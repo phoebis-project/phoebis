@@ -47,6 +47,10 @@ pub async fn read_head<R: AsyncRead + Unpin>(
                         .collect(),
                 };
                 buf.advance(n);
+                // 1xx responses precede the real head (e.g. 100 Continue, 103 Early Hints); skip past them.
+                if (100..200).contains(&head.status) {
+                    continue;
+                }
                 return Ok(head);
             }
             httparse::Status::Partial => {
@@ -71,6 +75,11 @@ pub enum Framing {
 }
 
 pub fn framing(head: &ResponseHead) -> Framing {
+    // 204 and 304 never carry a body, regardless of any Content-Length or Transfer-Encoding claimed; otherwise the
+    // body reader would wait on bytes the peer is never going to send.
+    if matches!(head.status, 204 | 304) {
+        return Framing::ContentLength(0);
+    }
     if head
         .get("transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
@@ -133,19 +142,27 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
                     self.done = true;
                     return Ok(None);
                 }
-                if self.buf.is_empty() && self.r.read_buf(&mut self.buf).await? == 0 {
-                    return Err(TransportError::Response(
-                        "connection closed inside body".into(),
-                    ));
+                if self.buf.is_empty() {
+                    // A prior split_to may have handed the buffer's capacity to the returned Bytes.
+                    self.buf.reserve(8 * 1024);
+                    if self.r.read_buf(&mut self.buf).await? == 0 {
+                        return Err(TransportError::Response(
+                            "connection closed inside body".into(),
+                        ));
+                    }
                 }
                 let take = (self.buf.len() as u64).min(self.remaining) as usize;
                 self.remaining -= take as u64;
                 Ok(Some(self.buf.split_to(take).freeze()))
             }
             Framing::UntilClose => {
-                if self.buf.is_empty() && self.r.read_buf(&mut self.buf).await? == 0 {
-                    self.done = true;
-                    return Ok(None);
+                if self.buf.is_empty() {
+                    // A prior split may have handed the buffer's capacity to the returned Bytes.
+                    self.buf.reserve(8 * 1024);
+                    if self.r.read_buf(&mut self.buf).await? == 0 {
+                        self.done = true;
+                        return Ok(None);
+                    }
                 }
                 Ok(Some(self.buf.split().freeze()))
             }
@@ -154,6 +171,8 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
     }
 
     async fn fill(&mut self) -> Result<(), TransportError> {
+        // A prior split_to may have handed the buffer's capacity to a returned Bytes.
+        self.buf.reserve(8 * 1024);
         if self.r.read_buf(&mut self.buf).await? == 0 {
             return Err(TransportError::Response(
                 "connection closed inside chunked body".into(),
@@ -215,5 +234,50 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
             }
             self.chunk_left = Some(size);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{duplex, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn interim_response_is_skipped_for_the_real_head() {
+        let (mut tx, mut rx) = duplex(256);
+        tokio::spawn(async move {
+            tx.write_all(
+                b"HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n\
+                  HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+            )
+            .await
+            .unwrap();
+        });
+        let mut buf = BytesMut::new();
+        let head = read_head(&mut rx, &mut buf).await.unwrap();
+        assert_eq!(head.status, 200);
+        let mut body = BodyReader::new(rx, buf, framing(&head));
+        let mut all = Vec::new();
+        while let Some(c) = body.next_chunk().await.unwrap() {
+            all.extend_from_slice(&c);
+        }
+        assert_eq!(all, b"hello");
+    }
+
+    #[tokio::test]
+    async fn no_content_response_ends_without_reading_further() {
+        let (mut tx, mut rx) = duplex(64);
+        tokio::spawn(async move {
+            tx.write_all(b"HTTP/1.1 204 No Content\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let mut buf = BytesMut::new();
+        let head = read_head(&mut rx, &mut buf).await.unwrap();
+        assert_eq!(head.status, 204);
+        let f = framing(&head);
+        assert!(matches!(f, Framing::ContentLength(0)));
+        let mut body = BodyReader::new(rx, buf, f);
+        assert!(body.next_chunk().await.unwrap().is_none());
     }
 }

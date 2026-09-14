@@ -31,6 +31,8 @@ pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
     }
 }
 
+/// Callers must concatenate every `feed` result with the final `finish` result to recover the full output:
+/// `finish` returns only whatever tail is still buffered internally, not the whole decoded stream.
 pub trait Decoder: Send {
     fn feed(&mut self, input: &[u8]) -> Result<Vec<u8>, TransportError>;
     fn finish(&mut self) -> Result<Vec<u8>, TransportError>;
@@ -171,5 +173,63 @@ mod tests {
     #[test]
     fn unknown_token_is_rejected() {
         assert!(encoding(&head(vec![("Content-Encoding", "gzip, br")])).is_err());
+    }
+
+    /// A few KB of repetitive-but-not-trivial text, long enough to span many 7-byte feed pieces.
+    fn sample_bytes() -> Vec<u8> {
+        let mut out = String::new();
+        for i in 0..120 {
+            out.push_str(&format!(
+                "line {i}: the quick brown fox jumps over the lazy dog\n"
+            ));
+        }
+        out.into_bytes()
+    }
+
+    /// Feeds compressed bytes through `decoder(e)` in small pieces, exercising the concatenation contract the
+    /// `Decoder` trait documents: every `feed` result plus the final `finish` result must equal the input.
+    fn round_trip(e: Encoding, compressed: &[u8]) -> Vec<u8> {
+        let mut d = decoder(e);
+        let mut out = Vec::new();
+        for chunk in compressed.chunks(7) {
+            out.extend(d.feed(chunk).unwrap());
+        }
+        out.extend(d.finish().unwrap());
+        out
+    }
+
+    #[test]
+    fn gzip_round_trips_through_small_feeds() {
+        let sample = sample_bytes();
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&sample).unwrap();
+        let compressed = enc.finish().unwrap();
+        assert_eq!(round_trip(Encoding::Gzip, &compressed), sample);
+    }
+
+    #[test]
+    fn deflate_round_trips_through_small_feeds() {
+        let sample = sample_bytes();
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&sample).unwrap();
+        let compressed = enc.finish().unwrap();
+        assert_eq!(round_trip(Encoding::Deflate, &compressed), sample);
+    }
+
+    #[test]
+    fn brotli_round_trips_through_small_feeds() {
+        let sample = sample_bytes();
+        let mut enc = brotli::CompressorWriter::new(Vec::new(), 4096, 5, 22);
+        enc.write_all(&sample).unwrap();
+        enc.flush().unwrap();
+        let compressed = enc.into_inner();
+        assert_eq!(round_trip(Encoding::Brotli, &compressed), sample);
+    }
+
+    #[test]
+    fn zstd_round_trips_through_small_feeds() {
+        let sample = sample_bytes();
+        let compressed = zstd::stream::encode_all(&sample[..], 0).unwrap();
+        assert_eq!(round_trip(Encoding::Zstd, &compressed), sample);
     }
 }
