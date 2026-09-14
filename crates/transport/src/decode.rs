@@ -13,19 +13,21 @@ pub enum Encoding {
     Zstd,
 }
 
-/// An unrecognized `Content-Encoding` maps to `Identity`: the bytes pass through unchanged, and any mismatch
-/// between the declared and actual encoding then surfaces as a parse error wherever the body is consumed.
-pub fn encoding(head: &ResponseHead) -> Encoding {
-    match head
-        .get("content-encoding")
-        .map(|v| v.trim().to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("gzip") => Encoding::Gzip,
-        Some("deflate") => Encoding::Deflate,
-        Some("br") => Encoding::Brotli,
-        Some("zstd") => Encoding::Zstd,
-        _ => Encoding::Identity,
+/// An unrecognized `Content-Encoding` is rejected rather than treated as `Identity`: passing the still-compressed
+/// bytes through as plain text would corrupt the relayed response instead of failing loudly.
+pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
+    let Some(raw) = head.get("content-encoding") else {
+        return Ok(Encoding::Identity);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "identity" => Ok(Encoding::Identity),
+        "gzip" => Ok(Encoding::Gzip),
+        "deflate" => Ok(Encoding::Deflate),
+        "br" => Ok(Encoding::Brotli),
+        "zstd" => Ok(Encoding::Zstd),
+        _ => Err(TransportError::Response(format!(
+            "unsupported content-encoding: {raw}"
+        ))),
     }
 }
 
@@ -128,5 +130,46 @@ impl Decoder for ZstdDecoder {
         let mut d = self.0.take().ok_or_else(already_finished)?;
         d.flush()?;
         Ok(d.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn head(headers: Vec<(&str, &str)>) -> ResponseHead {
+        ResponseHead {
+            status: 200,
+            headers: headers
+                .into_iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn absent_header_is_identity() {
+        assert!(matches!(encoding(&head(vec![])), Ok(Encoding::Identity)));
+    }
+
+    #[test]
+    fn uppercase_token_is_recognized() {
+        assert!(matches!(
+            encoding(&head(vec![("Content-Encoding", "GZIP")])),
+            Ok(Encoding::Gzip)
+        ));
+    }
+
+    #[test]
+    fn zstd_is_recognized() {
+        assert!(matches!(
+            encoding(&head(vec![("Content-Encoding", "zstd")])),
+            Ok(Encoding::Zstd)
+        ));
+    }
+
+    #[test]
+    fn unknown_token_is_rejected() {
+        assert!(encoding(&head(vec![("Content-Encoding", "gzip, br")])).is_err());
     }
 }
