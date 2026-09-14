@@ -6,6 +6,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::TransportError;
 
 const MAX_HEAD: usize = 64 * 1024;
+// Bounds a streaming-1xx upstream: MAX_HEAD only caps the size of the head being parsed, not how many can precede it.
+const MAX_INTERIM: u32 = 8;
 
 pub struct ResponseHead {
     pub status: u16,
@@ -25,6 +27,7 @@ pub async fn read_head<R: AsyncRead + Unpin>(
     r: &mut R,
     buf: &mut BytesMut,
 ) -> Result<ResponseHead, TransportError> {
+    let mut interim = 0u32;
     loop {
         let mut headers = [httparse::EMPTY_HEADER; 128];
         let mut resp = httparse::Response::new(&mut headers);
@@ -49,6 +52,12 @@ pub async fn read_head<R: AsyncRead + Unpin>(
                 buf.advance(n);
                 // 1xx responses precede the real head (e.g. 100 Continue, 103 Early Hints); skip past them.
                 if (100..200).contains(&head.status) {
+                    interim += 1;
+                    if interim > MAX_INTERIM {
+                        return Err(TransportError::Response(
+                            "too many interim responses".into(),
+                        ));
+                    }
                     continue;
                 }
                 return Ok(head);
@@ -279,5 +288,17 @@ mod tests {
         assert!(matches!(f, Framing::ContentLength(0)));
         let mut body = BodyReader::new(rx, buf, f);
         assert!(body.next_chunk().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn too_many_interim_responses_is_rejected() {
+        let (mut tx, mut rx) = duplex(4096);
+        tokio::spawn(async move {
+            let heads = "HTTP/1.1 103 Early Hints\r\n\r\n".repeat(9);
+            tx.write_all(heads.as_bytes()).await.unwrap();
+        });
+        let mut buf = BytesMut::new();
+        let result = read_head(&mut rx, &mut buf).await;
+        assert!(matches!(result, Err(TransportError::Response(_))));
     }
 }
