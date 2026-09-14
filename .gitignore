@@ -12,3 +12,6 @@
 # Local environment
 .env
 .env.*
+
+# Linked worktrees
+/.worktrees/
