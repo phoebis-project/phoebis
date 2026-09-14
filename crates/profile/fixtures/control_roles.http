@@ -1,0 +1,8 @@
+GET /api/oauth/claude_cli/roles HTTP/1.1
+Accept: application/json, text/plain, */*
+User-Agent: claude-code/2.1.310
+Authorization: Bearer sk-ant-oat01-PLACEHOLDER
+Accept-Encoding: gzip, compress, deflate, br
+Host: api.anthropic.com
+Connection: close
+

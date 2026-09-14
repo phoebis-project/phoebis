@@ -1,0 +1,10 @@
+GET /api/oauth/usage HTTP/1.1
+Accept: application/json, text/plain, */*
+Content-Type: application/json
+User-Agent: claude-cli/2.1.310 (external, cli)
+Authorization: Bearer sk-ant-oat01-PLACEHOLDER
+anthropic-beta: oauth-2025-04-20
+Accept-Encoding: gzip, compress, deflate, br
+Host: api.anthropic.com
+Connection: close
+
