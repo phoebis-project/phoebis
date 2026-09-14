@@ -6,3 +6,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+boring = { workspace = true }
+bytes = { workspace = true }
+# Profile is part of connector_builder's public signature, so this must be a regular
+# dependency; a dev-dependency is invisible to the lib target that declares it.
+phoebis-profile = { path = "../profile" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-boring = { workspace = true }
+tracing = { workspace = true }
