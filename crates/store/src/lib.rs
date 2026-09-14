@@ -1,4 +1,4 @@
-//! Data storage and persistence layer.
+//! SQLite registry and encrypted credentials.
 
 #[cfg(test)]
 mod tests {

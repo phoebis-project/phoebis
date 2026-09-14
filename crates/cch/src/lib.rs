@@ -1,4 +1,4 @@
-//! Claude Code Handler for request processing.
+//! Billing-header hash.
 
 #[cfg(test)]
 mod tests {

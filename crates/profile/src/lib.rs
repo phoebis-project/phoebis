@@ -1,4 +1,4 @@
-//! User profile and metadata management.
+//! Pinned 2.1.269 constants and fixtures.
 
 #[cfg(test)]
 mod tests {

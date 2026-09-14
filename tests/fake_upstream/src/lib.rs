@@ -1,4 +1,4 @@
-//! Fake upstream server for testing.
+//! A loopback HTTP/1.1 server used by relay and oauth tests.
 
 #[cfg(test)]
 mod tests {

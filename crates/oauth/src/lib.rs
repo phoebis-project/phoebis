@@ -1,4 +1,4 @@
-//! OAuth provider and token management.
+//! Pairing and refresh.
 
 #[cfg(test)]
 mod tests {

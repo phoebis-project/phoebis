@@ -1,4 +1,4 @@
-//! Request relay and forwarding logic.
+//! The Messages handler.
 
 #[cfg(test)]
 mod tests {

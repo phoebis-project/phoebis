@@ -1,4 +1,4 @@
-//! HTTP transport and network layer.
+//! TLS profiles, ordered HTTP/1.1 writer, response reader, keep-alive pool.
 
 #[cfg(test)]
 mod tests {

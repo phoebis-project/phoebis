@@ -1,4 +1,4 @@
-//! Admin API and management endpoints.
+//! Admin API.
 
 #[cfg(test)]
 mod tests {
