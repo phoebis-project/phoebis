@@ -1,7 +1,10 @@
 //! TLS profiles, ordered HTTP/1.1 writer, response reader, keep-alive pool.
 
+pub mod decode;
 pub mod hello;
+pub mod pool;
 pub mod request;
+pub mod response;
 mod tls;
 
 pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca, Plane};
