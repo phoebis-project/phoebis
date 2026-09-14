@@ -1,0 +1,14 @@
+# Build output
+/target/
+/web/dist/
+/web/node_modules/
+
+# Runtime data
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local environment
+.env
+.env.*
