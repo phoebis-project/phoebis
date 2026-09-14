@@ -1,0 +1,11 @@
+[package]
+name = "fake-upstream"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+httparse = { workspace = true }
+tokio = { workspace = true }
