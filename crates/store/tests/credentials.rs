@@ -89,18 +89,44 @@ fn sealed_blobs_open_only_with_their_key_row_and_generation() {
 fn disconnect_revokes_both_credential_kinds() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
-    store
+    let g = store
         .commit_credentials("a", 1, None, None, &bundle("at-1"))
         .unwrap();
     store
         .set_api_key_secret("a", &Secret::new("sk-ant-api03-x"))
         .unwrap();
-    store.bump_lifecycle("a").unwrap();
+    store.open_refresh_attempt("a", 1, g).unwrap();
+    let bumped = store.bump_lifecycle("a").unwrap();
     assert!(store.credentials("a").unwrap().is_none());
     assert!(
         store.api_key_secret("a").unwrap().is_none(),
         "disconnect revokes the API key too"
     );
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "disconnect resolves the attempt left open from before it"
+    );
+    assert!(
+        store.open_refresh_attempt("a", bumped, 0).is_ok(),
+        "the refresh gate is clear again on the new lifecycle generation"
+    );
+}
+
+#[test]
+fn an_uncertain_attempt_blocks_new_attempts() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let g = store
+        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .unwrap();
+    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    store
+        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain)
+        .unwrap();
+    assert!(matches!(
+        store.open_refresh_attempt("a", 1, g),
+        Err(StoreError::AttemptPending)
+    ));
 }
 
 #[test]
@@ -193,6 +219,22 @@ fn only_one_refresh_attempt_can_be_pending() {
         1,
         "uncertain attempts stay listed for recovery"
     );
+}
+
+#[test]
+fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let g1 = store
+        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .unwrap();
+    assert!(matches!(
+        store.commit_credentials("a", 1, Some(g1), Some(999), &bundle("at-2")),
+        Err(StoreError::AttemptNotFound(999))
+    ));
+    let got = store.credentials("a").unwrap().unwrap();
+    assert_eq!(got.access_token.expose(), "at-1");
+    assert_eq!(got.generation, g1);
 }
 
 #[test]

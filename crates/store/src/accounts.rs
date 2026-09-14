@@ -3,7 +3,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::{Store, StoreError, LOCK_POISONED};
+use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKind {
@@ -213,6 +213,15 @@ impl Store {
         tx.execute(
             "DELETE FROM api_key_secrets WHERE account_id = ?1",
             params![id],
+        )?;
+        // A disconnect must also clear the refresh gate: otherwise a pending or uncertain attempt from
+        // before the disconnect keeps blocking every refresh after re-pairing, until the process restarts.
+        tx.execute(
+            &format!(
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \
+                 WHERE account_id = ?1 AND ({PENDING_WHERE})"
+            ),
+            params![id, now],
         )?;
         tx.commit()?;
         Ok(new_generation as u64)

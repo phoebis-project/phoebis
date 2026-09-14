@@ -22,10 +22,17 @@ pub use credentials::{
 // on-disk state may be half-written, so continuing past that point is not safe.
 const LOCK_POISONED: &str = "store connection mutex poisoned by a prior panic";
 
+// Shared by `open_refresh_attempt`'s gate and `pending_refresh_attempts`'s listing, so the two queries
+// cannot drift apart: an unresolved attempt, or one resolved `uncertain`, still blocks a new refresh,
+// because the upstream may already have rotated the refresh token.
+const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("account {0} not found")]
     AccountNotFound(String),
+    #[error("refresh attempt {0} not found")]
+    AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
     AttemptPending,
     #[error("sealed credential could not be decrypted")]

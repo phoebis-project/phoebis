@@ -3,7 +3,7 @@
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{crypto, Store, StoreError, LOCK_POISONED};
+use crate::{crypto, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -218,10 +218,16 @@ impl Store {
         )?;
 
         if let Some(id) = attempt_id {
-            tx.execute(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL WHERE id = ?1",
-                params![id as i64, now],
+            // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
+            // be resolved by this commit, even by accident.
+            let updated = tx.execute(
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
+                 WHERE id = ?1 AND account_id = ?3",
+                params![id as i64, now, account_id],
             )?;
+            if updated == 0 {
+                return Err(StoreError::AttemptNotFound(id));
+            }
         }
 
         tx.commit()?;
@@ -278,7 +284,7 @@ impl Store {
     ) -> Result<u64, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let pending: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND resolved_at IS NULL)",
+            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE}))"),
             params![account_id],
             |row| row.get(0),
         )?;
@@ -306,10 +312,13 @@ impl Store {
             AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
             AttemptOutcome::Uncertain => ("uncertain", None),
         };
-        conn.execute(
+        let updated = conn.execute(
             "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 WHERE id = ?1",
             params![attempt_id as i64, now, label, detail],
         )?;
+        if updated == 0 {
+            return Err(StoreError::AttemptNotFound(attempt_id));
+        }
         Ok(())
     }
 
@@ -317,10 +326,10 @@ impl Store {
     // resolved uncertain and needs recovery, both stay visible until something resolves them further.
     pub fn pending_refresh_attempts(&self) -> Result<Vec<PendingAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT id, account_id, credential_generation, started_at FROM refresh_attempts \
-             WHERE resolved_at IS NULL OR outcome = 'uncertain' ORDER BY id",
-        )?;
+             WHERE {PENDING_WHERE} ORDER BY id"
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok(PendingAttempt {
                 id: row.get::<_, i64>(0)? as u64,
