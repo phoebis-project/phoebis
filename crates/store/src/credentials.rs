@@ -1,0 +1,349 @@
+//! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
+
+use rusqlite::{params, OptionalExtension};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::{crypto, Store, StoreError, LOCK_POISONED};
+
+/// A secret string that zeroizes its buffer on drop and never prints its value.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: &str) -> Secret {
+        Secret(value.to_owned())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Secret(***)")
+    }
+}
+
+// Wire shape sealed inside a credentials row's `sealed` blob; everything else about the bundle is a
+// plain column.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SealedTokens {
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct CredentialBundle {
+    pub access_token: Secret,
+    pub refresh_token: Option<Secret>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub refresh_expires_at: Option<i64>,
+    pub scopes: String,
+    pub generation: u64,
+}
+
+#[derive(Debug)]
+pub struct NewBundle {
+    pub access_token: Secret,
+    pub refresh_token: Option<Secret>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub refresh_expires_at: Option<i64>,
+    pub scopes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttemptOutcome {
+    Committed,
+    Failed(String),
+    Uncertain,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingAttempt {
+    pub id: u64,
+    pub account_id: String,
+    pub credential_generation: u64,
+    pub started_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LastAttempt {
+    pub resolved_at: Option<i64>,
+    pub outcome: Option<String>,
+    pub detail: Option<String>,
+}
+
+// (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes)
+type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String);
+
+fn credential_aad(account_id: &str, generation: i64) -> String {
+    format!("{account_id}:{generation}")
+}
+
+fn api_key_aad(account_id: &str) -> String {
+    format!("{account_id}:api_key")
+}
+
+impl Store {
+    pub fn credentials(&self, account_id: &str) -> Result<Option<CredentialBundle>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let row: Option<CredentialRow> = conn
+            .query_row(
+                "SELECT generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes \
+                 FROM credentials WHERE account_id = ?1",
+                params![account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            )
+            .optional()?;
+        let Some((generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes)) =
+            row
+        else {
+            return Ok(None);
+        };
+
+        let plaintext = crypto::open(
+            &self.key,
+            &credential_aad(account_id, generation),
+            &nonce,
+            &sealed,
+        )?;
+        let tokens: SealedTokens = serde_json::from_slice(&plaintext)?;
+
+        Ok(Some(CredentialBundle {
+            access_token: Secret::new(&tokens.access_token),
+            refresh_token: tokens.refresh_token.map(|t| Secret::new(&t)),
+            issued_at,
+            expires_at,
+            refresh_expires_at,
+            scopes,
+            generation: generation as u64,
+        }))
+    }
+
+    /// Commits a new credential generation in one transaction: the lifecycle and credential generations
+    /// are checked against the account's current state (`Stale` on mismatch), a missing refresh token is
+    /// folded forward from the previous plaintext, and `attempt_id`, if given, is resolved as `Committed`
+    /// here too, so a crash between the two writes cannot leave a committed bundle behind a pending attempt.
+    pub fn commit_credentials(
+        &self,
+        account_id: &str,
+        lifecycle_generation: u64,
+        expected_generation: Option<u64>,
+        attempt_id: Option<u64>,
+        bundle: &NewBundle,
+    ) -> Result<u64, StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        let account_lifecycle: i64 = tx
+            .query_row(
+                "SELECT lifecycle_generation FROM accounts WHERE id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
+        if account_lifecycle as u64 != lifecycle_generation {
+            return Err(StoreError::Stale);
+        }
+
+        let existing: Option<(i64, Vec<u8>, Vec<u8>)> = tx
+            .query_row(
+                "SELECT generation, sealed, nonce FROM credentials WHERE account_id = ?1",
+                params![account_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+
+        let current_generation = existing
+            .as_ref()
+            .map(|(generation, _, _)| *generation as u64);
+        if current_generation != expected_generation {
+            return Err(StoreError::Stale);
+        }
+
+        let refresh_token = match &bundle.refresh_token {
+            Some(secret) => Some(secret.expose().to_owned()),
+            // A refresh response that omits the refresh token means "unchanged", not "cleared";
+            // decrypt the row being replaced to carry its refresh token forward.
+            None => match &existing {
+                Some((generation, sealed, nonce)) => {
+                    let plaintext = crypto::open(
+                        &self.key,
+                        &credential_aad(account_id, *generation),
+                        nonce,
+                        sealed,
+                    )?;
+                    let previous: SealedTokens = serde_json::from_slice(&plaintext)?;
+                    previous.refresh_token
+                }
+                None => None,
+            },
+        };
+
+        let new_generation = current_generation.map_or(1, |generation| generation + 1);
+        let payload = SealedTokens {
+            access_token: bundle.access_token.expose().to_owned(),
+            refresh_token,
+        };
+        let plaintext = serde_json::to_vec(&payload)?;
+        let (nonce, sealed) = crypto::seal(
+            &self.key,
+            &credential_aad(account_id, new_generation as i64),
+            &plaintext,
+        )?;
+        let now = jiff::Timestamp::now().as_millisecond();
+
+        tx.execute(
+            "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+             ON CONFLICT(account_id) DO UPDATE SET generation = excluded.generation, lifecycle_generation = excluded.lifecycle_generation, \
+             sealed = excluded.sealed, nonce = excluded.nonce, issued_at = excluded.issued_at, expires_at = excluded.expires_at, \
+             refresh_expires_at = excluded.refresh_expires_at, scopes = excluded.scopes, updated_at = excluded.updated_at",
+            params![
+                account_id,
+                new_generation as i64,
+                lifecycle_generation as i64,
+                sealed,
+                nonce,
+                bundle.issued_at,
+                bundle.expires_at,
+                bundle.refresh_expires_at,
+                bundle.scopes,
+                now,
+            ],
+        )?;
+
+        if let Some(id) = attempt_id {
+            tx.execute(
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL WHERE id = ?1",
+                params![id as i64, now],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(new_generation)
+    }
+
+    pub fn api_key_secret(&self, account_id: &str) -> Result<Option<Secret>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let row: Option<(Vec<u8>, Vec<u8>)> = conn
+            .query_row(
+                "SELECT sealed, nonce FROM api_key_secrets WHERE account_id = ?1",
+                params![account_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((sealed, nonce)) = row else {
+            return Ok(None);
+        };
+        let plaintext = crypto::open(&self.key, &api_key_aad(account_id), &nonce, &sealed)?;
+        let value = String::from_utf8(plaintext).map_err(|_| StoreError::Crypto)?;
+        Ok(Some(Secret::new(&value)))
+    }
+
+    pub fn set_api_key_secret(&self, account_id: &str, secret: &Secret) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let (nonce, sealed) = crypto::seal(
+            &self.key,
+            &api_key_aad(account_id),
+            secret.expose().as_bytes(),
+        )?;
+        conn.execute(
+            "INSERT INTO api_key_secrets (account_id, sealed, nonce) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(account_id) DO UPDATE SET sealed = excluded.sealed, nonce = excluded.nonce",
+            params![account_id, sealed, nonce],
+        )?;
+        Ok(())
+    }
+
+    /// The raw sealed blob of every credential row, for tests that assert plaintext is absent.
+    #[doc(hidden)]
+    pub fn debug_dump_credentials_table(&self) -> Result<Vec<Vec<u8>>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare("SELECT sealed FROM credentials")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<Vec<u8>>>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn open_refresh_attempt(
+        &self,
+        account_id: &str,
+        lifecycle_generation: u64,
+        credential_generation: u64,
+    ) -> Result<u64, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let pending: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND resolved_at IS NULL)",
+            params![account_id],
+            |row| row.get(0),
+        )?;
+        if pending {
+            return Err(StoreError::AttemptPending);
+        }
+        let now = jiff::Timestamp::now().as_millisecond();
+        conn.execute(
+            "INSERT INTO refresh_attempts (account_id, lifecycle_generation, credential_generation, started_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![account_id, lifecycle_generation as i64, credential_generation as i64, now],
+        )?;
+        Ok(conn.last_insert_rowid() as u64)
+    }
+
+    pub fn resolve_refresh_attempt(
+        &self,
+        attempt_id: u64,
+        outcome: AttemptOutcome,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let now = jiff::Timestamp::now().as_millisecond();
+        let (label, detail) = match outcome {
+            AttemptOutcome::Committed => ("committed", None),
+            AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
+            AttemptOutcome::Uncertain => ("uncertain", None),
+        };
+        conn.execute(
+            "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 WHERE id = ?1",
+            params![attempt_id as i64, now, label, detail],
+        )?;
+        Ok(())
+    }
+
+    // The partial index in the schema exists for this query: an attempt still in flight, or one that
+    // resolved uncertain and needs recovery, both stay visible until something resolves them further.
+    pub fn pending_refresh_attempts(&self) -> Result<Vec<PendingAttempt>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(
+            "SELECT id, account_id, credential_generation, started_at FROM refresh_attempts \
+             WHERE resolved_at IS NULL OR outcome = 'uncertain' ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingAttempt {
+                id: row.get::<_, i64>(0)? as u64,
+                account_id: row.get(1)?,
+                credential_generation: row.get::<_, i64>(2)? as u64,
+                started_at: row.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn last_refresh_attempt(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<LastAttempt>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT resolved_at, outcome, detail FROM refresh_attempts WHERE account_id = ?1 ORDER BY id DESC LIMIT 1",
+            params![account_id],
+            |row| Ok(LastAttempt { resolved_at: row.get(0)?, outcome: row.get(1)?, detail: row.get(2)? }),
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+}
