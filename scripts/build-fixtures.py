@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build crates/profile/fixtures from a capture directory, or --check a capture against them."""
 import argparse
+import difflib
 import json
 import pathlib
 import re
@@ -12,6 +13,10 @@ import tempfile
 
 DEFAULT_CAPTURE = pathlib.Path.home() / "workspace/cc-capture-2026-09-13/cc-capture"
 FIXTURES = pathlib.Path("crates/profile/fixtures")
+
+# Bound on the unified diff --check prints per body. A whole Messages body runs to thousands of pretty-printed
+# lines; the operator needs enough to tell a date or a kernel string in the system prompt from a shape change.
+DIFF_LINES = 40
 
 # The two header values a session mints fresh on every run; masked so --check reports profile
 # drift, not the identifiers themselves.
@@ -276,6 +281,25 @@ def normalize_tree(root: pathlib.Path) -> dict:
     return normalized
 
 
+def body_diff(name: str, committed: bytes, fresh: bytes) -> list:
+    """Bounded unified diff of one body, pretty-printed as JSON so a changed value shows as a changed line.
+
+    Lines are left at full width: a system prompt is a single JSON string, and the differing date sits far into
+    it, so clipping would hide the very thing the diff is printed for.
+    """
+    if committed is None or fresh is None:
+        return []
+    try:
+        was = json.dumps(json.loads(committed), indent=2, ensure_ascii=False).splitlines()
+        now = json.dumps(json.loads(fresh), indent=2, ensure_ascii=False).splitlines()
+    except (UnicodeDecodeError, ValueError):
+        return []
+    lines = list(difflib.unified_diff(was, now, fromfile=f"committed {name}", tofile=f"fresh {name}", lineterm=""))
+    if len(lines) > DIFF_LINES:
+        lines = lines[: DIFF_LINES - 1] + [f"... {len(lines) - DIFF_LINES + 1} further diff lines"]
+    return lines
+
+
 def check(capture_dir: pathlib.Path) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
@@ -289,6 +313,9 @@ def check(capture_dir: pathlib.Path) -> int:
             print("fixtures differ:")
             for name in diffs:
                 print(f"  {name}")
+                if name.startswith("body_") and name.endswith(".json"):
+                    for line in body_diff(name, committed.get(name), fresh.get(name)):
+                        print(f"    {line}")
             return 2 if hashes == 2 else 1
         if hashes:
             return hashes
