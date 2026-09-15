@@ -6,3 +6,16 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
+phoebis-profile = { path = "../profile" }
+phoebis-store = { path = "../store" }
+phoebis-transport = { path = "../transport" }
+jiff = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }

@@ -1,9 +1,11 @@
 //! Pairing and refresh.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_links() {
-        assert!(!env!("CARGO_PKG_NAME").is_empty());
-    }
-}
+mod authorize;
+mod pkce;
+mod session;
+
+pub use authorize::{authorization_url, LoginKind};
+pub use pkce::{generate_pkce, generate_state, Pkce};
+pub use session::{
+    CallbackInput, PairingError, PairingSession, PairingSessions, PairingStatus, PendingIdentity,
+};

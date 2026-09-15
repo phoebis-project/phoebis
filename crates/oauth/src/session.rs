@@ -1,0 +1,206 @@
+//! In-memory pairing sessions: an admin starts one, pastes back the OAuth callback, and this
+//! validates it against the session before code exchange can run. A restart drops all sessions,
+//! which is fine since a stalled pairing is meant to be restarted anyway.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use url::Url;
+
+use crate::pkce::{generate_pkce, generate_state, Pkce};
+
+/// Matches the ten-minute window Claude Code gives a pasted callback before treating it as stale.
+const SESSION_TTL_MS: i64 = 600_000;
+
+const LOCK_POISONED: &str = "pairing sessions mutex poisoned by a prior panic";
+
+#[derive(Debug, Clone)]
+pub struct PairingSession {
+    pub id: String,
+    pub account_id: String,
+    pub admin_session_id: String,
+    pub state: String,
+    pub pkce: Pkce,
+    pub redirect_uri: String,
+    pub deadline: i64,
+    pub status: PairingStatus,
+}
+
+#[derive(Debug, Clone)]
+pub enum PairingStatus {
+    Pending,
+    CodeReceived { code: String },
+    Exchanged { pending: PendingIdentity },
+    Confirmed,
+    Cancelled,
+    Expired,
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingIdentity {
+    pub account_uuid: String,
+    pub email: String,
+    pub organization_uuid: Option<String>,
+    pub organization_name: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum CallbackInput {
+    Url(String),
+    Code { code: String, state: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PairingError {
+    #[error("a pairing session is already in progress for this account")]
+    Busy,
+    #[error("pairing session not found")]
+    NotFound,
+    #[error("admin session does not own this pairing session")]
+    Forbidden,
+    #[error("pairing session expired")]
+    Expired,
+    #[error("state does not match the pairing session")]
+    StateMismatch,
+    #[error("callback does not match the registered redirect")]
+    RedirectMismatch,
+    #[error("pairing session already consumed")]
+    AlreadyConsumed,
+    #[error("invalid callback: {0}")]
+    Invalid(String),
+}
+
+pub struct PairingSessions {
+    sessions: Mutex<HashMap<String, PairingSession>>,
+}
+
+impl Default for PairingSessions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PairingSessions {
+    pub fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// One pending session per account: a second `start` while one is in flight is a caller bug,
+    /// not a race to arbitrate, so it fails outright rather than replacing the first.
+    pub fn start(
+        &self,
+        account_id: &str,
+        admin_session_id: &str,
+        redirect_uri: &str,
+        now: i64,
+    ) -> Result<PairingSession, PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let busy = sessions
+            .values()
+            .any(|s| s.account_id == account_id && matches!(s.status, PairingStatus::Pending));
+        if busy {
+            return Err(PairingError::Busy);
+        }
+        let session = PairingSession {
+            id: generate_state(),
+            account_id: account_id.to_string(),
+            admin_session_id: admin_session_id.to_string(),
+            state: generate_state(),
+            pkce: generate_pkce(),
+            redirect_uri: redirect_uri.to_string(),
+            deadline: now + SESSION_TTL_MS,
+            status: PairingStatus::Pending,
+        };
+        sessions.insert(session.id.clone(), session.clone());
+        Ok(session)
+    }
+
+    pub fn get(&self, id: &str, admin_session_id: &str) -> Option<PairingSession> {
+        let sessions = self.sessions.lock().expect(LOCK_POISONED);
+        sessions
+            .get(id)
+            .filter(|s| s.admin_session_id == admin_session_id)
+            .cloned()
+    }
+
+    pub fn accept_callback(
+        &self,
+        id: &str,
+        admin_session_id: &str,
+        callback: CallbackInput,
+        now: i64,
+    ) -> Result<PairingSession, PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
+        if session.admin_session_id != admin_session_id {
+            return Err(PairingError::Forbidden);
+        }
+        if now > session.deadline {
+            session.status = PairingStatus::Expired;
+            return Err(PairingError::Expired);
+        }
+        if !matches!(session.status, PairingStatus::Pending) {
+            return Err(PairingError::AlreadyConsumed);
+        }
+
+        let raw_code = match callback {
+            CallbackInput::Url(url) => extract_code(&url, &session.redirect_uri, &session.state)?,
+            CallbackInput::Code { code, state } => {
+                if state != session.state {
+                    return Err(PairingError::StateMismatch);
+                }
+                code
+            }
+        };
+
+        // The authorization server appends the state again after `#` in the code it returns;
+        // only the part before it is what the token endpoint accepts.
+        let (code, fragment) = match raw_code.split_once('#') {
+            Some((code, fragment)) => (code.to_string(), Some(fragment.to_string())),
+            None => (raw_code, None),
+        };
+        if fragment.is_some_and(|f| f != session.state) {
+            return Err(PairingError::StateMismatch);
+        }
+
+        session.status = PairingStatus::CodeReceived { code };
+        Ok(session.clone())
+    }
+
+    pub fn cancel(&self, id: &str, admin_session_id: &str) -> Result<(), PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
+        if session.admin_session_id != admin_session_id {
+            return Err(PairingError::Forbidden);
+        }
+        session.status = PairingStatus::Cancelled;
+        Ok(())
+    }
+}
+
+fn extract_code(url: &str, redirect_uri: &str, state: &str) -> Result<String, PairingError> {
+    let parsed = Url::parse(url).map_err(|e| PairingError::Invalid(e.to_string()))?;
+    let registered = Url::parse(redirect_uri).map_err(|e| PairingError::Invalid(e.to_string()))?;
+    let redirect_matches = parsed.scheme() == registered.scheme()
+        && parsed.host_str() == registered.host_str()
+        && parsed.port_or_known_default() == registered.port_or_known_default()
+        && parsed.path() == registered.path();
+    if !redirect_matches {
+        return Err(PairingError::RedirectMismatch);
+    }
+    let query_state = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned());
+    if query_state.as_deref() != Some(state) {
+        return Err(PairingError::StateMismatch);
+    }
+    parsed
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.into_owned())
+        .ok_or_else(|| PairingError::Invalid("callback is missing a code parameter".to_string()))
+}
