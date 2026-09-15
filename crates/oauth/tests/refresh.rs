@@ -71,6 +71,25 @@ fn control_requests_serialize_to_the_fixture_heads() {
         None,
     );
     assert_eq!(serialize_head(&usage), control_head(ControlFixture::Usage));
+    let raw = control_head(ControlFixture::Token);
+    let terminator = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let token = control_request(
+        p,
+        ControlKind::Token,
+        None,
+        Some(raw[terminator..].to_vec()),
+    );
+    assert_eq!(serialize_head(&token), &raw[..terminator]);
+    let profile = control_request(
+        p,
+        ControlKind::Profile,
+        Some("sk-ant-oat01-PLACEHOLDER"),
+        None,
+    );
+    assert_eq!(
+        serialize_head(&profile),
+        control_head(ControlFixture::Profile)
+    );
     let t = parse_token_response(control_response(ControlFixture::Token)).unwrap();
     assert_eq!(t.expires_in, 28800);
     assert_eq!(
@@ -497,4 +516,47 @@ async fn an_unreachable_upstream_does_not_quarantine() {
         "still-good"
     );
     assert!(store.pending_refresh_attempts().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_panicking_refresh_does_not_poison_the_account() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let token_rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Token).to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![token_rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    mgr.debug_panic_on_next_refresh();
+    assert!(mgr.acquire("a").await.is_err());
+    assert!(
+        up.requests().is_empty(),
+        "the panicking refresh never reached the upstream"
+    );
+    // The in-flight entry is gone, so this starts a refresh of its own instead of joining the dead future.
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "sk-ant-oat01-PLACEHOLDER"
+    );
+    assert_eq!(up.requests().len(), 1);
+    up.shutdown().await;
 }

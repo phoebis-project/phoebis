@@ -1,6 +1,7 @@
 //! Hands out access tokens, refreshing at most one per account at a time.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +29,11 @@ const MAX_MARGIN_MS: i64 = 300_000;
 /// Backoff after a refusal that cannot have rotated anything. Short on purpose: the token it protects may
 /// be a minute from expiring, and a long wait would turn a brief refusal into an outage.
 const TRANSIENT_BACKOFF_MS: i64 = 5_000;
+
+/// Ceiling on any backoff, including one the upstream asks for through `Retry-After`. A token's own margin
+/// bounds how long a refresh can sensibly wait, and an upstream that asks for an hour would otherwise park
+/// the account for an hour; an operator who needs longer can re-pair.
+const MAX_NOT_BEFORE_MS: i64 = 300_000;
 
 /// A refresh response is a small JSON document, so 30 s covers a slow upstream without letting one stalled
 /// connection hold an account's only refresh slot.
@@ -102,8 +108,27 @@ struct Inner {
     control: Arc<ControlClient>,
     inflight: Mutex<HashMap<String, RefreshFuture>>,
     not_before: Mutex<HashMap<String, i64>>,
+    panic_next_refresh: AtomicBool,
     profile: &'static Profile,
     store: Arc<Store>,
+}
+
+/// Removes an account's in-flight entry when its refresh task ends, however it ends. A panic inside the
+/// refresh must not leave the entry behind: every later caller would join a future that has already
+/// resolved, and the account would be stuck on that one result until the process restarts.
+struct InflightGuard {
+    account_id: String,
+    inner: Arc<Inner>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        // Panicking inside `Drop` while already unwinding aborts the process, so a poisoned map is left
+        // alone here rather than asserted on.
+        if let Ok(mut inflight) = self.inner.inflight.lock() {
+            inflight.remove(&self.account_id);
+        }
+    }
 }
 
 pub struct CredentialManager {
@@ -123,6 +148,7 @@ impl CredentialManager {
                 control,
                 inflight: Mutex::new(HashMap::new()),
                 not_before: Mutex::new(HashMap::new()),
+                panic_next_refresh: AtomicBool::new(false),
                 profile,
                 store,
             }),
@@ -181,6 +207,13 @@ impl CredentialManager {
         Ok(recovered)
     }
 
+    /// Makes the next refresh panic, so a test can check that a panicking refresh does not wedge the
+    /// account. Hidden from the docs: nothing outside the tests has a reason to call it.
+    #[doc(hidden)]
+    pub fn debug_panic_on_next_refresh(&self) {
+        self.inner.panic_next_refresh.store(true, Ordering::SeqCst);
+    }
+
     async fn join_or_start(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
         let shared = {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
@@ -191,14 +224,17 @@ impl CredentialManager {
                     let id = account_id.to_string();
                     // The refresh owns the whole sequence in its own task, so a caller that goes away
                     // mid-refresh only stops awaiting: the attempt row, the commit, and the resolution
-                    // still run to the end. The task takes the same map lock to drop its entry, and this
-                    // lock is held across the spawn, so a refresh that finishes at once cannot remove the
-                    // entry before it is inserted. Removing it last also means the next caller cannot
-                    // start a second rotation while this commit is still in flight.
+                    // still run to the end. The guard drops the entry once the refresh is over, and it
+                    // takes the same map lock, which is held across the spawn here so a refresh that
+                    // finishes at once cannot remove the entry before it is inserted. Dropping the entry
+                    // last also keeps the next caller from starting a second rotation while this commit is
+                    // still in flight.
                     let handle = tokio::spawn(async move {
-                        let outcome = inner.refresh(&id).await;
-                        inner.inflight.lock().expect(LOCK_POISONED).remove(&id);
-                        outcome
+                        let guard = InflightGuard {
+                            account_id: id,
+                            inner,
+                        };
+                        guard.inner.refresh(&guard.account_id).await
                     });
                     let shared = async move {
                         match handle.await {
@@ -242,6 +278,11 @@ impl Inner {
     }
 
     async fn refresh(&self, account_id: &str) -> Result<AccessToken, RefreshFailure> {
+        // Test seam, see `debug_panic_on_next_refresh`. Checked before anything durable happens, so the
+        // panicking refresh leaves no attempt row behind.
+        if self.panic_next_refresh.swap(false, Ordering::SeqCst) {
+            panic!("refresh panicked on purpose");
+        }
         let account = self
             .store
             .account(account_id)
@@ -335,7 +376,7 @@ impl Inner {
             self.resolve(attempt, AttemptOutcome::Failed(detail.clone()));
             self.arm_backoff(
                 account_id,
-                retry_after_ms(&head).unwrap_or(TRANSIENT_BACKOFF_MS),
+                retry_after_ms(&head, (self.clock)()).unwrap_or(TRANSIENT_BACKOFF_MS),
             );
             return self.stored_or(&account, &bundle, RefreshFailure::Unavailable(detail));
         }
@@ -434,7 +475,7 @@ impl Inner {
     }
 
     fn arm_backoff(&self, account_id: &str, delay_ms: i64) {
-        let until = (self.clock)() + delay_ms.max(0);
+        let until = (self.clock)().saturating_add(delay_ms.clamp(0, MAX_NOT_BEFORE_MS));
         self.not_before
             .lock()
             .expect(LOCK_POISONED)
@@ -518,9 +559,54 @@ fn error_code(body: &[u8]) -> Option<String> {
     }
 }
 
-/// `Retry-After` in its delay-seconds form. The HTTP-date form is ignored on purpose: it would have to be
-/// trusted against a clock this process does not share with the upstream.
-fn retry_after_ms(head: &ResponseHead) -> Option<i64> {
-    let seconds: i64 = head.get("retry-after")?.trim().parse().ok()?;
-    Some(seconds.clamp(0, i64::MAX / 1000) * 1000)
+/// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to
+/// `MAX_NOT_BEFORE_MS`. The HTTP-date form names an instant rather than a delay, so it is read against the
+/// caller's clock, which is also what keeps an upstream clock that runs ahead from parking the account.
+fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
+    let value = head.get("retry-after")?.trim();
+    let delay = match value.parse::<i64>() {
+        Ok(seconds) => seconds.saturating_mul(1000),
+        Err(_) => jiff::fmt::rfc2822::DateTimeParser::new()
+            .parse_timestamp(value)
+            .ok()?
+            .as_millisecond()
+            .saturating_sub(now),
+    };
+    Some(delay.clamp(0, MAX_NOT_BEFORE_MS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn head_with(retry_after: &str) -> ResponseHead {
+        ResponseHead {
+            status: 429,
+            headers: vec![("Retry-After".to_string(), retry_after.to_string())],
+        }
+    }
+
+    #[test]
+    fn a_retry_after_delay_is_bounded() {
+        let now = 1_000_000;
+        assert_eq!(retry_after_ms(&head_with("30"), now), Some(30_000));
+        assert_eq!(
+            retry_after_ms(&head_with("99999999999999"), now),
+            Some(MAX_NOT_BEFORE_MS)
+        );
+        assert_eq!(retry_after_ms(&head_with("-5"), now), Some(0));
+        assert_eq!(retry_after_ms(&head_with("whenever"), now), None);
+    }
+
+    #[test]
+    fn a_retry_after_date_is_read_against_our_own_clock() {
+        let date = "Wed, 21 Oct 2015 07:28:00 GMT";
+        let at = 1_445_412_480_000;
+        assert_eq!(retry_after_ms(&head_with(date), at - 45_000), Some(45_000));
+        assert_eq!(
+            retry_after_ms(&head_with(date), at - 86_400_000),
+            Some(MAX_NOT_BEFORE_MS)
+        );
+        assert_eq!(retry_after_ms(&head_with(date), at + 1_000), Some(0));
+    }
 }
