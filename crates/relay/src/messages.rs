@@ -337,11 +337,14 @@ impl Relay {
                 Err(_) => continue,
             };
             let mut edited = raw.to_vec();
-            if let Err(error) = edit_body(
-                &mut edited,
-                credential.account_uuid.as_deref(),
-                &selection.upstream_model,
-            ) {
+            let edit = {
+                edit_body(
+                    &mut edited,
+                    credential.account_uuid.as_deref(),
+                    &selection.upstream_model,
+                )
+            };
+            if let Err(error) = edit {
                 if let RelayError::ClientDrift { kind } = &error {
                     // Drift depends on the body alone, so it is found on the first account before any wire
                     // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
