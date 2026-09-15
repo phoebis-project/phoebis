@@ -24,7 +24,7 @@ impl DriftGuard {
                 HeaderSlot::Fixed("x-app", v) => Some(*v),
                 _ => None,
             })
-            .unwrap_or("cli");
+            .expect("the pinned profile always carries a fixed x-app header slot");
         DriftGuard {
             app,
             profile,

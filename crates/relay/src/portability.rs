@@ -4,6 +4,8 @@
 use serde_json::Value;
 
 pub fn is_portable(body: &[u8]) -> bool {
+    // Fails open: an unparseable body is refused by the upstream anyway, and a request the scanner cannot
+    // read carries no account-bound reference it could prove.
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return true;
     };
@@ -28,7 +30,7 @@ fn references_account_state(value: &Value) -> bool {
             if map
                 .get("type")
                 .and_then(Value::as_str)
-                .is_some_and(|t| t.ends_with("_tool_result") && t != "tool_result")
+                .is_some_and(|t| t.ends_with("_tool_result"))
             {
                 return true;
             }

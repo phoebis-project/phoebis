@@ -3,6 +3,7 @@
 
 use phoebis_store::{AccountKind, AccountState};
 use phoebis_transport::response::ResponseHead;
+use serde_json::Value;
 
 use crate::ratelimit::{retry_after, UnifiedHeaders};
 
@@ -37,10 +38,14 @@ pub enum Verdict {
 
 pub struct HeadContext<'a> {
     pub kind: AccountKind,
+    /// The model the caller writes a model-scoped `Cooldown` row under.
     pub canonical_model: &'a str,
     pub now: i64,
     pub fallback_ms: i64,
+    /// The first SSE event's data, decoded: the caller decodes its inspection copy, so this is never compressed.
     pub first_event: Option<&'a [u8]>,
+    /// The start of a non-streaming body, decoded: the caller decodes its inspection copy, so this is never
+    /// compressed.
     pub body_prefix: Option<&'a [u8]>,
 }
 
@@ -62,7 +67,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     let sse_rate_limited = head.status == 200
         && ctx
             .first_event
-            .is_some_and(|e| error_type(e) == Some("rate_limit_error"));
+            .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error"));
     let rate_limited = head.status == 429 || sse_rate_limited;
     match ctx.kind {
         AccountKind::Oauth if rate_limited => {
@@ -80,7 +85,8 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         AccountKind::ApiKey
             if head.status == 400
                 && ctx.body_prefix.is_some_and(|b| {
-                    error_type(b) == Some("invalid_request_error") && names_credit_balance(b)
+                    error_type(b).as_deref() == Some("invalid_request_error")
+                        && names_credit_balance(b)
                 }) =>
         {
             return Verdict::FailOver {
@@ -94,7 +100,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         || (head.status == 403
             && ctx
                 .body_prefix
-                .is_some_and(|b| error_type(b) == Some("authentication_error")));
+                .is_some_and(|b| error_type(b).as_deref() == Some("authentication_error")));
     if auth {
         return match ctx.kind {
             AccountKind::Oauth => Verdict::Refresh,
@@ -107,12 +113,15 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
     if head.status == 403
         && ctx
             .body_prefix
-            .is_some_and(|b| error_type(b) == Some("permission_error"))
+            .is_some_and(|b| error_type(b).as_deref() == Some("permission_error"))
     {
         return Verdict::FailOver {
             cooldown: Some(Cooldown {
                 scope: Scope::Model,
-                until: ctx.now + PERMISSION_MS + MARGIN_MS,
+                until: ctx
+                    .now
+                    .saturating_add(PERMISSION_MS)
+                    .saturating_add(MARGIN_MS),
                 reason: "permission",
                 window: "retry_after".into(),
             }),
@@ -142,64 +151,68 @@ fn oauth_cooldown(
             .flatten()
             .max();
             let until = reset
-                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now + d))
-                .unwrap_or(ctx.now + ctx.fallback_ms);
+                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
+                .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
             return Cooldown {
                 scope: Scope::Account,
-                until: until + MARGIN_MS,
+                until: until.saturating_add(MARGIN_MS),
                 reason: "rate_limit",
                 window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
         if fable_only(u) && (rejected(&u.seven_day_oi_status) || rejected(&u.status)) {
-            let until = u
-                .seven_day_oi_reset
-                .or(u.reset)
-                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now + d))
-                .unwrap_or(ctx.now + ctx.fallback_ms);
+            // Same deadline rule as the shared row: the later of the rejected window's own reset and the
+            // top-level reset, which only ever lengthens the cooldown when it wins.
+            let reset = [u.seven_day_oi_reset, u.reset].into_iter().flatten().max();
+            let until = reset
+                .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
+                .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
             return Cooldown {
                 scope: Scope::Model,
-                until: until + MARGIN_MS,
+                until: until.saturating_add(MARGIN_MS),
                 reason: "rate_limit",
                 window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
     }
     let until = retry_after(head, ctx.now)
-        .map(|d| ctx.now + d)
-        .unwrap_or(ctx.now + ctx.fallback_ms);
+        .map(|d| ctx.now.saturating_add(d))
+        .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
     Cooldown {
         scope: Scope::Account,
-        until: until + MARGIN_MS,
+        until: until.saturating_add(MARGIN_MS),
         reason: "rate_limit",
         window: exhaustion_window(unified, AccountKind::Oauth),
     }
 }
 
 /// A rejection whose only rejected window is the model-scoped one. Both shared statuses have to be present and
-/// not rejected: an absent status is no evidence that the shared window is fine, and a model-only cooldown on
-/// that basis would keep sending an exhausted account traffic.
+/// exactly `allowed`: neither an absent status nor an unrecognized third value is evidence that the shared
+/// window is fine, and a model-only cooldown on that basis would keep sending an exhausted account traffic.
 fn fable_only(u: &UnifiedHeaders) -> bool {
-    let allowed = |s: &Option<String>| s.as_deref().is_some_and(|v| v != "rejected");
+    let allowed = |s: &Option<String>| s.as_deref() == Some("allowed");
     let shared_fine = allowed(&u.five_hour_status) && allowed(&u.seven_day_status);
     shared_fine
         && (u.seven_day_oi_status.as_deref() == Some("rejected")
             || u.representative_claim
                 .as_deref()
-                .is_some_and(|c| c.starts_with("seven_day_") && c != "seven_day"))
+                .is_some_and(|c| c.starts_with("seven_day_")))
 }
 
 fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
     match retry_after(head, ctx.now) {
         Some(delay) => Cooldown {
             scope: Scope::Model,
-            until: ctx.now + delay + MARGIN_MS,
+            until: ctx.now.saturating_add(delay).saturating_add(MARGIN_MS),
             reason: "rate_limit",
             window: "retry_after".into(),
         },
         None => Cooldown {
             scope: Scope::Account,
-            until: ctx.now + ctx.fallback_ms + MARGIN_MS,
+            until: ctx
+                .now
+                .saturating_add(ctx.fallback_ms)
+                .saturating_add(MARGIN_MS),
             reason: "rate_limit",
             window: "retry_after".into(),
         },
@@ -223,18 +236,35 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>, kind: AccountKind) ->
     "retry_after".into()
 }
 
-fn error_type(body: &[u8]) -> Option<&str> {
-    // The prefix may be cut mid-document, so the type is located textually rather than parsed.
+/// The error body's `error.type`. A complete body parses directly, which is what keeps a `"type"` string that
+/// happens to appear inside an upstream `message` from being mistaken for the real type. A prefix cut
+/// mid-document fails to parse, so the type is then located textually, trusting only a `"type"` key that opens
+/// an object or follows a sibling field, never one embedded in a string value.
+fn error_type(body: &[u8]) -> Option<String> {
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        return value
+            .get("error")
+            .and_then(|e| e.get("type"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
     let text = std::str::from_utf8(body).ok()?;
-    let at = text.find(r#""error""#)?;
-    let rest = &text[at..];
-    let t = rest.find(r#""type""#)?;
-    let after = rest[t + 6..]
-        .trim_start()
-        .strip_prefix(':')?
-        .trim_start()
-        .strip_prefix('"')?;
-    after.split('"').next()
+    let error_at = text.find(r#""error""#)?;
+    let mut cursor = error_at;
+    while let Some(offset) = text[cursor..].find(r#""type""#) {
+        let match_at = cursor + offset;
+        let before = text[..match_at].trim_end();
+        if before.ends_with('{') || before.ends_with(',') {
+            let after = text[match_at + 6..]
+                .trim_start()
+                .strip_prefix(':')?
+                .trim_start()
+                .strip_prefix('"')?;
+            return after.split('"').next().map(str::to_string);
+        }
+        cursor = match_at + 6;
+    }
+    None
 }
 
 fn names_credit_balance(body: &[u8]) -> bool {
@@ -351,6 +381,26 @@ mod tests {
     }
 
     #[test]
+    fn a_third_shared_status_value_is_not_treated_as_allowed() {
+        let h = head(
+            429,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                ("anthropic-ratelimit-unified-5h-status", "throttled"),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+                ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+            ],
+        );
+        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        assert_eq!(
+            c.scope,
+            Scope::Account,
+            "a shared status other than allowed or rejected is not evidence the window is fine"
+        );
+    }
+
+    #[test]
     fn an_oauth_429_without_unified_headers_takes_retry_after_then_the_fallback() {
         let c = cooldown_of(classify(
             &head(429, &[("retry-after", "30")]),
@@ -394,6 +444,15 @@ mod tests {
     }
 
     #[test]
+    fn an_extreme_retry_after_saturates_instead_of_overflowing() {
+        let c = cooldown_of(classify(
+            &head(429, &[("retry-after", "1e18")]),
+            &context(AccountKind::ApiKey),
+        ));
+        assert_eq!(c.until, i64::MAX);
+    }
+
+    #[test]
     fn the_first_sse_event_error_uses_the_partition_rows_and_a_credit_400_marks_funding() {
         let mut ctx = context(AccountKind::Oauth);
         ctx.first_event =
@@ -423,6 +482,19 @@ mod tests {
                 mark: Some(AccountState::FundingRequired)
             }
         ));
+    }
+
+    #[test]
+    fn the_api_key_200_sse_first_event_error_is_model_scoped_with_retry_after() {
+        let mut ctx = context(AccountKind::ApiKey);
+        ctx.first_event =
+            Some(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#);
+        let h = head(
+            200,
+            &[("content-type", "text/event-stream"), ("retry-after", "9")],
+        );
+        let c = cooldown_of(classify(&h, &ctx));
+        assert_eq!((c.scope, c.until), (Scope::Model, NOW + 9_000 + 1_000));
     }
 
     #[test]
@@ -469,6 +541,16 @@ mod tests {
             classify_transport(TransportPhase::AfterWritten),
             Verdict::Commit
         ));
+    }
+
+    #[test]
+    fn a_message_mentioning_type_text_does_not_steer_a_complete_body() {
+        let mut ctx = context(AccountKind::Oauth);
+        ctx.body_prefix = Some(br#"{"type":"error","error":{"type":"invalid_request_error","message":"contains \"type\": \"permission_error\" in the text"}}"#);
+        assert!(
+            matches!(classify(&head(403, &[]), &ctx), Verdict::Commit),
+            "the real type comes from the parsed body, not the first \"type\" match"
+        );
     }
 
     #[test]

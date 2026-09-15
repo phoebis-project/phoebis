@@ -68,7 +68,9 @@ impl UnifiedHeaders {
     pub fn present(&self) -> bool {
         self.status.is_some()
             || self.five_hour_status.is_some()
+            || self.five_hour_reset.is_some()
             || self.seven_day_status.is_some()
+            || self.seven_day_reset.is_some()
             || self.five_hour_utilization.is_some()
             || self.seven_day_utilization.is_some()
     }
@@ -168,10 +170,19 @@ mod tests {
                     "seven_day_opus",
                 ),
                 ("anthropic-ratelimit-unified-5h-status", "allowed"),
+                ("anthropic-ratelimit-unified-5h-reset", "1700000300"),
                 ("anthropic-ratelimit-unified-5h-utilization", "0.42"),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d-reset", "1700000400"),
+                ("anthropic-ratelimit-unified-7d-utilization", "0.13"),
                 ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700000200"),
                 ("anthropic-ratelimit-unified-overage-in-use", "true"),
+                ("anthropic-ratelimit-unified-overage-reset", "1700000500"),
+                (
+                    "anthropic-ratelimit-unified-overage-disabled-reason",
+                    "no_payment_method",
+                ),
             ],
         );
         let u = UnifiedHeaders::parse(&h).unwrap();
@@ -188,14 +199,37 @@ mod tests {
             )
         );
         assert_eq!(
-            (u.five_hour_status.as_deref(), u.five_hour_utilization),
-            (Some("allowed"), Some(0.42))
+            (
+                u.five_hour_status.as_deref(),
+                u.five_hour_reset,
+                u.five_hour_utilization
+            ),
+            (Some("allowed"), Some(1_700_000_300_000), Some(0.42))
+        );
+        assert_eq!(
+            (
+                u.seven_day_status.as_deref(),
+                u.seven_day_reset,
+                u.seven_day_utilization
+            ),
+            (Some("allowed"), Some(1_700_000_400_000), Some(0.13))
         );
         assert_eq!(
             (u.seven_day_oi_status.as_deref(), u.seven_day_oi_reset),
             (Some("rejected"), Some(1_700_000_200_000))
         );
-        assert_eq!(u.overage_in_use, Some(true));
+        assert_eq!(
+            (
+                u.overage_in_use,
+                u.overage_reset,
+                u.overage_disabled_reason.as_deref()
+            ),
+            (
+                Some(true),
+                Some(1_700_000_500_000),
+                Some("no_payment_method")
+            )
+        );
         assert!(u.present());
         assert!(UnifiedHeaders::parse(&head(529, &[("retry-after", "1")])).is_none());
     }
