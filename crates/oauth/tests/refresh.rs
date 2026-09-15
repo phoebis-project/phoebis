@@ -79,17 +79,7 @@ fn control_requests_serialize_to_the_fixture_heads() {
     );
 }
 
-async fn manager_with(
-    rules: Vec<Rule>,
-    now: Arc<AtomicI64>,
-) -> (CredentialManager, Arc<Store>, FakeUpstream) {
-    let up = FakeUpstream::start(rules).await;
-    let p = claude_code_2_1_269_linux_x64();
-    let mut b = connector_builder(p, Plane::Control).unwrap();
-    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
-    let addr = up.addr();
-    let resolver: Resolver = Arc::new(move |_| Some(addr));
-    let control = Arc::new(ControlClient::new(p, b.build(), resolver));
+fn store_with_account() -> Arc<Store> {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
         .insert_account(&AccountRow {
@@ -106,6 +96,21 @@ async fn manager_with(
             state: AccountState::Ready,
         })
         .unwrap();
+    store
+}
+
+async fn manager_with(
+    rules: Vec<Rule>,
+    now: Arc<AtomicI64>,
+) -> (CredentialManager, Arc<Store>, FakeUpstream) {
+    let up = FakeUpstream::start(rules).await;
+    let p = claude_code_2_1_269_linux_x64();
+    let mut b = connector_builder(p, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver = Arc::new(move |_| Some(addr));
+    let control = Arc::new(ControlClient::new(p, b.build(), resolver));
+    let store = store_with_account();
     let n = now.clone();
     let clock: phoebis_oauth::Clock = Arc::new(move || n.load(Ordering::SeqCst));
     (
@@ -419,4 +424,77 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
     );
     assert!(up.requests().is_empty());
     up.shutdown().await;
+}
+
+/// A manager whose resolver never yields an address, so every refresh fails before a byte is written.
+async fn manager_without_upstream(now: Arc<AtomicI64>) -> (CredentialManager, Arc<Store>) {
+    let p = claude_code_2_1_269_linux_x64();
+    let resolver: Resolver = Arc::new(|_| None);
+    let control = Arc::new(ControlClient::new(
+        p,
+        connector_builder(p, Plane::Control).unwrap().build(),
+        resolver,
+    ));
+    let store = store_with_account();
+    let n = now.clone();
+    let clock: phoebis_oauth::Clock = Arc::new(move || n.load(Ordering::SeqCst));
+    (
+        CredentialManager::new(store.clone(), control, p, clock),
+        store,
+    )
+}
+
+#[tokio::test]
+async fn an_unreachable_upstream_does_not_quarantine() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store) = manager_without_upstream(now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::Unavailable(_))
+    ));
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "a request that never left resolves its attempt instead of quarantining the account"
+    );
+
+    // Past the backoff the first failure armed, with 100 ms left of a 210 s lifetime, so the refresh runs
+    // again and still cannot reach anything.
+    now.store(1_010_000, Ordering::SeqCst);
+    store
+        .commit_credentials(
+            "a",
+            1,
+            Some(1),
+            None,
+            &NewBundle {
+                access_token: Secret::new("still-good"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 800_000,
+                expires_at: 1_010_100,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "still-good"
+    );
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
 }

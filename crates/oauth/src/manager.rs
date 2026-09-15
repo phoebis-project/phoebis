@@ -492,14 +492,16 @@ fn account_uuid(account: &AccountRow) -> String {
 /// Whether the request was still unsent when the transport failed, in which case no rotation can have
 /// happened upstream.
 ///
-/// `ControlClient::send` folds the writer's `WriteProgress` into a plain `TransportError::Io`, so this is
-/// the finest split the transport exposes: `Boring` and `Handshake` can only happen while the connection
-/// is still being set up, while `Io`, `Response`, and `TooLarge` can all happen after the request went out
-/// whole, which makes them the lost-response class.
+/// `ControlClient::send` reports `Unreachable` for every failure before the request was written whole: no
+/// address for the host, a refused connection, a rejected handshake, a partially written request, and a
+/// timeout that fired before the body went out. `Boring` is a local TLS configuration fault and
+/// `Handshake` can only arise while the connection is being set up, so both join it. What is left,
+/// `Io`, `Response`, and `TooLarge`, can all happen after the request reached the upstream intact, which
+/// makes the response, not the request, the part that went missing.
 fn transport_before_write(error: &TransportError) -> bool {
     matches!(
         error,
-        TransportError::Boring(_) | TransportError::Handshake(_)
+        TransportError::Boring(_) | TransportError::Handshake(_) | TransportError::Unreachable(_)
     )
 }
 
