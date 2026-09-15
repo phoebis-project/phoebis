@@ -349,6 +349,12 @@ async fn discovery_sends_the_measured_request_shape_on_each_dispatch_path_and_a_
     assert_eq!(got.headers[0].1, format!("Bearer {A}"));
     assert_eq!(got.headers[1].1, "claude-code/2.1.269");
     assert_eq!(got.headers[4].1, "*/*");
+    h.store.bump_lifecycle("a").unwrap();
+    let disconnected = h.store.account("a").unwrap().unwrap();
+    assert!(matches!(
+        h.catalog.discover(&disconnected).await,
+        Err(DiscoveryError::NoCredential)
+    ));
     let k = h.store.account("k").unwrap().unwrap();
     h.catalog.discover(&k).await.unwrap();
     let got = &up.requests()[1];

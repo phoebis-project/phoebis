@@ -96,31 +96,43 @@ impl CatalogService {
         secret: Option<&Secret>,
     ) -> Result<Discovered, DiscoveryError> {
         let credential = match (account.kind, secret) {
-            (AccountKind::Oauth, _) => (
-                "Authorization".to_string(),
-                format!(
-                    "Bearer {}",
-                    self.manager
-                        .acquire(&account.id)
-                        .await
-                        .map_err(|_| DiscoveryError::NoCredential)?
-                        .secret
-                        .expose()
-                ),
-            ),
+            (AccountKind::Oauth, _) => {
+                let token = self.manager.acquire(&account.id).await.map_err(|error| {
+                    tracing::warn!(
+                        account = %account.id,
+                        %error,
+                        "the catalog discovery could not obtain the account's credential"
+                    );
+                    DiscoveryError::NoCredential
+                })?;
+                (
+                    "Authorization".to_string(),
+                    format!("Bearer {}", token.secret.expose()),
+                )
+            }
             (AccountKind::ApiKey, Some(staged)) => {
                 ("x-api-key".to_string(), staged.expose().to_string())
             }
-            (AccountKind::ApiKey, None) => (
-                "x-api-key".to_string(),
-                self.store
-                    .api_key_secret(&account.id)
-                    .ok()
-                    .flatten()
-                    .ok_or(DiscoveryError::NoCredential)?
-                    .expose()
-                    .to_string(),
-            ),
+            (AccountKind::ApiKey, None) => {
+                let stored = match self.store.api_key_secret(&account.id) {
+                    Ok(secret) => secret,
+                    Err(error) => {
+                        tracing::warn!(
+                            account = %account.id,
+                            %error,
+                            "the catalog discovery could not obtain the account's credential"
+                        );
+                        None
+                    }
+                };
+                (
+                    "x-api-key".to_string(),
+                    stored
+                        .ok_or(DiscoveryError::NoCredential)?
+                        .expose()
+                        .to_string(),
+                )
+            }
         };
         let authority = "api.anthropic.com".to_string();
         let headers = vec![
