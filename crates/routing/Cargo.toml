@@ -1,0 +1,17 @@
+[package]
+name = "phoebis-routing"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+phoebis-oauth = { path = "../oauth" }
+phoebis-store = { path = "../store" }
+rand = { workspace = true }
+serde_json = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
