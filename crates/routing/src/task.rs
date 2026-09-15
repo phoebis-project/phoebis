@@ -11,7 +11,7 @@ use phoebis_store::{AccountState, CooldownRow, PinRow, Store, StoreError};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::select::{select, SelectRequest, SelectResult};
+use crate::select::{select, Exhaustion, SelectRequest, SelectResult};
 use crate::state::{
     EvidenceSource, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
 };
@@ -136,20 +136,21 @@ impl RouterHandle {
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(Command::Select { request, reply })
-            .await
-            .map_err(|_| RouterGone)?;
-        rx.await.map_err(|_| RouterGone)
+        self.ask(|reply| Command::Select { request, reply }).await
     }
 
     /// Never waits: a report is a fact about the past, and a relay holding a client stream must not block on
     /// the task's queue. A full queue is logged and the report dropped, which delays a state change by one
     /// request rather than stalling one.
     pub fn report(&self, report: Report) {
-        if let Err(error) = self.tx.try_send(Command::Report(report)) {
-            tracing::warn!(%error, "the router task's queue is full, a report was dropped");
+        match self.tx.try_send(Command::Report(report)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("the router task's queue is full, a report was dropped")
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::warn!("the router task has stopped, a report was dropped")
+            }
         }
     }
 
@@ -158,6 +159,8 @@ impl RouterHandle {
             .await?
             .map_err(ReloadError::Load)
     }
+    /// The first call drains the queue and the writer, then answers `Ok(())`. A later one answers
+    /// `Err(RouterGone)`, because the task it would ask has already stopped.
     pub async fn shutdown(&self) -> Result<(), RouterGone> {
         self.ask(|reply| Command::Shutdown { reply }).await
     }
@@ -248,6 +251,8 @@ pub fn spawn(
     ))));
     let state = RoutingState::from_load(store.load_routing()?);
     let (tx, mut rx) = mpsc::channel(COMMANDS);
+    // Unbounded so the loop never blocks on SQLite: a stalled store grows this queue in memory rather than
+    // stalling selection, and bounding the process's memory is the operator's call, not this channel's.
     let (writer, mut writes) = mpsc::unbounded_channel::<Vec<StateWrite>>();
     let (done_tx, done_rx) = oneshot::channel();
     let handle = RouterHandle {
@@ -260,9 +265,15 @@ pub fn spawn(
         // before the upsert it was meant to follow.
         while let Some(batch) = writes.recv().await {
             let store = writer_store.clone();
-            let result = tokio::task::spawn_blocking(move || apply(&store, batch)).await;
-            if let Ok(Err(error)) = result {
-                tracing::error!(%error, "a routing state write failed");
+            let size = batch.len();
+            match tokio::task::spawn_blocking(move || apply(&store, batch)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::error!(%error, batch = size, "a routing state write failed")
+                }
+                Err(error) => {
+                    tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost")
+                }
             }
         }
         let _ = done_tx.send(());
@@ -352,7 +363,7 @@ impl Task {
                     let now = (self.clock)();
                     let Ok(key) = snapshot.authenticate_id(&request.key_id, now) else {
                         let _ = reply.send(SelectAnswer {
-                            result: SelectResult::Exhausted(crate::Exhaustion::Untimed),
+                            result: SelectResult::Exhausted(Exhaustion::Untimed),
                             cancel: CancellationToken::new(),
                         });
                         return;
@@ -408,7 +419,9 @@ impl Task {
                 reply,
             } => {
                 let cleared = self.state.clear_cooldown(&account_id, &scope);
-                self.write(vec![StateWrite::DeleteCooldown(account_id, scope)]);
+                if cleared {
+                    self.write(vec![StateWrite::DeleteCooldown(account_id, scope)]);
+                }
                 let _ = reply.send(cleared);
             }
             Command::Pins { reply } => {
