@@ -705,3 +705,86 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
+    // A re-pairing without a disconnect keeps the lifecycle generation, so the bundle generation is the only
+    // thing that says this verdict is about credentials nobody uses any more.
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        })),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    let stale = store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let mgr = Arc::new(mgr);
+    let refreshing = tokio::spawn({
+        let mgr = mgr.clone();
+        async move { mgr.acquire("a").await }
+    });
+    while up.requests().is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    // The operator pairs the slot again while the token request is still in flight. No disconnect, so the
+    // lifecycle generation does not move.
+    store
+        .commit_credentials(
+            "a",
+            1,
+            Some(stale),
+            None,
+            &NewBundle {
+                access_token: Secret::new("fresh"),
+                refresh_token: Some(Secret::new("rt2")),
+                issued_at: 1_000_000,
+                expires_at: 1_000_000 + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    up.release();
+    assert!(matches!(
+        refreshing.await.unwrap(),
+        Err(AcquireError::ReauthRequired)
+    ));
+
+    assert!(
+        matches!(
+            store.account("a").unwrap().unwrap().state,
+            AccountState::Ready
+        ),
+        "the rejected refresh token is not the one the slot now holds"
+    );
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "fresh",
+        "the account keeps serving the bundle that replaced the rejected one"
+    );
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "the re-paired bundle is nowhere near its margin, so nothing is refreshed"
+    );
+    up.shutdown().await;
+}

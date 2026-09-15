@@ -377,7 +377,7 @@ impl Inner {
 
         let Some(refresh_token) = &bundle.refresh_token else {
             self.resolve(attempt, AttemptOutcome::Failed("no refresh token".into()));
-            self.mark_reauth(&account);
+            self.mark_reauth(&account, bundle.generation);
             return Err(RefreshFailure::ReauthRequired);
         };
         let scopes = if bundle.scopes.is_empty() {
@@ -424,7 +424,7 @@ impl Inner {
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
                 self.resolve(attempt, AttemptOutcome::Failed(detail));
-                self.mark_reauth(&account);
+                self.mark_reauth(&account, bundle.generation);
                 return Err(RefreshFailure::ReauthRequired);
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
@@ -464,7 +464,7 @@ impl Inner {
         if let Some(stored) = &account.identity {
             if !identity_matches(stored, &IdentityClaims::from_token(&token)) {
                 self.resolve(attempt, AttemptOutcome::Failed("identity mismatch".into()));
-                self.mark_reauth(&account);
+                self.mark_reauth(&account, bundle.generation);
                 return Err(RefreshFailure::ReauthRequired);
             }
         }
@@ -570,13 +570,16 @@ impl Inner {
         let _ = self.store.resolve_refresh_attempt(attempt, outcome);
     }
 
-    /// Asks for re-pairing, unless the slot moved on: a verdict about credentials that a disconnect has
-    /// already thrown away must not lock out the pairing that replaced them.
-    fn mark_reauth(&self, account: &AccountRow) {
-        let _ = self.store.set_state_if_lifecycle(
+    /// Asks for re-pairing, unless the slot moved on: a verdict about credentials that a disconnect threw
+    /// away, or that a re-pairing replaced without one, must not lock out what took their place. A re-pair
+    /// keeps the lifecycle generation, so the bundle generation this refresh was started against is the half
+    /// of the fence that catches it.
+    fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) {
+        let _ = self.store.set_state_if_generations(
             &account.id,
             AccountState::ReauthRequired,
             account.lifecycle_generation,
+            credential_generation,
         );
     }
 }

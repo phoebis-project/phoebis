@@ -258,22 +258,30 @@ impl Store {
     }
 
     /// `set_state` for a verdict formed before a request that took a while: the state only moves while the
-    /// slot is still the one the caller looked at, so a disconnect and a re-pair in between leave the
-    /// replacement untouched. Reports whether the row moved.
-    pub fn set_state_if_lifecycle(
+    /// slot still holds the exact credentials the caller looked at. A disconnect moves the lifecycle
+    /// generation and a re-pair without one moves the credential generation, so both have to match or the
+    /// verdict is about credentials that no longer exist and would only lock out what replaced them. Reports
+    /// whether the row moved.
+    ///
+    /// One statement, because two would leave a window between the check and the update exactly as wide as
+    /// the one this exists to close.
+    pub fn set_state_if_generations(
         &self,
         id: &str,
         state: AccountState,
         lifecycle_generation: u64,
+        credential_generation: u64,
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let updated = conn.execute(
-            "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1 AND lifecycle_generation = ?4",
+            "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1 AND lifecycle_generation = ?4 \
+             AND EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5)",
             params![
                 id,
                 state,
                 jiff::Timestamp::now().as_millisecond(),
-                lifecycle_generation as i64
+                lifecycle_generation as i64,
+                credential_generation as i64
             ],
         )?;
         Ok(updated > 0)
