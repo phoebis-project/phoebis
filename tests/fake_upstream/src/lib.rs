@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use boring::ssl::{SslAcceptor, SslMethod};
 use bytes::{Buf, BytesMut};
@@ -141,13 +141,47 @@ impl FakeUpstream {
     }
 
     /// Closes every connection that is sitting between requests, the way an upstream reaps a socket it
-    /// considers idle. A connection in the middle of a request is left to finish it.
+    /// considers idle. A connection in the middle of a request is left to finish it. The signal is
+    /// asynchronous, so a caller that needs the client to observe the end of stream wants
+    /// `close_idle_and_wait` instead.
     pub fn close_idle(&self) {
-        for handle in self.shared.conns.lock().unwrap().values() {
+        self.reap_idle();
+    }
+
+    /// `close_idle` that returns only once the reaped sockets are actually shut, so the next thing the client
+    /// reads from one of them is the end of stream rather than nothing at all.
+    pub async fn close_idle_and_wait(&self) {
+        let reaped = self.reap_idle();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self
+            .shared
+            .conns
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|id| reaped.contains(id))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "fake-upstream: a reaped connection never shut down",
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        // The serve task has dropped its socket, so the FIN is on the wire; this settle keeps its loopback
+        // delivery from racing whatever the client does next with its end.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    /// Signals every connection between requests to close and names the ones it signalled.
+    fn reap_idle(&self) -> Vec<u64> {
+        let mut reaped = Vec::new();
+        for (id, handle) in self.shared.conns.lock().unwrap().iter() {
             if !handle.in_request.load(Ordering::SeqCst) {
                 let _ = handle.close.send(true);
+                reaped.push(*id);
             }
         }
+        reaped
     }
 
     /// Lets every gated `SseGated` responder continue past its first event, including ones that gate after this

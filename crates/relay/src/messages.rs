@@ -452,12 +452,13 @@ impl Relay {
         fresh: bool,
         written: &AtomicBool,
     ) -> Result<Sent, AttemptFailure> {
-        let (mut conn, reused) = if fresh {
-            (checkout_fresh(&self.pool, key, host, addr).await?, false)
+        let mut conn = if fresh {
+            checkout_fresh(&self.pool, key, host, addr).await?
         } else {
             self.pool
                 .checkout(key.clone(), host, addr)
                 .await
+                .map(|(conn, _)| conn)
                 .map_err(unsent)?
         };
         write_request(&mut conn, request)
@@ -478,11 +479,10 @@ impl Relay {
                 head,
                 leftover,
             }),
-            // A pooled connection the upstream closed while it sat idle fails exactly here: the request went
-            // into a socket that was already gone and not one byte came back.
-            Err(error) if reused && leftover.is_empty() => {
-                Err(AttemptFailure::Unsent(error.to_string()))
-            }
+            // The whole request is in the socket, so an upstream that read it and then closed without
+            // answering is indistinguishable from one that never saw it. Sending it again would bill the
+            // caller twice; the pool's liveness probe, not a retry, is what keeps a reaped idle connection
+            // from reaching this point.
             Err(error) => Err(AttemptFailure::Lost(error.to_string())),
         }
     }

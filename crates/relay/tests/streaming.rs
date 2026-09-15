@@ -387,7 +387,7 @@ fn gzip(payload: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn a_reused_connection_that_died_is_retried_on_a_fresh_one() {
+async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -411,7 +411,7 @@ async fn a_reused_connection_that_died_is_retried_on_a_fresh_one() {
         1,
         "the first request opened one connection"
     );
-    up.close_idle();
+    up.close_idle_and_wait().await;
     let second = app
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
@@ -419,16 +419,7 @@ async fn a_reused_connection_that_died_is_retried_on_a_fresh_one() {
     assert_eq!(
         second.status(),
         200,
-        "the request went out again on a fresh connection"
-    );
-    assert_eq!(
-        second
-            .extensions()
-            .get::<phoebis_relay::RelayOutcome>()
-            .expect("a relayed response carries its outcome")
-            .attempt,
-        2,
-        "the first attempt died on the pooled connection before a byte came back"
+        "the request went out on a connection the pool opened for it"
     );
     second.into_body().collect().await.unwrap();
     assert_eq!(
@@ -439,7 +430,59 @@ async fn a_reused_connection_that_died_is_retried_on_a_fresh_one() {
     assert_eq!(
         up.connections(),
         2,
-        "the retry opened a connection rather than reusing the dead one"
+        "the pool opened a connection rather than handing out the dead one"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_upstream_that_reads_a_request_and_closes_is_not_retried() {
+    // The pool hands out a connection it just probed, so the close can only have happened after the upstream
+    // read the request: it may have acted on it, and a second send would bill the caller twice.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let first = app
+        .clone()
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    // A connection returns to the pool only once its body has been read to the end.
+    first.into_body().collect().await.unwrap();
+    up.set_rule_after(1, "/v1/messages", Respond::CloseAfterRequest);
+    let second = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 502);
+    assert_eq!(
+        second.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    let outcome = second
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome")
+        .clone();
+    assert!(outcome.written, "the request went out in full");
+    assert_eq!(outcome.attempt, 1, "a written request is never sent twice");
+    assert_eq!(
+        up.requests().len(),
+        2,
+        "the upstream saw the second request once"
+    );
+    assert_eq!(
+        up.connections(),
+        1,
+        "the second request rode the pooled connection"
     );
     up.shutdown().await;
 }

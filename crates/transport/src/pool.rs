@@ -2,6 +2,7 @@
 
 use boring::ssl::SslConnector;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -33,10 +34,10 @@ impl Pool {
         }
     }
 
-    /// Hands out a connection for the key, and reports whether it came from the idle list. The upstream can
-    /// close an idle connection without the caller noticing, so a request written into a reused one may fail
-    /// with nothing read back although it never reached the upstream; a caller that must not repeat a side
-    /// effect has no other way to tell that case from a lost response.
+    /// Hands out a connection for the key, and reports whether it came from the idle list. An idle entry is
+    /// probed before it is handed out and dropped unless the socket is open and quiet, because a request
+    /// written into a connection the upstream closed while it sat idle looks exactly like a lost response and
+    /// so has to be failed rather than sent again.
     pub async fn checkout(
         &self,
         key: PoolKey,
@@ -47,7 +48,7 @@ impl Pool {
             let mut idle = self.idle.lock().unwrap();
             idle.get_mut(&key).and_then(|v| {
                 while let Some((c, at)) = v.pop() {
-                    if at.elapsed() < self.ttl {
+                    if at.elapsed() < self.ttl && alive(&c) {
                         return Some(c);
                     }
                 }
@@ -69,4 +70,12 @@ impl Pool {
             v.push((conn, Instant::now()));
         }
     }
+}
+
+/// Whether an idle connection can still carry a request. `WouldBlock` is the only answer an open and quiet
+/// socket gives; an end of stream, a close_notify alert, or any other byte waiting on a connection nobody has
+/// a request on all mean the same thing, that the next request must go somewhere else.
+fn alive(conn: &Conn) -> bool {
+    let mut probe = [0u8; 1];
+    matches!(conn.get_ref().try_read(&mut probe), Err(error) if error.kind() == ErrorKind::WouldBlock)
 }
