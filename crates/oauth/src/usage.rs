@@ -103,7 +103,15 @@ pub fn parse_usage(
     };
 
     let fable_window = match map.get("limits") {
-        Some(limits) => fable_from_limits(limits),
+        Some(limits) => {
+            let scoped = fable_from_limits(limits);
+            if scoped.is_some() {
+                // The alias is the same quota under the name an older response used, so leaving it among the
+                // windows would show the operator one limit twice.
+                windows.retain(|window| !FABLE_KEY_ALIASES.contains(&window.key.as_str()));
+            }
+            scoped
+        }
         None => {
             let alias = windows
                 .iter()

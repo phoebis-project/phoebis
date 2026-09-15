@@ -24,6 +24,15 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
         windows.iter().all(|w| w.key != "extra_usage"),
         "purchased credit is not a quota window"
     );
+    assert!(
+        windows.iter().all(|w| w.key != "cinder_cove"),
+        "the alias is the same quota under an older name, so it is not a window of its own"
+    );
+    assert_eq!(
+        windows.len(),
+        1,
+        "five_hour is all that is left once the alias is folded into the Fable window"
+    );
     let e = extra.unwrap();
     assert_eq!(e.used_credits, Some(1234));
     assert_eq!(
