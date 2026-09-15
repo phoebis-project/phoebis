@@ -843,3 +843,68 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
     assert!(store.pending_refresh_attempts().unwrap().is_empty());
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_lost_response_after_a_re_pair_quarantines_rather_than_serving_the_replaced_token() {
+    // The fallback that keeps a usable token through an uncertain rotation must not reach back for a bundle
+    // the account no longer has: by the time this resolves, the token it captured has been replaced.
+    let now = Arc::new(AtomicI64::new(1_120_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::CloseAfterRequest)),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now).await;
+    // 80 s left of a 400 s lifetime: inside the 100 s margin, so the refresh runs while the token still works.
+    let stale = store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 800_000,
+                expires_at: 1_200_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let mgr = Arc::new(mgr);
+    let refreshing = tokio::spawn({
+        let mgr = mgr.clone();
+        async move { mgr.acquire("a").await }
+    });
+    while up.requests().is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    store
+        .commit_credentials(
+            "a",
+            1,
+            Some(stale),
+            None,
+            &NewBundle {
+                access_token: Secret::new("fresh"),
+                refresh_token: Some(Secret::new("rt2")),
+                issued_at: 1_120_000,
+                expires_at: 1_120_000 + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    up.release();
+
+    assert!(
+        matches!(refreshing.await.unwrap(), Err(AcquireError::Quarantined)),
+        "the token this refresh captured is not the account's any more, however usable it still looks"
+    );
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "fresh",
+        "the bundle that replaced it is served by the next call"
+    );
+    up.shutdown().await;
+}

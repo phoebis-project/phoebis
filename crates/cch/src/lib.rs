@@ -407,6 +407,24 @@ mod tests {
         );
     }
 
+    /// The same body with the nesting inside `fallbacks`, a member the hash view cuts, so no depth of arrays
+    /// under it can reach the signature.
+    fn nested_in_an_excluded_member(depth: usize) -> Vec<u8> {
+        format!(
+            r#"{{{BILLING},"fallbacks":{}1{},"model":"model-a"}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+        .into_bytes()
+    }
+
+    fn digits(signed: &[u8]) -> &[u8] {
+        let at = find_cch(signed)
+            .expect("the billing block carries a hash")
+            .digits_start;
+        &signed[at..at + LEN]
+    }
+
     #[test]
     fn a_body_within_the_bound_still_scans() {
         let body = nested(100);
@@ -414,5 +432,17 @@ mod tests {
         assert_eq!(signed.len(), body.len());
         let (start, end) = string_member_span(&body, &["model"]).expect("the model is readable");
         assert_eq!(&body[start..end], br#""model-a""#);
+
+        // Counting depth must not move what the scan produces. These two differ only inside `fallbacks`,
+        // which the hash view cuts whole, so the digits have to agree; a deep walk that lost its place would
+        // cut the wrong span and sign something else.
+        let deep = sign(&nested_in_an_excluded_member(100)).expect("depth alone is not a refusal");
+        let shallow = sign(&nested_in_an_excluded_member(1)).expect("depth alone is not a refusal");
+        assert_ne!(
+            digits(&deep),
+            b"00000".as_slice(),
+            "the placeholder was replaced, so the comparison below is not two unsigned bodies"
+        );
+        assert_eq!(digits(&deep), digits(&shallow));
     }
 }
