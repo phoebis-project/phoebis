@@ -1,9 +1,32 @@
-//! The Messages handler.
+//! The Messages relay: caller authentication, request identity, the measured outbound header sequence, the two
+//! body edits, and the upstream round trip with its retry and refresh rules.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_links() {
-        assert!(!env!("CARGO_PKG_NAME").is_empty());
-    }
+mod auth;
+mod body;
+mod errors;
+mod headers;
+mod identity;
+mod messages;
+mod stream;
+
+pub use auth::{AuthError, KeyTable, KeyTableError, Route};
+pub use body::{edit_body, BodyEdits};
+pub use errors::anthropic_error;
+pub use headers::{outbound_headers, CredentialKind};
+pub use identity::{identify, RequestIdentity};
+pub use messages::{router, Limits, Relay, RelayOutcome};
+
+/// A request the relay refuses before it reaches the upstream.
+#[derive(Debug, thiserror::Error)]
+pub enum RelayError {
+    #[error("the bound account's identity cannot be written into the request body")]
+    AccountUuid,
+    #[error("request body is larger than the configured limit")]
+    BodyTooLarge,
+    #[error("billing header: {0}")]
+    Cch(#[from] phoebis_cch::CchError),
+    #[error("request body has no model")]
+    NoModel,
+    #[error("request body is not a JSON object")]
+    NotAnObject,
 }

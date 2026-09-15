@@ -29,6 +29,8 @@ bytes = "1"
 fd-lock = "4.0.4"
 flate2 = "1.1.10"
 futures = "0.3"
+hmac = "0.12"
+http-body-util = "0.1"
 httparse = "1.10.1"
 jiff = "0.2.37"
 rand = "0.10.2"
@@ -38,9 +40,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 serde_norway = "0.9.42"
 sha2 = "0.10"
+subtle = "2"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-boring = "5.2.0"
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2"
