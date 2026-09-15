@@ -21,5 +21,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 
+[features]
+# The refresh test seam. Enabled through the self dev-dependency below, so it is on for this crate's own
+# tests and absent from anything else that depends on it.
+debug-hooks = []
+
 [dev-dependencies]
+phoebis-oauth = { path = ".", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }

@@ -1,6 +1,7 @@
 //! Hands out access tokens, refreshing at most one per account at a time.
 
 use std::collections::HashMap;
+#[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,6 +109,7 @@ struct Inner {
     control: Arc<ControlClient>,
     inflight: Mutex<HashMap<String, RefreshFuture>>,
     not_before: Mutex<HashMap<String, i64>>,
+    #[cfg(any(test, feature = "debug-hooks"))]
     panic_next_refresh: AtomicBool,
     profile: &'static Profile,
     store: Arc<Store>,
@@ -148,6 +150,7 @@ impl CredentialManager {
                 control,
                 inflight: Mutex::new(HashMap::new()),
                 not_before: Mutex::new(HashMap::new()),
+                #[cfg(any(test, feature = "debug-hooks"))]
                 panic_next_refresh: AtomicBool::new(false),
                 profile,
                 store,
@@ -208,7 +211,9 @@ impl CredentialManager {
     }
 
     /// Makes the next refresh panic, so a test can check that a panicking refresh does not wedge the
-    /// account. Hidden from the docs: nothing outside the tests has a reason to call it.
+    /// account. Compiled only under the `debug-hooks` feature, which the tests turn on, so a release build
+    /// carries no way to make a refresh panic.
+    #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_panic_on_next_refresh(&self) {
         self.inner.panic_next_refresh.store(true, Ordering::SeqCst);
@@ -286,6 +291,7 @@ impl Inner {
     async fn refresh(&self, account_id: &str) -> Result<AccessToken, RefreshFailure> {
         // Test seam, see `debug_panic_on_next_refresh`. Checked before anything durable happens, so the
         // panicking refresh leaves no attempt row behind.
+        #[cfg(any(test, feature = "debug-hooks"))]
         if self.panic_next_refresh.swap(false, Ordering::SeqCst) {
             panic!("refresh panicked on purpose");
         }

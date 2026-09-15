@@ -1,5 +1,5 @@
-//! The registry schema. Only `accounts` is used in this crate; `api_keys` is populated per route
-//! table entry starting with the admin API crate.
+//! The registry schema: `accounts`, `api_key_secrets`, `credentials`, and `refresh_attempts`, plus `meta`
+//! for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
