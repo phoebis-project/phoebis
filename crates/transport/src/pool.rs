@@ -33,12 +33,16 @@ impl Pool {
         }
     }
 
+    /// Hands out a connection for the key, and reports whether it came from the idle list. The upstream can
+    /// close an idle connection without the caller noticing, so a request written into a reused one may fail
+    /// with nothing read back although it never reached the upstream; a caller that must not repeat a side
+    /// effect has no other way to tell that case from a lost response.
     pub async fn checkout(
         &self,
         key: PoolKey,
         host: &str,
         addr: SocketAddr,
-    ) -> Result<Conn, TransportError> {
+    ) -> Result<(Conn, bool), TransportError> {
         let reused = {
             let mut idle = self.idle.lock().unwrap();
             idle.get_mut(&key).and_then(|v| {
@@ -51,9 +55,11 @@ impl Pool {
             })
         };
         if let Some(c) = reused {
-            return Ok(c);
+            return Ok((c, true));
         }
-        connect_tls(&self.connector, host, addr).await
+        connect_tls(&self.connector, host, addr)
+            .await
+            .map(|c| (c, false))
     }
 
     pub fn checkin(&self, key: PoolKey, conn: Conn) {

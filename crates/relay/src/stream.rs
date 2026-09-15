@@ -1,9 +1,7 @@
 //! Upstream connection lifecycle and the piece-by-piece relay of a response body.
 
-use std::collections::HashSet;
 use std::io;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -23,89 +21,16 @@ const CHANNEL_DEPTH: usize = 64;
 /// failure takes that path and those bodies are a few hundred bytes.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
-// A poisoned tracker mutex means a prior panic happened while the parked set was being mutated, so its
-// contents can no longer be trusted to describe which sockets are idle.
-const LOCK_POISONED: &str = "connection tracker mutex poisoned by a prior panic";
-
-/// Bound on the parked set. Forgetting an entry only costs a retry the relay could have taken, never a request
-/// sent twice, so the set is cleared wholesale rather than reconciled with the pool's own eviction.
-const MAX_PARKED: usize = 1024;
-
-/// The pool, plus the relay's own record of which sockets it parked there.
-pub(crate) struct Connections {
-    parked: Mutex<HashSet<SocketAddr>>,
-    pool: Arc<Pool>,
-}
-
-impl Connections {
-    pub(crate) fn new(pool: Arc<Pool>) -> Connections {
-        Connections {
-            parked: Mutex::new(HashSet::new()),
-            pool,
-        }
-    }
-
-    /// Hands out a connection along with whether it came back from the pool. A connection served from the pool
-    /// has been idle and the upstream may have closed it without the relay noticing, which is the one case
-    /// where a request that got no response byte can be sent again without risking a duplicate.
-    pub(crate) async fn checkout(
-        &self,
-        key: &PoolKey,
-        host: &str,
-        addr: SocketAddr,
-    ) -> Result<(Conn, bool), TransportError> {
-        let conn = self.pool.checkout(key.clone(), host, addr).await?;
-        let reused = self.take(&conn);
-        Ok((conn, reused))
-    }
-
-    /// Drains the idle connections for this key until a genuinely new one comes back. The retry that calls
-    /// this has just been failed by an idle connection, so handing it another one would repeat the failure.
-    pub(crate) async fn checkout_fresh(
-        &self,
-        key: &PoolKey,
-        host: &str,
-        addr: SocketAddr,
-    ) -> Result<Conn, TransportError> {
-        loop {
-            let (conn, reused) = self.checkout(key, host, addr).await?;
-            if !reused {
-                return Ok(conn);
-            }
-            drop(conn);
-        }
-    }
-
-    pub(crate) fn park(&self, key: PoolKey, conn: Conn) {
-        // A socket that cannot report its address only costs the retry the record would have allowed, so the
-        // connection still goes back to the pool.
-        if let Ok(addr) = conn.get_ref().local_addr() {
-            let mut parked = self.parked.lock().expect(LOCK_POISONED);
-            if parked.len() >= MAX_PARKED {
-                parked.clear();
-            }
-            parked.insert(addr);
-        }
-        self.pool.checkin(key, conn);
-    }
-
-    fn take(&self, conn: &Conn) -> bool {
-        conn.get_ref()
-            .local_addr()
-            .is_ok_and(|addr| self.parked.lock().expect(LOCK_POISONED).remove(&addr))
-    }
-}
-
 /// Everything the body task needs once the head has been forwarded.
 pub(crate) struct Relayed {
     pub conn: Conn,
-    pub connections: Arc<Connections>,
     pub decoder: Option<Box<dyn Decoder>>,
     pub framing: Framing,
     pub idle_timeout: Duration,
     pub keep_alive: bool,
     pub key: PoolKey,
     pub leftover: BytesMut,
+    pub pool: Arc<Pool>,
 }
 
 /// Relays the upstream body as it arrives: one task reads, the response body drains the channel, and the
@@ -115,13 +40,13 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
     tokio::spawn(async move {
         let Relayed {
             mut conn,
-            connections,
             mut decoder,
             framing,
             idle_timeout,
             keep_alive,
             key,
             leftover,
+            pool,
         } = relayed;
         let complete = {
             let mut reader = BodyReader::new(&mut conn, leftover, framing);
@@ -183,10 +108,10 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
                 Ok(_) => {}
             }
         }
-        // Parking before the sender drops is what makes the connection available again by the time the caller
-        // sees the end of the body, which is the only ordering a sequential caller can observe.
+        // Checking in before the sender drops is what makes the connection available again by the time the
+        // caller sees the end of the body, which is the only ordering a sequential caller can observe.
         if keep_alive {
-            connections.park(key, conn);
+            pool.checkin(key, conn);
         }
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {

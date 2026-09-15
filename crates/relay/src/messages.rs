@@ -30,7 +30,7 @@ use crate::errors::{
 };
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::identity::{identify, upstream_model};
-use crate::stream::{read_bounded, relay_body, Connections, Relayed};
+use crate::stream::{read_bounded, relay_body, Relayed};
 use crate::{edit_body, KeyTable, RelayError};
 
 /// The one host the relay dials.
@@ -72,10 +72,10 @@ pub struct RelayOutcome {
 }
 
 pub struct Relay {
-    connections: Arc<Connections>,
     keys: KeyTable,
     limits: Limits,
     manager: Arc<CredentialManager>,
+    pool: Arc<Pool>,
     profile: &'static Profile,
     resolver: Resolver,
     store: Arc<Store>,
@@ -92,10 +92,10 @@ impl Relay {
         limits: Limits,
     ) -> Relay {
         Relay {
-            connections: Arc::new(Connections::new(pool)),
             keys,
             limits,
             manager,
+            pool,
             profile,
             resolver,
             store,
@@ -326,7 +326,7 @@ impl Relay {
                     }
                 };
                 if reusable {
-                    self.connections.park(key.clone(), conn);
+                    self.pool.checkin(key.clone(), conn);
                 }
                 if is_authentication_error(&buffered) {
                     match self
@@ -437,15 +437,10 @@ impl Relay {
         written: &AtomicBool,
     ) -> Result<Sent, AttemptFailure> {
         let (mut conn, reused) = if fresh {
-            let conn = self
-                .connections
-                .checkout_fresh(key, host, addr)
-                .await
-                .map_err(unsent)?;
-            (conn, false)
+            (checkout_fresh(&self.pool, key, host, addr).await?, false)
         } else {
-            self.connections
-                .checkout(key, host, addr)
+            self.pool
+                .checkout(key.clone(), host, addr)
                 .await
                 .map_err(unsent)?
         };
@@ -499,13 +494,13 @@ impl Relay {
         let keep = keep_alive(&head, &framing);
         let body = relay_body(Relayed {
             conn,
-            connections: self.connections.clone(),
             decoder,
             framing,
             idle_timeout: self.limits.idle_timeout,
             keep_alive: keep,
             key,
             leftover,
+            pool: self.pool.clone(),
         });
         with_outcome(built(builder, body), outcome)
     }
@@ -648,6 +643,26 @@ fn refused(failure: Failure, request_id: &str, account_id: &str) -> Response {
 fn with_outcome(mut response: Response, outcome: RelayOutcome) -> Response {
     response.extensions_mut().insert(outcome);
     response
+}
+
+/// Drains the idle connections for this key until the pool opens a new one. The retry that calls this has
+/// just been failed by a connection that was already idle, so handing it another one would repeat the failure.
+async fn checkout_fresh(
+    pool: &Pool,
+    key: &PoolKey,
+    host: &str,
+    addr: SocketAddr,
+) -> Result<Conn, AttemptFailure> {
+    loop {
+        let (conn, reused) = pool
+            .checkout(key.clone(), host, addr)
+            .await
+            .map_err(unsent)?;
+        if !reused {
+            return Ok(conn);
+        }
+        drop(conn);
+    }
 }
 
 fn unsent(error: TransportError) -> AttemptFailure {
