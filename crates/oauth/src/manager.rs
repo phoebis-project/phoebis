@@ -214,6 +214,12 @@ impl CredentialManager {
         self.inner.panic_next_refresh.store(true, Ordering::SeqCst);
     }
 
+    /// Exposes the store so services built on top of the manager, like the usage cache, can read lifecycle
+    /// generations without opening a second handle to the same database.
+    pub fn store(&self) -> &Arc<Store> {
+        &self.inner.store
+    }
+
     async fn join_or_start(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
         let shared = {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
@@ -562,7 +568,7 @@ fn error_code(body: &[u8]) -> Option<String> {
 /// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to
 /// `MAX_NOT_BEFORE_MS`. The HTTP-date form names an instant rather than a delay, so it is read against the
 /// caller's clock, which is also what keeps an upstream clock that runs ahead from parking the account.
-fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
+pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
     let value = head.get("retry-after")?.trim();
     let delay = match value.parse::<i64>() {
         Ok(seconds) => seconds.saturating_mul(1000),
