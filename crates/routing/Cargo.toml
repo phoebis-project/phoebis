@@ -15,3 +15,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
