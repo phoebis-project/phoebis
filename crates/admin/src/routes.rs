@@ -472,31 +472,41 @@ async fn pairing_confirm(
     Path(id): Path<String>,
 ) -> Response {
     let now = (state.clock)();
-    let Some(session) = state.pairing.get(&id, &caller.session_id, now) else {
-        return failure(StatusCode::NOT_FOUND, "pairing session not found");
-    };
-    let conflict = |state: &AdminState, message: &str| {
-        // A failed confirmation is final rather than retryable: the authorization code is spent, so the
-        // slot is released for a fresh pairing instead of being held by a session nobody can finish.
+    // Claiming the session is the first thing this does, and it is what makes everything below safe: the
+    // status moves out of `Exchanged` under the sessions lock, so a cancellation arriving while the
+    // credential is being installed is refused rather than leaving the account paired behind it. An expired
+    // session, one that never reached an exchange, and one somebody else owns are all refused here too.
+    if let Err(error) = state.pairing.claim_confirm(&id, &caller.session_id, now) {
+        // A confirmation that cannot start is final rather than retryable: the authorization code is spent,
+        // so the slot is released for a fresh pairing instead of being held by a session nobody can finish.
         let _ = state.pairing.cancel(&id, &caller.session_id, now);
+        state.vault.discard(&id);
+        return pairing_failure(error);
+    }
+    let conflict = |state: &AdminState, message: &'static str| {
+        let _ = state.pairing.fail(&id, &caller.session_id, message, now);
         state.vault.discard(&id);
         failure(StatusCode::CONFLICT, message)
     };
+    let unstored = |state: &AdminState, error: StoreError| {
+        let _ = state
+            .pairing
+            .fail(&id, &caller.session_id, "storage failure", now);
+        state.vault.discard(&id);
+        store_failure(error)
+    };
 
-    // An operator can leave the confirmation screen open for an hour; a bundle exchanged against a
-    // session that has since expired is not one to commit.
-    if now > session.deadline {
-        return conflict(&state, "pairing session expired");
-    }
-    if !matches!(session.status, PairingStatus::Exchanged { .. }) {
-        return conflict(&state, "pairing session is not awaiting a confirmation");
-    }
     let Some(pending) = state.vault.take_exchange(&id) else {
         return conflict(&state, "pairing session has no exchanged credential");
     };
     let row = match account(&state, &pending.account_id) {
         Ok(row) => row,
-        Err(refusal) => return refusal,
+        Err(refusal) => {
+            let _ = state
+                .pairing
+                .fail(&id, &caller.session_id, "account unavailable", now);
+            return refusal;
+        }
     };
     if row.lifecycle_generation != pending.lifecycle_generation {
         return conflict(&state, "the account was disconnected while pairing");
@@ -520,7 +530,7 @@ async fn pairing_confirm(
                     .identity
                     .is_some_and(|identity| identity.account_uuid == pending.identity.account_uuid)
         }),
-        Err(error) => return store_failure(error),
+        Err(error) => return unstored(&state, error),
     };
     if bound_elsewhere {
         return conflict(
@@ -536,12 +546,12 @@ async fn pairing_confirm(
             organization_uuid: pending.identity.organization_uuid.clone(),
         };
         if let Err(error) = state.store.set_identity(&row.id, &identity) {
-            return store_failure(error);
+            return unstored(&state, error);
         }
     }
     let expected = match state.store.credentials(&row.id) {
         Ok(current) => current.map(|bundle| bundle.generation),
-        Err(error) => return store_failure(error),
+        Err(error) => return unstored(&state, error),
     };
     if let Err(error) = state.store.commit_credentials(
         &row.id,
@@ -550,10 +560,10 @@ async fn pairing_confirm(
         None,
         &pending.bundle,
     ) {
-        return store_failure(error);
+        return unstored(&state, error);
     }
     if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
-        return store_failure(error);
+        return unstored(&state, error);
     }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id);
@@ -763,6 +773,7 @@ fn reported_status(session: &PairingSession) -> &'static str {
         PairingStatus::Cancelled => "cancelled",
         PairingStatus::CodeReceived { .. } => "code_received",
         PairingStatus::Confirmed => "confirmed",
+        PairingStatus::Confirming { .. } => "confirming",
         PairingStatus::Exchanged { .. } => "exchanged",
         PairingStatus::Expired => "expired",
         PairingStatus::Failed(_) => "failed",

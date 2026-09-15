@@ -229,13 +229,21 @@ fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
     );
 
     assert!(matches!(
-        s.confirm(&sess.id, "admin-2", 1_003),
+        s.claim_confirm(&sess.id, "admin-2", 1_003),
         Err(PairingError::Forbidden)
     ));
     assert!(matches!(
-        s.confirm("not-a-session", "admin-1", 1_003),
+        s.claim_confirm("not-a-session", "admin-1", 1_003),
         Err(PairingError::NotFound)
     ));
+    assert!(
+        matches!(
+            s.confirm(&sess.id, "admin-1", 1_003),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "a confirmation that never claimed the session has nothing to close"
+    );
+    s.claim_confirm(&sess.id, "admin-1", 1_003).unwrap();
     s.confirm(&sess.id, "admin-1", 1_003).unwrap();
     assert!(matches!(
         s.get(&sess.id, "admin-1", 1_003).unwrap().status,
@@ -272,7 +280,88 @@ fn an_exchange_that_sat_past_the_deadline_cannot_be_confirmed() {
     )
     .unwrap();
     assert!(matches!(
-        s.confirm(&sess.id, "admin-1", sess.deadline + 1),
+        s.claim_confirm(&sess.id, "admin-1", sess.deadline + 1),
         Err(PairingError::Expired)
+    ));
+}
+
+/// An exchanged session, one step short of the confirmation that installs its credential.
+fn exchanged(s: &PairingSessions, redirect: &str) -> String {
+    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let url = format!("{redirect}?code=CODE123&state={}", sess.state);
+    s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
+        .unwrap();
+    s.mark_exchanged(
+        &sess.id,
+        "admin-1",
+        PendingIdentity {
+            account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+            email: "test@example.invalid".into(),
+            organization_name: None,
+            organization_uuid: None,
+        },
+        1_002,
+    )
+    .unwrap();
+    sess.id
+}
+
+#[test]
+fn a_claimed_session_cannot_be_cancelled_out_from_under_the_commit() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let id = exchanged(&s, redirect);
+    s.claim_confirm(&id, "admin-1", 1_003).unwrap();
+    assert!(matches!(
+        s.get(&id, "admin-1", 1_003).unwrap().status,
+        PairingStatus::Confirming { .. }
+    ));
+    assert!(
+        matches!(
+            s.cancel(&id, "admin-1", 1_003),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "the credential may already be installed by the time this lands"
+    );
+    assert!(
+        matches!(
+            s.claim_confirm(&id, "admin-1", 1_003),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "one confirmation at a time, like everything else about a session"
+    );
+    assert!(
+        matches!(
+            s.start("business", "admin-1", redirect, 1_003),
+            Err(PairingError::Busy)
+        ),
+        "a claimed session still holds the account's slot"
+    );
+    s.confirm(&id, "admin-1", 1_004).unwrap();
+    assert!(matches!(
+        s.get(&id, "admin-1", 1_004).unwrap().status,
+        PairingStatus::Confirmed
+    ));
+}
+
+#[test]
+fn a_commit_that_failed_ends_the_session_and_frees_the_account() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let id = exchanged(&s, redirect);
+    s.claim_confirm(&id, "admin-1", 1_003).unwrap();
+    s.fail(&id, "admin-1", "storage failure", 1_003).unwrap();
+    let status = s.get(&id, "admin-1", 1_003).unwrap().status;
+    assert!(
+        matches!(&status, PairingStatus::Failed(reason) if reason == "storage failure"),
+        "the operator is told why, in the same words the response carried"
+    );
+    assert!(
+        s.start("business", "admin-1", redirect, 1_003).is_ok(),
+        "a failed session hands the account's slot back"
+    );
+    assert!(matches!(
+        s.confirm(&id, "admin-1", 1_004),
+        Err(PairingError::AlreadyConsumed)
     ));
 }

@@ -31,6 +31,9 @@ pub enum PairingStatus {
     Pending,
     CodeReceived { code: String },
     Exchanged { pending: PendingIdentity },
+    /// Claimed by a confirmation that is installing the credential. Nothing else may end the session while
+    /// it holds, which is what keeps a cancellation from racing the commit.
+    Confirming { pending: PendingIdentity },
     Confirmed,
     Cancelled,
     Expired,
@@ -49,6 +52,10 @@ impl std::fmt::Debug for PairingStatus {
                 .finish(),
             PairingStatus::Exchanged { pending } => f
                 .debug_struct("Exchanged")
+                .field("pending", pending)
+                .finish(),
+            PairingStatus::Confirming { pending } => f
+                .debug_struct("Confirming")
                 .field("pending", pending)
                 .finish(),
             PairingStatus::Confirmed => write!(f, "Confirmed"),
@@ -232,15 +239,54 @@ impl PairingSessions {
         Ok(())
     }
 
+    /// Claims an exchanged session for the confirmation that is about to install its credential. The status
+    /// moves under this lock, so the caller holds the session for the rest of the commit: anything else that
+    /// would end it, a cancellation above all, is refused from here on and cannot leave an account paired
+    /// behind a session that says it was cancelled.
+    pub fn claim_confirm(
+        &self,
+        id: &str,
+        admin_session_id: &str,
+        now: i64,
+    ) -> Result<(), PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
+        let PairingStatus::Exchanged { pending } = &session.status else {
+            return Err(PairingError::AlreadyConsumed);
+        };
+        session.status = PairingStatus::Confirming {
+            pending: pending.clone(),
+        };
+        Ok(())
+    }
+
     /// Ends a pairing that was committed. The session no longer occupies its account's one-at-a-time
     /// slot, and nothing further can be committed through it.
     pub fn confirm(&self, id: &str, admin_session_id: &str, now: i64) -> Result<(), PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
         let session = owned_session(&mut sessions, id, admin_session_id, now)?;
-        if !matches!(session.status, PairingStatus::Exchanged { .. }) {
+        if !matches!(session.status, PairingStatus::Confirming { .. }) {
             return Err(PairingError::AlreadyConsumed);
         }
         session.status = PairingStatus::Confirmed;
+        Ok(())
+    }
+
+    /// Ends a pairing that could not be completed, with the same words the operator is answered with. The
+    /// account's slot is handed back, so the next attempt does not have to wait out the deadline.
+    pub fn fail(
+        &self,
+        id: &str,
+        admin_session_id: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<(), PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
+        if !is_in_flight(&session.status) {
+            return Err(PairingError::AlreadyConsumed);
+        }
+        session.status = PairingStatus::Failed(reason.to_string());
         Ok(())
     }
 
@@ -253,6 +299,11 @@ impl PairingSessions {
         expire_if_stale(session, now);
         if matches!(session.status, PairingStatus::Expired) {
             return Err(PairingError::Expired);
+        }
+        // A confirmation already holds this session and may be part way through installing the credential.
+        // Cancelling it here is what used to leave an account paired behind a cancelled session.
+        if matches!(session.status, PairingStatus::Confirming { .. }) {
+            return Err(PairingError::AlreadyConsumed);
         }
         session.status = PairingStatus::Cancelled;
         Ok(())
@@ -283,6 +334,7 @@ fn is_in_flight(status: &PairingStatus) -> bool {
         status,
         PairingStatus::Pending
             | PairingStatus::CodeReceived { .. }
+            | PairingStatus::Confirming { .. }
             | PairingStatus::Exchanged { .. }
     )
 }
