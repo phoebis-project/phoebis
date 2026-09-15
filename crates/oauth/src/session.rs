@@ -29,11 +29,17 @@ pub struct PairingSession {
 #[derive(Clone)]
 pub enum PairingStatus {
     Pending,
-    CodeReceived { code: String },
-    Exchanged { pending: PendingIdentity },
+    CodeReceived {
+        code: String,
+    },
+    Exchanged {
+        pending: PendingIdentity,
+    },
     /// Claimed by a confirmation that is installing the credential. Nothing else may end the session while
     /// it holds, which is what keeps a cancellation from racing the commit.
-    Confirming { pending: PendingIdentity },
+    Confirming {
+        pending: PendingIdentity,
+    },
     Confirmed,
     Cancelled,
     Expired,

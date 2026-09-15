@@ -340,7 +340,11 @@ mod service {
 
         now.store(1_000_000 + 3_600_000, Ordering::SeqCst);
         service.snapshot("a").await.unwrap();
-        assert_eq!(requests(), 2, "the wait ends when the endpoint said it would");
+        assert_eq!(
+            requests(),
+            2,
+            "the wait ends when the endpoint said it would"
+        );
         up.shutdown().await;
     }
 
@@ -356,7 +360,12 @@ mod service {
             },
         }])
         .await;
-        let service = service_for(&up, store_with_valid_bundle(), Duration::from_secs(60), &now);
+        let service = service_for(
+            &up,
+            store_with_valid_bundle(),
+            Duration::from_secs(60),
+            &now,
+        );
 
         let first = service.snapshot("a").await.unwrap();
         assert_eq!(first.fetched_at, 1_000_000);

@@ -210,9 +210,10 @@ impl CredentialManager {
                 .credentials(&attempt.account_id)?
                 .map(|bundle| (bundle.lifecycle_generation, bundle.generation));
             if stored != Some((attempt.lifecycle_generation, attempt.credential_generation)) {
-                self.inner
-                    .store
-                    .resolve_refresh_attempt(attempt.id, AttemptOutcome::Failed("superseded".into()))?;
+                self.inner.store.resolve_refresh_attempt(
+                    attempt.id,
+                    AttemptOutcome::Failed("superseded".into()),
+                )?;
                 continue;
             }
             self.inner

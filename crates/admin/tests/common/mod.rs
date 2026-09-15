@@ -65,8 +65,7 @@ pub async fn admin_app_quarantined(detail: &str) -> (Router, FakeUpstream) {
 pub async fn quarantined_parts(
     detail: &str,
 ) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
-    let (router, up, store, manager) =
-        app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
+    let (router, up, store, manager) = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
     let attempt = store.open_refresh_attempt("business", 1, 1).unwrap();
     store
         .resolve_refresh_attempt(attempt, AttemptOutcome::Uncertain(detail.to_string()))
