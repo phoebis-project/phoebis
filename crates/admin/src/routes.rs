@@ -431,9 +431,14 @@ async fn pairing_callback(
     };
     let (identity, bundle) = match exchange(&state, &session, code).await {
         Ok(exchanged) => exchanged,
-        Err(refusal) => {
+        // The authorization code is spent whether or not the exchange worked, so a rejected one ends the
+        // session rather than leaving it in flight: the account would otherwise stay busy for the rest of
+        // the ten-minute deadline with nothing able to finish it. The operator is told the same thing the
+        // session now records.
+        Err(detail) => {
             state.vault.discard(&id);
-            return refusal;
+            let _ = state.pairing.fail(&id, &caller.session_id, &detail, now);
+            return failure(StatusCode::BAD_GATEWAY, &detail);
         }
     };
     // The pairing session moves first: it is what the confirmation is checked against, so a bundle must
@@ -589,11 +594,15 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
 
 /// Runs the native post-login sequence against the control plane and turns its answers into the pending
 /// identity an operator confirms, plus the bundle that confirmation would commit.
+///
+/// A failure is a detail rather than a response because the caller both answers with it and records it on the
+/// session. Every way this fails is the upstream's fault, so the caller's status is always a bad gateway. No
+/// detail here names a token: an upstream body is described, never quoted.
 async fn exchange(
     state: &AdminState,
     session: &PairingSession,
     code: &str,
-) -> Result<(PendingIdentity, NewBundle), Response> {
+) -> Result<(PendingIdentity, NewBundle), String> {
     let body = exchange_body(
         state.profile,
         code,
@@ -603,13 +612,12 @@ async fn exchange(
     );
     let (head, raw) = control_send(state, ControlKind::Token, None, Some(body)).await?;
     if head.status != 200 {
-        return Err(failure(
-            StatusCode::BAD_GATEWAY,
-            &format!("token exchange rejected with status {}", head.status),
+        return Err(format!(
+            "token exchange rejected with status {}",
+            head.status
         ));
     }
-    let token = parse_token_response(&raw)
-        .map_err(|error| failure(StatusCode::BAD_GATEWAY, &oauth_detail("token", error)))?;
+    let token = parse_token_response(&raw).map_err(|error| oauth_detail("token", error))?;
 
     let answered = {
         let bearer = token.access_token.expose();
@@ -629,13 +637,9 @@ async fn exchange(
         answered
     };
     let Some(raw) = answered else {
-        return Err(failure(
-            StatusCode::BAD_GATEWAY,
-            "the profile lookup did not answer",
-        ));
+        return Err("the profile lookup did not answer".to_string());
     };
-    let profile = parse_profile(&raw)
-        .map_err(|error| failure(StatusCode::BAD_GATEWAY, &oauth_detail("profile", error)))?;
+    let profile = parse_profile(&raw).map_err(|error| oauth_detail("profile", error))?;
 
     let identity = PendingIdentity {
         account_uuid: profile.account_uuid,
@@ -667,19 +671,14 @@ async fn control_send(
     kind: ControlKind,
     bearer: Option<&str>,
     body: Option<Vec<u8>>,
-) -> Result<(ResponseHead, Bytes), Response> {
+) -> Result<(ResponseHead, Bytes), String> {
     let request = control_request(state.profile, kind, bearer, body);
     let host = kind.host(state.profile);
     state
         .control
         .send(request, &host, CONTROL_TIMEOUT)
         .await
-        .map_err(|error| {
-            failure(
-                StatusCode::BAD_GATEWAY,
-                &format!("control request failed: {error}"),
-            )
-        })
+        .map_err(|error| format!("control request failed: {error}"))
 }
 
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a

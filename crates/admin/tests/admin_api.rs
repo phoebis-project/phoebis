@@ -477,3 +477,55 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
         "a restart has nothing left to quarantine"
     );
 }
+
+#[tokio::test]
+async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
+    use common::{get, json, login, post};
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        fake_upstream::Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant"}"#.to_vec(),
+        },
+    );
+    let start = r#"{"account_id":"business","login":"claude_ai"}"#;
+    let started = json(post(&app, "/admin/oauth/sessions", start, Some(&cookie)).await).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(
+            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 502);
+    let refusal = json(callback).await;
+    let refusal = refusal["error"].as_str().unwrap().to_string();
+    assert!(
+        refusal.contains("400"),
+        "the operator is told what the endpoint answered: {refusal}"
+    );
+
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+    assert_eq!(
+        post(&app, "/admin/oauth/sessions", start, Some(&cookie))
+            .await
+            .status(),
+        201,
+        "the spent code does not hold the account for another ten minutes"
+    );
+}
