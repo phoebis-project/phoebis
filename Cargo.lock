@@ -377,6 +377,7 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "fake-upstream",
+ "flate2",
  "futures",
  "hmac",
  "http-body-util",

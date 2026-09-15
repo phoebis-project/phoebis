@@ -312,3 +312,76 @@ async fn keep_alive_reuses_the_upstream_connection() {
     );
     up.shutdown().await;
 }
+
+/// The body the fake serves compressed in both tests below.
+const COMPRESSIBLE: &[u8] =
+    br#"{"id":"msg_1","type":"message","content":[{"type":"text","text":"aaaaaaaaaaaaaaaaaaaa"}]}"#;
+
+#[tokio::test]
+async fn a_gzipped_response_stays_compressed_for_a_caller_that_reads_gzip() {
+    let gzipped = gzip(COMPRESSIBLE);
+    let up = gzip_upstream(gzipped.clone()).await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        gzipped.as_slice(),
+        "a caller that reads gzip gets the upstream payload untouched"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_gzipped_response_is_decoded_for_a_caller_that_refuses_it() {
+    let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let mut request = common::stream_request("phoebis-testkey");
+    request.headers_mut().insert(
+        axum::http::header::ACCEPT_ENCODING,
+        axum::http::HeaderValue::from_static("identity"),
+    );
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "a decoded payload must not claim an encoding"
+    );
+    let declared = resp
+        .headers()
+        .get("content-length")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), COMPRESSIBLE);
+    assert!(
+        declared.is_none_or(|declared| declared == COMPRESSIBLE.len().to_string()),
+        "no length describing the compressed body survives the decode"
+    );
+    up.shutdown().await;
+}
+
+async fn gzip_upstream(body: Vec<u8>) -> FakeUpstream {
+    FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body,
+        },
+    }])
+    .await
+}
+
+fn gzip(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(payload)
+        .expect("a Vec never fails a write");
+    encoder.finish().expect("the encoder flushes into the Vec")
+}
