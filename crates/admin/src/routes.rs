@@ -23,7 +23,7 @@ use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
-use crate::{AdminState, LoginError, Role, VaultStatus};
+use crate::{AdminState, LoginError, Role};
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
 /// for minutes.
@@ -109,7 +109,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     let Some((session_id, role)) = state.sessions.authenticate(&cookie, (state.clock)()) else {
         return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
     };
-    if mutation && role != Role::Admin && !viewer_may_mutate(&path) {
+    if mutation && role != Role::Admin && !viewer_may_mutate(&method, &path) {
         return Some(failure(
             StatusCode::FORBIDDEN,
             "the viewer role cannot change anything",
@@ -119,10 +119,11 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     None
 }
 
-/// The one mutation a viewer may issue: a usage refresh is served from the usage cache, so it changes
-/// nothing and cannot be used to hammer the upstream.
-fn viewer_may_mutate(path: &str) -> bool {
-    path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh")
+/// The two mutations a viewer may issue: ending its own session, which reaches nothing but itself, and a
+/// usage refresh, which is served from the usage cache and so changes nothing upstream either.
+fn viewer_may_mutate(method: &Method, path: &str) -> bool {
+    (method == Method::DELETE && path == LOGIN_PATH)
+        || (path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh"))
 }
 
 fn presented_cookie(headers: &HeaderMap) -> Option<String> {
@@ -363,7 +364,7 @@ async fn pairing_show(
         "account_id": session.account_id,
         "expires_at": session.deadline,
         "id": session.id,
-        "status": reported_status(&state, &id, &session),
+        "status": reported_status(&session),
     }))
     .into_response()
 }
@@ -397,6 +398,7 @@ async fn pairing_callback(
         state: Option<String>,
         url: Option<String>,
     }
+    let now = (state.clock)();
     let malformed = || {
         failure(
             StatusCode::BAD_REQUEST,
@@ -411,14 +413,13 @@ async fn pairing_callback(
         (None, Some(code), Some(state)) => CallbackInput::Code { code, state },
         _ => return malformed(),
     };
-    let session =
-        match state
-            .pairing
-            .accept_callback(&id, &caller.session_id, callback, (state.clock)())
-        {
-            Ok(session) => session,
-            Err(error) => return pairing_failure(error),
-        };
+    let session = match state
+        .pairing
+        .accept_callback(&id, &caller.session_id, callback, now)
+    {
+        Ok(session) => session,
+        Err(error) => return pairing_failure(error),
+    };
     let PairingStatus::CodeReceived { code } = &session.status else {
         return failure(
             StatusCode::CONFLICT,
@@ -432,6 +433,15 @@ async fn pairing_callback(
             return refusal;
         }
     };
+    // The pairing session moves first: it is what the confirmation is checked against, so a bundle must
+    // never sit in the vault for a session that says it is anything but exchanged.
+    if let Err(error) = state
+        .pairing
+        .mark_exchanged(&id, &caller.session_id, identity.clone(), now)
+    {
+        state.vault.discard(&id);
+        return pairing_failure(error);
+    }
     if !state.vault.record_exchange(&id, identity.clone(), bundle) {
         return failure(
             StatusCode::CONFLICT,
@@ -474,6 +484,9 @@ async fn pairing_confirm(
     // session that has since expired is not one to commit.
     if now > session.deadline {
         return conflict(&state, "pairing session expired");
+    }
+    if !matches!(session.status, PairingStatus::Exchanged { .. }) {
+        return conflict(&state, "pairing session is not awaiting a confirmation");
     }
     let Some(pending) = state.vault.take_exchange(&id) else {
         return conflict(&state, "pairing session has no exchanged credential");
@@ -541,8 +554,12 @@ async fn pairing_confirm(
     }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id);
-    // The pairing is over, so the account's one-at-a-time slot is handed back.
-    let _ = state.pairing.cancel(&id, &caller.session_id, now);
+    // The pairing is over, so the account's one-at-a-time slot is handed back. The credential is already
+    // committed at this point, so a session that refuses to close costs the account nothing beyond the
+    // wait for its own deadline.
+    if let Err(error) = state.pairing.confirm(&id, &caller.session_id, now) {
+        tracing::warn!(%error, "a confirmed pairing session could not be closed");
+    }
     Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
 }
 
@@ -732,20 +749,15 @@ fn state_name(state: AccountState) -> &'static str {
     }
 }
 
-/// The vault knows the outcomes `PairingSessions` cannot express, so it wins wherever it has one.
-fn reported_status(state: &AdminState, id: &str, session: &PairingSession) -> &'static str {
-    match state.vault.status(id) {
-        Some(VaultStatus::Confirmed) => "confirmed",
-        Some(VaultStatus::Exchanged) => "exchanged",
-        Some(VaultStatus::Discarded) | Some(VaultStatus::Started) | None => match session.status {
-            PairingStatus::Cancelled => "cancelled",
-            PairingStatus::CodeReceived { .. } => "code_received",
-            PairingStatus::Confirmed => "confirmed",
-            PairingStatus::Exchanged { .. } => "exchanged",
-            PairingStatus::Expired => "expired",
-            PairingStatus::Failed(_) => "failed",
-            PairingStatus::Pending => "pending",
-        },
+fn reported_status(session: &PairingSession) -> &'static str {
+    match session.status {
+        PairingStatus::Cancelled => "cancelled",
+        PairingStatus::CodeReceived { .. } => "code_received",
+        PairingStatus::Confirmed => "confirmed",
+        PairingStatus::Exchanged { .. } => "exchanged",
+        PairingStatus::Expired => "expired",
+        PairingStatus::Failed(_) => "failed",
+        PairingStatus::Pending => "pending",
     }
 }
 

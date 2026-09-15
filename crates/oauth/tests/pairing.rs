@@ -1,6 +1,6 @@
 use phoebis_oauth::{
     authorization_url, generate_pkce, generate_state, CallbackInput, LoginKind, PairingError,
-    PairingSessions, PairingStatus,
+    PairingSessions, PairingStatus, PendingIdentity,
 };
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 
@@ -175,4 +175,104 @@ fn an_abandoned_session_expires_and_frees_the_account() {
         .is_ok());
     let stale = s.get(&first.id, "admin-1", later).unwrap();
     assert!(matches!(stale.status, PairingStatus::Expired));
+}
+
+#[test]
+fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let pending = || PendingIdentity {
+        account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+        email: "test@example.invalid".into(),
+        organization_name: None,
+        organization_uuid: None,
+    };
+    assert!(
+        matches!(
+            s.confirm(&sess.id, "admin-1", 1_001),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "a session with no exchange behind it has nothing to confirm"
+    );
+    let url = format!("{redirect}?code=CODE123&state={}", sess.state);
+    s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
+        .unwrap();
+    assert!(
+        matches!(
+            s.confirm(&sess.id, "admin-1", 1_002),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "a code alone is not an exchange"
+    );
+
+    assert!(matches!(
+        s.mark_exchanged(&sess.id, "admin-2", pending(), 1_002),
+        Err(PairingError::Forbidden)
+    ));
+    s.mark_exchanged(&sess.id, "admin-1", pending(), 1_002)
+        .unwrap();
+    assert!(matches!(
+        s.mark_exchanged(&sess.id, "admin-1", pending(), 1_002),
+        Err(PairingError::AlreadyConsumed)
+    ));
+    assert!(matches!(
+        s.get(&sess.id, "admin-1", 1_002).unwrap().status,
+        PairingStatus::Exchanged { .. }
+    ));
+    assert!(
+        matches!(
+            s.start("business", "admin-1", redirect, 1_002),
+            Err(PairingError::Busy)
+        ),
+        "an exchanged session still holds the account's slot"
+    );
+
+    assert!(matches!(
+        s.confirm(&sess.id, "admin-2", 1_003),
+        Err(PairingError::Forbidden)
+    ));
+    assert!(matches!(
+        s.confirm("not-a-session", "admin-1", 1_003),
+        Err(PairingError::NotFound)
+    ));
+    s.confirm(&sess.id, "admin-1", 1_003).unwrap();
+    assert!(matches!(
+        s.get(&sess.id, "admin-1", 1_003).unwrap().status,
+        PairingStatus::Confirmed
+    ));
+    assert!(matches!(
+        s.confirm(&sess.id, "admin-1", 1_003),
+        Err(PairingError::AlreadyConsumed)
+    ));
+    assert!(
+        s.start("business", "admin-1", redirect, 1_003).is_ok(),
+        "a confirmed session hands the account's slot back"
+    );
+}
+
+#[test]
+fn an_exchange_that_sat_past_the_deadline_cannot_be_confirmed() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let url = format!("{redirect}?code=CODE123&state={}", sess.state);
+    s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
+        .unwrap();
+    s.mark_exchanged(
+        &sess.id,
+        "admin-1",
+        PendingIdentity {
+            account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+            email: "test@example.invalid".into(),
+            organization_name: None,
+            organization_uuid: None,
+        },
+        1_002,
+    )
+    .unwrap();
+    assert!(matches!(
+        s.confirm(&sess.id, "admin-1", sess.deadline + 1),
+        Err(PairingError::Expired)
+    ));
 }

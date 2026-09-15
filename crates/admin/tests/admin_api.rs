@@ -2,7 +2,7 @@ mod common;
 
 #[tokio::test]
 async fn login_sets_a_cookie_and_viewer_cannot_mutate() {
-    use common::{cookie_of, get, post};
+    use common::{cookie_of, delete, get, post};
     let (app, _up) = common::admin_app().await;
     let bad = post(&app, "/admin/session", r#"{"secret":"nope"}"#, None).await;
     assert_eq!(bad.status(), 401);
@@ -45,6 +45,18 @@ async fn login_sets_a_cookie_and_viewer_cannot_mutate() {
         .status(),
         200,
         "usage refresh is the one POST a viewer may call"
+    );
+    assert_eq!(
+        delete(&app, "/admin/session", Some(&vcookie))
+            .await
+            .status(),
+        204,
+        "a viewer can end its own session"
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts", Some(&vcookie)).await.status(),
+        401,
+        "the logged-out cookie no longer resolves"
     );
     assert_eq!(
         post(&app, "/admin/accounts/business/pause", "", Some(&cookie))
@@ -118,6 +130,8 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     )
     .await;
     assert_eq!(confirmed.status(), 200);
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "confirmed");
     let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(acct["state"], "ready");
     assert_eq!(
@@ -269,5 +283,34 @@ async fn disconnect_bumps_the_lifecycle_and_a_late_confirm_is_rejected() {
         .status(),
         409,
         "the pairing session was invalidated by the disconnect"
+    );
+}
+
+#[tokio::test]
+async fn verifying_an_api_key_account_reports_the_upstream_status() {
+    use common::{json, login, post, API_KEY};
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let verified = post(&app, "/admin/accounts/direct/verify", "", Some(&cookie)).await;
+    assert_eq!(verified.status(), 200);
+    assert_eq!(json(verified).await["status"], 200);
+    let recorded = up.requests();
+    let probe = recorded
+        .iter()
+        .find(|r| r.line.starts_with("GET /v1/models?limit=1"))
+        .expect("the probe reached the upstream");
+    assert!(
+        probe
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && value == API_KEY),
+        "the stored key is what the probe presents"
+    );
+    assert_eq!(
+        post(&app, "/admin/accounts/business/verify", "", Some(&cookie))
+            .await
+            .status(),
+        400,
+        "an OAuth account has no key to verify"
     );
 }

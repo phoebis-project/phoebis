@@ -46,26 +46,16 @@ pub struct PairingVault {
     records: Mutex<HashMap<String, PairingRecord>>,
 }
 
-/// What an operator sees for a pairing session, once the vault has moved past what `PairingSessions`
-/// alone can express.
+/// How far a pairing got, as the vault saw it. A disconnect cancels only the sessions still in flight,
+/// so a pairing that already ended is never rewritten; the status an operator reads comes from
+/// `PairingSessions` instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum VaultStatus {
+enum VaultStatus {
     Confirmed,
     /// The exchange was taken out of the vault and not committed, so nothing of it is left.
     Discarded,
     Exchanged,
     Started,
-}
-
-impl VaultStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            VaultStatus::Confirmed => "confirmed",
-            VaultStatus::Discarded => "discarded",
-            VaultStatus::Exchanged => "exchanged",
-            VaultStatus::Started => "started",
-        }
-    }
 }
 
 /// A pending exchange handed to the confirm route, with the account state the pairing started from.
@@ -197,13 +187,5 @@ impl PairingVault {
             }
         }
         cancelled
-    }
-
-    pub fn status(&self, session_id: &str) -> Option<VaultStatus> {
-        self.records
-            .lock()
-            .expect(LOCK_POISONED)
-            .get(session_id)
-            .map(|record| record.status)
     }
 }

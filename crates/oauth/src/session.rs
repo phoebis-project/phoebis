@@ -213,6 +213,37 @@ impl PairingSessions {
         Ok(session.clone())
     }
 
+    /// Records the identity the exchanged credential belongs to, which is what an operator confirms
+    /// against. The bundle itself stays with the caller: this store lives in memory and holds no
+    /// credential, by design.
+    pub fn mark_exchanged(
+        &self,
+        id: &str,
+        admin_session_id: &str,
+        pending: PendingIdentity,
+        now: i64,
+    ) -> Result<(), PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
+        if !matches!(session.status, PairingStatus::CodeReceived { .. }) {
+            return Err(PairingError::AlreadyConsumed);
+        }
+        session.status = PairingStatus::Exchanged { pending };
+        Ok(())
+    }
+
+    /// Ends a pairing that was committed. The session no longer occupies its account's one-at-a-time
+    /// slot, and nothing further can be committed through it.
+    pub fn confirm(&self, id: &str, admin_session_id: &str, now: i64) -> Result<(), PairingError> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = owned_session(&mut sessions, id, admin_session_id, now)?;
+        if !matches!(session.status, PairingStatus::Exchanged { .. }) {
+            return Err(PairingError::AlreadyConsumed);
+        }
+        session.status = PairingStatus::Confirmed;
+        Ok(())
+    }
+
     pub fn cancel(&self, id: &str, admin_session_id: &str, now: i64) -> Result<(), PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
         let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
@@ -226,6 +257,24 @@ impl PairingSessions {
         session.status = PairingStatus::Cancelled;
         Ok(())
     }
+}
+
+/// The lookup, ownership, and staleness guard every transition runs before it reads a status.
+fn owned_session<'a>(
+    sessions: &'a mut HashMap<String, PairingSession>,
+    id: &str,
+    admin_session_id: &str,
+    now: i64,
+) -> Result<&'a mut PairingSession, PairingError> {
+    let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
+    if session.admin_session_id != admin_session_id {
+        return Err(PairingError::Forbidden);
+    }
+    expire_if_stale(session, now);
+    if matches!(session.status, PairingStatus::Expired) {
+        return Err(PairingError::Expired);
+    }
+    Ok(session)
 }
 
 /// Whether a session still occupies its account's one-pairing-at-a-time slot.

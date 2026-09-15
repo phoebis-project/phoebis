@@ -30,6 +30,9 @@ use tower::ServiceExt;
 /// The account uuid every control fixture names.
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 
+/// The key stored on the API-key account, which the verify test expects to see on the wire.
+pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
+
 /// Unix milliseconds every clock in these tests reports, so no deadline moves under a test.
 pub const NOW: i64 = 1_000_000;
 
@@ -159,6 +162,23 @@ async fn app_with(identity: Option<Identity>, upstream_uuid: &str) -> (Router, F
             .unwrap();
     }
 
+    // Every app carries an API-key slot as well, since verification is the one route that only an
+    // API-key account reaches.
+    store
+        .insert_account(&AccountRow {
+            id: "direct".into(),
+            kind: AccountKind::ApiKey,
+            label: "Direct".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .set_api_key_secret("direct", &Secret::new(API_KEY))
+        .unwrap();
+
     let mut builder = connector_builder(p, Plane::Control).unwrap();
     trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
     let addr = up.addr();
@@ -218,6 +238,7 @@ async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
             "/api/oauth/usage",
             control_response(ControlFixture::Usage).to_vec(),
         ),
+        json_rule("/v1/models", br#"{"data":[]}"#.to_vec()),
         json_rule(
             "/v1/oauth/token",
             as_account(control_response(ControlFixture::Token), upstream_uuid),
