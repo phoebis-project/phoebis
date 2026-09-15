@@ -361,7 +361,7 @@ impl Inner {
 
         let Some(refresh_token) = &bundle.refresh_token else {
             self.resolve(attempt, AttemptOutcome::Failed("no refresh token".into()));
-            self.mark_reauth(account_id);
+            self.mark_reauth(&account);
             return Err(RefreshFailure::ReauthRequired);
         };
         let scopes = if bundle.scopes.is_empty() {
@@ -408,7 +408,7 @@ impl Inner {
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
                 self.resolve(attempt, AttemptOutcome::Failed(detail));
-                self.mark_reauth(account_id);
+                self.mark_reauth(&account);
                 return Err(RefreshFailure::ReauthRequired);
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
@@ -448,7 +448,7 @@ impl Inner {
         if let Some(stored) = &account.identity {
             if !identity_matches(stored, &IdentityClaims::from_token(&token)) {
                 self.resolve(attempt, AttemptOutcome::Failed("identity mismatch".into()));
-                self.mark_reauth(account_id);
+                self.mark_reauth(&account);
                 return Err(RefreshFailure::ReauthRequired);
             }
         }
@@ -505,17 +505,26 @@ impl Inner {
 
     /// Serves the stored access token while it is still unexpired, because an unfinished rotation must not
     /// cost a token that still works; once it expires the failure class is all that is left.
+    ///
+    /// The bundle is read again rather than served from the copy taken before the token request: a
+    /// disconnect, a re-pair, or another caller's rotation can have replaced it in the meantime, and both
+    /// generations have to still match or the token in hand belongs to a slot that no longer exists.
     fn stored_or(
         &self,
         account: &AccountRow,
         bundle: &CredentialBundle,
         failure: RefreshFailure,
     ) -> Result<AccessToken, RefreshFailure> {
-        if bundle.expires_at > (self.clock)() {
-            Ok(access_token(account, bundle))
-        } else {
-            Err(failure)
+        let Ok(Some(stored)) = self.store.credentials(&account.id) else {
+            return Err(failure);
+        };
+        if stored.generation != bundle.generation
+            || stored.lifecycle_generation != bundle.lifecycle_generation
+            || stored.expires_at <= (self.clock)()
+        {
+            return Err(failure);
         }
+        Ok(access_token(account, &stored))
     }
 
     /// Whether a recorded backoff is still in force, dropping it once it has elapsed.
@@ -545,10 +554,14 @@ impl Inner {
         let _ = self.store.resolve_refresh_attempt(attempt, outcome);
     }
 
-    fn mark_reauth(&self, account_id: &str) {
-        let _ = self
-            .store
-            .set_state(account_id, AccountState::ReauthRequired);
+    /// Asks for re-pairing, unless the slot moved on: a verdict about credentials that a disconnect has
+    /// already thrown away must not lock out the pairing that replaced them.
+    fn mark_reauth(&self, account: &AccountRow) {
+        let _ = self.store.set_state_if_lifecycle(
+            &account.id,
+            AccountState::ReauthRequired,
+            account.lifecycle_generation,
+        );
     }
 }
 

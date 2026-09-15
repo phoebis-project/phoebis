@@ -31,6 +31,9 @@ pub enum Respond {
     CloseAfterRequest,
     CloseImmediately,
     DropAfterHead,
+    /// Holds the request at the point where the response would start, until `release()`, and then answers
+    /// with the wrapped rule. Lets a test act on a request the upstream has already read.
+    Gated(Box<Respond>),
     Json {
         status: u16,
         headers: Vec<(String, String)>,
@@ -184,9 +187,9 @@ impl FakeUpstream {
         reaped
     }
 
-    /// Lets every gated `SseGated` responder continue past its first event, including ones that gate after this
-    /// call. The gate latches open: once released, it stays open for the lifetime of this `FakeUpstream`, so a
-    /// second `release()` is never required.
+    /// Lets every gated responder continue: a `Gated` one past the request it is holding, an `SseGated` one past
+    /// its first event, including ones that gate after this call. The gate latches open: once released, it stays
+    /// open for the lifetime of this `FakeUpstream`, so a second `release()` is never required.
     pub fn release(&self) {
         // Set before notifying: a responder woken by `notify_waiters()` re-checks this flag, and a responder
         // that gates afterward checks it before ever waiting, so neither ordering loses the release.
@@ -419,7 +422,14 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
         let path = path_of(&recorded.line).to_string();
         let close_after = wants_close(&recorded.headers);
         shared.record(recorded);
-        match shared.resolve(&path) {
+        // Unwrapped before the match rather than inside it, so the gate costs the responders nothing and no
+        // arm has to be written twice.
+        let mut respond = shared.resolve(&path);
+        while let Respond::Gated(inner) = respond {
+            shared.wait_for_release().await;
+            respond = *inner;
+        }
+        match respond {
             Respond::Chunked {
                 status,
                 headers,
@@ -433,6 +443,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
             Respond::CloseImmediately | Respond::CloseAfterRequest => return,
+            Respond::Gated(_) => unreachable!("the loop above unwraps every gate"),
             Respond::DropAfterHead => {
                 let _ = write_drop_head(&mut stream).await;
                 return;

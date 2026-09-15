@@ -257,6 +257,28 @@ impl Store {
         Ok(())
     }
 
+    /// `set_state` for a verdict formed before a request that took a while: the state only moves while the
+    /// slot is still the one the caller looked at, so a disconnect and a re-pair in between leave the
+    /// replacement untouched. Reports whether the row moved.
+    pub fn set_state_if_lifecycle(
+        &self,
+        id: &str,
+        state: AccountState,
+        lifecycle_generation: u64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let updated = conn.execute(
+            "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1 AND lifecycle_generation = ?4",
+            params![
+                id,
+                state,
+                jiff::Timestamp::now().as_millisecond(),
+                lifecycle_generation as i64
+            ],
+        )?;
+        Ok(updated > 0)
+    }
+
     /// Disconnects the account: the new lifecycle generation invalidates any refresh in flight for the
     /// old one, and both credential kinds are deleted so a disconnected slot cannot keep spending money.
     pub fn bump_lifecycle(&self, id: &str) -> Result<u64, StoreError> {

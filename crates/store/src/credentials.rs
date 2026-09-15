@@ -42,6 +42,9 @@ pub struct CredentialBundle {
     pub refresh_expires_at: Option<i64>,
     pub scopes: String,
     pub generation: u64,
+    /// The account lifecycle this bundle was committed under. A holder that captured the bundle before a
+    /// slow request compares it to tell a rotation of the same slot from a disconnect and a re-pair.
+    pub lifecycle_generation: u64,
 }
 
 #[derive(Debug)]
@@ -78,8 +81,8 @@ pub struct LastAttempt {
     pub detail: Option<String>,
 }
 
-// (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes)
-type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String);
+// (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
+type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String, i64);
 
 fn credential_aad(account_id: &str, generation: i64) -> String {
     format!("{account_id}:{generation}")
@@ -89,19 +92,43 @@ fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
 
+/// Whether the attempt row is there at all, which is what separates a verdict that arrived too late from
+/// one that names an attempt nobody ever opened. `account_id` narrows it where the caller has one to check
+/// against.
+fn attempt_exists(
+    conn: &rusqlite::Connection,
+    attempt_id: u64,
+    account_id: Option<&str>,
+) -> Result<bool, StoreError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE id = ?1 AND (?2 IS NULL OR account_id = ?2))",
+        params![attempt_id as i64, account_id],
+        |row| row.get(0),
+    )
+    .map_err(StoreError::from)
+}
+
 impl Store {
     pub fn credentials(&self, account_id: &str) -> Result<Option<CredentialBundle>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let row: Option<CredentialRow> = conn
             .query_row(
-                "SELECT generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes \
+                "SELECT generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation \
                  FROM credentials WHERE account_id = ?1",
                 params![account_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
             )
             .optional()?;
-        let Some((generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes)) =
-            row
+        let Some((
+            generation,
+            sealed,
+            nonce,
+            issued_at,
+            expires_at,
+            refresh_expires_at,
+            scopes,
+            lifecycle_generation,
+        )) = row
         else {
             return Ok(None);
         };
@@ -122,6 +149,7 @@ impl Store {
             refresh_expires_at,
             scopes,
             generation: generation as u64,
+            lifecycle_generation: lifecycle_generation as u64,
         }))
     }
 
@@ -223,11 +251,16 @@ impl Store {
             // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
             // be resolved by this commit, even by accident.
             let updated = tx.execute(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
-                 WHERE id = ?1 AND account_id = ?3",
+                &format!(
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
+                     WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
+                ),
                 params![id as i64, now, account_id],
             )?;
-            if updated == 0 {
+            // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
+            // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
+            // strand the account on a refresh token the endpoint has already replaced.
+            if updated == 0 && !attempt_exists(&tx, id, Some(account_id))? {
                 return Err(StoreError::AttemptNotFound(id));
             }
         }
@@ -302,11 +335,15 @@ impl Store {
         Ok(conn.last_insert_rowid() as u64)
     }
 
+    /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, which is
+    /// what this crate treats as open everywhere else. A verdict that arrives after something else settled
+    /// the row for good, a disconnect racing a slow token request for instance, is dropped rather than
+    /// applied, and says so by returning `false`.
     pub fn resolve_refresh_attempt(
         &self,
         attempt_id: u64,
         outcome: AttemptOutcome,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let now = jiff::Timestamp::now().as_millisecond();
         let (label, detail) = match outcome {
@@ -315,13 +352,16 @@ impl Store {
             AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
         };
         let updated = conn.execute(
-            "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 WHERE id = ?1",
+            &format!(
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 \
+                 WHERE id = ?1 AND ({PENDING_WHERE})"
+            ),
             params![attempt_id as i64, now, label, detail],
         )?;
-        if updated == 0 {
+        if updated == 0 && !attempt_exists(&conn, attempt_id, None)? {
             return Err(StoreError::AttemptNotFound(attempt_id));
         }
-        Ok(())
+        Ok(updated > 0)
     }
 
     // The partial index in the schema exists for this query: an attempt still in flight, or one that

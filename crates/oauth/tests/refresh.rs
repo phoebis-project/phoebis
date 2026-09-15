@@ -618,3 +618,90 @@ async fn a_server_error_from_the_token_endpoint_backs_off_a_minute() {
     assert_eq!(up.requests().len(), 2, "the backoff ends after the minute");
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        })),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let mgr = Arc::new(mgr);
+    let refreshing = tokio::spawn({
+        let mgr = mgr.clone();
+        async move { mgr.acquire("a").await }
+    });
+    while up.requests().is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
+    // The operator disconnects and pairs the slot again while the token request is still in flight.
+    let lifecycle = store.bump_lifecycle("a").unwrap();
+    store.set_state("a", AccountState::Ready).unwrap();
+    store
+        .commit_credentials(
+            "a",
+            lifecycle,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("fresh"),
+                refresh_token: Some(Secret::new("rt2")),
+                issued_at: 1_000_000,
+                expires_at: 1_000_000 + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    up.release();
+    assert!(matches!(
+        refreshing.await.unwrap(),
+        Err(AcquireError::ReauthRequired)
+    ));
+
+    assert!(
+        matches!(
+            store.account("a").unwrap().unwrap().state,
+            AccountState::Ready
+        ),
+        "the verdict was about credentials the disconnect already threw away"
+    );
+    assert_eq!(
+        store
+            .credentials("a")
+            .unwrap()
+            .unwrap()
+            .access_token
+            .expose(),
+        "fresh"
+    );
+    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    assert_eq!(
+        attempt.detail.as_deref(),
+        Some("disconnected"),
+        "the disconnect settled the attempt, and the late verdict does not rewrite it"
+    );
+    up.shutdown().await;
+}
