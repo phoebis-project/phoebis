@@ -19,3 +19,6 @@ tokio = { workspace = true }
 tokio-boring = { workspace = true }
 tracing = { workspace = true }
 zstd = { workspace = true }
+
+[dev-dependencies]
+fake-upstream = { path = "../../tests/fake_upstream" }

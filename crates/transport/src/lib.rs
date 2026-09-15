@@ -1,5 +1,6 @@
 //! TLS profiles, ordered HTTP/1.1 writer, response reader, keep-alive pool.
 
+pub mod control;
 pub mod decode;
 pub mod hello;
 pub mod pool;

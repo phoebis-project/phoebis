@@ -6,6 +6,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+boring = { workspace = true }
 bytes = { workspace = true }
 httparse = { workspace = true }
+rcgen = { workspace = true }
 tokio = { workspace = true }
+tokio-boring = { workspace = true }
