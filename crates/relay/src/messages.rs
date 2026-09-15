@@ -36,9 +36,10 @@ use crate::errors::{
 };
 use crate::exhaustion::exhaustion_response;
 use crate::headers::{outbound_headers, CredentialKind};
+use crate::hold::{hold, Commit, Held, Inspect};
 use crate::identity::{identify, RequestIdentity};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
-use crate::stream::{drain_bounded, relay_body, Drained, Relayed, MAX_BUFFERED_BODY};
+use crate::stream::{drain_bounded, relay_body, Drained, PostCommit, Relayed, MAX_BUFFERED_BODY};
 use crate::{edit_body, is_portable, presented_key, DriftGuard, RelayError};
 
 /// The one host the relay dials.
@@ -454,8 +455,8 @@ impl Relay {
                     head,
                     leftover,
                 } = sent;
-                // Cooldown deadlines are measured from when the head arrived, not from when the account was
-                // selected: a slow upstream must not shorten what it asked for.
+                // When the head arrived, which is what stamps the overage evidence below for an upstream that
+                // sends no `Date` of its own.
                 let arrived = (self.clock)();
                 let framing = framing(&head);
                 let reusable = keep_alive(&head, &framing);
@@ -478,7 +479,7 @@ impl Relay {
                 // Heads the table reads a body for are drained within the bound; a body too large to read
                 // commits. The reader survives only where the body was left alone, because a drained body has
                 // already handed its connection back to the pool.
-                let (buffered, reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
+                let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
                     let Some(drained) = until_cancelled(
                         drain_bounded(&mut reader, self.limits.idle_timeout),
                         &answer.cancel,
@@ -512,6 +513,7 @@ impl Relay {
                                 head: &head,
                                 keep_alive: reusable,
                                 key: pool_key,
+                                observer: None,
                                 outcome,
                                 prefix,
                                 reader,
@@ -529,6 +531,56 @@ impl Relay {
                     (None, Some(reader))
                 };
                 let decoded = buffered.as_ref().and_then(|b| inspectable_copy(&head, b));
+                // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
+                // rejection the caller must never see, because the request can still go to another account.
+                let streaming = head.status == 200
+                    && head
+                        .get("content-type")
+                        .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+                let mut held: Option<Held> = None;
+                let mut first_event: Option<Bytes> = None;
+                if let (true, Some(reader)) = (streaming, reader.as_mut()) {
+                    let inspect = Inspect::new(match encoding(&head) {
+                        Ok(Encoding::Identity) => None,
+                        Ok(coding) => Some(decoder(coding)),
+                        Err(_) => None,
+                    });
+                    let Some(result) = until_cancelled(
+                        hold(reader, inspect, self.limits.hold_timeout),
+                        &answer.cancel,
+                    )
+                    .await
+                    else {
+                        return self.cancelled(
+                            &request_id,
+                            &key,
+                            &identity,
+                            &account.id,
+                            head.status,
+                            attempt,
+                            &client_drift,
+                            &client_version,
+                            pin_epoch,
+                        );
+                    };
+                    match result {
+                        Ok(h) => {
+                            if let Commit::Error(data) = &h.commit {
+                                first_event = Some(data.clone());
+                            }
+                            held = Some(h);
+                        }
+                        Err(error) => {
+                            tracing::warn!(account = %account.id, %error, "the stream ended before it committed");
+                            return with_outcome(
+                                UPSTREAM_UNREACHABLE.response(&request_id),
+                                outcome,
+                            );
+                        }
+                    }
+                }
+                // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
+                let arrived = (self.clock)();
                 let verdict = classify(
                     &head,
                     &HeadContext {
@@ -536,7 +588,7 @@ impl Relay {
                         canonical_model: &identity.canonical_model,
                         now: arrived,
                         fallback_ms,
-                        first_event: None,
+                        first_event: first_event.as_deref(),
                         body_prefix: decoded.as_deref(),
                     },
                 );
@@ -583,6 +635,59 @@ impl Relay {
                                 now: (self.clock)(),
                             });
                         }
+                        let (prefix, observer) = match held {
+                            None => (Bytes::new(), None),
+                            Some(Held { bytes, inspect, .. }) => {
+                                let (router, clock, account_id, kind, model, pin, request_id) = (
+                                    self.router.clone(),
+                                    self.clock.clone(),
+                                    account.id.clone(),
+                                    account.kind,
+                                    identity.canonical_model.clone(),
+                                    if portable {
+                                        selection.pin.clone()
+                                    } else {
+                                        None
+                                    },
+                                    request_id.clone(),
+                                );
+                                let head = ResponseHead {
+                                    status: head.status,
+                                    headers: head.headers.clone(),
+                                };
+                                let on_error = Box::new(move |data: Bytes| {
+                                    // After commit nothing fails over. A rate-limit error records the cooldown
+                                    // and, on a portable request, invalidates the pin so the next request
+                                    // migrates; a non-portable request keeps its pin. The deadline is measured
+                                    // from the error's arrival, not from the selection.
+                                    let now = clock();
+                                    if let Verdict::FailOver { cooldown, mark } = classify(
+                                        &head,
+                                        &HeadContext {
+                                            kind,
+                                            canonical_model: &model,
+                                            now,
+                                            fallback_ms,
+                                            first_event: Some(&data),
+                                            body_prefix: None,
+                                        },
+                                    ) {
+                                        report_failover(
+                                            &router,
+                                            &account_id,
+                                            &model,
+                                            cooldown,
+                                            mark,
+                                            pin,
+                                            &request_id,
+                                            generations,
+                                        );
+                                    }
+                                })
+                                    as Box<dyn FnOnce(Bytes) + Send>;
+                                (bytes, Some(PostCommit { inspect, on_error }))
+                            }
+                        };
                         return match buffered {
                             Some(buffered) => {
                                 forward_buffered(&head, buffered, &parts.headers, outcome)
@@ -593,8 +698,9 @@ impl Relay {
                                 head: &head,
                                 keep_alive: reusable,
                                 key: pool_key,
+                                observer,
                                 outcome,
-                                prefix: Bytes::new(),
+                                prefix,
                                 reader: reader.expect(
                                     "a head the table reads no body for still holds its reader",
                                 ),
@@ -618,6 +724,26 @@ impl Relay {
                     &request_id,
                     generations,
                 );
+                // A held stream cannot be rewound onto another connection, so the only way not to commit it is
+                // to drop it unread; once the budget is spent it goes to the caller as it came.
+                if let Some(held) = held {
+                    if portable && attempt < self.limits.max_attempts {
+                        drop(reader);
+                        break 'account;
+                    }
+                    return self.stream(Forward {
+                        caller: &parts.headers,
+                        cancel: answer.cancel.clone(),
+                        head: &head,
+                        keep_alive: false,
+                        key: pool_key,
+                        observer: None,
+                        outcome,
+                        prefix: held.bytes,
+                        reader: reader
+                            .expect("a streaming head still holds the reader the hold read from"),
+                    });
+                }
                 // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
                 // drained above, so the default here is the empty body of a head that carried none. A row
                 // added for a status outside that set would forward nothing instead of its own body.
@@ -790,6 +916,7 @@ impl Relay {
             head,
             keep_alive,
             key,
+            observer,
             outcome,
             prefix,
             reader,
@@ -807,6 +934,7 @@ impl Relay {
             idle_timeout: self.limits.idle_timeout,
             keep_alive,
             key,
+            observer,
             pool: self.pool.clone(),
             prefix,
             reader,
@@ -822,6 +950,8 @@ struct Forward<'a> {
     head: &'a ResponseHead,
     keep_alive: bool,
     key: PoolKey,
+    /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
+    observer: Option<PostCommit>,
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<Conn>,

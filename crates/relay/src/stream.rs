@@ -13,6 +13,8 @@ use phoebis_transport::TransportError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::hold::Inspect;
+
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
 /// moment does not stall the read loop, shallow enough that a caller that stops reading still pushes back on
 /// the upstream instead of letting the response pile up in memory.
@@ -23,6 +25,13 @@ const CHANNEL_DEPTH: usize = 64;
 /// same cap bounds the decoded copy a compressed rejection is classified from.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
+/// What a committed stream is still watched for. The inspection copy is the pre-commit hold's, so the events it
+/// already consumed are not seen a second time and the parser's bound is all the memory this costs.
+pub(crate) struct PostCommit {
+    pub inspect: Inspect,
+    pub on_error: Box<dyn FnOnce(Bytes) + Send>,
+}
+
 /// Everything the body task needs once the head has been forwarded.
 pub(crate) struct Relayed {
     /// Cancelled when the account this body belongs to is disconnected or deleted.
@@ -31,6 +40,7 @@ pub(crate) struct Relayed {
     pub idle_timeout: Duration,
     pub keep_alive: bool,
     pub key: PoolKey,
+    pub observer: Option<PostCommit>,
     pub pool: Arc<Pool>,
     /// Body bytes already read, which go out ahead of anything the reader still produces.
     pub prefix: Bytes,
@@ -48,10 +58,14 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
             idle_timeout,
             keep_alive,
             key,
+            mut observer,
             pool,
             prefix,
             mut reader,
         } = relayed;
+        // The hold already fed the held bytes to the inspection copy, so the prefix is scanned for what it left
+        // behind rather than fed again.
+        observe(&mut observer);
         if !prefix.is_empty() {
             match decode_piece(decoder.as_mut(), prefix) {
                 Ok(piece) => {
@@ -93,6 +107,11 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
                 let Some(chunk) = next else {
                     break true;
                 };
+                // The raw chunk, because the inspection copy runs the upstream's own content coding; it is read
+                // before the chunk goes out so a late rate-limit error is acted on no later than the client
+                // sees it.
+                feed(&mut observer, &chunk);
+                observe(&mut observer);
                 let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
@@ -113,6 +132,7 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
         if !complete {
             return;
         }
+        observe_end(&mut observer);
         if let Some(mut decoder) = decoder {
             match decoder.finish() {
                 Ok(tail) if !tail.is_empty() => {
@@ -136,6 +156,56 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
     }))
+}
+
+/// Hands a forwarded chunk to the inspection copy. A copy that no longer decodes or no longer fits its bound
+/// cannot be acted on, so the observer goes rather than guessing at what it missed.
+fn feed(observer: &mut Option<PostCommit>, raw: &[u8]) {
+    if let Some(post) = observer.as_mut() {
+        if post.inspect.feed_raw(raw).is_err() {
+            *observer = None;
+        }
+    }
+}
+
+/// Fires the observer on the first `error` event the inspection copy can parse.
+fn observe(observer: &mut Option<PostCommit>) {
+    let Some(post) = observer.as_mut() else {
+        return;
+    };
+    let mut found = None;
+    while let Some(event) = post.inspect.parser.next_event() {
+        if event.name.as_deref() == Some(b"error".as_slice()) {
+            found = Some(event.data);
+            break;
+        }
+    }
+    fire(observer, found);
+}
+
+/// A stream cut off after its last event never sent the empty line that would close it, so the error can still
+/// be sitting in the parser when the body ends.
+fn observe_end(observer: &mut Option<PostCommit>) {
+    let Some(post) = observer.as_mut() else {
+        return;
+    };
+    let found = post
+        .inspect
+        .parser
+        .finish()
+        .filter(|event| event.name.as_deref() == Some(b"error".as_slice()))
+        .map(|event| event.data);
+    fire(observer, found);
+}
+
+/// One firing per stream: the observer is taken with it, so a second `error` event changes nothing.
+fn fire(observer: &mut Option<PostCommit>, data: Option<Vec<u8>>) {
+    let Some(data) = data else {
+        return;
+    };
+    if let Some(post) = observer.take() {
+        (post.on_error)(Bytes::from(data));
+    }
 }
 
 /// What came of reading a body the relay has to look at before it can decide what to do with it.

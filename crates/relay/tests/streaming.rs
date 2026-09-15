@@ -13,8 +13,8 @@ async fn sse_is_relayed_event_by_event_with_pings_and_unknown_events_intact() {
         SseEvent { event: "content_block_delta".into(), data: r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#.into() },
         SseEvent { event: "message_stop".into(), data: r#"{"type":"message_stop"}"#.into() },
     ];
-    // Gated: the fake writes the first event and then blocks until release(), so a relay that buffered the whole
-    // response could not produce a frame at all. A timing bound would only say the relay was fast.
+    // Gated: the fake writes the first event and then blocks until release(). The relay holds that ping until
+    // the stream commits, so the response head itself cannot arrive before the release.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::SseGated {
@@ -25,30 +25,29 @@ async fn sse_is_relayed_event_by_event_with_pings_and_unknown_events_intact() {
     }])
     .await;
     let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let resp = app
-        .oneshot(common::stream_request("phoebis-testkey"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers().get("request-id").unwrap(), "req_up_1");
-    let mut body = resp.into_body();
-    let mut seen = String::new();
-    while !seen.ends_with("\n\n") {
-        let frame = body
-            .frame()
+    let pending = tokio::spawn(async move {
+        app.oneshot(common::stream_request("phoebis-testkey"))
             .await
-            .expect("the first event arrives while the rest is unwritten")
-            .unwrap();
-        seen.push_str(std::str::from_utf8(&frame.into_data().unwrap()).unwrap());
-    }
-    assert_eq!(
-        seen,
-        format!("event: {}\ndata: {}\n\n", events[0].event, events[0].data)
+            .unwrap()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        !pending.is_finished(),
+        "the ping alone commits nothing, so the caller has no head yet"
     );
     up.release();
-    while let Some(frame) = body.frame().await {
-        seen.push_str(std::str::from_utf8(&frame.unwrap().into_data().unwrap()).unwrap());
-    }
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers().get("request-id").unwrap(), "req_up_1");
+    let seen = String::from_utf8(
+        resp.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
     let expected: String = events
         .iter()
         .map(|e| format!("event: {}\ndata: {}\n\n", e.event, e.data))
