@@ -596,6 +596,8 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// A manual row the discovery reports keeps its source and selection, but takes the discovery's
+    /// long-context flag.
     pub fn apply_catalog_sync(
         &self,
         account_id: &str,

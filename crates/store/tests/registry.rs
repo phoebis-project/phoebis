@@ -387,3 +387,65 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
         Err(StoreError::AccountNotFound(_))
     ));
 }
+
+#[test]
+fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    store
+        .put_served_models(
+            "a",
+            &[ServedModelWrite {
+                upstream_id: "Vendor/Model-A".into(),
+                selected: false,
+                long_context: false,
+            }],
+            "admin",
+        )
+        .unwrap();
+    let first = store
+        .apply_catalog_sync(
+            "a",
+            &[
+                ("Vendor/Model-A".into(), true),
+                ("claude-sonnet-5".into(), false),
+            ],
+            10,
+            "catalog",
+        )
+        .unwrap();
+    assert_eq!(first.added, ["claude-sonnet-5"]);
+    let rows = store.served_models("a").unwrap();
+    let by_id = |id: &str| rows.iter().find(|m| m.upstream_id == id).unwrap();
+    let manual = by_id("Vendor/Model-A");
+    assert_eq!(manual.source, ModelSource::Manual);
+    assert!(
+        !manual.selected,
+        "the discovery reporting a manual row never changes its selection"
+    );
+    assert!(
+        manual.long_context,
+        "the discovery's long-context flag applies even to a manual row"
+    );
+    assert!(!manual.missing);
+    let new_row = by_id("claude-sonnet-5");
+    assert!(!new_row.selected && new_row.is_new);
+
+    let second = store
+        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], 20, "catalog")
+        .unwrap();
+    assert!(
+        second.missing.is_empty(),
+        "a manual row omitted from a sync is never flagged missing"
+    );
+    assert!(
+        store
+            .served_models("a")
+            .unwrap()
+            .iter()
+            .any(|m| m.upstream_id == "Vendor/Model-A"),
+        "a manual row omitted from a sync is never removed"
+    );
+}
