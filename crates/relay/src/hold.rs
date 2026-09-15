@@ -9,7 +9,7 @@ use phoebis_transport::response::BodyReader;
 use phoebis_transport::TransportError;
 use tokio::io::AsyncRead;
 
-use crate::sse::{Overflow, SseParser};
+use crate::sse::{Overflow, SseEvent, SseParser};
 
 pub const HOLD_BUFFER: usize = 64 * 1024;
 pub const INSPECT_BUFFER: usize = 64 * 1024;
@@ -101,8 +101,18 @@ pub async fn hold<R: AsyncRead + Unpin>(
             Ok(next) => next?,
         };
         let Some(chunk) = next else {
+            // A stream cut off after its last event never sent the empty line that would close it, so the
+            // committing event can still be sitting in the parser's buffer.
+            let commit = match inspect.parser.finish() {
+                Some(SseEvent { name, data }) => match name.as_deref() {
+                    Some(b"message_start") => Commit::MessageStart,
+                    Some(b"error") => Commit::Error(Bytes::from(data)),
+                    _ => Commit::EndOfStream,
+                },
+                None => Commit::EndOfStream,
+            };
             return Ok(Held {
-                commit: Commit::EndOfStream,
+                commit,
                 bytes: raw.freeze(),
                 inspect,
             });
@@ -236,6 +246,34 @@ mod tests {
             held.bytes.as_ref(),
             gz.as_slice(),
             "the held bytes are the wire bytes"
+        );
+    }
+
+    /// Unlike `held_from`, the writer is dropped after the last chunk, so the body ends instead of going quiet.
+    async fn held_to_end_of_body(chunks: Vec<Vec<u8>>) -> Held {
+        let (mut tx, rx) = duplex(1 << 16);
+        tokio::spawn(async move {
+            for chunk in chunks {
+                tx.write_all(&chunk).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let mut reader = BodyReader::new(rx, Default::default(), Framing::UntilClose);
+        hold(&mut reader, Inspect::new(None), Duration::from_secs(1))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_end_of_the_body_commits_on_a_last_event_missing_its_empty_line() {
+        let ping = event("ping", "{}");
+        let held = held_to_end_of_body(plain(&[&ping])).await;
+        assert!(matches!(held.commit, Commit::EndOfStream));
+        assert_eq!(held.bytes.as_ref(), ping.as_bytes());
+        let held = held_to_end_of_body(plain(&[&ping, "event: message_start\ndata: {}"])).await;
+        assert!(
+            matches!(held.commit, Commit::MessageStart),
+            "a truncated stream still commits on the event it did deliver"
         );
     }
 

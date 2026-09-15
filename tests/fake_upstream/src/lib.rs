@@ -276,9 +276,7 @@ impl FakeUpstream {
         let rule = rules
             .iter_mut()
             .find(|r| r.path_prefix == path_prefix && r.credential.as_deref() == Some(credential))
-            .unwrap_or_else(|| {
-                panic!("fake-upstream: no rule for {credential:?} at {path_prefix:?}")
-            });
+            .unwrap_or_else(|| panic!("fake-upstream: no credential rule at {path_prefix:?}"));
         rule.pending = Some(PendingSwitch {
             kind: SwitchKind::Requests,
             threshold: n_requests as u64,
@@ -399,7 +397,9 @@ impl Shared {
     }
 
     /// `CloseImmediately` cannot be scoped to a path prefix: the decision is made before any request byte
-    /// arrives, so before the path is even known. Tests that use it configure exactly one active rule.
+    /// arrives, so before the path is even known. The credential is unknown just as early, so a
+    /// `CloseImmediately` on a credential rule closes every connection, not that account's. Tests that use it
+    /// configure exactly one active rule.
     fn should_close_immediately(&self) -> bool {
         self.rules
             .lock()
@@ -415,11 +415,13 @@ impl Shared {
         let mut rules = self.rules.lock().unwrap();
         for scoped in [true, false] {
             for rule in rules.iter_mut() {
-                let matches_credential = match &rule.credential {
-                    Some(c) => Some(c.as_str()) == credential,
-                    None => false,
+                let admitted = match &rule.credential {
+                    // A credential rule answers that account and nothing else: a request carrying another
+                    // credential, or none, must fall through to the prefix-only rules.
+                    Some(c) => scoped && Some(c.as_str()) == credential,
+                    None => !scoped,
                 };
-                if matches_credential != scoped {
+                if !admitted {
                     continue;
                 }
                 if !path.starts_with(rule.path_prefix.as_str()) {
