@@ -18,6 +18,32 @@ FIXTURES = pathlib.Path("crates/profile/fixtures")
 # lines; the operator needs enough to tell a date or a kernel string in the system prompt from a shape change.
 DIFF_LINES = 40
 
+# Both ClientHellos carry the same server name, so their byte length is the only thing that tells the inference
+# path from the control path in a connect.json.
+CONTROL_HELLO_LEN = 1473
+INFERENCE_HELLO_LEN = 1499
+
+# The fixtures only the control-plane half of the capture produces. scripts/capture-baseline.sh cannot reach it
+# without a live login session, so --check reports these as not captured rather than as drift.
+CONTROL_PLANE = {
+    "control_profile.http",
+    "control_roles.http",
+    "control_token.http",
+    "control_usage.http",
+    "hello_control.hex",
+    "responses/profile.json",
+    "responses/roles.json",
+    "responses/token.json",
+    "responses/usage.json",
+}
+
+# The inference runs the capture drives, in the order it drives them, and the fixture each one's body becomes.
+INFERENCE_BODIES = ["body_oauth.json", "body_fp_9b244.json", "body_apikey.json", "body_fp_e142e.json"]
+
+# The three of those runs whose request head is pinned. The fourth repeats the first-party override and is kept
+# for its body alone, as a second hash vector.
+INFERENCE_HEADS = ["inference_oauth.http", "inference_oauth_fp.http", "inference_apikey.http"]
+
 # The two header values a session mints fresh on every run; masked so --check reports profile
 # drift, not the identifiers themselves.
 HEADER_PLACEHOLDERS = {
@@ -55,28 +81,43 @@ def control(entry, name, out):
 
 
 def build(src: pathlib.Path, out: pathlib.Path) -> None:
-    """Write the fixture tree at `out`, sourced from the capture directory `src`."""
+    """Write the fixture tree at `out`, sourced from the capture directory `src`.
+
+    `src/mitm/` is optional: a capture without it holds the inference plane only, and the control fixtures and
+    canned responses are left unwritten for `check()` to report as not captured.
+    """
     (out / "responses").mkdir(parents=True, exist_ok=True)
     cm = json.load(open(src / "clean_modes.json"))
-    bodies = {1: "body_oauth.json", 3: "body_fp_9b244.json", 5: "body_apikey.json", 7: "body_fp_e142e.json"}
-    for idx, name in bodies.items():
+    # Selected by request line rather than by index: a capture that interleaves its HEAD /api/hello probes
+    # differently still lands the same four bodies on the same four fixtures.
+    posts = [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages")]
+    if len(posts) != len(INFERENCE_BODIES):
+        raise SystemExit(f"{src}/clean_modes.json holds {len(posts)} POST /v1/messages entries, want 4")
+    for (idx, _), name in zip(posts, INFERENCE_BODIES):
         # Byte-for-byte: the captured CCH digits in the heads are the hash of exactly these bytes.
         (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
-    (out / "inference_oauth.http").write_bytes(head(cm[1], len((out / "body_oauth.json").read_bytes())))
-    (out / "inference_oauth_fp.http").write_bytes(head(cm[3], len((out / "body_fp_9b244.json").read_bytes())))
-    (out / "inference_apikey.http").write_bytes(head(cm[5], len((out / "body_apikey.json").read_bytes())))
-    (out / "hello.http").write_bytes(head(cm[0]))
+    for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
+        (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
+    hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
+    if hello is None:
+        raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+    (out / "hello.http").write_bytes(head(hello))
+    conn = json.load(open(src / "connect.json"))
+    inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
+    if inf is None:
+        raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
+    (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+    ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
+    if ctl is not None:
+        (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
+    if not (src / "mitm").is_dir():
+        return
     login = json.load(open(src / "mitm/login.json"))
     status = json.load(open(src / "mitm/status.json"))
     control(login[0], "control_token.http", out)
     control(login[1], "control_profile.http", out)
     control(login[3], "control_roles.http", out)
     control(status[15], "control_usage.http", out)
-    conn = json.load(open(src / "connect.json"))
-    inf = next(h for h in conn if h["hello_len"] == 1499)
-    ctl = next(h for h in conn if h["hello_len"] == 1473)
-    (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
-    (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
     # The tunnel harness answered these synthetic bodies; they are the fake upstream's canned responses.
     harness = (src / "mitm/mitm5.py").read_text()
     for name, var in [("token", "TOKEN"), ("profile", "PROFILE"), ("usage", "USAGE")]:
@@ -308,7 +349,12 @@ def check(capture_dir: pathlib.Path) -> int:
         committed = normalize_tree(FIXTURES)
         fresh = normalize_tree(fresh_dir)
         names = sorted(set(committed) | set(fresh))
-        diffs = [name for name in names if committed.get(name) != fresh.get(name)]
+        uncaptured = [name for name in names if name not in fresh and name in CONTROL_PLANE]
+        diffs = [name for name in names if name not in uncaptured and committed.get(name) != fresh.get(name)]
+        if uncaptured:
+            print("not captured (control plane):")
+            for name in uncaptured:
+                print(f"  {name}")
         if diffs:
             print("fixtures differ:")
             for name in diffs:
