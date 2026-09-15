@@ -99,8 +99,28 @@ async fn creating_an_api_key_account_verifies_it_seeds_its_catalog_and_a_rejecte
 
 #[tokio::test]
 async fn patching_deleting_and_disconnecting_accounts() {
-    let (app, _up) = common::admin_app().await;
+    let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(&app, "/admin/accounts/direct/pause", "", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert!(
+        !router.snapshot().account("direct").unwrap().enabled,
+        "a pause is published to the router, not only written to the store"
+    );
+    assert_eq!(
+        post(&app, "/admin/accounts/direct/resume", "", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert!(
+        router.snapshot().account("direct").unwrap().enabled,
+        "and so is a resume"
+    );
     let patched = patch(
         &app,
         "/admin/accounts/direct",
@@ -198,15 +218,15 @@ async fn a_rejected_replacement_secret_leaves_the_original_credential_and_the_sn
     let refused = patch(
         &app,
         "/admin/accounts/direct",
-        r#"{"label":"Half","secret":"sk-ant-api03-BAD"}"#,
+        r#"{"enabled":false,"label":"Half","secret":"sk-ant-api03-BAD"}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(refused.status(), 400);
     let row = store.account("direct").unwrap().unwrap();
     assert_eq!(
-        (row.label.as_str(), row.state),
-        ("Direct", phoebis_store::AccountState::Ready),
+        (row.label.as_str(), row.enabled, row.state),
+        ("Direct", true, phoebis_store::AccountState::Ready),
         "no field was half-applied"
     );
     assert_eq!(
@@ -345,6 +365,17 @@ async fn served_models_are_listed_written_and_synced_and_a_clash_is_refused() {
             &app,
             "/admin/accounts/direct/models/sync",
             "",
+            Some(&viewer)
+        )
+        .await
+        .status(),
+        403
+    );
+    assert_eq!(
+        put(
+            &app,
+            "/admin/accounts/direct/models",
+            r#"{"models":[]}"#,
             Some(&viewer)
         )
         .await

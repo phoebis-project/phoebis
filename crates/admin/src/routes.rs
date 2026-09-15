@@ -221,21 +221,25 @@ async fn show_account(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 }
 
 async fn pause(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    set_enabled(&state, &id, false)
+    set_enabled(&state, &id, false).await
 }
 
 async fn resume(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    set_enabled(&state, &id, true)
+    set_enabled(&state, &id, true).await
 }
 
-fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
+/// Selection reads `enabled` off the snapshot, so a pause that is only in the store still takes traffic.
+async fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
     if let Err(refusal) = account(state, id) {
         return refusal;
     }
-    match state.store.set_enabled(id, enabled) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => store_failure(error),
+    if let Err(error) = state.store.set_enabled(id, enabled) {
+        return store_failure(error);
     }
+    if let Err(refusal) = reload_or_refuse(state).await {
+        return refusal;
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Disconnects the slot: the lifecycle bump deletes both credential kinds, and everything still holding

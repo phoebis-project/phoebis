@@ -20,6 +20,8 @@ use crate::AdminState;
 
 const ACTOR: &str = "admin";
 
+const DUPLICATE_ID: &str = "an account with this id exists";
+
 /// What discovery said about a staged credential: the catalog to store, or the error to record.
 enum Verified {
     Catalog(Vec<(String, bool)>),
@@ -97,7 +99,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         _ => {}
     }
     if let Ok(Some(_)) = state.store.account(&input.id) {
-        return failure(StatusCode::CONFLICT, "an account with this id exists");
+        return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
     let now = (state.clock)();
     let row = AccountRow {
@@ -131,7 +133,13 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             .store
             .create_account(&row, secret.as_ref(), catalog, catalog_error, now, ACTOR)
     {
-        return store_failure(error);
+        // The check above is a read, and discovery runs between it and this insert, so a creation that lost a
+        // race for the id arrives here as the store's unique constraint. The insert is one transaction, so a
+        // row standing under that id now belongs to the winner rather than to a half-written attempt.
+        return match state.store.account(&row.id) {
+            Ok(Some(_)) => failure(StatusCode::CONFLICT, DUPLICATE_ID),
+            _ => store_failure(error),
+        };
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
@@ -177,11 +185,6 @@ pub(crate) async fn patch(
             StatusCode::BAD_REQUEST,
             "only an api_key account has a secret",
         );
-    }
-    if let Some(enabled) = input.enabled {
-        if let Err(error) = state.store.set_enabled(&id, enabled) {
-            return store_failure(error);
-        }
     }
     let label = input.label.as_deref().unwrap_or(&row.label);
     let verifying = row.kind == AccountKind::ApiKey && input.secret.is_some();
@@ -229,6 +232,16 @@ pub(crate) async fn patch(
             .store
             .update_account(&id, label, ACTOR)
         {
+            return store_failure(error);
+        }
+    }
+    // Last, because every refusal above answers that nothing changed: a rejected key that had already flipped
+    // `enabled` would make that answer a lie.
+    if let Some(enabled) = input.enabled {
+        if let Err(error) = state.store.set_enabled(&id, enabled) {
+            // A verified edit may already be in the store, so it is published before the storage failure is
+            // answered rather than left waiting for an unrelated write.
+            let _ = reload_or_refuse(&state).await;
             return store_failure(error);
         }
     }
