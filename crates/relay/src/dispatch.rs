@@ -10,12 +10,13 @@ use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
 use phoebis_transport::response::{read_head, ResponseHead};
 use phoebis_transport::TransportError;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
 use crate::messages::Relay;
 
-pub(crate) struct Sent {
-    pub conn: Conn,
+pub(crate) struct Sent<C> {
+    pub conn: C,
     pub head: ResponseHead,
     pub leftover: BytesMut,
 }
@@ -53,15 +54,35 @@ pub(crate) async fn attempt(
     addr: SocketAddr,
     fresh: bool,
     cancel: &CancellationToken,
-) -> Result<Sent, AttemptFailure> {
+) -> Result<Sent<Conn>, AttemptFailure> {
     // Read by the timeout arms, which cannot see how far the attempt itself got. It is raised before the
     // first byte goes out rather than after the last one, because a timeout that fires part way through
     // the write leaves the request in the socket for an upstream that may already be acting on it.
     let sending = AtomicBool::new(false);
-    let work = tokio::time::timeout(
-        relay.limits.head_timeout,
-        attempt_once(relay, request, key, host, addr, fresh, &sending),
-    );
+    let once = async {
+        let conn = if fresh {
+            checkout_fresh(&relay.pool, key, host, addr).await?
+        } else {
+            relay
+                .pool
+                .checkout(key.clone(), host, addr)
+                .await
+                .map(|(conn, _)| conn)
+                .map_err(unsent)?
+        };
+        send_and_read(conn, request, &sending).await
+    };
+    bounded(relay, cancel, &sending, once).await
+}
+
+/// The head timeout and the account's cancellation, which bound an attempt on either plane.
+async fn bounded<T>(
+    relay: &Relay,
+    cancel: &CancellationToken,
+    sending: &AtomicBool,
+    once: impl Future<Output = Result<T, AttemptFailure>>,
+) -> Result<T, AttemptFailure> {
+    let work = tokio::time::timeout(relay.limits.head_timeout, once);
     tokio::select! {
         result = work => match result {
             Ok(result) => result,
@@ -77,26 +98,12 @@ pub(crate) async fn attempt(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn attempt_once(
-    relay: &Relay,
+/// Writes the request into a connection that is already open and reads the response head back.
+async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
+    mut conn: C,
     request: &RawRequest,
-    key: &PoolKey,
-    host: &str,
-    addr: SocketAddr,
-    fresh: bool,
     sending: &AtomicBool,
-) -> Result<Sent, AttemptFailure> {
-    let mut conn = if fresh {
-        checkout_fresh(&relay.pool, key, host, addr).await?
-    } else {
-        relay
-            .pool
-            .checkout(key.clone(), host, addr)
-            .await
-            .map(|(conn, _)| conn)
-            .map_err(unsent)?
-    };
+) -> Result<Sent<C>, AttemptFailure> {
     // From here on the request may be on the wire, which is what the timeout arms need to know; the
     // write's own failures carry their progress and are classified below.
     sending.store(true, Ordering::SeqCst);

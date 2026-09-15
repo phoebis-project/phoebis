@@ -10,6 +10,7 @@ use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
 use phoebis_transport::TransportError;
+use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -32,34 +33,52 @@ pub(crate) struct PostCommit {
     pub on_error: Box<dyn FnOnce(Bytes) + Send>,
 }
 
+/// The measured pool a relayed connection came from, so the body task can hand it back.
+#[derive(Clone)]
+pub(crate) enum Checkin {
+    Measured(Arc<Pool>, PoolKey),
+}
+
+pub(crate) trait ReturnToPool: Sized {
+    fn return_to(self, checkin: Checkin);
+}
+
+impl ReturnToPool for Conn {
+    fn return_to(self, checkin: Checkin) {
+        if let Checkin::Measured(pool, key) = checkin {
+            pool.checkin(key, self);
+        }
+    }
+}
+
 /// Everything the body task needs once the head has been forwarded.
-pub(crate) struct Relayed {
+pub(crate) struct Relayed<C> {
     /// Cancelled when the account this body belongs to is disconnected or deleted.
     pub cancel: CancellationToken,
+    pub checkin: Checkin,
     pub decoder: Option<Box<dyn Decoder>>,
     pub idle_timeout: Duration,
     pub keep_alive: bool,
-    pub key: PoolKey,
     pub observer: Option<PostCommit>,
-    pub pool: Arc<Pool>,
     /// Body bytes already read, which go out ahead of anything the reader still produces.
     pub prefix: Bytes,
-    pub reader: BodyReader<Conn>,
+    pub reader: BodyReader<C>,
 }
 
 /// Relays the upstream body as it arrives: one task reads, the response body drains the channel, and the
 /// connection goes back to the pool only after a clean end.
-pub(crate) fn relay_body(relayed: Relayed) -> Body {
+pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
+    relayed: Relayed<C>,
+) -> Body {
     let (tx, rx) = mpsc::channel::<Result<Bytes, TransportError>>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let Relayed {
             cancel,
+            checkin,
             mut decoder,
             idle_timeout,
             keep_alive,
-            key,
             mut observer,
-            pool,
             prefix,
             mut reader,
         } = relayed;
@@ -150,7 +169,7 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
         // Checking in before the sender drops is what makes the connection available again by the time the
         // caller sees the end of the body, which is the only ordering a sequential caller can observe.
         if keep_alive {
-            pool.checkin(key, reader.into_inner());
+            reader.into_inner().return_to(checkin);
         }
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
@@ -220,8 +239,8 @@ pub(crate) enum Drained {
 /// Reads a response body into memory until it ends or outgrows the bound. The reader stays with the caller
 /// either way: after a clean end it hands back the connection, and after an overrun it is the only thing that
 /// can produce the rest of the body, whatever framing the upstream chose.
-pub(crate) async fn drain_bounded(
-    reader: &mut BodyReader<Conn>,
+pub(crate) async fn drain_bounded<C: AsyncRead + Unpin>(
+    reader: &mut BodyReader<C>,
     idle_timeout: Duration,
 ) -> Result<Drained, TransportError> {
     let mut out = BytesMut::new();

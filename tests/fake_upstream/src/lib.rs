@@ -1,5 +1,6 @@
 //! Loopback HTTP(S) upstream double: records every request verbatim and answers per configured rule, terminating
-//! TLS for the `api.anthropic.com` / `platform.claude.com` SNI or speaking plain HTTP via `start_plain`.
+//! TLS for the `api.anthropic.com` / `platform.claude.com` SNI, for the SANs `start_tls_for` is given, or
+//! speaking plain HTTP via `start_plain`.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
@@ -106,7 +107,12 @@ pub struct FakeUpstream {
 
 impl FakeUpstream {
     pub async fn start(rules: Vec<Rule>) -> FakeUpstream {
-        let tls = generate_tls();
+        Self::start_tls_for(rules, &["api.anthropic.com", "platform.claude.com"]).await
+    }
+
+    /// A leaf carrying the caller's own SANs, so a request to a foreign hostname passes verification.
+    pub async fn start_tls_for(rules: Vec<Rule>, hosts: &[&str]) -> FakeUpstream {
+        let tls = generate_tls(hosts);
         Self::spawn(rules, Wire::Tls(tls.acceptor), tls.ca_pem).await
     }
 
@@ -635,7 +641,7 @@ async fn read_request<S: AsyncRead + Unpin>(
     buf: &mut BytesMut,
     connection: u64,
 ) -> std::io::Result<Option<RecordedRequest>> {
-    let (line, headers, content_length, head_len) = loop {
+    let (line, headers, content_length, chunked, head_len) = loop {
         let mut raw_headers = [httparse::EMPTY_HEADER; 64];
         let mut parsed = httparse::Request::new(&mut raw_headers);
         match parsed
@@ -660,9 +666,14 @@ async fn read_request<S: AsyncRead + Unpin>(
                 let content_length = headers
                     .iter()
                     .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
-                    .and_then(|(_, v)| v.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                break (line, headers, content_length, n);
+                    .and_then(|(_, v)| v.trim().parse::<usize>().ok());
+                // A declared length wins, so a head carrying both is read the way the framing rules say.
+                let chunked = content_length.is_none()
+                    && headers.iter().any(|(n, v)| {
+                        n.eq_ignore_ascii_case("transfer-encoding")
+                            && v.to_ascii_lowercase().contains("chunked")
+                    });
+                break (line, headers, content_length, chunked, n);
             }
             httparse::Status::Partial => {
                 if buf.len() > MAX_HEAD {
@@ -685,19 +696,11 @@ async fn read_request<S: AsyncRead + Unpin>(
         }
     };
     buf.advance(head_len);
-    let mut body = Vec::with_capacity(content_length);
-    let mut complete = true;
-    while body.len() < content_length {
-        if buf.is_empty() {
-            buf.reserve(4096);
-            if stream.read_buf(buf).await? == 0 {
-                complete = false;
-                break;
-            }
-        }
-        let take = buf.len().min(content_length - body.len());
-        body.extend_from_slice(&buf.split_to(take));
-    }
+    let (body, complete) = if chunked {
+        read_chunked_body(stream, buf).await?
+    } else {
+        read_sized_body(stream, buf, content_length.unwrap_or(0)).await?
+    };
     Ok(Some(RecordedRequest {
         connection,
         line,
@@ -705,6 +708,93 @@ async fn read_request<S: AsyncRead + Unpin>(
         body,
         complete,
     }))
+}
+
+/// `complete` is false when the peer stopped before the declared length arrived.
+async fn read_sized_body<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut BytesMut,
+    content_length: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut body = Vec::with_capacity(content_length);
+    while body.len() < content_length {
+        if buf.is_empty() {
+            buf.reserve(4096);
+            if stream.read_buf(buf).await? == 0 {
+                return Ok((body, false));
+            }
+        }
+        let take = buf.len().min(content_length - body.len());
+        body.extend_from_slice(&buf.split_to(take));
+    }
+    Ok((body, true))
+}
+
+/// Reassembles a chunked body into the payload an upstream would have seen, so a test asserts what was sent
+/// rather than how it was framed.
+async fn read_chunked_body<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut BytesMut,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut body = Vec::new();
+    loop {
+        let Some(header) = read_line(stream, buf).await? else {
+            return Ok((body, false));
+        };
+        // Everything after the semicolon is a chunk extension, which carries nothing the fake records.
+        let digits = header.split(';').next().unwrap_or_default().trim();
+        let Ok(size) = usize::from_str_radix(digits, 16) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("malformed chunk size {digits:?}"),
+            ));
+        };
+        if size == 0 {
+            // Any trailer lines, then the empty line that ends the body.
+            return Ok(loop {
+                match read_line(stream, buf).await? {
+                    None => break (body, false),
+                    Some(line) if line.is_empty() => break (body, true),
+                    Some(_) => {}
+                }
+            });
+        }
+        while buf.len() < size {
+            buf.reserve(4096);
+            if stream.read_buf(buf).await? == 0 {
+                body.extend_from_slice(buf);
+                return Ok((body, false));
+            }
+        }
+        body.extend_from_slice(&buf.split_to(size));
+        if read_line(stream, buf).await?.is_none() {
+            return Ok((body, false));
+        }
+    }
+}
+
+/// One CRLF-terminated line without its terminator; `None` when the peer closed before one arrived.
+async fn read_line<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut BytesMut,
+) -> std::io::Result<Option<String>> {
+    loop {
+        if let Some(at) = buf.windows(2).position(|w| w == b"\r\n") {
+            let line = String::from_utf8_lossy(&buf[..at]).into_owned();
+            buf.advance(at + 2);
+            return Ok(Some(line));
+        }
+        if buf.len() > MAX_HEAD {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "chunk line too large",
+            ));
+        }
+        buf.reserve(4096);
+        if stream.read_buf(buf).await? == 0 {
+            return Ok(None);
+        }
+    }
 }
 
 fn status_line(status: u16) -> String {
@@ -848,7 +938,7 @@ struct GeneratedTls {
     acceptor: SslAcceptor,
 }
 
-fn generate_tls() -> GeneratedTls {
+fn generate_tls(hosts: &[&str]) -> GeneratedTls {
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("empty-SAN CA params");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let mut ca_name = DistinguishedName::new();
@@ -859,11 +949,9 @@ fn generate_tls() -> GeneratedTls {
     let ca_key = KeyPair::generate().expect("generate CA key");
     let ca_cert = ca_params.self_signed(&ca_key).expect("self-sign CA cert");
 
-    let leaf_params = CertificateParams::new(vec![
-        "api.anthropic.com".to_string(),
-        "platform.claude.com".to_string(),
-    ])
-    .expect("leaf SAN params");
+    let leaf_params =
+        CertificateParams::new(hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+            .expect("leaf SAN params");
     let leaf_key = KeyPair::generate().expect("generate leaf key");
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &ca_cert, &ca_key)

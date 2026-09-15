@@ -294,7 +294,7 @@ pub async fn harness_with(
         Arc::new(move || c.load(Ordering::SeqCst))
     };
     let mut b = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
-    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    trust_fake_ca(&mut b, up);
     let addr = up.addr();
     // An authority with an explicit port names another loopback fake on that port; everything else is `up`.
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |authority: &str| {
@@ -305,7 +305,7 @@ pub async fn harness_with(
             .or(Some(addr))
     });
     let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
-    phoebis_transport::trust_extra_ca(&mut cb, up.ca_pem()).unwrap();
+    trust_fake_ca(&mut cb, up);
     let control = Arc::new(phoebis_transport::control::ControlClient::new(
         p,
         cb.build(),
@@ -323,21 +323,30 @@ pub async fn harness_with(
         Duration::from_secs(60),
     ));
     let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
-    let relay = Arc::new(Relay::new(
-        p,
-        store.clone(),
-        manager,
-        pool,
-        router_handle.clone(),
-        resolver,
-        clock,
-        limits,
-    ));
+    let relay = Arc::new(
+        Relay::new(
+            p,
+            store.clone(),
+            manager,
+            pool,
+            router_handle.clone(),
+            resolver,
+            clock,
+            limits,
+        )
+    );
     Harness {
         app: router(relay),
         clock: clock_cell,
         router: router_handle,
         store,
+    }
+}
+
+/// A fake serving plain HTTP has no certificate to trust, and `X509::from_pem` refuses the empty string.
+fn trust_fake_ca(builder: &mut boring::ssl::SslConnectorBuilder, up: &FakeUpstream) {
+    if !up.ca_pem().is_empty() {
+        phoebis_transport::trust_extra_ca(builder, up.ca_pem()).unwrap();
     }
 }
 

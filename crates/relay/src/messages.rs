@@ -21,10 +21,11 @@ use phoebis_routing::{
 use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Store};
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
-use phoebis_transport::pool::{Conn, Pool, PoolKey};
+use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
+use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 
 use crate::classify::{classify, Cooldown, HeadContext, Scope, Verdict};
@@ -39,11 +40,11 @@ use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect};
 use crate::identity::{identify, RequestIdentity};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
-use crate::stream::{drain_bounded, relay_body, Drained, PostCommit, Relayed, MAX_BUFFERED_BODY};
+use crate::stream::{
+    drain_bounded, relay_body, Checkin, Drained, PostCommit, Relayed, ReturnToPool,
+    MAX_BUFFERED_BODY,
+};
 use crate::{edit_body, is_portable, presented_key, DriftGuard, RelayError};
-
-/// The one host the relay dials.
-const INFERENCE_HOST: &str = "api.anthropic.com";
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
 /// payload, and the framing ones no longer match the body the caller is sent.
@@ -368,14 +369,14 @@ impl Relay {
                 return self.refused(relay_failure(&error), &request_id, &key, Some(&identity));
             }
             let edited = Bytes::from(edited);
-            let host = INFERENCE_HOST.to_string();
-            let Some(addr) = (self.resolver)(&host) else {
-                tracing::warn!(host = %host, "the upstream host does not resolve");
+            let authority = "api.anthropic.com".to_string();
+            let Some(addr) = (self.resolver)(&authority) else {
+                tracing::warn!(host = %authority, "the upstream host does not resolve");
                 continue;
             };
             let pool_key = PoolKey {
                 account_id: account.id.clone(),
-                host: host.clone(),
+                host: authority.to_string(),
             };
             let mut fresh = false;
             let mut retried = false;
@@ -383,30 +384,59 @@ impl Relay {
 
             'account: loop {
                 attempt += 1;
-                let request = RawRequest {
-                    method: "POST",
-                    target: target.clone(),
-                    headers: outbound_headers(
-                        self.profile,
-                        &parts.headers,
-                        &credential.kind,
-                        &host,
-                        edited.len(),
-                    ),
-                    body: edited.clone(),
+                let responding = Responding {
+                    account: &account,
+                    attempt,
+                    caller: &parts.headers,
+                    cancel: &answer.cancel,
+                    client_drift: client_drift.clone(),
+                    client_version: client_version.clone(),
+                    credential_generation: credential.generation,
+                    fallback_ms,
+                    identity: &identity,
+                    key: &key,
+                    pin: selection.pin.as_ref(),
+                    pin_epoch,
+                    portable,
+                    replayed,
+                    request_id: &request_id,
                 };
-                let sent = match dispatch::attempt(
-                    self,
-                    &request,
-                    &pool_key,
-                    &host,
-                    addr,
-                    fresh,
-                    &answer.cancel,
-                )
-                .await
-                {
-                    Ok(sent) => sent,
+                let dispatched = {
+                    let request = RawRequest {
+                        method: "POST",
+                        target: target.clone(),
+                        headers: outbound_headers(
+                            self.profile,
+                            &parts.headers,
+                            &credential.kind,
+                            &authority,
+                            edited.len(),
+                        ),
+                        body: edited.clone(),
+                    };
+                    match dispatch::attempt(
+                        self,
+                        &request,
+                        &pool_key,
+                        &authority,
+                        addr,
+                        fresh,
+                        &answer.cancel,
+                    )
+                    .await
+                    {
+                        Err(failure) => Err(failure),
+                        Ok(sent) => Ok(self
+                            .respond(
+                                responding,
+                                sent,
+                                Checkin::Measured(self.pool.clone(), pool_key.clone()),
+                            )
+                            .await),
+                    }
+                };
+                let next = match dispatched {
+                    Ok(next) => next,
                     Err(AttemptFailure::Unsent(detail))
                         if !retried && attempt < self.limits.max_attempts =>
                     {
@@ -450,311 +480,295 @@ impl Relay {
                         return with_outcome(UPSTREAM_UNREACHABLE.response(&request_id), outcome);
                     }
                 };
-                let Sent {
-                    conn,
-                    head,
-                    leftover,
-                } = sent;
-                // When the head arrived, which is what stamps the overage evidence below for an upstream that
-                // sends no `Date` of its own.
-                let arrived = (self.clock)();
-                let framing = framing(&head);
-                let reusable = keep_alive(&head, &framing);
-                let mut reader = BodyReader::new(conn, leftover, framing);
-                let outcome = self.outcome(
-                    &request_id,
-                    &key,
-                    Some(&identity),
-                    &account.id,
-                    head.status,
-                    attempt,
-                    true,
-                    client_drift.clone(),
-                    client_version.clone(),
-                    None,
-                    pin_epoch,
-                );
-                self.report_overage(&account, &head, arrived);
-
-                // Heads the table reads a body for are drained within the bound; a body too large to read
-                // commits. The reader survives only where the body was left alone, because a drained body has
-                // already handed its connection back to the pool.
-                let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
-                    let Some(drained) = until_cancelled(
-                        drain_bounded(&mut reader, self.limits.idle_timeout),
-                        &answer.cancel,
-                    )
-                    .await
-                    else {
-                        return self.cancelled(
-                            &request_id,
-                            &key,
-                            &identity,
-                            &account.id,
-                            head.status,
-                            attempt,
-                            &client_drift,
-                            &client_version,
-                            pin_epoch,
-                        );
-                    };
-                    match drained {
-                        Ok(Drained::Complete(buffered)) => {
-                            if reusable {
-                                self.pool.checkin(pool_key.clone(), reader.into_inner());
-                            }
-                            (Some(buffered), None)
-                        }
-                        Ok(Drained::TooLarge(prefix)) => {
-                            tracing::debug!(account = %account.id, "forwarding a rejection too large to inspect");
-                            return self.stream(Forward {
-                                caller: &parts.headers,
-                                cancel: answer.cancel.clone(),
-                                head: &head,
-                                keep_alive: reusable,
-                                key: pool_key,
-                                observer: None,
-                                outcome,
-                                prefix,
-                                reader,
-                            });
-                        }
-                        Err(error) => {
-                            tracing::warn!(account = %account.id, %error, "the rejection body was not readable");
-                            return with_outcome(
-                                UPSTREAM_UNREACHABLE.response(&request_id),
-                                outcome,
-                            );
-                        }
+                match next {
+                    Next::Replay(refreshed) => {
+                        credential = refreshed;
+                        replayed = true;
+                        fresh = false;
+                        continue 'account;
                     }
-                } else {
-                    (None, Some(reader))
-                };
-                let decoded = buffered.as_ref().and_then(|b| inspectable_copy(&head, b));
-                // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
-                // rejection the caller must never see, because the request can still go to another account.
-                let streaming = head.status == 200
-                    && head
-                        .get("content-type")
-                        .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
-                let mut held: Option<Held> = None;
-                let mut first_event: Option<Bytes> = None;
-                if let (true, Some(reader)) = (streaming, reader.as_mut()) {
-                    let inspect = Inspect::new(match encoding(&head) {
-                        Ok(Encoding::Identity) => None,
-                        Ok(coding) => Some(decoder(coding)),
-                        Err(_) => None,
-                    });
-                    let Some(result) = until_cancelled(
-                        hold(reader, inspect, self.limits.hold_timeout),
-                        &answer.cancel,
-                    )
-                    .await
-                    else {
-                        return self.cancelled(
-                            &request_id,
-                            &key,
-                            &identity,
-                            &account.id,
-                            head.status,
-                            attempt,
-                            &client_drift,
-                            &client_version,
-                            pin_epoch,
-                        );
-                    };
-                    match result {
-                        Ok(h) => {
-                            if let Commit::Error(data) = &h.commit {
-                                first_event = Some(data.clone());
-                            }
-                            held = Some(h);
+                    Next::FailOver(last) => {
+                        if last.is_some() {
+                            last_failed = last;
                         }
-                        Err(error) => {
-                            tracing::warn!(account = %account.id, %error, "the stream ended before it committed");
-                            return with_outcome(
-                                UPSTREAM_UNREACHABLE.response(&request_id),
-                                outcome,
-                            );
-                        }
-                    }
-                }
-                // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
-                let arrived = (self.clock)();
-                let verdict = classify(
-                    &head,
-                    &HeadContext {
-                        kind: account.kind,
-                        canonical_model: &identity.canonical_model,
-                        now: arrived,
-                        fallback_ms,
-                        first_event: first_event.as_deref(),
-                        body_prefix: decoded.as_deref(),
-                    },
-                );
-                let generations = (account.lifecycle_generation, credential.generation);
-
-                let (cooldown, mark) = match verdict {
-                    // A rejected replay is conclusive: the refreshed token was refused too.
-                    Verdict::Refresh if replayed => (None, Some(AccountState::ReauthRequired)),
-                    Verdict::Refresh if attempt < self.limits.max_attempts => {
-                        match self
-                            .manager
-                            .refresh_now(&account.id, credential.generation)
-                            .await
-                        {
-                            Ok(token) => {
-                                credential = Credential::from(token);
-                                replayed = true;
-                                fresh = false;
-                                continue 'account;
-                            }
-                            // The manager marks the account itself when the refresh ended in invalid_grant; anything
-                            // else is inconclusive, so the upstream's 401 goes back with no mark from here.
-                            Err(error) => {
-                                tracing::warn!(account = %account.id, %error, "the rejected token could not be refreshed");
-                                (None, None)
-                            }
-                        }
-                    }
-                    // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
-                    // is forwarded as it came and the account keeps its state and its pin.
-                    Verdict::Refresh => {
-                        return forward_buffered(
-                            &head,
-                            buffered.unwrap_or_default(),
-                            &parts.headers,
-                            outcome,
-                        )
-                    }
-                    Verdict::FailOver { cooldown, mark } => (cooldown, mark),
-                    Verdict::Commit | Verdict::RetrySameAccount => {
-                        if let Some(pin) = &selection.pin {
-                            self.router.report(Report::PinRenewed {
-                                pin: pin.clone(),
-                                now: (self.clock)(),
-                            });
-                        }
-                        let (prefix, observer) = match held {
-                            None => (Bytes::new(), None),
-                            Some(Held { bytes, inspect, .. }) => {
-                                let (router, clock, account_id, kind, model, pin, request_id) = (
-                                    self.router.clone(),
-                                    self.clock.clone(),
-                                    account.id.clone(),
-                                    account.kind,
-                                    identity.canonical_model.clone(),
-                                    if portable {
-                                        selection.pin.clone()
-                                    } else {
-                                        None
-                                    },
-                                    request_id.clone(),
-                                );
-                                let head = ResponseHead {
-                                    status: head.status,
-                                    headers: head.headers.clone(),
-                                };
-                                let on_error = Box::new(move |data: Bytes| {
-                                    // After commit nothing fails over. A rate-limit error records the cooldown
-                                    // and, on a portable request, invalidates the pin so the next request
-                                    // migrates; a non-portable request keeps its pin. The deadline is measured
-                                    // from the error's arrival, not from the selection.
-                                    let now = clock();
-                                    if let Verdict::FailOver { cooldown, mark } = classify(
-                                        &head,
-                                        &HeadContext {
-                                            kind,
-                                            canonical_model: &model,
-                                            now,
-                                            fallback_ms,
-                                            first_event: Some(&data),
-                                            body_prefix: None,
-                                        },
-                                    ) {
-                                        report_failover(
-                                            &router,
-                                            &account_id,
-                                            &model,
-                                            cooldown,
-                                            mark,
-                                            pin,
-                                            &request_id,
-                                            generations,
-                                        );
-                                    }
-                                })
-                                    as Box<dyn FnOnce(Bytes) + Send>;
-                                (bytes, Some(PostCommit { inspect, on_error }))
-                            }
-                        };
-                        return match buffered {
-                            Some(buffered) => {
-                                forward_buffered(&head, buffered, &parts.headers, outcome)
-                            }
-                            None => self.stream(Forward {
-                                caller: &parts.headers,
-                                cancel: answer.cancel.clone(),
-                                head: &head,
-                                keep_alive: reusable,
-                                key: pool_key,
-                                observer,
-                                outcome,
-                                prefix,
-                                reader: reader.expect(
-                                    "a head the table reads no body for still holds its reader",
-                                ),
-                            }),
-                        };
-                    }
-                };
-                // A non-portable request keeps its pin: the failed response goes back to the client on the
-                // account that holds its state, and only the cooldown is recorded.
-                report_failover(
-                    &self.router,
-                    &account.id,
-                    &identity.canonical_model,
-                    cooldown,
-                    mark,
-                    if portable {
-                        selection.pin.clone()
-                    } else {
-                        None
-                    },
-                    &request_id,
-                    generations,
-                );
-                // A held stream cannot be rewound onto another connection, so the only way not to commit it is
-                // to drop it unread; once the budget is spent it goes to the caller as it came.
-                if let Some(held) = held {
-                    if portable && attempt < self.limits.max_attempts {
-                        drop(reader);
                         break 'account;
                     }
-                    return self.stream(Forward {
-                        caller: &parts.headers,
-                        cancel: answer.cancel.clone(),
-                        head: &head,
-                        keep_alive: false,
-                        key: pool_key,
-                        observer: None,
-                        outcome,
-                        prefix: held.bytes,
-                        reader: reader
-                            .expect("a streaming head still holds the reader the hold read from"),
-                    });
+                    Next::Respond(response) => return response,
                 }
-                // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
-                // drained above, so the default here is the empty body of a head that carried none. A row
-                // added for a status outside that set would forward nothing instead of its own body.
-                let buffered = buffered.unwrap_or_default();
-                if portable && attempt < self.limits.max_attempts {
-                    last_failed = Some((head, buffered, outcome));
-                    break 'account;
-                }
-                return forward_buffered(&head, buffered, &parts.headers, outcome);
             }
         }
+    }
+
+    /// The half of an attempt that runs once the head is in: the drain, the pre-commit hold, the verdict, and
+    /// the response or the decision to move on.
+    async fn respond<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
+        &self,
+        ctx: Responding<'_>,
+        sent: Sent<C>,
+        checkin: Checkin,
+    ) -> Next {
+        let Sent {
+            conn,
+            head,
+            leftover,
+        } = sent;
+        // When the head arrived, which is what stamps the overage evidence below for an upstream that
+        // sends no `Date` of its own.
+        let arrived = (self.clock)();
+        let framing = framing(&head);
+        let reusable = keep_alive(&head, &framing);
+        let mut reader = BodyReader::new(conn, leftover, framing);
+        let outcome = self.outcome(
+            ctx.request_id,
+            ctx.key,
+            Some(ctx.identity),
+            &ctx.account.id,
+            head.status,
+            ctx.attempt,
+            true,
+            ctx.client_drift.clone(),
+            ctx.client_version.clone(),
+            None,
+            ctx.pin_epoch,
+        );
+        self.report_overage(ctx.account, &head, arrived);
+
+        // Heads the table reads a body for are drained within the bound; a body too large to read
+        // commits. The reader survives only where the body was left alone, because a drained body has
+        // already handed its connection back to the pool.
+        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
+            let Some(drained) = until_cancelled(
+                drain_bounded(&mut reader, self.limits.idle_timeout),
+                ctx.cancel,
+            )
+            .await
+            else {
+                return Next::Respond(self.cancelled(&ctx, head.status));
+            };
+            match drained {
+                Ok(Drained::Complete(buffered)) => {
+                    if reusable {
+                        reader.into_inner().return_to(checkin.clone());
+                    }
+                    (Some(buffered), None)
+                }
+                Ok(Drained::TooLarge(prefix)) => {
+                    tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
+                    return Next::Respond(self.stream(Forward {
+                        caller: ctx.caller,
+                        cancel: ctx.cancel.clone(),
+                        checkin,
+                        head: &head,
+                        keep_alive: reusable,
+                        observer: None,
+                        outcome,
+                        prefix,
+                        reader,
+                    }));
+                }
+                Err(error) => {
+                    tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
+                    return Next::Respond(with_outcome(
+                        UPSTREAM_UNREACHABLE.response(ctx.request_id),
+                        outcome,
+                    ));
+                }
+            }
+        } else {
+            (None, Some(reader))
+        };
+        let decoded = buffered.as_ref().and_then(|b| inspectable_copy(&head, b));
+        // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
+        // rejection the caller must never see, because the request can still go to another account.
+        let streaming = head.status == 200
+            && head
+                .get("content-type")
+                .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let mut held: Option<Held> = None;
+        let mut first_event: Option<Bytes> = None;
+        if let (true, Some(reader)) = (streaming, reader.as_mut()) {
+            let inspect = Inspect::new(match encoding(&head) {
+                Ok(Encoding::Identity) => None,
+                Ok(coding) => Some(decoder(coding)),
+                Err(_) => None,
+            });
+            let Some(result) =
+                until_cancelled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
+            else {
+                return Next::Respond(self.cancelled(&ctx, head.status));
+            };
+            match result {
+                Ok(h) => {
+                    if let Commit::Error(data) = &h.commit {
+                        first_event = Some(data.clone());
+                    }
+                    held = Some(h);
+                }
+                Err(error) => {
+                    tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
+                    return Next::Respond(with_outcome(
+                        UPSTREAM_UNREACHABLE.response(ctx.request_id),
+                        outcome,
+                    ));
+                }
+            }
+        }
+        // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
+        let arrived = (self.clock)();
+        let verdict = classify(
+            &head,
+            &HeadContext {
+                kind: ctx.account.kind,
+                canonical_model: &ctx.identity.canonical_model,
+                now: arrived,
+                fallback_ms: ctx.fallback_ms,
+                first_event: first_event.as_deref(),
+                body_prefix: decoded.as_deref(),
+            },
+        );
+        let generations = (ctx.account.lifecycle_generation, ctx.credential_generation);
+
+        let (cooldown, mark) = match verdict {
+            // A rejected replay is conclusive: the refreshed token was refused too.
+            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired)),
+            Verdict::Refresh if ctx.attempt < self.limits.max_attempts => {
+                match self
+                    .manager
+                    .refresh_now(&ctx.account.id, ctx.credential_generation)
+                    .await
+                {
+                    Ok(token) => return Next::Replay(Credential::from(token)),
+                    // The manager marks the account itself when the refresh ended in invalid_grant; anything
+                    // else is inconclusive, so the upstream's 401 goes back with no mark from here.
+                    Err(error) => {
+                        tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
+                        (None, None)
+                    }
+                }
+            }
+            // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
+            // is forwarded as it came and the account keeps its state and its pin.
+            Verdict::Refresh => {
+                return Next::Respond(forward_buffered(
+                    &head,
+                    buffered.unwrap_or_default(),
+                    ctx.caller,
+                    outcome,
+                ))
+            }
+            Verdict::FailOver { cooldown, mark } => (cooldown, mark),
+            Verdict::Commit | Verdict::RetrySameAccount => {
+                if let Some(pin) = ctx.pin {
+                    self.router.report(Report::PinRenewed {
+                        pin: pin.clone(),
+                        now: (self.clock)(),
+                    });
+                }
+                let (prefix, observer) = match held {
+                    None => (Bytes::new(), None),
+                    Some(Held { bytes, inspect, .. }) => {
+                        let fallback_ms = ctx.fallback_ms;
+                        let (router, clock, account_id, kind, model, pin, request_id) = (
+                            self.router.clone(),
+                            self.clock.clone(),
+                            ctx.account.id.clone(),
+                            ctx.account.kind,
+                            ctx.identity.canonical_model.clone(),
+                            ctx.portable.then(|| ctx.pin.cloned()).flatten(),
+                            ctx.request_id.to_string(),
+                        );
+                        let head = ResponseHead {
+                            status: head.status,
+                            headers: head.headers.clone(),
+                        };
+                        let on_error = Box::new(move |data: Bytes| {
+                            // After commit nothing fails over. A rate-limit error records the cooldown
+                            // and, on a portable request, invalidates the pin so the next request
+                            // migrates; a non-portable request keeps its pin. The deadline is measured
+                            // from the error's arrival, not from the selection.
+                            let now = clock();
+                            if let Verdict::FailOver { cooldown, mark } = classify(
+                                &head,
+                                &HeadContext {
+                                    kind,
+                                    canonical_model: &model,
+                                    now,
+                                    fallback_ms,
+                                    first_event: Some(&data),
+                                    body_prefix: None,
+                                },
+                            ) {
+                                report_failover(
+                                    &router,
+                                    &account_id,
+                                    &model,
+                                    cooldown,
+                                    mark,
+                                    pin,
+                                    &request_id,
+                                    generations,
+                                );
+                            }
+                        }) as Box<dyn FnOnce(Bytes) + Send>;
+                        (bytes, Some(PostCommit { inspect, on_error }))
+                    }
+                };
+                return Next::Respond(match buffered {
+                    Some(buffered) => forward_buffered(&head, buffered, ctx.caller, outcome),
+                    None => self.stream(Forward {
+                        caller: ctx.caller,
+                        cancel: ctx.cancel.clone(),
+                        checkin,
+                        head: &head,
+                        keep_alive: reusable,
+                        observer,
+                        outcome,
+                        prefix,
+                        reader: reader
+                            .expect("a head the table reads no body for still holds its reader"),
+                    }),
+                });
+            }
+        };
+        // A non-portable request keeps its pin: the failed response goes back to the client on the
+        // account that holds its state, and only the cooldown is recorded.
+        report_failover(
+            &self.router,
+            &ctx.account.id,
+            &ctx.identity.canonical_model,
+            cooldown,
+            mark,
+            ctx.portable.then(|| ctx.pin.cloned()).flatten(),
+            ctx.request_id,
+            generations,
+        );
+        // A held stream cannot be rewound onto another connection, so the only way not to commit it is
+        // to drop it unread; once the budget is spent it goes to the caller as it came.
+        if let Some(held) = held {
+            if ctx.portable && ctx.attempt < self.limits.max_attempts {
+                drop(reader);
+                return Next::FailOver(None);
+            }
+            return Next::Respond(self.stream(Forward {
+                caller: ctx.caller,
+                cancel: ctx.cancel.clone(),
+                checkin,
+                head: &head,
+                keep_alive: false,
+                observer: None,
+                outcome,
+                prefix: held.bytes,
+                reader: reader.expect("a streaming head still holds the reader the hold read from"),
+            }));
+        }
+        // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
+        // drained above, so the default here is the empty body of a head that carried none. A row
+        // added for a status outside that set would forward nothing instead of its own body.
+        let buffered = buffered.unwrap_or_default();
+        if ctx.portable && ctx.attempt < self.limits.max_attempts {
+            return Next::FailOver(Some((head, buffered, outcome)));
+        }
+        Next::Respond(forward_buffered(&head, buffered, ctx.caller, outcome))
     }
 
     async fn credential(&self, account: &AccountRow) -> Result<Credential, Failure> {
@@ -809,33 +823,21 @@ impl Relay {
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
-    #[allow(clippy::too_many_arguments)]
-    fn cancelled(
-        &self,
-        request_id: &str,
-        key: &ApiKeyRow,
-        identity: &RequestIdentity,
-        account_id: &str,
-        upstream_status: u16,
-        attempt: u8,
-        client_drift: &Option<String>,
-        client_version: &Option<String>,
-        pin_epoch: Option<u64>,
-    ) -> Response {
+    fn cancelled(&self, ctx: &Responding<'_>, upstream_status: u16) -> Response {
         let outcome = self.outcome(
-            request_id,
-            key,
-            Some(identity),
-            account_id,
+            ctx.request_id,
+            ctx.key,
+            Some(ctx.identity),
+            &ctx.account.id,
             upstream_status,
-            attempt,
+            ctx.attempt,
             true,
-            client_drift.clone(),
-            client_version.clone(),
+            ctx.client_drift.clone(),
+            ctx.client_version.clone(),
             Some("account_cancelled"),
-            pin_epoch,
+            ctx.pin_epoch,
         );
-        with_outcome(ACCOUNT_CANCELLED.response(request_id), outcome)
+        with_outcome(ACCOUNT_CANCELLED.response(ctx.request_id), outcome)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -909,13 +911,16 @@ impl Relay {
         });
     }
 
-    fn stream(&self, forward: Forward<'_>) -> Response {
+    fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
+        &self,
+        forward: Forward<'_, C>,
+    ) -> Response {
         let Forward {
             caller,
             cancel,
+            checkin,
             head,
             keep_alive,
-            key,
             observer,
             outcome,
             prefix,
@@ -930,12 +935,11 @@ impl Relay {
         };
         let body = relay_body(Relayed {
             cancel,
+            checkin,
             decoder,
             idle_timeout: self.limits.idle_timeout,
             keep_alive,
-            key,
             observer,
-            pool: self.pool.clone(),
             prefix,
             reader,
         });
@@ -944,17 +948,46 @@ impl Relay {
 }
 
 /// A response whose head is settled and whose body is still on the wire.
-struct Forward<'a> {
+struct Forward<'a, C> {
     caller: &'a HeaderMap,
     cancel: CancellationToken,
+    checkin: Checkin,
     head: &'a ResponseHead,
     keep_alive: bool,
-    key: PoolKey,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
     outcome: RelayOutcome,
     prefix: Bytes,
-    reader: BodyReader<Conn>,
+    reader: BodyReader<C>,
+}
+
+/// What one attempt's response half reads about the request it belongs to.
+struct Responding<'a> {
+    account: &'a AccountRow,
+    attempt: u8,
+    caller: &'a HeaderMap,
+    cancel: &'a CancellationToken,
+    client_drift: Option<String>,
+    client_version: Option<String>,
+    credential_generation: u64,
+    fallback_ms: i64,
+    identity: &'a RequestIdentity,
+    key: &'a ApiKeyRow,
+    pin: Option<&'a PinRef>,
+    pin_epoch: Option<u64>,
+    portable: bool,
+    replayed: bool,
+    request_id: &'a str,
+}
+
+/// What the response half decided the account loop should do next.
+enum Next {
+    /// This account is finished. `Some` carries the response to commit if the attempt budget runs out before
+    /// another account answers.
+    FailOver(Option<(ResponseHead, Bytes, RelayOutcome)>),
+    /// The refreshed token goes back to the same account.
+    Replay(Credential),
+    Respond(Response),
 }
 
 /// `generations` is the attempt's (lifecycle, credential) pair, which fences the mark: a verdict about a
