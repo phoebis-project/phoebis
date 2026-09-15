@@ -15,7 +15,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, Limits, Relay, RelayOutcome};
+use phoebis_relay::{router, CatalogService, Limits, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
@@ -79,6 +79,7 @@ impl Default for PoolSpec {
 
 pub struct Harness {
     pub app: axum::Router,
+    pub catalog: Arc<CatalogService>,
     pub clock: Arc<AtomicI64>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -169,124 +170,144 @@ pub async fn harness_with(
     models: &[&str],
     limits: Limits,
 ) -> Harness {
-    let p = claude_code_2_1_269_linux_x64();
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    for (n, account) in accounts.iter().enumerate() {
-        // Every extra account gets its own uuid; the one-account wrapper is the only caller that names one.
-        let uuid = account
-            .uuid
-            .map(String::from)
-            .unwrap_or_else(|| format!("00000000-0000-4000-8000-0000000001{n:02}"));
-        let identity = matches!(account.kind, AccountKind::Oauth).then(|| Identity {
-            account_uuid: uuid,
-            email: format!("{}@example.invalid", account.id),
-            organization_uuid: None,
-        });
-        store
-            .insert_account(&AccountRow {
-                id: account.id.into(),
-                kind: account.kind,
-                label: account.id.into(),
-                enabled: true,
-                identity,
-                lifecycle_generation: 1,
-                state: AccountState::Ready,
-            })
-            .unwrap();
-        match account.kind {
-            // The refresh token is seeded because the 401 replay tests drive a real refresh through an account.
-            AccountKind::Oauth => {
-                store
-                    .commit_credentials(
-                        account.id,
-                        1,
-                        None,
-                        None,
-                        &NewBundle {
-                            access_token: Secret::new(account.secret),
-                            refresh_token: Some(Secret::new(&format!(
-                                "{}-refresh",
-                                account.secret
-                            ))),
-                            issued_at: NOW,
-                            expires_at: i64::MAX / 2,
-                            refresh_expires_at: None,
-                            scopes: "user:inference".into(),
-                        },
-                    )
-                    .unwrap();
-            }
-            AccountKind::ApiKey => {
-                store
-                    .set_api_key_secret(account.id, &Secret::new(account.secret))
-                    .unwrap();
+    harness_on(store, up, accounts, pool, models, limits).await
+}
+
+/// The same builder over a store the caller already opened, so a test can reopen an on-disk store and see its
+/// rows survive. Seeding accounts, the pool, and the key is skipped once the store already has accounts, and
+/// the model seed is skipped when the caller wants a bare catalog for its own sync to fill in.
+pub async fn harness_on(
+    store: Arc<Store>,
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    models: &[&str],
+    limits: Limits,
+) -> Harness {
+    let p = claude_code_2_1_269_linux_x64();
+    if store.accounts().unwrap().is_empty() {
+        for (n, account) in accounts.iter().enumerate() {
+            // Every extra account gets its own uuid; the one-account wrapper is the only caller that names one.
+            let uuid = account
+                .uuid
+                .map(String::from)
+                .unwrap_or_else(|| format!("00000000-0000-4000-8000-0000000001{n:02}"));
+            let identity = matches!(account.kind, AccountKind::Oauth).then(|| Identity {
+                account_uuid: uuid,
+                email: format!("{}@example.invalid", account.id),
+                organization_uuid: None,
+            });
+            store
+                .insert_account(&AccountRow {
+                    id: account.id.into(),
+                    kind: account.kind,
+                    label: account.id.into(),
+                    enabled: true,
+                    identity,
+                    lifecycle_generation: 1,
+                    state: AccountState::Ready,
+                })
+                .unwrap();
+            match account.kind {
+                // The refresh token is seeded because the 401 replay tests drive a real refresh through an account.
+                AccountKind::Oauth => {
+                    store
+                        .commit_credentials(
+                            account.id,
+                            1,
+                            None,
+                            None,
+                            &NewBundle {
+                                access_token: Secret::new(account.secret),
+                                refresh_token: Some(Secret::new(&format!(
+                                    "{}-refresh",
+                                    account.secret
+                                ))),
+                                issued_at: NOW,
+                                expires_at: i64::MAX / 2,
+                                refresh_expires_at: None,
+                                scopes: "user:inference".into(),
+                            },
+                        )
+                        .unwrap();
+                }
+                AccountKind::ApiKey => {
+                    store
+                        .set_api_key_secret(account.id, &Secret::new(account.secret))
+                        .unwrap();
+                }
             }
         }
         store
-            .apply_catalog_sync(
-                account.id,
-                &models
+            .insert_pool(
+                &PoolRow {
+                    id: "main".into(),
+                    label: "main".into(),
+                    enabled: true,
+                    strategy: pool.strategy,
+                    affinity_ttl_seconds: pool.affinity_ttl_seconds,
+                    overage_policy: pool.overage_policy,
+                    migrate_above_utilization: pool.migrate_above_utilization,
+                    default_allowed_models: pool
+                        .allowed_models
+                        .map(|l| l.into_iter().map(String::from).collect()),
+                    keepalive_json: "{}".into(),
+                    body_capture_hours: 0,
+                    created_at: NOW,
+                    updated_at: NOW,
+                },
+                "test",
+            )
+            .unwrap();
+        store
+            .set_pool_members(
+                "main",
+                &accounts
                     .iter()
-                    .map(|m| (m.to_string(), false))
+                    .map(|a| (a.id.to_string(), a.priority))
                     .collect::<Vec<_>>(),
-                NOW,
+                "test",
+            )
+            .unwrap();
+        store
+            .insert_api_key(
+                &ApiKeyRow {
+                    id: "desktop".into(),
+                    label: "desktop".into(),
+                    notes: None,
+                    pool_id: "main".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    allowed_models: None,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: store.api_key_digest(KEY).to_vec(),
+                    prefix: phoebis_store::key_prefix(KEY),
+                    created_at: NOW,
+                    rotated_at: None,
+                    last_used_at: None,
+                },
                 "test",
             )
             .unwrap();
     }
-    store
-        .insert_pool(
-            &PoolRow {
-                id: "main".into(),
-                label: "main".into(),
-                enabled: true,
-                strategy: pool.strategy,
-                affinity_ttl_seconds: pool.affinity_ttl_seconds,
-                overage_policy: pool.overage_policy,
-                migrate_above_utilization: pool.migrate_above_utilization,
-                default_allowed_models: pool
-                    .allowed_models
-                    .map(|l| l.into_iter().map(String::from).collect()),
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
-                created_at: NOW,
-                updated_at: NOW,
-            },
-            "test",
-        )
-        .unwrap();
-    store
-        .set_pool_members(
-            "main",
-            &accounts
-                .iter()
-                .map(|a| (a.id.to_string(), a.priority))
-                .collect::<Vec<_>>(),
-            "test",
-        )
-        .unwrap();
-    store
-        .insert_api_key(
-            &ApiKeyRow {
-                id: "desktop".into(),
-                label: "desktop".into(),
-                notes: None,
-                pool_id: "main".into(),
-                enabled: true,
-                revoked_at: None,
-                expires_at: None,
-                allowed_models: None,
-                keepalive_opt_out: false,
-                body_capture_hours: None,
-                secret_digest: store.api_key_digest(KEY).to_vec(),
-                prefix: phoebis_store::key_prefix(KEY),
-                created_at: NOW,
-                rotated_at: None,
-                last_used_at: None,
-            },
-            "test",
-        )
-        .unwrap();
+    if !models.is_empty() {
+        for account in accounts {
+            store
+                .apply_catalog_sync(
+                    account.id,
+                    &models
+                        .iter()
+                        .map(|m| (m.to_string(), false))
+                        .collect::<Vec<_>>(),
+                    NOW,
+                    "test",
+                )
+                .unwrap();
+        }
+    }
 
     let clock_cell = Arc::new(AtomicI64::new(NOW));
     let clock: Clock = {
@@ -323,6 +344,16 @@ pub async fn harness_with(
         Duration::from_secs(60),
     ));
     let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    let catalog = Arc::new(CatalogService::new(
+        p,
+        store.clone(),
+        manager.clone(),
+        pool.clone(),
+        resolver.clone(),
+        router_handle.clone(),
+        clock.clone(),
+        limits.head_timeout,
+    ));
     let relay = Arc::new(
         Relay::new(
             p,
@@ -337,6 +368,7 @@ pub async fn harness_with(
     );
     Harness {
         app: router(relay),
+        catalog,
         clock: clock_cell,
         router: router_handle,
         store,

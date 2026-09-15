@@ -3,6 +3,7 @@
 
 mod auth;
 mod body;
+mod catalog;
 mod classify;
 mod dispatch;
 mod drift;
@@ -19,6 +20,7 @@ mod stream;
 
 pub use auth::{presented_key, AuthError};
 pub use body::{edit_body, BodyEdits};
+pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};
 pub use classify::{
     classify, classify_transport, exhaustion_window, Cooldown, HeadContext, Scope, TransportPhase,
     Verdict,
