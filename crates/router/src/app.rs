@@ -241,6 +241,15 @@ fn sync_accounts(store: &Store, config: &Config) -> anyhow::Result<()> {
         }
         if let Some(secret) = &account.secret {
             store.set_api_key_secret(&account.id, secret)?;
+            // A slot the file has just moved from OAuth to an API key has everything it needs the moment its
+            // key is stored, but it still carries the unpaired state the OAuth row was created with, which
+            // the relay refuses and which no pairing will ever clear for an API-key account.
+            let unpaired = store
+                .account(&account.id)?
+                .is_some_and(|row| matches!(row.state, AccountState::Unpaired));
+            if matches!(account.kind, AccountKind::ApiKey) && unpaired {
+                store.set_state(&account.id, AccountState::Ready)?;
+            }
         }
     }
     Ok(())
@@ -352,6 +361,34 @@ usage:
         assert_eq!(
             store.api_key_secret("console").unwrap().unwrap().expose(),
             "sk-ant-api03-PLACEHOLDER"
+        );
+    }
+
+    #[test]
+    fn an_unpaired_slot_reconfigured_as_an_api_key_is_ready_once_its_key_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_SYNC_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
+        std::env::set_var("TEST_SYNC_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_SYNC_DESKTOP_KEY", "phoebis-testkey");
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        store
+            .insert_account(&AccountRow {
+                id: "console".into(),
+                kind: phoebis_store::AccountKind::Oauth,
+                label: "Console".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                state: AccountState::Unpaired,
+            })
+            .unwrap();
+        sync_accounts(&store, &configured_as(dir.path(), "Console")).unwrap();
+        let row = store.account("console").unwrap().unwrap();
+        assert_eq!(row.kind, phoebis_store::AccountKind::ApiKey);
+        assert_eq!(
+            row.state,
+            AccountState::Ready,
+            "nothing else would ever move an api_key slot out of unpaired"
         );
     }
 }
