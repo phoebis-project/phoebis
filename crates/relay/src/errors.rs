@@ -95,6 +95,12 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             code: "invalid_body",
             message: "the request body is not a valid Messages request",
         },
+        RelayError::InvalidModel => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "invalid_model",
+            message: "the request body's model is not a usable model name",
+        },
         RelayError::NoModel => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",

@@ -25,6 +25,8 @@ pub enum RelayError {
     BodyTooLarge,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
+    #[error("request body names a model the relay will not repeat")]
+    InvalidModel,
     #[error("request body has no model")]
     NoModel,
     #[error("request body is not a JSON object")]

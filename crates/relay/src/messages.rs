@@ -21,7 +21,7 @@ use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
-use phoebis_transport::response::{framing, keep_alive, read_head, ResponseHead};
+use phoebis_transport::response::{framing, keep_alive, read_head, Framing, ResponseHead};
 use phoebis_transport::TransportError;
 
 use crate::errors::{
@@ -30,7 +30,7 @@ use crate::errors::{
 };
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::identity::{identify, upstream_model};
-use crate::stream::{read_bounded, relay_body, Relayed};
+use crate::stream::{read_bounded, relay_body, Relayed, MAX_BUFFERED_BODY};
 use crate::{edit_body, KeyTable, RelayError};
 
 /// The one host the relay dials.
@@ -103,6 +103,8 @@ impl Relay {
     }
 }
 
+/// The relayed surface. A known path asked with an unsupported method answers an Anthropic-shaped 405 rather
+/// than the 404 an unknown path gets, so a client can tell a wrong method from a wrong route.
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/api/hello", head(hello))
@@ -290,10 +292,12 @@ impl Relay {
                 }
             };
 
-            // A rejected OAuth token is the one upstream answer the relay acts on itself, and only once.
+            // A rejected OAuth token is the one upstream answer the relay acts on itself, and only once, and
+            // only when the rejection is small enough to read first.
             if !replayed
                 && matches!(account.kind, AccountKind::Oauth)
                 && matches!(sent.head.status, 401 | 403)
+                && inspectable(&framing(&sent.head))
             {
                 let Sent {
                     mut conn,
@@ -610,6 +614,14 @@ fn is_authentication_error(body: &[u8]) -> bool {
                 .map(str::to_string)
         })
         .is_some_and(|error_type| error_type == "authentication_error")
+}
+
+/// Whether a rejection can be read into memory before it is forwarded, which is what the replay decision needs.
+/// A body whose length is not declared, or is declared past the inspection bound, is forwarded like any other
+/// response and simply not replayed: the caller has to see the upstream's own rejection rather than a local
+/// error invented because the body was large.
+fn inspectable(framing: &Framing) -> bool {
+    matches!(framing, Framing::ContentLength(length) if *length <= MAX_BUFFERED_BODY as u64)
 }
 
 /// States a request may be served in. Listing the admissible ones rather than the refused ones means a state

@@ -11,7 +11,7 @@ const MAIN_AGENT: &str = "main";
 /// the upstream never sees, so it is stripped from the model before the request goes out.
 const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
-/// Bound on an identifier the relay repeats into logs and ledger keys.
+/// Bound on an identifier or model name the relay repeats into logs and ledger keys.
 const MAX_ID_LEN: usize = 256;
 
 #[derive(Debug)]
@@ -33,6 +33,12 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
             .unwrap_or(&lowered)
             .to_string()
     };
+    // The model reaches log lines and ledger keys, so it is bounded and charset-checked here rather than
+    // wherever it is printed. Unlike the identifiers below it cannot be dropped: a request without a usable
+    // model has nothing to relay.
+    if !is_valid_model(&canonical_model) {
+        return Err(RelayError::InvalidModel);
+    }
     // The header is the client's own statement of the session.
     let session_id = header_id(headers, "x-claude-code-session-id");
     Ok(RequestIdentity {
@@ -52,11 +58,22 @@ pub(crate) fn upstream_model(model: &str) -> &str {
     let Some(head) = model.len().checked_sub(LONG_CONTEXT_SUFFIX.len()) else {
         return model;
     };
-    if model[head..].eq_ignore_ascii_case(LONG_CONTEXT_SUFFIX) {
+    // The suffix is ASCII, so a split that lands inside a multi-byte character cannot be one: without this
+    // guard slicing there would panic on a model ending in one.
+    if model.is_char_boundary(head) && model[head..].eq_ignore_ascii_case(LONG_CONTEXT_SUFFIX) {
         &model[..head]
     } else {
         model
     }
+}
+
+/// Brackets are allowed on top of the identifier charset because a client may name a tier with them, as the
+/// long-context suffix does.
+fn is_valid_model(value: &str) -> bool {
+    (1..=MAX_ID_LEN).contains(&value.len())
+        && value.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'[' | b']' | b'_')
+        })
 }
 
 pub(crate) fn is_valid_id(value: &str) -> bool {
@@ -96,6 +113,40 @@ mod tests {
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.canonical_model, "claude-sonnet-4-5");
         assert_eq!(upstream_model(&identity.model), "claude-sonnet-4-5");
+    }
+
+    #[test]
+    fn a_model_ending_in_multibyte_characters_is_left_alone() {
+        assert_eq!(
+            upstream_model("claude-sonnet-4-5\u{20ac}\u{20ac}"),
+            "claude-sonnet-4-5\u{20ac}\u{20ac}"
+        );
+        assert_eq!(upstream_model("claude-sonnet-4-5[1M]"), "claude-sonnet-4-5");
+        assert_eq!(upstream_model("[1m]"), "");
+    }
+
+    #[test]
+    fn a_model_outside_the_charset_or_over_the_bound_is_rejected() {
+        let euro = br#"{"model":"claude-sonnet-4-5\u20ac\u20ac"}"#;
+        assert!(matches!(
+            identify(&HeaderMap::new(), euro),
+            Err(RelayError::InvalidModel)
+        ));
+        let newline = br#"{"model":"claude\nsonnet"}"#;
+        assert!(matches!(
+            identify(&HeaderMap::new(), newline),
+            Err(RelayError::InvalidModel)
+        ));
+        let long = format!(r#"{{"model":"{}"}}"#, "m".repeat(257));
+        assert!(matches!(
+            identify(&HeaderMap::new(), long.as_bytes()),
+            Err(RelayError::InvalidModel)
+        ));
+        let empty = br#"{"model":""}"#;
+        assert!(matches!(
+            identify(&HeaderMap::new(), empty),
+            Err(RelayError::InvalidModel)
+        ));
     }
 
     #[test]

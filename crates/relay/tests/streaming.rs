@@ -144,6 +144,43 @@ async fn a_401_triggers_one_refresh_and_one_replay() {
 }
 
 #[tokio::test]
+async fn a_rejection_too_large_to_read_is_forwarded_rather_than_replayed() {
+    // The relay cannot tell whether this rejection is the one that warrants a refresh without holding 200 KiB
+    // of it in memory, so the caller gets the upstream's own answer instead of a local error.
+    let body = format!(
+        r#"{{"type":"error","error":{{"type":"authentication_error","message":"{}"}}}}"#,
+        "x".repeat(200 * 1024)
+    );
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 401,
+            headers: vec![],
+            body: body.clone().into_bytes(),
+        },
+    }])
+    .await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        bytes.len(),
+        body.len(),
+        "the whole rejection reaches the caller"
+    );
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "an unread rejection triggers no refresh and no replay"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_lost_response_after_the_body_was_written_is_not_replayed() {
     // CloseAfterRequest, not DropAfterHead: the upstream received the whole request and answered nothing at all,
     // which is exactly the case where a replay could double-bill.
