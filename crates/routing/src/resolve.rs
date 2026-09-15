@@ -2,7 +2,7 @@ use phoebis_store::ApiKeyRow;
 
 use crate::RegistrySnapshot;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ResolveError {
     #[error("model not allowed for this key")]
     ModelNotAllowed,
