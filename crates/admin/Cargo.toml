@@ -11,6 +11,8 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
+phoebis-relay = { path = "../relay" }
+phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 jiff = { workspace = true }
@@ -23,6 +25,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
 tower = { workspace = true }

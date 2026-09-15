@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{Limits, Relay};
+use phoebis_relay::{CatalogService, Limits, Relay};
 use phoebis_store::{AccountRow, AccountState, Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::pool::Pool;
@@ -49,6 +49,12 @@ const MAX_REQUEST_BYTES: usize = 32 << 20;
 /// and reusing it costs a failed write and a retry.
 const POOL_IDLE_TTL: Duration = Duration::from_secs(60);
 const POOL_MAX_IDLE: usize = 8;
+
+/// The ceiling on a key's body-capture window, so no capture can be left recording for weeks.
+const BODY_CAPTURE_MAX_HOURS: u32 = 72;
+
+/// A models list is one small request; a host that has not answered by then is not going to.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// An unattended browser must not keep an admin session usable, and no session outlives the day it was
 /// opened on.
@@ -131,23 +137,35 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock.clone(),
         phoebis_routing::RouterConfig::default(),
     )?;
-    let relay = Arc::new(Relay::new(
+    let catalog = Arc::new(CatalogService::new(
         profile,
         store.clone(),
         manager.clone(),
         pool.clone(),
-        router_task,
-        resolver,
+        resolver.clone(),
+        router_task.clone(),
         clock.clone(),
-        Limits {
-            cooldown_fallback: COOLDOWN_FALLBACK,
-            head_timeout: HEAD_TIMEOUT,
-            hold_timeout: HOLD_TIMEOUT,
-            idle_timeout: IDLE_TIMEOUT,
-            max_attempts: MAX_ATTEMPTS,
-            max_request_bytes: MAX_REQUEST_BYTES,
-        },
+        DISCOVERY_TIMEOUT,
     ));
+    let relay = Arc::new(
+        Relay::new(
+            profile,
+            store.clone(),
+            manager.clone(),
+            pool.clone(),
+            router_task.clone(),
+            resolver,
+            clock.clone(),
+            Limits {
+                cooldown_fallback: COOLDOWN_FALLBACK,
+                head_timeout: HEAD_TIMEOUT,
+                hold_timeout: HOLD_TIMEOUT,
+                idle_timeout: IDLE_TIMEOUT,
+                max_attempts: MAX_ATTEMPTS,
+                max_request_bytes: MAX_REQUEST_BYTES,
+            },
+        )
+    );
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -169,6 +187,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         origin: config.admin.origin.clone(),
         vault: Arc::new(PairingVault::new()),
         started_at: (clock)(),
+        router: router_task,
+        catalog,
+        body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
     });
 
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)

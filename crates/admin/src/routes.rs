@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{Path, Request, State};
 use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -17,13 +17,15 @@ use phoebis_oauth::{
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, UsageSnapshot,
 };
-use phoebis_profile::{HeaderSlot, Profile};
-use phoebis_store::{AccountKind, AccountRow, AccountState, Identity, NewBundle, StoreError};
-use phoebis_transport::request::RawRequest;
+use phoebis_relay::DiscoveryError;
+use phoebis_routing::ReloadError;
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, StoreError,
+};
 use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
-use crate::{AdminState, LoginError, Role};
+use crate::{accounts, AdminState, LoginError, Role};
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
 /// for minutes.
@@ -35,9 +37,27 @@ const LOGIN_PATH: &str = "/admin/session";
 
 pub fn router(state: Arc<AdminState>) -> Router {
     Router::new()
-        .route("/admin/accounts", get(list_accounts))
-        .route("/admin/accounts/{id}", get(show_account))
+        .route("/admin/accounts", get(list_accounts).post(accounts::create))
+        .route(
+            "/admin/accounts/{id}",
+            get(show_account)
+                .patch(accounts::patch)
+                .delete(accounts::remove),
+        )
+        .route(
+            "/admin/accounts/{id}/clear-funding",
+            post(accounts::clear_funding),
+        )
+        .route(
+            "/admin/accounts/{id}/cooldowns/{scope}",
+            delete(accounts::clear_cooldown),
+        )
         .route("/admin/accounts/{id}/credentials", delete(disconnect))
+        .route(
+            "/admin/accounts/{id}/models",
+            get(accounts::models).put(accounts::put_models),
+        )
+        .route("/admin/accounts/{id}/models/sync", post(accounts::sync))
         .route("/admin/accounts/{id}/pause", post(pause))
         .route("/admin/accounts/{id}/resume", post(resume))
         .route("/admin/accounts/{id}/usage", get(usage))
@@ -85,7 +105,10 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
 fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
-    let mutation = matches!(method, Method::POST | Method::DELETE);
+    let mutation = matches!(
+        method,
+        Method::DELETE | Method::PATCH | Method::POST | Method::PUT
+    );
 
     // A browser attaches `Origin` to every cross-site write, so a value that is not the configured admin
     // origin is a forged request rather than a mistake. The login is checked too: a forced login is a
@@ -177,18 +200,22 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
 }
 
 async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
-    match state.store.accounts() {
-        Ok(rows) => {
-            let accounts: Vec<Value> = rows.iter().map(|row| account_json(&state, row)).collect();
-            Json(json!({ "accounts": accounts })).into_response()
-        }
-        Err(error) => store_failure(error),
+    let rows = match state.store.accounts() {
+        Ok(rows) => rows,
+        Err(error) => return store_failure(error),
+    };
+    // One ask for the whole list: the router holds every account's cooldowns in the same table.
+    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
+    let mut accounts = Vec::with_capacity(rows.len());
+    for row in &rows {
+        accounts.push(account_view(&state, row, &cooldowns).await);
     }
+    Json(json!({ "accounts": accounts })).into_response()
 }
 
 async fn show_account(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     match account(&state, &id) {
-        Ok(row) => Json(account_json(&state, &row)).into_response(),
+        Ok(row) => Json(account_json(&state, &row).await).into_response(),
         Err(refusal) => refusal,
     }
 }
@@ -214,6 +241,10 @@ fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
 /// Disconnects the slot: the lifecycle bump deletes both credential kinds, and everything still holding
 /// the old identity's state goes with them.
 async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
     match state.store.bump_lifecycle(&id) {
         Ok(_) => {}
         Err(StoreError::AccountNotFound(_)) => {
@@ -221,10 +252,20 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         }
         Err(error) => return store_failure(error),
     }
+    // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An API-key slot
+    // has no pairing to run, so it rests where a slot that never had a key rests.
+    if row.kind == AccountKind::ApiKey {
+        if let Err(error) = state.store.set_state(&id, AccountState::Unpaired) {
+            return store_failure(error);
+        }
+    }
     state.usage.invalidate(&id);
     let now = (state.clock)();
     for (session_id, owner) in state.vault.discard_for_account(&id) {
         let _ = state.pairing.cancel(&session_id, &owner, now);
+    }
+    if let Err(refusal) = reload_or_refuse(&state).await {
+        return refusal;
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -241,7 +282,8 @@ async fn usage(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> 
     }
 }
 
-/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is.
+/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is: the
+/// catalog discovery, which goes to the account's own host over the pool that host belongs to.
 async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -253,34 +295,16 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
             "only an API-key account is verified this way",
         );
     }
-    let key = match state.store.api_key_secret(&id) {
-        Ok(Some(key)) => key,
-        Ok(None) => return failure(StatusCode::CONFLICT, "account holds no API key"),
-        Err(error) => return store_failure(error),
-    };
-    let host = "api.anthropic.com".to_string();
-    let request = RawRequest {
-        method: "GET",
-        target: "/v1/models?limit=1".into(),
-        headers: vec![
-            ("Accept".into(), "application/json".into()),
-            (
-                "anthropic-version".into(),
-                fixed_header(state.profile, "anthropic-version")
-                    .unwrap_or_default()
-                    .into(),
-            ),
-            ("x-api-key".into(), key.expose().into()),
-            ("Host".into(), host.clone()),
-            ("Connection".into(), "close".into()),
-        ],
-        body: Bytes::new(),
-    };
-    match state.control.send(request, &host, CONTROL_TIMEOUT).await {
-        Ok((head, _)) => Json(json!({ "ok": head.status == 200, "status": head.status })),
+    let (ok, status) = match state.catalog.discover(&row).await {
+        Ok(_) => (true, 200),
+        Err(DiscoveryError::Unauthorized) => (false, 401),
+        Err(DiscoveryError::Status(status)) => (false, status),
+        Err(DiscoveryError::NoCredential) => {
+            return failure(StatusCode::CONFLICT, "account holds no API key")
+        }
         Err(error) => return failure(StatusCode::BAD_GATEWAY, &format!("upstream: {error}")),
-    }
-    .into_response()
+    };
+    Json(json!({ "ok": ok, "status": status })).into_response()
 }
 
 async fn pairing_start(
@@ -534,30 +558,24 @@ async fn pairing_confirm(
             "this slot is already paired to a different upstream account",
         );
     }
-    let bound_elsewhere = match state.store.accounts() {
-        Ok(rows) => rows.into_iter().any(|other| {
-            other.id != row.id
-                && other
-                    .identity
-                    .is_some_and(|identity| identity.account_uuid == pending.identity.account_uuid)
-        }),
-        Err(error) => return unstored(&state, error),
-    };
-    if bound_elsewhere {
-        return conflict(
-            &state,
-            "that upstream account is already paired to another slot",
-        );
-    }
-
     if row.identity.is_none() {
         let identity = Identity {
             account_uuid: pending.identity.account_uuid.clone(),
             email: pending.identity.email.clone(),
             organization_uuid: pending.identity.organization_uuid.clone(),
         };
-        if let Err(error) = state.store.set_identity(&row.id, &identity) {
-            return unstored(&state, error);
+        // The store's unique index over the bound account uuid is what refuses the second slot. A scan here
+        // would have to read every row and could still lose to a confirmation landing between the read and
+        // the write.
+        match state.store.set_identity(&row.id, &identity) {
+            Ok(()) => {}
+            Err(StoreError::IdentityTaken) => {
+                return conflict(
+                    &state,
+                    "that upstream account is already paired to another slot",
+                )
+            }
+            Err(error) => return unstored(&state, error),
         }
     }
     let expected = match state.store.credentials(&row.id) {
@@ -578,11 +596,20 @@ async fn pairing_confirm(
     }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id);
+    // A slot that has just been paired serves its discovered models straight away, or the built-in seed when
+    // the models endpoint refuses a subscription token. A store failure here leaves the pairing standing: the
+    // credential is committed, and the scheduled sync will try again.
+    if let Err(error) = state.catalog.sync(&row.id, "pairing").await {
+        tracing::warn!(%error, account = %row.id, "a newly paired account could not sync its catalog");
+    }
     // The pairing is over, so the account's one-at-a-time slot is handed back. The credential is already
     // committed at this point, so a session that refuses to close costs the account nothing beyond the
     // wait for its own deadline.
     if let Err(error) = state.pairing.confirm(&id, &caller.session_id, now) {
         tracing::warn!(%error, "a confirmed pairing session could not be closed");
+    }
+    if let Err(refusal) = reload_or_refuse(&state).await {
+        return refusal;
     }
     Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
 }
@@ -690,7 +717,7 @@ async fn control_send(
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
+pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
     match state.store.account(id) {
         Ok(Some(row)) => Ok(row),
         Ok(None) => Err(failure(StatusCode::NOT_FOUND, "account not found")),
@@ -700,7 +727,21 @@ fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
 
 /// Never a token, in any branch: an account view is the one place a credential could plausibly be shown
 /// and must not be.
-fn account_json(state: &AdminState, row: &AccountRow) -> Value {
+pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Value {
+    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
+    account_view(state, row, &cooldowns).await
+}
+
+/// The view over a cooldown list the caller already holds, so listing every account asks the router once.
+async fn account_view(state: &AdminState, row: &AccountRow, cooldowns: &[CooldownRow]) -> Value {
+    let overage = state.router.overage(&row.id).await.ok().flatten();
+    let (catalog_synced_at, catalog_error) =
+        state.store.catalog_status(&row.id).unwrap_or_default();
+    let served_models_count = state
+        .store
+        .served_models(&row.id)
+        .map(|models| models.len())
+        .unwrap_or_default();
     let bundle = state.store.credentials(&row.id).ok().flatten();
     let attempt = state.store.last_refresh_attempt(&row.id).ok().flatten();
     // The store refuses to open a second attempt while one is unresolved or uncertain, so the newest
@@ -731,6 +772,21 @@ fn account_json(state: &AdminState, row: &AccountRow) -> Value {
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
+        "catalog_error": catalog_error,
+        "catalog_synced_at": catalog_synced_at,
+        "cooldowns": cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
+            "scope": cooldown.scope,
+            "until": cooldown.until,
+            "reason": cooldown.reason,
+            "window": cooldown.window,
+        })).collect::<Vec<_>>(),
+        "overage": overage.map(|overage| json!({
+            "in_use": overage.in_use,
+            "since": overage.since,
+            "reset": overage.reset,
+            "observed_at": overage.observed_at,
+        })),
+        "served_models_count": served_models_count,
     })
 }
 
@@ -786,18 +842,6 @@ fn reported_status(session: &PairingSession) -> &'static str {
     }
 }
 
-/// Reads a pinned inference header out of the profile, so a probe cannot drift from the version the
-/// profile measures.
-fn fixed_header(profile: &Profile, name: &str) -> Option<&'static str> {
-    profile
-        .inference_header_order
-        .iter()
-        .find_map(|slot| match slot {
-            HeaderSlot::Fixed(slot_name, value) if *slot_name == name => Some(*value),
-            _ => None,
-        })
-}
-
 /// A `serde_json` failure quotes the value it tripped on, and a token response is made of credentials,
 /// so only the shape complaints this crate writes itself are passed back to the caller.
 fn oauth_detail(what: &str, error: OauthError) -> String {
@@ -822,13 +866,44 @@ fn pairing_failure(error: PairingError) -> Response {
     failure(status, &error.to_string())
 }
 
-fn store_failure(error: StoreError) -> Response {
+/// The row is already written; a snapshot that could not be rebuilt is reported rather than hidden, because
+/// until the next successful reload the router still authenticates and routes by the old registry.
+pub(crate) async fn reload_or_refuse(state: &AdminState) -> Result<(), Response> {
+    match state.router.reload().await {
+        Ok(()) => Ok(()),
+        Err(ReloadError::Load(error)) => {
+            tracing::error!(%error, "a registry write could not be published");
+            Err(failure_with_code(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "registry_unavailable",
+                "the registry was written but could not be reloaded; the next successful reload publishes it",
+            ))
+        }
+        Err(ReloadError::Gone(_)) => Err(failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the router is not available",
+        )),
+    }
+}
+
+pub(crate) fn store_failure(error: StoreError) -> Response {
     tracing::warn!(%error, "admin request failed in the store");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure")
 }
 
-fn failure(status: StatusCode, message: &str) -> Response {
+pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// A refusal an operator console can branch on without reading the prose, in the same header slot the relay
+/// puts its own codes.
+fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {
+    let mut response = failure(status, message);
+    response.headers_mut().insert(
+        HeaderName::from_static("x-phoebis-error-code"),
+        HeaderValue::from_static(code),
+    );
+    response
 }
 
 fn set_cookie(status: StatusCode, attributes: &str) -> Response {

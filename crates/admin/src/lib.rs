@@ -1,5 +1,6 @@
 //! Admin API: cookie sessions, account views, OAuth pairing, and usage.
 
+mod accounts;
 mod routes;
 mod session;
 
@@ -8,6 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
 use phoebis_profile::Profile;
+use phoebis_relay::CatalogService;
+use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
@@ -35,6 +38,11 @@ pub struct AdminState {
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,
+    pub router: RouterHandle,
+    pub catalog: Arc<CatalogService>,
+    /// The longest body capture a route may ask for. A capture holds request and response bodies on disk, so
+    /// the ceiling is the operator's, not the caller's.
+    pub body_capture_max_hours: u32,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

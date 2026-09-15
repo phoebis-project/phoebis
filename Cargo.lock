@@ -314,6 +314,8 @@ dependencies = [
  "bytes",
  "phoebis-oauth",
  "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
  "phoebis-store",
  "phoebis-transport",
  "fake-upstream",

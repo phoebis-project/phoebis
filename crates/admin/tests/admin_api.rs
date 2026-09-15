@@ -308,7 +308,7 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
     let recorded = up.requests();
     let probe = recorded
         .iter()
-        .find(|r| r.line.starts_with("GET /v1/models?limit=1"))
+        .find(|r| r.line.starts_with("GET /v1/models?limit=1000"))
         .expect("the probe reached the upstream");
     assert!(
         probe
@@ -530,39 +530,6 @@ async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
     );
 }
 
-/// Drives an unpaired slot to an exchanged pairing session and returns its id.
-async fn exchanged_session(app: &axum::Router, cookie: &str) -> String {
-    use common::{json, post};
-    let started = json(
-        post(
-            app,
-            "/admin/oauth/sessions",
-            r#"{"account_id":"business","login":"claude_ai"}"#,
-            Some(cookie),
-        )
-        .await,
-    )
-    .await;
-    let id = started["id"].as_str().unwrap().to_string();
-    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
-    let state = started["authorization_url"]
-        .as_str()
-        .unwrap()
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .to_string();
-    let callback = post(
-        app,
-        &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
-        Some(cookie),
-    )
-    .await;
-    assert_eq!(callback.status(), 200);
-    id
-}
-
 #[tokio::test]
 async fn a_second_confirmation_is_refused_without_undoing_the_first() {
     use common::{get, json, login, post};
@@ -570,7 +537,7 @@ async fn a_second_confirmation_is_refused_without_undoing_the_first() {
     // under the winner.
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    let id = exchanged_session(&app, &cookie).await;
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
     let confirm = format!("/admin/oauth/sessions/{id}/confirm");
 
     assert_eq!(post(&app, &confirm, "", Some(&cookie)).await.status(), 200);
@@ -592,7 +559,7 @@ async fn a_confirmation_from_another_admin_session_changes_nothing() {
     let (app, _up) = common::admin_app().await;
     let owner = login(&app, "admin-secret").await;
     let other = login(&app, "admin-secret").await;
-    let id = exchanged_session(&app, &owner).await;
+    let id = common::exchanged_session_for(&app, &owner, "business").await;
 
     let refused = post(
         &app,
