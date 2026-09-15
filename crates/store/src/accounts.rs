@@ -12,7 +12,7 @@ pub enum AccountKind {
 }
 
 impl AccountKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             AccountKind::Oauth => "oauth",
             AccountKind::ApiKey => "api_key",
@@ -48,7 +48,7 @@ pub enum AccountState {
 }
 
 impl AccountState {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             AccountState::Unpaired => "unpaired",
             AccountState::Pairing => "pairing",
@@ -124,16 +124,22 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
     })
 }
 
+/// Shared by `Store::accounts` and `load_registry`, so the registry snapshot can read the account list
+/// inside its own transaction instead of through the store's connection lock.
+pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, state \
+         FROM accounts ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], row_to_account)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(StoreError::from)
+}
+
 impl Store {
     pub fn accounts(&self) -> Result<Vec<AccountRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
-            "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, state \
-             FROM accounts ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], row_to_account)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(StoreError::from)
+        all_accounts(&conn)
     }
 
     pub fn account(&self, id: &str) -> Result<Option<AccountRow>, StoreError> {
@@ -237,15 +243,23 @@ impl Store {
                 return Err(StoreError::Stale);
             }
         }
-        conn.execute(
+        let written = conn.execute(
             "UPDATE accounts SET identity_json = ?2, updated_at = ?3 WHERE id = ?1",
             params![
                 id,
                 serde_json::to_string(identity)?,
                 jiff::Timestamp::now().as_millisecond()
             ],
-        )?;
-        Ok(())
+        );
+        match written {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(StoreError::IdentityTaken)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn set_state(&self, id: &str, state: AccountState) -> Result<(), StoreError> {
@@ -275,7 +289,8 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let updated = conn.execute(
             "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1 AND lifecycle_generation = ?4 \
-             AND EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5)",
+             AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
+                  OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
             params![
                 id,
                 state,
@@ -321,6 +336,65 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(new_generation as u64)
+    }
+
+    pub fn delete_account(&self, id: &str, actor: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let now = jiff::Timestamp::now().as_millisecond();
+        if tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])? == 0 {
+            return Err(StoreError::AccountNotFound(id.to_string()));
+        }
+        crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn update_account(
+        &self,
+        id: &str,
+        label: &str,
+        actor: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let now = jiff::Timestamp::now().as_millisecond();
+        if tx.execute(
+            "UPDATE accounts SET label = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, label, now],
+        )? == 0
+        {
+            return Err(StoreError::AccountNotFound(id.to_string()));
+        }
+        let diff = serde_json::json!({ "label": label }).to_string();
+        crate::registry::record_change(&tx, now, actor, "account_updated", id, &diff)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn catalog_status(&self, id: &str) -> Result<(Option<i64>, Option<String>), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT catalog_synced_at, catalog_error FROM accounts WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::AccountNotFound(id.to_string()))
+    }
+
+    pub fn set_catalog_status(
+        &self,
+        id: &str,
+        synced_at: Option<i64>,
+        error: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.execute(
+            "UPDATE accounts SET catalog_synced_at = COALESCE(?2, catalog_synced_at), catalog_error = ?3 WHERE id = ?1",
+            params![id, synced_at, error],
+        )?;
+        Ok(())
     }
 }
 

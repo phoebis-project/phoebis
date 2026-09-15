@@ -3,7 +3,7 @@
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{crypto, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
+use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -107,6 +107,25 @@ fn attempt_exists(
         |row| row.get(0),
     )
     .map_err(StoreError::from)
+}
+
+/// Seals and stores an API-key secret under the caller's connection, so a creation or a verified edit can
+/// carry it inside the same transaction as the row it belongs to. Bumps the generation on every write,
+/// including the first, so a verdict formed against generation 1 is never confused with the row before it
+/// existed.
+pub(crate) fn store_api_key_secret(
+    conn: &rusqlite::Connection,
+    key: &StorageKey,
+    account_id: &str,
+    secret: &Secret,
+) -> Result<(), StoreError> {
+    let (nonce, sealed) = crypto::seal(key, &api_key_aad(account_id), secret.expose().as_bytes())?;
+    conn.execute(
+        "INSERT INTO api_key_secrets (account_id, sealed, nonce) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(account_id) DO UPDATE SET sealed = excluded.sealed, nonce = excluded.nonce, generation = api_key_secrets.generation + 1",
+        params![account_id, sealed, nonce],
+    )?;
+    Ok(())
 }
 
 impl Store {
@@ -300,17 +319,31 @@ impl Store {
 
     pub fn set_api_key_secret(&self, account_id: &str, secret: &Secret) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let (nonce, sealed) = crypto::seal(
-            &self.key,
-            &api_key_aad(account_id),
-            secret.expose().as_bytes(),
-        )?;
-        conn.execute(
-            "INSERT INTO api_key_secrets (account_id, sealed, nonce) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(account_id) DO UPDATE SET sealed = excluded.sealed, nonce = excluded.nonce",
-            params![account_id, sealed, nonce],
-        )?;
-        Ok(())
+        store_api_key_secret(&conn, &self.key, account_id, secret)
+    }
+
+    /// The secret with the generation that names it, so a verdict formed while it was in use can be told
+    /// apart from one about its replacement.
+    pub fn api_key_credential(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<(Secret, u64)>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let row: Option<(Vec<u8>, Vec<u8>, i64)> = conn
+            .query_row(
+                "SELECT sealed, nonce, generation FROM api_key_secrets WHERE account_id = ?1",
+                params![account_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((sealed, nonce, generation)) = row else {
+            return Ok(None);
+        };
+        let plain = crypto::open(&self.key, &api_key_aad(account_id), &nonce, &sealed)?;
+        Ok(Some((
+            Secret::new(std::str::from_utf8(&plain).map_err(|_| StoreError::Crypto)?),
+            generation as u64,
+        )))
     }
 
     /// The raw sealed blob of every credential row, for tests that assert plaintext is absent.

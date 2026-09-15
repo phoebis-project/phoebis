@@ -425,11 +425,14 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "fd-lock",
+ "hmac",
  "jiff",
  "rand",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
  "zeroize",
 ]

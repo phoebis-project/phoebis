@@ -3,19 +3,28 @@
 mod accounts;
 mod credentials;
 mod lock;
+mod registry;
 mod schema;
 
 pub mod crypto;
 
 use std::path::Path;
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use hmac::{Hmac, Mac};
 use rand::Rng;
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
+use sha2::Sha256;
 
 pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, Secret,
+};
+pub use registry::{
+    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
+    PoolRow, RegistryChange, RegistryLoad, ServedModel, ServedModelWrite, Strategy, SyncDelta,
 };
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's
@@ -35,18 +44,31 @@ pub enum StoreError {
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
     AttemptPending,
+    #[error("account {account_id} already serves a model whose canonical id is {canonical_id}")]
+    CanonicalClash {
+        account_id: String,
+        canonical_id: String,
+    },
     #[error("sealed credential could not be decrypted")]
     Crypto,
+    #[error("another account already holds this identity")]
+    IdentityTaken,
     #[error("storage key file must hold exactly 32 raw bytes or 64 hex characters")]
     InvalidKey,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("api key {0} not found")]
+    KeyNotFound(String),
     #[error("account {0} already holds credentials, so its kind cannot change")]
     KindChange(String),
     #[error("the data directory is locked by another process")]
     Locked,
+    #[error("pool {0} still has api keys assigned to it")]
+    PoolInUse(String),
+    #[error("pool {0} not found")]
+    PoolNotFound(String),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("lifecycle or credential generation is stale")]
@@ -96,6 +118,8 @@ pub struct Store {
     conn: Mutex<Connection>,
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_load: AtomicBool,
 }
 
 impl Store {
@@ -126,23 +150,99 @@ impl Store {
                 .open(db_path)?;
         }
 
-        let conn = Connection::open(db_path)?;
-        conn.execute_batch(schema::SCHEMA)?;
+        let mut conn = Connection::open(db_path)?;
+        prepare(&mut conn, true)?;
         Ok(Store {
             conn: Mutex::new(conn),
             key: key.clone(),
             _lock: Some(process_lock),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_load: AtomicBool::new(false),
         })
     }
 
     /// Opens an in-memory registry for tests: no directory, no lock, no on-disk file.
     pub fn open_in_memory(key: &StorageKey) -> Result<Store, StoreError> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(schema::SCHEMA)?;
+        let mut conn = Connection::open_in_memory()?;
+        prepare(&mut conn, false)?;
         Ok(Store {
             conn: Mutex::new(conn),
             key: key.clone(),
             _lock: None,
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_load: AtomicBool::new(false),
         })
     }
+
+    pub fn schema_version(&self) -> Result<u32, StoreError> {
+        read_version(&self.conn.lock().expect(LOCK_POISONED))
+    }
+
+    /// The key an in-memory snapshot digests presented secrets with, so a comparison never needs the raw
+    /// storage key outside the store.
+    pub fn digest_key(&self) -> [u8; 32] {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key.0)
+            .expect("HMAC-SHA256 accepts a 32 byte key");
+        mac.update(b"api-key-digest");
+        mac.finalize().into_bytes().into()
+    }
+
+    /// A database copy without the key file cannot use this to test guessed secrets: the digest is keyed,
+    /// not a plain hash.
+    pub fn api_key_digest(&self, secret: &str) -> [u8; 32] {
+        digest_with(&self.digest_key(), secret.as_bytes())
+    }
+
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_load(&self) {
+        self.fail_next_load.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Runs the v1 `SCHEMA`, then every migration above the stored `schema_version`, each inside its own
+/// transaction, so a crash mid-migration leaves the version at the last one that actually committed.
+fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    if on_disk {
+        // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
+    conn.execute_batch(schema::SCHEMA)?;
+    let current = read_version(conn)?;
+    for (version, sql) in schema::MIGRATIONS {
+        if *version <= current {
+            continue;
+        }
+        let tx = conn.transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![version.to_string()],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+/// A database from before `meta.schema_version` existed is schema version 1: the v1 `SCHEMA` created every
+/// table it needs, just none of the migrations above it.
+fn read_version(conn: &Connection) -> Result<u32, StoreError> {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+
+/// Shared by `Store::api_key_digest` and the router task's in-memory snapshot, so both digest a presented
+/// secret with the exact same function.
+pub fn digest_with(key: &[u8; 32], secret: &[u8]) -> [u8; 32] {
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts a 32 byte key");
+    mac.update(secret);
+    mac.finalize().into_bytes().into()
 }
