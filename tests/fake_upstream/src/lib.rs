@@ -2,7 +2,7 @@
 //! TLS for the `api.anthropic.com` / `platform.claude.com` SNI or speaking plain HTTP via `start_plain`.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -85,6 +85,7 @@ impl FakeUpstream {
             requests: Mutex::new(Vec::new()),
             connections: AtomicU64::new(0),
             gate: Notify::new(),
+            released: AtomicBool::new(false),
         });
         let wire = Arc::new(wire);
         let accept_shared = shared.clone();
@@ -131,9 +132,14 @@ impl FakeUpstream {
         self.shared.connections.load(Ordering::SeqCst) as usize
     }
 
-    /// Lets every gated `SseGated` responder currently waiting continue past its first event.
+    /// Lets every gated `SseGated` responder continue past its first event, including ones that gate after this
+    /// call. The gate latches open: once released, it stays open for the lifetime of this `FakeUpstream`, so a
+    /// second `release()` is never required.
     pub fn release(&self) {
-        self.shared.gate.notify_one();
+        // Set before notifying: a responder woken by `notify_waiters()` re-checks this flag, and a responder
+        // that gates afterward checks it before ever waiting, so neither ordering loses the release.
+        self.shared.released.store(true, Ordering::SeqCst);
+        self.shared.gate.notify_waiters();
     }
 
     pub fn set_rule_after(&self, n_requests: usize, path_prefix: &str, respond: Respond) {
@@ -166,6 +172,7 @@ struct Shared {
     requests: Mutex<Vec<RecordedRequest>>,
     connections: AtomicU64,
     gate: Notify,
+    released: AtomicBool,
 }
 
 struct RuleState {
@@ -266,6 +273,21 @@ impl Shared {
             threshold,
             new_respond,
         });
+    }
+
+    /// Blocks until `release()` has latched the gate open. The `Notified` future is created before the flag
+    /// check on every loop iteration, so a `release()` landing between the check and the `.await` is still
+    /// observed (`Notify` captures that ordering); the flag itself covers a `release()` that already happened
+    /// before this call started, which `notify_waiters()` alone would miss since it only wakes listeners that
+    /// existed at the time it was called.
+    async fn wait_for_release(&self) {
+        loop {
+            let notified = self.gate.notified();
+            if self.released.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -533,7 +555,7 @@ async fn write_sse_gated<S: AsyncWrite + Unpin>(
     if let Some(first) = remaining.next() {
         write_chunk(stream, render_event(first).as_bytes()).await?;
     }
-    shared.gate.notified().await;
+    shared.wait_for_release().await;
     for e in remaining {
         write_chunk(stream, render_event(e).as_bytes()).await?;
     }
