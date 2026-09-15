@@ -1,0 +1,247 @@
+//! Builders shared by the admin API tests.
+//!
+//! Each integration test binary compiles this module separately, so a helper only one binary uses looks dead to
+//! the other.
+#![allow(dead_code)]
+
+use axum::body::Body;
+use axum::http::{Request, Response, StatusCode};
+use axum::Router;
+use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions};
+use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
+use phoebis_profile::{
+    claude_code_2_1_269_linux_x64,
+    fixtures::{control_response, ControlFixture},
+};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StorageKey, Store,
+};
+use phoebis_transport::{
+    connector_builder,
+    control::{ControlClient, Resolver},
+    trust_extra_ca, Plane,
+};
+use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
+use std::sync::Arc;
+use std::time::Duration;
+use tower::ServiceExt;
+
+/// The account uuid every control fixture names.
+pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// Unix milliseconds every clock in these tests reports, so no deadline moves under a test.
+pub const NOW: i64 = 1_000_000;
+
+pub async fn admin_app() -> (Router, FakeUpstream) {
+    app_with(None, ACCOUNT_UUID).await
+}
+
+pub async fn admin_app_paired() -> (Router, FakeUpstream) {
+    app_with(Some(fixture_identity()), ACCOUNT_UUID).await
+}
+
+/// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
+/// presents somebody else's login to a slot that is already bound.
+pub async fn admin_app_paired_as(uuid: &str) -> (Router, FakeUpstream) {
+    app_with(Some(fixture_identity()), uuid).await
+}
+
+pub async fn get(app: &Router, path: &str, cookie: Option<&str>) -> Response<Body> {
+    send(app, "GET", path, "", cookie).await
+}
+
+pub async fn post(app: &Router, path: &str, body: &str, cookie: Option<&str>) -> Response<Body> {
+    send(app, "POST", path, body, cookie).await
+}
+
+pub async fn delete(app: &Router, path: &str, cookie: Option<&str>) -> Response<Body> {
+    send(app, "DELETE", path, "", cookie).await
+}
+
+pub async fn json(response: Response<Body>) -> serde_json::Value {
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+pub fn cookie_of(response: &Response<Body>) -> String {
+    response
+        .headers()
+        .get("set-cookie")
+        .expect("a login response carries the session cookie")
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .strip_prefix("phoebis_admin=")
+        .expect("the cookie is named phoebis_admin")
+        .to_string()
+}
+
+pub async fn login(app: &Router, secret: &str) -> String {
+    let response = post(
+        app,
+        "/admin/session",
+        &format!(r#"{{"secret":"{secret}"}}"#),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    cookie_of(&response)
+}
+
+async fn send(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("phoebis_admin={cookie}"));
+    }
+    app.clone()
+        .oneshot(request.body(Body::from(body.to_owned())).unwrap())
+        .await
+        .unwrap()
+}
+
+fn fixture_identity() -> Identity {
+    Identity {
+        account_uuid: ACCOUNT_UUID.into(),
+        email: "test@example.invalid".into(),
+        organization_uuid: Some("00000000-0000-4000-8000-000000000002".into()),
+    }
+}
+
+async fn app_with(identity: Option<Identity>, upstream_uuid: &str) -> (Router, FakeUpstream) {
+    let up = fake_control_plane(upstream_uuid).await;
+    let p = claude_code_2_1_269_linux_x64();
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let paired = identity.is_some();
+    store
+        .insert_account(&AccountRow {
+            id: "business".into(),
+            kind: AccountKind::Oauth,
+            label: "Business".into(),
+            enabled: true,
+            identity,
+            lifecycle_generation: 1,
+            state: if paired {
+                AccountState::Ready
+            } else {
+                AccountState::Unpaired
+            },
+        })
+        .unwrap();
+    if paired {
+        // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
+        store
+            .commit_credentials(
+                "business",
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                    issued_at: NOW,
+                    expires_at: NOW + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let mut builder = connector_builder(p, Plane::Control).unwrap();
+    trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver = Arc::new(move |_| Some(addr));
+    let control = Arc::new(ControlClient::new(p, builder.build(), resolver));
+    let clock: Clock = Arc::new(|| NOW);
+    let manager = Arc::new(CredentialManager::new(
+        store.clone(),
+        control.clone(),
+        p,
+        clock.clone(),
+    ));
+    let usage = Arc::new(UsageService::new(
+        manager.clone(),
+        control.clone(),
+        p,
+        Duration::from_secs(60),
+        4,
+        clock.clone(),
+    ));
+    let state = Arc::new(AdminState {
+        store,
+        manager,
+        usage,
+        pairing: Arc::new(PairingSessions::new()),
+        control,
+        profile: p,
+        sessions: Arc::new(Sessions::new(
+            Duration::from_secs(900),
+            Duration::from_secs(43_200),
+        )),
+        secrets: AdminSecrets {
+            admin: Secret::new("admin-secret"),
+            viewer: Some(Secret::new("viewer-secret")),
+        },
+        clock,
+        dev_loopback_http: true,
+        origin: None,
+        redirect_base: "http://localhost:0".into(),
+        vault: Arc::new(PairingVault::new()),
+        started_at: NOW,
+    });
+    (router(state), up)
+}
+
+async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
+    FakeUpstream::start(vec![
+        json_rule(
+            "/api/oauth/claude_cli/roles",
+            control_response(ControlFixture::Roles).to_vec(),
+        ),
+        json_rule(
+            "/api/oauth/profile",
+            as_account(control_response(ControlFixture::Profile), upstream_uuid),
+        ),
+        json_rule(
+            "/api/oauth/usage",
+            control_response(ControlFixture::Usage).to_vec(),
+        ),
+        json_rule(
+            "/v1/oauth/token",
+            as_account(control_response(ControlFixture::Token), upstream_uuid),
+        ),
+    ])
+    .await
+}
+
+fn json_rule(path_prefix: &str, body: Vec<u8>) -> Rule {
+    Rule {
+        path_prefix: path_prefix.into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body,
+        },
+    }
+}
+
+/// The fixtures name one upstream account; the account uuid is what the confirm checks compare, so
+/// rewriting it is enough to make the fake answer as somebody else.
+fn as_account(body: &[u8], uuid: &str) -> Vec<u8> {
+    String::from_utf8(body.to_vec())
+        .unwrap()
+        .replace(ACCOUNT_UUID, uuid)
+        .into_bytes()
+}

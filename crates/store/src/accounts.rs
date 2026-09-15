@@ -182,6 +182,36 @@ impl Store {
         Ok(())
     }
 
+    /// Binds the slot to an upstream account, once. A slot keeps the identity it was first paired with
+    /// across disconnects, so re-pairing restores access to that same upstream account instead of moving
+    /// the slot to another one; a second identity is `Stale` rather than an overwrite.
+    pub fn set_identity(&self, id: &str, identity: &Identity) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let current: Option<Option<String>> = conn
+            .query_row(
+                "SELECT identity_json FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let current = current.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+        if let Some(json) = current {
+            let bound: Identity = serde_json::from_str(&json)?;
+            if bound.account_uuid != identity.account_uuid {
+                return Err(StoreError::Stale);
+            }
+        }
+        conn.execute(
+            "UPDATE accounts SET identity_json = ?2, updated_at = ?3 WHERE id = ?1",
+            params![
+                id,
+                serde_json::to_string(identity)?,
+                jiff::Timestamp::now().as_millisecond()
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn set_state(&self, id: &str, state: AccountState) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(

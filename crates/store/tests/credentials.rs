@@ -1,6 +1,6 @@
 use phoebis_store::{
-    crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, NewBundle, Secret, StorageKey,
-    Store, StoreError,
+    crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret,
+    StorageKey, Store, StoreError,
 };
 
 fn account(id: &str) -> AccountRow {
@@ -240,4 +240,47 @@ fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
 #[test]
 fn secret_debug_never_prints_the_value() {
     assert_eq!(format!("{:?}", Secret::new("hunter2")), "Secret(***)");
+}
+
+#[test]
+fn an_identity_is_bound_once_and_survives_a_disconnect() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let bound = Identity {
+        account_uuid: "uuid-1".into(),
+        email: "one@example.invalid".into(),
+        organization_uuid: Some("org-1".into()),
+    };
+    store.set_identity("a", &bound).unwrap();
+    // Re-pairing the same upstream account may refresh the email or the organization it reports.
+    store
+        .set_identity(
+            "a",
+            &Identity {
+                email: "renamed@example.invalid".into(),
+                ..bound.clone()
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        store.set_identity(
+            "a",
+            &Identity {
+                account_uuid: "uuid-2".into(),
+                ..bound.clone()
+            }
+        ),
+        Err(StoreError::Stale)
+    ));
+    store
+        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .unwrap();
+    store.bump_lifecycle("a").unwrap();
+    let after = store.account("a").unwrap().unwrap();
+    assert!(store.credentials("a").unwrap().is_none());
+    assert_eq!(after.identity.unwrap().account_uuid, "uuid-1");
+    assert!(matches!(
+        store.set_identity("missing", &bound),
+        Err(StoreError::AccountNotFound(_))
+    ));
 }

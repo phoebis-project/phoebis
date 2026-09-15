@@ -6,3 +6,23 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+phoebis-oauth = { path = "../oauth" }
+phoebis-profile = { path = "../profile" }
+phoebis-store = { path = "../store" }
+phoebis-transport = { path = "../transport" }
+jiff = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+fake-upstream = { path = "../../tests/fake_upstream" }
+http-body-util = { workspace = true }
+tower = { workspace = true }

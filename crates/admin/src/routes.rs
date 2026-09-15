@@ -1,0 +1,808 @@
+//! The `/admin` surface: one gate in front of every route, then the account, pairing, usage, and system
+//! handlers.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Bytes;
+use axum::extract::{Path, Request, State};
+use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::middleware::{from_fn_with_state, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Extension, Json, Router};
+use phoebis_oauth::{
+    authorization_url, control_request, exchange_body, parse_profile, parse_token_response,
+    CallbackInput, ControlKind, LoginKind, OauthError, PairingError, PairingSession, PairingStatus,
+    PendingIdentity, UsageSnapshot,
+};
+use phoebis_profile::{HeaderSlot, Profile};
+use phoebis_store::{AccountKind, AccountRow, AccountState, Identity, NewBundle, StoreError};
+use phoebis_transport::request::RawRequest;
+use phoebis_transport::response::ResponseHead;
+use serde_json::{json, Value};
+
+use crate::{AdminState, LoginError, Role, VaultStatus};
+
+/// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
+/// for minutes.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+const COOKIE_NAME: &str = "phoebis_admin";
+
+const LOGIN_PATH: &str = "/admin/session";
+
+pub fn router(state: Arc<AdminState>) -> Router {
+    Router::new()
+        .route("/admin/accounts", get(list_accounts))
+        .route("/admin/accounts/{id}", get(show_account))
+        .route("/admin/accounts/{id}/credentials", delete(disconnect))
+        .route("/admin/accounts/{id}/pause", post(pause))
+        .route("/admin/accounts/{id}/resume", post(resume))
+        .route("/admin/accounts/{id}/usage", get(usage))
+        .route("/admin/accounts/{id}/usage/refresh", post(usage))
+        .route("/admin/accounts/{id}/verify", post(verify))
+        .route("/admin/oauth/sessions", post(pairing_start))
+        .route(
+            "/admin/oauth/sessions/{id}",
+            get(pairing_show).delete(pairing_cancel),
+        )
+        .route(
+            "/admin/oauth/sessions/{id}/callback",
+            post(pairing_callback),
+        )
+        .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
+        .route("/admin/session", post(login).delete(logout))
+        .route("/admin/system", get(system))
+        .layer(from_fn_with_state(state.clone(), gate))
+        .with_state(state)
+}
+
+/// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
+/// ownership. The cookie that produced it never leaves the session store.
+#[derive(Clone)]
+struct Caller {
+    session_id: String,
+}
+
+/// Authentication, the role gate, the origin check, and `Cache-Control` for every route at once, so no
+/// handler can be added that quietly skips one of them.
+async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
+    let mut response = match admit(&state, &mut request) {
+        None => next.run(request).await,
+        Some(refusal) => refusal,
+    };
+    // An admin answer describes credentials and usage; a cache between the browser and this process has
+    // no business holding any of it.
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// `None` admits the request; anything else is the refusal to answer with.
+fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let mutation = matches!(method, Method::POST | Method::DELETE);
+
+    // A browser attaches `Origin` to every cross-site write, so a value that is not the configured admin
+    // origin is a forged request rather than a mistake. The login is checked too: a forced login is a
+    // real attack, and it is the one mutation an unauthenticated caller can reach.
+    if mutation {
+        if let Some(expected) = &state.origin {
+            let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
+            if presented != Some(expected.as_str()) {
+                return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
+            }
+        }
+    }
+
+    if method == Method::POST && path == LOGIN_PATH {
+        return None;
+    }
+
+    let Some(cookie) = presented_cookie(request.headers()) else {
+        return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
+    };
+    let Some((session_id, role)) = state.sessions.authenticate(&cookie, (state.clock)()) else {
+        return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
+    };
+    if mutation && role != Role::Admin && !viewer_may_mutate(&path) {
+        return Some(failure(
+            StatusCode::FORBIDDEN,
+            "the viewer role cannot change anything",
+        ));
+    }
+    request.extensions_mut().insert(Caller { session_id });
+    None
+}
+
+/// The one mutation a viewer may issue: a usage refresh is served from the usage cache, so it changes
+/// nothing and cannot be used to hammer the upstream.
+fn viewer_may_mutate(path: &str) -> bool {
+    path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh")
+}
+
+fn presented_cookie(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(COOKIE)?.to_str().ok()?;
+    header.split(';').find_map(|pair| {
+        pair.trim()
+            .strip_prefix(COOKIE_NAME)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(str::to_string)
+    })
+}
+
+async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Input {
+        secret: String,
+    }
+    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+        return failure(StatusCode::BAD_REQUEST, "body must carry a secret");
+    };
+    match state
+        .sessions
+        .login(&input.secret, &state.secrets, (state.clock)())
+    {
+        Ok((cookie, _)) => {
+            let mut attributes =
+                format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
+            if !state.dev_loopback_http {
+                attributes.push_str("; Secure");
+            }
+            set_cookie(StatusCode::NO_CONTENT, &attributes)
+        }
+        Err(LoginError::Throttled) => failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins, try again in a minute",
+        ),
+        Err(LoginError::Invalid) => failure(StatusCode::UNAUTHORIZED, "secret does not match"),
+    }
+}
+
+async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
+    if let Some(cookie) = presented_cookie(&headers) {
+        state.sessions.logout(&cookie);
+    }
+    // Clearing the browser's copy as well keeps a logged-out tab from presenting a cookie this process
+    // would only reject.
+    set_cookie(
+        StatusCode::NO_CONTENT,
+        &format!("{COOKIE_NAME}=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0"),
+    )
+}
+
+async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
+    match state.store.accounts() {
+        Ok(rows) => {
+            let accounts: Vec<Value> = rows.iter().map(|row| account_json(&state, row)).collect();
+            Json(json!({ "accounts": accounts })).into_response()
+        }
+        Err(error) => store_failure(error),
+    }
+}
+
+async fn show_account(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    match account(&state, &id) {
+        Ok(row) => Json(account_json(&state, &row)).into_response(),
+        Err(refusal) => refusal,
+    }
+}
+
+async fn pause(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    set_enabled(&state, &id, false)
+}
+
+async fn resume(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    set_enabled(&state, &id, true)
+}
+
+fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
+    if let Err(refusal) = account(state, id) {
+        return refusal;
+    }
+    match state.store.set_enabled(id, enabled) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => store_failure(error),
+    }
+}
+
+/// Disconnects the slot: the lifecycle bump deletes both credential kinds, and everything still holding
+/// the old identity's state goes with them.
+async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    match state.store.bump_lifecycle(&id) {
+        Ok(_) => {}
+        Err(StoreError::AccountNotFound(_)) => {
+            return failure(StatusCode::NOT_FOUND, "account not found")
+        }
+        Err(error) => return store_failure(error),
+    }
+    state.usage.invalidate(&id);
+    let now = (state.clock)();
+    for (session_id, owner) in state.vault.discard_for_account(&id) {
+        let _ = state.pairing.cancel(&session_id, &owner, now);
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Serves `GET .../usage` and `POST .../usage/refresh` alike: the usage service has no cache bypass, so
+/// a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
+async fn usage(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    if let Err(refusal) = account(&state, &id) {
+        return refusal;
+    }
+    match state.usage.snapshot(&id).await {
+        Ok(snapshot) => Json(usage_json(&snapshot)).into_response(),
+        Err(error) => failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is.
+async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    if row.kind != AccountKind::ApiKey {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "only an API-key account is verified this way",
+        );
+    }
+    let key = match state.store.api_key_secret(&id) {
+        Ok(Some(key)) => key,
+        Ok(None) => return failure(StatusCode::CONFLICT, "account holds no API key"),
+        Err(error) => return store_failure(error),
+    };
+    let host = "api.anthropic.com".to_string();
+    let request = RawRequest {
+        method: "GET",
+        target: "/v1/models?limit=1".into(),
+        headers: vec![
+            ("Accept".into(), "application/json".into()),
+            (
+                "anthropic-version".into(),
+                fixed_header(state.profile, "anthropic-version")
+                    .unwrap_or_default()
+                    .into(),
+            ),
+            ("x-api-key".into(), key.expose().into()),
+            ("Host".into(), host.clone()),
+            ("Connection".into(), "close".into()),
+        ],
+        body: Bytes::new(),
+    };
+    match state.control.send(request, &host, CONTROL_TIMEOUT).await {
+        Ok((head, _)) => Json(json!({ "ok": head.status == 200, "status": head.status })),
+        Err(error) => return failure(StatusCode::BAD_GATEWAY, &format!("upstream: {error}")),
+    }
+    .into_response()
+}
+
+async fn pairing_start(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    body: Bytes,
+) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Input {
+        account_id: String,
+        login: Option<String>,
+    }
+    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+        return failure(StatusCode::BAD_REQUEST, "body must carry an account_id");
+    };
+    let kind = match input.login.as_deref() {
+        None | Some("claude_ai") => LoginKind::ClaudeAi,
+        Some("console") => LoginKind::Console,
+        Some(_) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "login must be claude_ai or console",
+            )
+        }
+    };
+    let row = match account(&state, &input.account_id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    // An API-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
+    // the relay never reaches for, since it picks the credential by the account's kind.
+    if row.kind != AccountKind::Oauth {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "only an OAuth account is paired this way",
+        );
+    }
+    let redirect_uri = format!("{}/callback", state.redirect_base);
+    let session =
+        match state
+            .pairing
+            .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
+        {
+            Ok(session) => session,
+            Err(error) => return pairing_failure(error),
+        };
+    state.vault.open(
+        &session.id,
+        &row.id,
+        &caller.session_id,
+        row.lifecycle_generation,
+    );
+    let url = authorization_url(
+        state.profile,
+        kind,
+        &redirect_uri,
+        state.profile.control.default_login_scopes,
+        &session.pkce.challenge,
+        &session.state,
+    );
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": session.id,
+            "authorization_url": url,
+            "expires_at": session.deadline,
+        })),
+    )
+        .into_response()
+}
+
+async fn pairing_show(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(session) = state.pairing.get(&id, &caller.session_id, (state.clock)()) else {
+        return failure(StatusCode::NOT_FOUND, "pairing session not found");
+    };
+    Json(json!({
+        "account_id": session.account_id,
+        "expires_at": session.deadline,
+        "id": session.id,
+        "status": reported_status(&state, &id, &session),
+    }))
+    .into_response()
+}
+
+async fn pairing_cancel(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    match state
+        .pairing
+        .cancel(&id, &caller.session_id, (state.clock)())
+    {
+        Ok(()) => {
+            state.vault.discard(&id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => pairing_failure(error),
+    }
+}
+
+async fn pairing_callback(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Input {
+        code: Option<String>,
+        state: Option<String>,
+        url: Option<String>,
+    }
+    let malformed = || {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "body must carry the callback url, or a code and a state",
+        )
+    };
+    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+        return malformed();
+    };
+    let callback = match (input.url, input.code, input.state) {
+        (Some(url), _, _) => CallbackInput::Url(url),
+        (None, Some(code), Some(state)) => CallbackInput::Code { code, state },
+        _ => return malformed(),
+    };
+    let session =
+        match state
+            .pairing
+            .accept_callback(&id, &caller.session_id, callback, (state.clock)())
+        {
+            Ok(session) => session,
+            Err(error) => return pairing_failure(error),
+        };
+    let PairingStatus::CodeReceived { code } = &session.status else {
+        return failure(
+            StatusCode::CONFLICT,
+            "pairing session did not accept the callback",
+        );
+    };
+    let (identity, bundle) = match exchange(&state, &session, code).await {
+        Ok(exchanged) => exchanged,
+        Err(refusal) => {
+            state.vault.discard(&id);
+            return refusal;
+        }
+    };
+    if !state.vault.record_exchange(&id, identity.clone(), bundle) {
+        return failure(
+            StatusCode::CONFLICT,
+            "the pairing session was closed while the code was being exchanged",
+        );
+    }
+    Json(json!({
+        "status": "exchanged",
+        "pending": {
+            "account_uuid": identity.account_uuid,
+            "email": identity.email,
+            "organization_name": identity.organization_name,
+            "organization_uuid": identity.organization_uuid,
+        },
+    }))
+    .into_response()
+}
+
+/// Commits a pairing, after four checks that all have to hold at once. Every one of them refuses rather
+/// than repairs, and every refusal drops the pending bundle, so no path through here leaves a credential
+/// behind that a later call could commit.
+async fn pairing_confirm(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Response {
+    let now = (state.clock)();
+    let Some(session) = state.pairing.get(&id, &caller.session_id, now) else {
+        return failure(StatusCode::NOT_FOUND, "pairing session not found");
+    };
+    let conflict = |state: &AdminState, message: &str| {
+        // A failed confirmation is final rather than retryable: the authorization code is spent, so the
+        // slot is released for a fresh pairing instead of being held by a session nobody can finish.
+        let _ = state.pairing.cancel(&id, &caller.session_id, now);
+        state.vault.discard(&id);
+        failure(StatusCode::CONFLICT, message)
+    };
+
+    // An operator can leave the confirmation screen open for an hour; a bundle exchanged against a
+    // session that has since expired is not one to commit.
+    if now > session.deadline {
+        return conflict(&state, "pairing session expired");
+    }
+    let Some(pending) = state.vault.take_exchange(&id) else {
+        return conflict(&state, "pairing session has no exchanged credential");
+    };
+    let row = match account(&state, &pending.account_id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    if row.lifecycle_generation != pending.lifecycle_generation {
+        return conflict(&state, "the account was disconnected while pairing");
+    }
+    // An identity is permanent: `bump_lifecycle` clears credentials but never the binding, so a slot
+    // stays with the upstream account it was first paired to. Moving a slot elsewhere means deleting it.
+    if row
+        .identity
+        .as_ref()
+        .is_some_and(|bound| bound.account_uuid != pending.identity.account_uuid)
+    {
+        return conflict(
+            &state,
+            "this slot is already paired to a different upstream account",
+        );
+    }
+    let bound_elsewhere = match state.store.accounts() {
+        Ok(rows) => rows.into_iter().any(|other| {
+            other.id != row.id
+                && other
+                    .identity
+                    .is_some_and(|identity| identity.account_uuid == pending.identity.account_uuid)
+        }),
+        Err(error) => return store_failure(error),
+    };
+    if bound_elsewhere {
+        return conflict(
+            &state,
+            "that upstream account is already paired to another slot",
+        );
+    }
+
+    if row.identity.is_none() {
+        let identity = Identity {
+            account_uuid: pending.identity.account_uuid.clone(),
+            email: pending.identity.email.clone(),
+            organization_uuid: pending.identity.organization_uuid.clone(),
+        };
+        if let Err(error) = state.store.set_identity(&row.id, &identity) {
+            return store_failure(error);
+        }
+    }
+    let expected = match state.store.credentials(&row.id) {
+        Ok(current) => current.map(|bundle| bundle.generation),
+        Err(error) => return store_failure(error),
+    };
+    if let Err(error) = state.store.commit_credentials(
+        &row.id,
+        row.lifecycle_generation,
+        expected,
+        None,
+        &pending.bundle,
+    ) {
+        return store_failure(error);
+    }
+    if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
+        return store_failure(error);
+    }
+    state.usage.invalidate(&row.id);
+    state.vault.mark_confirmed(&id);
+    // The pairing is over, so the account's one-at-a-time slot is handed back.
+    let _ = state.pairing.cancel(&id, &caller.session_id, now);
+    Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
+}
+
+async fn system(State(state): State<Arc<AdminState>>) -> Response {
+    let uptime = ((state.clock)() - state.started_at).max(0) / 1_000;
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "profile": state.profile.name,
+        "uptime_seconds": uptime,
+        "storage_ok": state.store.accounts().is_ok(),
+    }))
+    .into_response()
+}
+
+/// Runs the native post-login sequence against the control plane and turns its answers into the pending
+/// identity an operator confirms, plus the bundle that confirmation would commit.
+async fn exchange(
+    state: &AdminState,
+    session: &PairingSession,
+    code: &str,
+) -> Result<(PendingIdentity, NewBundle), Response> {
+    let body = exchange_body(
+        state.profile,
+        code,
+        &session.redirect_uri,
+        &session.pkce.verifier,
+        &session.state,
+    );
+    let (head, raw) = control_send(state, ControlKind::Token, None, Some(body)).await?;
+    if head.status != 200 {
+        return Err(failure(
+            StatusCode::BAD_GATEWAY,
+            &format!("token exchange rejected with status {}", head.status),
+        ));
+    }
+    let token = parse_token_response(&raw)
+        .map_err(|error| failure(StatusCode::BAD_GATEWAY, &oauth_detail("token", error)))?;
+
+    let answered = {
+        let bearer = token.access_token.expose();
+        // The measured login issues the profile lookup twice and the roles lookup once. Both are part of
+        // what a login looks like on the wire, and the roles answer itself is not used here.
+        let mut answered: Option<Bytes> = None;
+        for _ in 0..2 {
+            if let Ok((head, raw)) =
+                control_send(state, ControlKind::Profile, Some(bearer), None).await
+            {
+                if head.status == 200 {
+                    answered = Some(raw);
+                }
+            }
+        }
+        let _ = control_send(state, ControlKind::Roles, Some(bearer), None).await;
+        answered
+    };
+    let Some(raw) = answered else {
+        return Err(failure(
+            StatusCode::BAD_GATEWAY,
+            "the profile lookup did not answer",
+        ));
+    };
+    let profile = parse_profile(&raw)
+        .map_err(|error| failure(StatusCode::BAD_GATEWAY, &oauth_detail("profile", error)))?;
+
+    let identity = PendingIdentity {
+        account_uuid: profile.account_uuid,
+        email: profile.email,
+        organization_name: token
+            .organization
+            .as_ref()
+            .and_then(|organization| organization.name.clone()),
+        organization_uuid: profile.organization_uuid,
+    };
+    let now = (state.clock)();
+    let bundle = NewBundle {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        issued_at: now,
+        expires_at: now.saturating_add(token.expires_in.saturating_mul(1_000)),
+        refresh_expires_at: token
+            .refresh_token_expires_in
+            .map(|seconds| now.saturating_add(seconds.saturating_mul(1_000))),
+        scopes: token
+            .scope
+            .unwrap_or_else(|| state.profile.control.default_login_scopes.to_string()),
+    };
+    Ok((identity, bundle))
+}
+
+async fn control_send(
+    state: &AdminState,
+    kind: ControlKind,
+    bearer: Option<&str>,
+    body: Option<Vec<u8>>,
+) -> Result<(ResponseHead, Bytes), Response> {
+    let request = control_request(state.profile, kind, bearer, body);
+    let host = kind.host(state.profile);
+    state
+        .control
+        .send(request, &host, CONTROL_TIMEOUT)
+        .await
+        .map_err(|error| {
+            failure(
+                StatusCode::BAD_GATEWAY,
+                &format!("control request failed: {error}"),
+            )
+        })
+}
+
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
+    match state.store.account(id) {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(failure(StatusCode::NOT_FOUND, "account not found")),
+        Err(error) => Err(store_failure(error)),
+    }
+}
+
+/// Never a token, in any branch: an account view is the one place a credential could plausibly be shown
+/// and must not be.
+fn account_json(state: &AdminState, row: &AccountRow) -> Value {
+    let bundle = state.store.credentials(&row.id).ok().flatten();
+    let attempt = state.store.last_refresh_attempt(&row.id).ok().flatten();
+    json!({
+        "id": row.id,
+        "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
+        "label": row.label,
+        "enabled": row.enabled,
+        "state": state_name(row.state),
+        "identity": row.identity.as_ref().map(|identity| json!({
+            "email": identity.email,
+            "account_uuid": identity.account_uuid,
+            "organization_uuid": identity.organization_uuid,
+        })),
+        "credential": bundle.map(|bundle| json!({
+            "access_expires_at": bundle.expires_at,
+            "refresh_expires_at": bundle.refresh_expires_at,
+            "generation": bundle.generation,
+            "last_refresh_at": attempt.as_ref().and_then(|attempt| attempt.resolved_at),
+            "last_error": attempt
+                .as_ref()
+                .filter(|attempt| attempt.outcome.as_deref() == Some("failed"))
+                .and_then(|attempt| attempt.detail.clone()),
+        })),
+        "lifecycle_generation": row.lifecycle_generation,
+    })
+}
+
+fn usage_json(snapshot: &UsageSnapshot) -> Value {
+    let window = |window: &phoebis_oauth::UsageWindow| {
+        json!({
+            "key": window.key,
+            "resets_at": window.resets_at,
+            "utilization": window.utilization,
+        })
+    };
+    json!({
+        "account_id": snapshot.account_id,
+        "error": snapshot.error,
+        "extra_usage": snapshot.extra_usage.as_ref().map(|extra| json!({
+            "currency": extra.currency,
+            "disabled_reason": extra.disabled_reason,
+            "is_enabled": extra.is_enabled,
+            "monthly_limit": extra.monthly_limit,
+            "used_credits": extra.used_credits,
+            "utilization": extra.utilization,
+        })),
+        "fable_window": snapshot.fable_window.as_ref().map(&window),
+        "fetched_at": snapshot.fetched_at,
+        "identity_generation": snapshot.identity_generation,
+        "raw_keys": snapshot.raw_keys,
+        "windows": snapshot.windows.iter().map(&window).collect::<Vec<_>>(),
+    })
+}
+
+fn state_name(state: AccountState) -> &'static str {
+    match state {
+        AccountState::Disconnected => "disconnected",
+        AccountState::FundingRequired => "funding_required",
+        AccountState::Pairing => "pairing",
+        AccountState::ReauthRequired => "reauth_required",
+        AccountState::Ready => "ready",
+        AccountState::Refreshing => "refreshing",
+        AccountState::Unpaired => "unpaired",
+    }
+}
+
+/// The vault knows the outcomes `PairingSessions` cannot express, so it wins wherever it has one.
+fn reported_status(state: &AdminState, id: &str, session: &PairingSession) -> &'static str {
+    match state.vault.status(id) {
+        Some(VaultStatus::Confirmed) => "confirmed",
+        Some(VaultStatus::Exchanged) => "exchanged",
+        Some(VaultStatus::Discarded) | Some(VaultStatus::Started) | None => match session.status {
+            PairingStatus::Cancelled => "cancelled",
+            PairingStatus::CodeReceived { .. } => "code_received",
+            PairingStatus::Confirmed => "confirmed",
+            PairingStatus::Exchanged { .. } => "exchanged",
+            PairingStatus::Expired => "expired",
+            PairingStatus::Failed(_) => "failed",
+            PairingStatus::Pending => "pending",
+        },
+    }
+}
+
+/// Reads a pinned inference header out of the profile, so a probe cannot drift from the version the
+/// profile measures.
+fn fixed_header(profile: &Profile, name: &str) -> Option<&'static str> {
+    profile
+        .inference_header_order
+        .iter()
+        .find_map(|slot| match slot {
+            HeaderSlot::Fixed(slot_name, value) if *slot_name == name => Some(*value),
+            _ => None,
+        })
+}
+
+/// A `serde_json` failure quotes the value it tripped on, and a token response is made of credentials,
+/// so only the shape complaints this crate writes itself are passed back to the caller.
+fn oauth_detail(what: &str, error: OauthError) -> String {
+    match error {
+        OauthError::Malformed(detail) => format!("{what} response: {detail}"),
+        OauthError::Json(_) => format!("{what} response was not the JSON this endpoint returns"),
+    }
+}
+
+fn pairing_failure(error: PairingError) -> Response {
+    let status = match error {
+        PairingError::AlreadyConsumed | PairingError::Busy | PairingError::Expired => {
+            StatusCode::CONFLICT
+        }
+        // A pairing session id is an unguessable handle; answering a non-owner with anything but "not
+        // found" would tell them the handle they hold is real.
+        PairingError::Forbidden | PairingError::NotFound => StatusCode::NOT_FOUND,
+        PairingError::Invalid(_) | PairingError::RedirectMismatch | PairingError::StateMismatch => {
+            StatusCode::BAD_REQUEST
+        }
+    };
+    failure(status, &error.to_string())
+}
+
+fn store_failure(error: StoreError) -> Response {
+    tracing::warn!(%error, "admin request failed in the store");
+    failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure")
+}
+
+fn failure(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "error": message }))).into_response()
+}
+
+fn set_cookie(status: StatusCode, attributes: &str) -> Response {
+    let mut response = status.into_response();
+    match HeaderValue::from_str(attributes) {
+        Ok(value) => {
+            response.headers_mut().insert(SET_COOKIE, value);
+            response
+        }
+        // The value is built from a base64url token and fixed attributes, so this is unreachable short
+        // of a bug; refusing the login beats answering with no cookie at all.
+        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "cookie could not be set"),
+    }
+}

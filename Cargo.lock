@@ -258,6 +258,26 @@ dependencies = [
 [[package]]
 name = "phoebis-admin"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-store",
+ "phoebis-transport",
+ "fake-upstream",
+ "http-body-util",
+ "jiff",
+ "rand",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+]
 
 [[package]]
 name = "phoebis-cch"
