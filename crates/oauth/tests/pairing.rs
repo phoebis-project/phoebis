@@ -52,6 +52,7 @@ fn pkce_challenge_is_s256_of_the_verifier() {
     );
     assert_eq!(p.challenge, expect);
     assert_ne!(generate_state(), generate_state());
+    assert!(!format!("{p:?}").contains(&p.verifier));
 }
 
 #[test]
@@ -147,4 +148,28 @@ fn sessions_expire_after_ten_minutes() {
         ),
         Err(PairingError::Expired)
     ));
+}
+
+#[test]
+fn an_abandoned_session_expires_and_frees_the_account() {
+    let s = PairingSessions::new();
+    let first = s
+        .start(
+            "business",
+            "admin-1",
+            "http://localhost:4567/callback",
+            1_000,
+        )
+        .unwrap();
+    let later = 1_000 + 601_000;
+    assert!(s
+        .start(
+            "business",
+            "admin-1",
+            "http://localhost:4567/callback",
+            later
+        )
+        .is_ok());
+    let stale = s.get(&first.id, "admin-1", later).unwrap();
+    assert!(matches!(stale.status, PairingStatus::Expired));
 }

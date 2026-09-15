@@ -45,10 +45,24 @@ pub struct PendingIdentity {
     pub organization_name: Option<String>,
 }
 
-#[derive(Debug)]
 pub enum CallbackInput {
     Url(String),
     Code { code: String, state: String },
+}
+
+// The code carries the OAuth authorization code (and the URL variant embeds it too), so both
+// arms redact it rather than let it land in a log line via a `{:?}` format.
+impl std::fmt::Debug for CallbackInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallbackInput::Url(_) => f.debug_tuple("Url").field(&"***").finish(),
+            CallbackInput::Code { state, .. } => f
+                .debug_struct("Code")
+                .field("code", &"***")
+                .field("state", state)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,9 +112,14 @@ impl PairingSessions {
         now: i64,
     ) -> Result<PairingSession, PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        // An abandoned session must not hold an account `Busy` forever; expire stale entries
+        // before scanning so an old one no longer blocks a fresh start.
+        for session in sessions.values_mut() {
+            expire_if_stale(session, now);
+        }
         let busy = sessions
             .values()
-            .any(|s| s.account_id == account_id && matches!(s.status, PairingStatus::Pending));
+            .any(|s| s.account_id == account_id && is_in_flight(&s.status));
         if busy {
             return Err(PairingError::Busy);
         }
@@ -118,12 +137,14 @@ impl PairingSessions {
         Ok(session)
     }
 
-    pub fn get(&self, id: &str, admin_session_id: &str) -> Option<PairingSession> {
-        let sessions = self.sessions.lock().expect(LOCK_POISONED);
-        sessions
-            .get(id)
-            .filter(|s| s.admin_session_id == admin_session_id)
-            .cloned()
+    pub fn get(&self, id: &str, admin_session_id: &str, now: i64) -> Option<PairingSession> {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let session = sessions.get_mut(id)?;
+        if session.admin_session_id != admin_session_id {
+            return None;
+        }
+        expire_if_stale(session, now);
+        Some(session.clone())
     }
 
     pub fn accept_callback(
@@ -138,8 +159,8 @@ impl PairingSessions {
         if session.admin_session_id != admin_session_id {
             return Err(PairingError::Forbidden);
         }
-        if now > session.deadline {
-            session.status = PairingStatus::Expired;
+        expire_if_stale(session, now);
+        if matches!(session.status, PairingStatus::Expired) {
             return Err(PairingError::Expired);
         }
         if !matches!(session.status, PairingStatus::Pending) {
@@ -170,14 +191,33 @@ impl PairingSessions {
         Ok(session.clone())
     }
 
-    pub fn cancel(&self, id: &str, admin_session_id: &str) -> Result<(), PairingError> {
+    pub fn cancel(&self, id: &str, admin_session_id: &str, now: i64) -> Result<(), PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
         let session = sessions.get_mut(id).ok_or(PairingError::NotFound)?;
         if session.admin_session_id != admin_session_id {
             return Err(PairingError::Forbidden);
         }
+        expire_if_stale(session, now);
         session.status = PairingStatus::Cancelled;
         Ok(())
+    }
+}
+
+/// Whether a session still occupies its account's one-pairing-at-a-time slot.
+fn is_in_flight(status: &PairingStatus) -> bool {
+    matches!(
+        status,
+        PairingStatus::Pending
+            | PairingStatus::CodeReceived { .. }
+            | PairingStatus::Exchanged { .. }
+    )
+}
+
+/// Nothing sweeps in the background, so every read or mutation re-checks the deadline against the
+/// caller's `now` and flips a stale in-flight session to `Expired` on the spot.
+fn expire_if_stale(session: &mut PairingSession, now: i64) {
+    if is_in_flight(&session.status) && now > session.deadline {
+        session.status = PairingStatus::Expired;
     }
 }
 

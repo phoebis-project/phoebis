@@ -5,10 +5,21 @@ use base64::Engine;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Pkce {
     pub verifier: String,
     pub challenge: String,
+}
+
+// The verifier is the bearer secret PKCE exists to protect; redact it so a stray `{:?}` in a log
+// line (including through `PairingSession`'s derived `Debug`) can't leak it.
+impl std::fmt::Debug for Pkce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pkce")
+            .field("verifier", &"***")
+            .field("challenge", &self.challenge)
+            .finish()
+    }
 }
 
 /// 32 random bytes base64url-encode to 43 characters, the minimum RFC 7636 verifier length.
