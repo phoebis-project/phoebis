@@ -170,7 +170,7 @@ impl CredentialManager {
         if bundle.expires_at - now > refresh_margin(&bundle) {
             return Ok(access_token(&account, &bundle));
         }
-        self.join_or_start(account_id).await
+        self.join_or_start(account_id, bundle.generation).await
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -187,7 +187,7 @@ impl CredentialManager {
         if bundle.generation > rejected_generation {
             return Ok(access_token(&account, &bundle));
         }
-        self.join_or_start(account_id).await
+        self.join_or_start(account_id, bundle.generation).await
     }
 
     /// Quarantines every account whose last refresh never resolved: the process died between sending a
@@ -225,7 +225,14 @@ impl CredentialManager {
         &self.inner.store
     }
 
-    async fn join_or_start(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
+    /// Joins the account's refresh, or starts one. `observed_generation` is the generation the caller read
+    /// before it got here, which the job rechecks once it holds the slot: the two are not one atomic step, so
+    /// another caller can commit a rotation in between and this one must not rotate on top of it.
+    async fn join_or_start(
+        &self,
+        account_id: &str,
+        observed_generation: u64,
+    ) -> Result<AccessToken, AcquireError> {
         let shared = {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
             match inflight.get(account_id) {
@@ -245,7 +252,10 @@ impl CredentialManager {
                             account_id: id,
                             inner,
                         };
-                        guard.inner.refresh(&guard.account_id).await
+                        guard
+                            .inner
+                            .refresh(&guard.account_id, observed_generation)
+                            .await
                     });
                     let shared = async move {
                         match handle.await {
@@ -288,7 +298,11 @@ impl Inner {
         Ok((account, bundle))
     }
 
-    async fn refresh(&self, account_id: &str) -> Result<AccessToken, RefreshFailure> {
+    async fn refresh(
+        &self,
+        account_id: &str,
+        observed_generation: u64,
+    ) -> Result<AccessToken, RefreshFailure> {
         // Test seam, see `debug_panic_on_next_refresh`. Checked before anything durable happens, so the
         // panicking refresh leaves no attempt row behind.
         #[cfg(any(test, feature = "debug-hooks"))]
@@ -310,6 +324,13 @@ impl Inner {
             .credentials(account_id)
             .map_err(store_failure)?
             .ok_or(RefreshFailure::Unpaired)?;
+
+        // Someone else finished a refresh between the caller's read and this job winning the slot, so the
+        // stored bundle is already the answer; rotating again would spend a refresh token that has just
+        // been replaced.
+        if bundle.generation != observed_generation {
+            return Ok(access_token(&account, &bundle));
+        }
 
         if self.holding_off(account_id) {
             return self.stored_or(
@@ -601,6 +622,95 @@ pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use phoebis_profile::fixtures::{control_response, ControlFixture};
+    use phoebis_store::{AccountKind, Identity, StorageKey};
+    use phoebis_transport::control::Resolver;
+    use phoebis_transport::{connector_builder, Plane};
+    use fake_upstream::{FakeUpstream, Respond, Rule};
+
+    /// A manager for account `a` over an in-memory store, a fixed clock, and a fake token endpoint that
+    /// answers every refresh with the measured fixture.
+    async fn manager_at(now: i64) -> (CredentialManager, Arc<Store>, FakeUpstream) {
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Token).to_vec(),
+            },
+        }])
+        .await;
+        let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
+        let mut builder = connector_builder(profile, Plane::Control).unwrap();
+        phoebis_transport::trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
+        let addr = up.addr();
+        let resolver: Resolver = Arc::new(move |_| Some(addr));
+        let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        store
+            .insert_account(&AccountRow {
+                id: "a".into(),
+                kind: AccountKind::Oauth,
+                label: "a".into(),
+                enabled: true,
+                identity: Some(Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "test@example.invalid".into(),
+                    organization_uuid: None,
+                }),
+                lifecycle_generation: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        let clock: Clock = Arc::new(move || now);
+        (
+            CredentialManager::new(store.clone(), control, profile, clock),
+            store,
+            up,
+        )
+    }
+
+    fn bundle_at(access_token: &str, issued_at: i64, expires_at: i64) -> NewBundle {
+        NewBundle {
+            access_token: Secret::new(access_token),
+            refresh_token: Some(Secret::new("rt")),
+            issued_at,
+            expires_at,
+            refresh_expires_at: None,
+            scopes: "user:profile user:inference".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_that_lost_the_race_serves_the_committed_token() {
+        let now = 1_000_000;
+        let (manager, store, up) = manager_at(now).await;
+        let observed = store
+            .commit_credentials("a", 1, None, None, &bundle_at("observed", 0, 1))
+            .unwrap();
+        // What another caller's refresh does between the generation this one read and the slot it wins.
+        store
+            .commit_credentials(
+                "a",
+                1,
+                Some(observed),
+                None,
+                &bundle_at("committed", now, now + 3_600_000),
+            )
+            .unwrap();
+        let token = manager.join_or_start("a", observed).await.unwrap();
+        assert_eq!(
+            token.secret.expose(),
+            "committed",
+            "the job serves the rotation it lost the race to"
+        );
+        assert!(
+            up.requests().is_empty(),
+            "a token rotated a moment ago is not rotated again"
+        );
+        up.shutdown().await;
+    }
 
     fn head_with(retry_after: &str) -> ResponseHead {
         ResponseHead {
