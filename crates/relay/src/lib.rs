@@ -7,10 +7,12 @@ mod classify;
 mod drift;
 mod errors;
 mod headers;
+mod hold;
 mod identity;
 mod messages;
 mod portability;
 mod ratelimit;
+mod sse;
 mod stream;
 
 pub use auth::{AuthError, KeyTable, KeyTableError, Route};
@@ -22,10 +24,12 @@ pub use classify::{
 pub use drift::DriftGuard;
 pub use errors::anthropic_error;
 pub use headers::{outbound_headers, CredentialKind};
+pub use hold::{hold, Commit, Held, Inspect};
 pub use identity::{identify, RequestIdentity};
 pub use messages::{router, Limits, Relay, RelayOutcome};
 pub use portability::is_portable;
 pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
+pub use sse::{SseEvent, SseParser};
 
 /// A request the relay refuses before it reaches the upstream.
 #[derive(Debug, thiserror::Error)]

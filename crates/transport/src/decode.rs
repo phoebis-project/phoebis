@@ -78,6 +78,9 @@ impl Decoder for GzipDecoder {
     fn feed(&mut self, input: &[u8]) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
         d.write_all(input)?;
+        // A write-side decoder keeps what it just decoded until the next write, so without this a caller
+        // reading the stream as it arrives would see one chunk's bytes only after the following chunk.
+        d.flush()?;
         Ok(std::mem::take(d.get_mut()))
     }
 
@@ -93,6 +96,7 @@ impl Decoder for DeflateDecoder {
     fn feed(&mut self, input: &[u8]) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
         d.write_all(input)?;
+        d.flush()?;
         Ok(std::mem::take(d.get_mut()))
     }
 
@@ -108,6 +112,7 @@ impl Decoder for BrotliDecoder {
     fn feed(&mut self, input: &[u8]) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
         d.write_all(input)?;
+        d.flush()?;
         Ok(std::mem::take(d.get_mut()))
     }
 
@@ -125,6 +130,7 @@ impl Decoder for ZstdDecoder {
     fn feed(&mut self, input: &[u8]) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
         d.write_all(input)?;
+        d.flush()?;
         Ok(std::mem::take(d.get_mut()))
     }
 

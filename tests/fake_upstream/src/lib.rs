@@ -1,7 +1,7 @@
 //! Loopback HTTP(S) upstream double: records every request verbatim and answers per configured rule, terminating
 //! TLS for the `api.anthropic.com` / `platform.claude.com` SNI or speaking plain HTTP via `start_plain`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -50,6 +50,12 @@ pub enum Respond {
         headers: Vec<(String, String)>,
         events: Vec<SseEvent>,
     },
+    /// Writes the head and then nothing until `release()`, which is what a stream that never commits looks like.
+    Stall {
+        status: u16,
+        headers: Vec<(String, String)>,
+        events: Vec<SseEvent>,
+    },
 }
 
 #[derive(Clone)]
@@ -65,6 +71,30 @@ pub struct RecordedRequest {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub complete: bool,
+}
+
+impl RecordedRequest {
+    pub fn credential(&self) -> Option<&str> {
+        credential_of(&self.headers)
+    }
+}
+
+/// The bearer token or the `x-api-key` value, whichever the request carries.
+fn credential_of(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, v)| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .or_else(|| {
+            headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("x-api-key"))
+                .map(|(_, v)| v.as_str())
+        })
+        .map(str::trim)
 }
 
 pub struct FakeUpstream {
@@ -143,6 +173,12 @@ impl FakeUpstream {
         self.shared.connections.load(Ordering::SeqCst) as usize
     }
 
+    /// Connections whose serve loop has not returned: a client that dropped its end shows up here once the
+    /// fake's next write fails.
+    pub fn open_connections(&self) -> usize {
+        self.shared.conns.lock().unwrap().len()
+    }
+
     /// Closes every connection that is sitting between requests, the way an upstream reaps a socket it
     /// considers idle. A connection in the middle of a request is left to finish it. The signal is
     /// asynchronous, so a caller that needs the client to observe the end of stream wants
@@ -197,6 +233,59 @@ impl FakeUpstream {
         self.shared.gate.notify_waiters();
     }
 
+    /// Answers only the requests that carry `credential`, ahead of every prefix-only rule, so several accounts
+    /// can be scripted independently against one listener.
+    pub fn add_credential_rule(&self, credential: &str, path_prefix: &str, respond: Respond) {
+        self.shared.rules.lock().unwrap().push(RuleState {
+            path_prefix: path_prefix.into(),
+            respond,
+            request_count: 0,
+            pending: None,
+            credential: Some(credential.into()),
+            queue: VecDeque::new(),
+        });
+    }
+
+    /// One response per request, in order, ahead of the standing rule; the rule is created when it does not exist.
+    pub fn push_credential_rule(&self, credential: &str, path_prefix: &str, respond: Respond) {
+        let mut rules = self.shared.rules.lock().unwrap();
+        match rules
+            .iter_mut()
+            .find(|r| r.path_prefix == path_prefix && r.credential.as_deref() == Some(credential))
+        {
+            Some(rule) => rule.queue.push_back(respond),
+            None => rules.push(RuleState {
+                path_prefix: path_prefix.into(),
+                respond: Respond::CloseAfterRequest,
+                request_count: 0,
+                pending: None,
+                credential: Some(credential.into()),
+                queue: VecDeque::from([respond]),
+            }),
+        }
+    }
+
+    pub fn set_credential_rule_after(
+        &self,
+        credential: &str,
+        n_requests: usize,
+        path_prefix: &str,
+        respond: Respond,
+    ) {
+        let mut rules = self.shared.rules.lock().unwrap();
+        let rule = rules
+            .iter_mut()
+            .find(|r| r.path_prefix == path_prefix && r.credential.as_deref() == Some(credential))
+            .unwrap_or_else(|| {
+                panic!("fake-upstream: no rule for {credential:?} at {path_prefix:?}")
+            });
+        rule.pending = Some(PendingSwitch {
+            kind: SwitchKind::Requests,
+            threshold: n_requests as u64,
+            new_respond: respond,
+        });
+    }
+
     pub fn set_rule_after(&self, n_requests: usize, path_prefix: &str, respond: Respond) {
         self.shared.set_pending(
             path_prefix,
@@ -242,6 +331,10 @@ struct RuleState {
     respond: Respond,
     request_count: u64,
     pending: Option<PendingSwitch>,
+    /// `None` matches on the path prefix alone; `Some` matches only the requests carrying that credential.
+    credential: Option<String>,
+    /// Scripted responses served one per request before the standing `respond`.
+    queue: VecDeque<Respond>,
 }
 
 impl From<Rule> for RuleState {
@@ -251,6 +344,8 @@ impl From<Rule> for RuleState {
             respond: r.respond,
             request_count: 0,
             pending: None,
+            credential: None,
+            queue: VecDeque::new(),
         }
     }
 }
@@ -313,18 +408,25 @@ impl Shared {
             .any(|r| matches!(r.respond, Respond::CloseImmediately))
     }
 
-    fn resolve(&self, path: &str) -> Respond {
+    /// Credential-scoped rules are consulted before the prefix-only ones, so one fake can answer several
+    /// accounts on the same path without their rules shadowing each other.
+    fn resolve(&self, path: &str, headers: &[(String, String)]) -> Respond {
+        let credential = credential_of(headers);
         let mut rules = self.rules.lock().unwrap();
-        for rule in rules.iter_mut() {
-            if !path.starts_with(rule.path_prefix.as_str()) {
-                continue;
+        for scoped in [true, false] {
+            for rule in rules.iter_mut() {
+                let matches_credential = match &rule.credential {
+                    Some(c) => Some(c.as_str()) == credential,
+                    None => false,
+                };
+                if matches_credential != scoped {
+                    continue;
+                }
+                if !path.starts_with(rule.path_prefix.as_str()) {
+                    continue;
+                }
+                return take_response(rule);
             }
-            let due = matches!(&rule.pending, Some(p) if p.kind == SwitchKind::Requests && rule.request_count >= p.threshold);
-            if due {
-                rule.respond = rule.pending.take().unwrap().new_respond;
-            }
-            rule.request_count += 1;
-            return rule.respond.clone();
         }
         Respond::Json {
             status: 404,
@@ -368,6 +470,18 @@ impl Shared {
             notified.await;
         }
     }
+}
+
+/// Applies whatever request-count switch is due, then serves the queue's front if the rule has one scripted.
+fn take_response(rule: &mut RuleState) -> Respond {
+    let due = matches!(&rule.pending, Some(p) if p.kind == SwitchKind::Requests && rule.request_count >= p.threshold);
+    if due {
+        rule.respond = rule.pending.take().unwrap().new_respond;
+    }
+    rule.request_count += 1;
+    rule.queue
+        .pop_front()
+        .unwrap_or_else(|| rule.respond.clone())
 }
 
 fn path_of(line: &str) -> &str {
@@ -421,10 +535,12 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
         in_request.store(true, Ordering::SeqCst);
         let path = path_of(&recorded.line).to_string();
         let close_after = wants_close(&recorded.headers);
+        // Read before the record takes ownership: the credential decides which rule answers.
+        let headers = recorded.headers.clone();
         shared.record(recorded);
         // Unwrapped before the match rather than inside it, so the gate costs the responders nothing and no
         // arm has to be written twice.
-        let mut respond = shared.resolve(&path);
+        let mut respond = shared.resolve(&path, &headers);
         while let Respond::Gated(inner) = respond {
             shared.wait_for_release().await;
             respond = *inner;
@@ -475,6 +591,29 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 events,
             } => {
                 let _ = write_sse_gated(shared, &mut stream, status, headers, events).await;
+                return;
+            }
+            Respond::Stall {
+                status,
+                headers,
+                events,
+            } => {
+                if write_sse_head(&mut stream, status, event_stream_headers(headers))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                shared.wait_for_release().await;
+                for e in &events {
+                    if write_chunk(&mut stream, render_event(e).as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                let _ = write_chunk_terminator(&mut stream).await;
                 return;
             }
         }
@@ -619,6 +758,18 @@ fn render_event(e: &SseEvent) -> String {
     format!("event: {}\ndata: {}\n\n", e.event, e.data)
 }
 
+/// The SSE responders label the stream the way the real upstream does when the test did not say otherwise.
+/// `write_chunked` deliberately does not, so a chunked JSON rejection keeps the caller's own content type.
+fn event_stream_headers(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    if !headers
+        .iter()
+        .any(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+    {
+        headers.push(("Content-Type".to_string(), "text/event-stream".to_string()));
+    }
+    headers
+}
+
 async fn write_sse_head<S: AsyncWrite + Unpin>(
     stream: &mut S,
     status: u16,
@@ -659,7 +810,7 @@ async fn write_sse<S: AsyncWrite + Unpin>(
     events: Vec<SseEvent>,
     delay_between: Duration,
 ) -> std::io::Result<()> {
-    write_sse_head(stream, status, headers).await?;
+    write_sse_head(stream, status, event_stream_headers(headers)).await?;
     let mut first = true;
     for e in &events {
         if !first {
@@ -678,7 +829,7 @@ async fn write_sse_gated<S: AsyncWrite + Unpin>(
     headers: Vec<(String, String)>,
     events: Vec<SseEvent>,
 ) -> std::io::Result<()> {
-    write_sse_head(stream, status, headers).await?;
+    write_sse_head(stream, status, event_stream_headers(headers)).await?;
     let mut remaining = events.iter();
     if let Some(first) = remaining.next() {
         write_chunk(stream, render_event(first).as_bytes()).await?;
