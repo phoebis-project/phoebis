@@ -32,7 +32,6 @@ pub struct AdminState {
     /// The admin origin every mutation's `Origin` header is compared against. `None` only in the
     /// loopback development mode, where there is no browser origin to pin.
     pub origin: Option<String>,
-    pub redirect_base: String,
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,

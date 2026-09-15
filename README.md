@@ -108,14 +108,27 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions \
   -d '{"account_id":"business","login":"claude_ai"}'
 ```
 
-Open the `authorization_url` in a browser and approve. The provider sends the browser to the redirect URI with a code;
-paste that whole URL back:
+Open the `authorization_url` in a browser and sign in. The provider sends the browser to its own callback page at
+`https://platform.claude.com/oauth/code/callback`, which shows the authorization code. Paste the full URL of that page
+back:
 
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/callback \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
-  -d '{"url":"https://phoebis.example/callback?code=...&state=..."}'
+  -d '{"url":"https://platform.claude.com/oauth/code/callback?code=...&state=..."}'
 ```
+
+The page also shows the code on its own, with the session state appended after a `#`. Pasting that works as well, with
+the state repeated in its own field:
+
+```sh
+curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/callback \
+  -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
+  -d '{"code":"<code>#<state>","state":"<state>"}'
+```
+
+The provider knows a second redirect, a loopback URL on an OS-assigned port, which is what the desktop client uses.
+This build does not offer that flow: a pairing started here always ends on the platform callback page above.
 
 `phoebis` exchanges the code and answers with the upstream account and organization it reached. Check that they are the
 ones you meant to pair, then commit the credentials:

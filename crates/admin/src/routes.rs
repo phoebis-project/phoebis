@@ -318,11 +318,14 @@ async fn pairing_start(
             "only an OAuth account is paired this way",
         );
     }
-    let redirect_uri = format!("{}/callback", state.redirect_base);
+    // The provider knows two redirects for this client: an OS-port loopback, and the manual page whose code
+    // the operator copies by hand. Only the second one fits a flow driven over the admin API, and registering
+    // anything else is answered with a redirect mismatch.
+    let redirect_uri = state.profile.control.manual_redirect;
     let session =
         match state
             .pairing
-            .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
+            .start(&row.id, &caller.session_id, redirect_uri, (state.clock)())
         {
             Ok(session) => session,
             Err(error) => return pairing_failure(error),
@@ -336,7 +339,7 @@ async fn pairing_start(
     let url = authorization_url(
         state.profile,
         kind,
-        &redirect_uri,
+        redirect_uri,
         state.profile.control.default_login_scopes,
         &session.pkce.challenge,
         &session.state,

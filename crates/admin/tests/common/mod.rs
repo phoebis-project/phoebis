@@ -217,7 +217,6 @@ async fn app_with(identity: Option<Identity>, upstream_uuid: &str) -> (Router, F
         clock,
         dev_loopback_http: true,
         origin: None,
-        redirect_base: "http://localhost:0".into(),
         vault: Arc::new(PairingVault::new()),
         started_at: NOW,
     });

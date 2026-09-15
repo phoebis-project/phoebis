@@ -131,13 +131,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         config.usage.refresh_concurrency,
         clock.clone(),
     ));
-    // The provider sends the operator's browser back here after an authorization; behind TLS that is the
-    // configured origin, and in loopback development mode the admin listener itself.
-    let redirect_base = config
-        .admin
-        .origin
-        .clone()
-        .unwrap_or_else(|| format!("http://{}", config.admin.listen));
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -157,7 +150,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock: clock.clone(),
         dev_loopback_http: config.admin.dev_loopback_http,
         origin: config.admin.origin.clone(),
-        redirect_base,
         vault: Arc::new(PairingVault::new()),
         started_at: (clock)(),
     });
