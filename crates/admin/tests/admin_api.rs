@@ -529,3 +529,97 @@ async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
         "the spent code does not hold the account for another ten minutes"
     );
 }
+
+/// Drives an unpaired slot to an exchanged pairing session and returns its id.
+async fn exchanged_session(app: &axum::Router, cookie: &str) -> String {
+    use common::{json, post};
+    let started = json(
+        post(
+            app,
+            "/admin/oauth/sessions",
+            r#"{"account_id":"business","login":"claude_ai"}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(
+            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
+        ),
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 200);
+    id
+}
+
+#[tokio::test]
+async fn a_second_confirmation_is_refused_without_undoing_the_first() {
+    use common::{get, json, login, post};
+    // What a double-clicked confirm button sends. The loser must not empty the vault or reopen the session
+    // under the winner.
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = exchanged_session(&app, &cookie).await;
+    let confirm = format!("/admin/oauth/sessions/{id}/confirm");
+
+    assert_eq!(post(&app, &confirm, "", Some(&cookie)).await.status(), 200);
+    assert_eq!(post(&app, &confirm, "", Some(&cookie)).await.status(), 409);
+
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(
+        shown["status"], "confirmed",
+        "the refused confirmation left the session it lost to alone"
+    );
+    let account = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(account["state"], "ready");
+    assert_eq!(account["credential"]["quarantined"], false);
+}
+
+#[tokio::test]
+async fn a_confirmation_from_another_admin_session_changes_nothing() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let owner = login(&app, "admin-secret").await;
+    let other = login(&app, "admin-secret").await;
+    let id = exchanged_session(&app, &owner).await;
+
+    let refused = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&other),
+    )
+    .await;
+    assert_eq!(
+        refused.status(),
+        404,
+        "a pairing session id is an unguessable handle, so a non-owner is not told it exists"
+    );
+
+    assert_eq!(
+        post(
+            &app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&owner)
+        )
+        .await
+        .status(),
+        200,
+        "the owner's confirmation still has its session and its credential"
+    );
+    let account = json(get(&app, "/admin/accounts/business", Some(&owner)).await).await;
+    assert_eq!(account["state"], "ready");
+}

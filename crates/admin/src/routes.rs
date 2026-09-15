@@ -482,10 +482,15 @@ async fn pairing_confirm(
     // credential is being installed is refused rather than leaving the account paired behind it. An expired
     // session, one that never reached an exchange, and one somebody else owns are all refused here too.
     if let Err(error) = state.pairing.claim_confirm(&id, &caller.session_id, now) {
-        // A confirmation that cannot start is final rather than retryable: the authorization code is spent,
-        // so the slot is released for a fresh pairing instead of being held by a session nobody can finish.
-        let _ = state.pairing.cancel(&id, &caller.session_id, now);
-        state.vault.discard(&id);
+        // A claim that does not land leaves the session and the vault exactly as they were. The refusal may
+        // well be about a session another confirmation is holding at this moment, and emptying the vault from
+        // here would fail that one too; the rest name a session this caller does not own, or one that is
+        // still usable. A session that ran out of time is the exception: it can never be confirmed, and its
+        // authorization code is spent, so the credential waiting on it is dropped now rather than held until
+        // the process restarts.
+        if matches!(error, PairingError::Expired) {
+            state.vault.discard(&id);
+        }
         return pairing_failure(error);
     }
     let conflict = |state: &AdminState, message: &'static str| {
