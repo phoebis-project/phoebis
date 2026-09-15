@@ -4,7 +4,9 @@ import argparse
 import json
 import pathlib
 import re
+import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 
@@ -17,6 +19,12 @@ HEADER_PLACEHOLDERS = {
     "x-claude-code-session-id": "SESSION-ID-PLACEHOLDER",
     "x-client-request-id": "REQUEST-ID-PLACEHOLDER",
 }
+
+# The billing block, and the two values inside it a session mints fresh on every run. A new cc_prompt_id changes
+# the cch digits with it, so masking the id alone would still leave --check reporting drift with no protocol change.
+BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
+BILLING_PROMPT_ID = re.compile(rb"cc_prompt_id=[^;\"]*;")
+BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
 
 
 def redact(line: str) -> str:
@@ -126,6 +134,11 @@ def mask_hello(raw: bytes) -> bytes:
 
 
 def _self_test() -> None:
+    _self_test_mask_hello()
+    _self_test_normalize_body()
+
+
+def _self_test_mask_hello() -> None:
     """Feeds mask_hello a key share declaring a 40-byte payload with only 5 bytes present; must raise ValueError."""
     random_bytes = b"\x00" * 32
     session_id = b""
@@ -162,6 +175,30 @@ def _self_test() -> None:
     raise AssertionError("mask_hello did not raise on a truncated key share payload")
 
 
+def _self_test_normalize_body() -> None:
+    """One case per masked billing value: two bodies differing only in it must normalize to the same bytes."""
+    block = (
+        b'{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517;'
+        b' cc_entrypoint=sdk-cli; cch=%s; cc_prompt_id=%s;"}]}'
+    )
+    first_id = b"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    second_id = b"33333333-3333-4333-8333-333333333333"
+    cases = [
+        ("the cch digits", block % (b"9b244", first_id), block % (b"e142e", first_id), b"9b244"),
+        ("cc_prompt_id", block % (b"9b244", first_id), block % (b"9b244", second_id), first_id),
+    ]
+    for name, one, other, minted in cases:
+        assert one != other, f"self-test case {name} feeds two identical bodies"
+        masked = normalize_body(one)
+        if masked != normalize_body(other):
+            raise AssertionError(f"normalize_body leaves {name} in the body")
+        if minted in masked:
+            raise AssertionError(f"normalize_body kept {minted!r} after masking {name}")
+        if b"cc_version=2.1.269.517" not in masked:
+            raise AssertionError(f"masking {name} swallowed the rest of the billing block")
+        print(f"self-test passed: normalize_body masks {name}")
+
+
 def normalize_head(raw: bytes) -> bytes:
     """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id."""
     head_bytes, sep, rest = raw.partition(b"\r\n\r\n")
@@ -174,11 +211,52 @@ def normalize_head(raw: bytes) -> bytes:
     return "\r\n".join(out_lines).encode("latin1") + sep + rest
 
 
+def mask_billing(block: bytes) -> bytes:
+    """Mask one billing block's per-capture values, leaving cc_version and cc_entrypoint to be compared."""
+    block = BILLING_STAMP.sub(b"cch=CCH-PLACEHOLDER;", block)
+    return BILLING_PROMPT_ID.sub(b"cc_prompt_id=PROMPT-ID-PLACEHOLDER;", block)
+
+
 def normalize_body(raw: bytes) -> bytes:
-    """Replace metadata.user_id's device_id and session_id; safe only here, not a claim about the hash gate."""
+    """Replace metadata.user_id's device_id and session_id, and the billing block's cc_prompt_id and cch digits.
+
+    Masking the digits is safe only because check_hashes() re-signs every stamped body; on its own it would drop
+    the hash from the comparison.
+    """
     raw = re.sub(rb'(\\"device_id\\":\\")[^\\]*(\\")', rb"\1DEVICE-ID-PLACEHOLDER\2", raw)
     raw = re.sub(rb'(\\"session_id\\":\\")[^\\]*(\\")', rb"\1SESSION-ID-PLACEHOLDER\2", raw)
-    return raw
+    # Every billing-header-shaped string is masked, not only system[0]: a decoy in a tool-use input carries the
+    # same per-capture values, and the real block keeps its own hash gate.
+    return BILLING_BLOCK.sub(lambda m: mask_billing(m.group(0)), raw)
+
+
+def has_stamp(body: bytes) -> bool:
+    """Whether the first billing block carries a cch=, which is the block phoebis_cch::find_cch signs."""
+    block = BILLING_BLOCK.search(body)
+    return bool(block and BILLING_STAMP.search(block.group(0)))
+
+
+def check_hashes(fresh_dir: pathlib.Path) -> int:
+    """Re-sign every freshly captured body that carries a cch= stamp, the gate normalize_body's masking removes."""
+    stamped = [p for p in sorted(fresh_dir.glob("body_*.json")) if has_stamp(p.read_bytes())]
+    if not stamped:
+        return 0
+    if shutil.which("cargo") is None:
+        print("hash check skipped: cargo not found")
+        return 2
+    status = 0
+    for path in stamped:
+        run = subprocess.run(
+            ["cargo", "run", "-q", "-p", "phoebis-cch", "--example", "resign", "--", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        if run.returncode != 0:
+            print(f"hash drift: {path.name}")
+            for line in (run.stdout + run.stderr).splitlines():
+                print(f"  {line}")
+            status = 1
+    return status
 
 
 def normalize_tree(root: pathlib.Path) -> dict:
@@ -202,6 +280,7 @@ def check(capture_dir: pathlib.Path) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
         build(capture_dir, fresh_dir)
+        hashes = check_hashes(fresh_dir)
         committed = normalize_tree(FIXTURES)
         fresh = normalize_tree(fresh_dir)
         names = sorted(set(committed) | set(fresh))
@@ -210,7 +289,9 @@ def check(capture_dir: pathlib.Path) -> int:
             print("fixtures differ:")
             for name in diffs:
                 print(f"  {name}")
-            return 1
+            return 2 if hashes == 2 else 1
+        if hashes:
+            return hashes
         print("fixtures match")
         return 0
 
