@@ -19,7 +19,14 @@ receivers with dummy credentials.
   `/v1/messages` credential modes (API-key, non-first-party OAuth, first-party OAuth).
 - `responses/`: the synthetic bodies the capture harness's fake upstream returned to the login and usage requests.
 
-A new Claude Code build requires a re-capture and diff against these fixtures before the profile is re-pinned.
+## Re-pinning
+
+A new Claude Code build requires a re-capture and a diff against these fixtures before the profile is re-pinned.
+`scripts/capture-baseline.sh <binary> <output-dir>` reproduces the inference-plane half of the capture recipe
+against loopback receivers; its header comment covers the control-plane half, which needs a live login session and
+cannot run unattended. `scripts/build-fixtures.py --check <capture-dir>` builds fixtures from a capture directory
+into a temporary location, normalizes the per-run randomness out of both trees, and diffs the result against this
+directory, printing `fixtures match` or the differing files.
 
 ## Redaction
 

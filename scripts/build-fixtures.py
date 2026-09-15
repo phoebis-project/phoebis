@@ -1,43 +1,181 @@
 #!/usr/bin/env python3
-"""Build crates/profile/fixtures from the 2026-09-13 capture directory. Run once; commit the output."""
-import base64, json, os, pathlib, re
-SRC = pathlib.Path.home() / "workspace/cc-capture-2026-09-13/cc-capture"
-OUT = pathlib.Path("crates/profile/fixtures"); (OUT / "responses").mkdir(parents=True, exist_ok=True)
+"""Build crates/profile/fixtures from a capture directory, or --check a capture against them."""
+import argparse
+import json
+import pathlib
+import re
+import struct
+import sys
+import tempfile
+
+DEFAULT_CAPTURE = pathlib.Path.home() / "workspace/cc-capture-2026-09-13/cc-capture"
+FIXTURES = pathlib.Path("crates/profile/fixtures")
+
+# The two header values a session mints fresh on every run; masked so --check reports profile
+# drift, not the identifiers themselves.
+HEADER_PLACEHOLDERS = {
+    "x-claude-code-session-id": "SESSION-ID-PLACEHOLDER",
+    "x-client-request-id": "REQUEST-ID-PLACEHOLDER",
+}
+
+
 def redact(line: str) -> str:
     line = re.sub(r"Bearer sk-ant-oat01-\S+", "Bearer sk-ant-oat01-PLACEHOLDER", line)
     line = re.sub(r"x-api-key: sk-ant-api03-\S+", "x-api-key: sk-ant-api03-PLACEHOLDER", line)
     line = re.sub(r"^Host: 127\.0\.0\.1:\d+$", "Host: api.anthropic.com", line)
     return line
+
+
 def head(entry, content_length=None):
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     if content_length is not None:
         lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {content_length}" for l in lines]
     return ("\r\n".join(lines) + "\r\n\r\n").encode()
-cm = json.load(open(SRC / "clean_modes.json"))
-bodies = {1: "body_oauth.json", 3: "body_fp_9b244.json", 5: "body_apikey.json", 7: "body_fp_e142e.json"}
-for idx, name in bodies.items():
-    # Byte-for-byte: the captured CCH digits in the heads are the hash of exactly these bytes.
-    (OUT / name).write_bytes((SRC / f"clean_body_{idx}.json").read_bytes())
-(OUT / "inference_oauth.http").write_bytes(head(cm[1], len((OUT / "body_oauth.json").read_bytes())))
-(OUT / "inference_oauth_fp.http").write_bytes(head(cm[3], len((OUT / "body_fp_9b244.json").read_bytes())))
-(OUT / "inference_apikey.http").write_bytes(head(cm[5], len((OUT / "body_apikey.json").read_bytes())))
-(OUT / "hello.http").write_bytes(head(cm[0]))
-login = json.load(open(SRC / "mitm/login.json")); status = json.load(open(SRC / "mitm/status.json"))
-def control(entry, name):
+
+
+def control(entry, name, out):
     body = entry.get("body", "")
     body = re.sub(r"sk-ant-ort01-\S+?\"", 'sk-ant-ort01-PLACEHOLDER"', body)
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(body)}" for l in lines]
-    (OUT / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + body.encode())
-control(login[0], "control_token.http"); control(login[1], "control_profile.http")
-control(login[3], "control_roles.http"); control(status[15], "control_usage.http")
-conn = json.load(open(SRC / "connect.json"))
-inf = next(h for h in conn if h["hello_len"] == 1499); ctl = next(h for h in conn if h["hello_len"] == 1473)
-(OUT / "hello_inference.hex").write_text(inf["raw_hex"] + "\n"); (OUT / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
-# The tunnel harness answered these synthetic bodies; they are the fake upstream's canned responses.
-harness = (SRC / "mitm/mitm5.py").read_text()
-for name, var in [("token", "TOKEN"), ("profile", "PROFILE"), ("usage", "USAGE")]:
-    m = re.search(rf"^{var}=json\.dumps\((.*)\)\.encode\(\)$", harness, re.M)
-    (OUT / "responses" / f"{name}.json").write_text(json.dumps(eval(m.group(1), {"False": False, "None": None, "True": True}), separators=(",", ":")) + "\n")
-(OUT / "responses/roles.json").write_text('{"organization_role":"admin","workspace_role":"workspace_admin"}\n')
-print("fixtures written:", sorted(p.name for p in OUT.rglob("*") if p.is_file()))
+    (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + body.encode())
+
+
+def build(src: pathlib.Path, out: pathlib.Path) -> None:
+    """Write the fixture tree at `out`, sourced from the capture directory `src`."""
+    (out / "responses").mkdir(parents=True, exist_ok=True)
+    cm = json.load(open(src / "clean_modes.json"))
+    bodies = {1: "body_oauth.json", 3: "body_fp_9b244.json", 5: "body_apikey.json", 7: "body_fp_e142e.json"}
+    for idx, name in bodies.items():
+        # Byte-for-byte: the captured CCH digits in the heads are the hash of exactly these bytes.
+        (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
+    (out / "inference_oauth.http").write_bytes(head(cm[1], len((out / "body_oauth.json").read_bytes())))
+    (out / "inference_oauth_fp.http").write_bytes(head(cm[3], len((out / "body_fp_9b244.json").read_bytes())))
+    (out / "inference_apikey.http").write_bytes(head(cm[5], len((out / "body_apikey.json").read_bytes())))
+    (out / "hello.http").write_bytes(head(cm[0]))
+    login = json.load(open(src / "mitm/login.json"))
+    status = json.load(open(src / "mitm/status.json"))
+    control(login[0], "control_token.http", out)
+    control(login[1], "control_profile.http", out)
+    control(login[3], "control_roles.http", out)
+    control(status[15], "control_usage.http", out)
+    conn = json.load(open(src / "connect.json"))
+    inf = next(h for h in conn if h["hello_len"] == 1499)
+    ctl = next(h for h in conn if h["hello_len"] == 1473)
+    (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+    (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
+    # The tunnel harness answered these synthetic bodies; they are the fake upstream's canned responses.
+    harness = (src / "mitm/mitm5.py").read_text()
+    for name, var in [("token", "TOKEN"), ("profile", "PROFILE"), ("usage", "USAGE")]:
+        m = re.search(rf"^{var}=json\.dumps\((.*)\)\.encode\(\)$", harness, re.M)
+        assert m, f"mitm5.py no longer defines {var} as a single json.dumps(...).encode() literal"
+        value = eval(m.group(1), {"False": False, "None": None, "True": True})
+        if name == "token":
+            # The canned token response's access/refresh tokens are credential-shaped; redact them like every other.
+            value["access_token"] = "sk-ant-oat01-PLACEHOLDER"
+            value["refresh_token"] = "sk-ant-ort01-PLACEHOLDER"
+        (out / "responses" / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
+    (out / "responses/roles.json").write_text('{"organization_role":"admin","workspace_role":"workspace_admin"}\n')
+
+
+def mask_hello(raw: bytes) -> bytes:
+    """Python port of transport::hello::mask; zeroes per-run randomness, leaves structure and lengths intact."""
+    h = bytearray(raw)
+    random = 11  # record(5) + handshake header(4) + version(2)
+    h[random : random + 32] = b"\x00" * 32
+    sid_len = h[random + 32]
+    sid = random + 33
+    h[sid : sid + sid_len] = b"\x00" * sid_len
+    p = sid + sid_len
+    cipher_len = struct.unpack("!H", h[p : p + 2])[0]
+    p += 2 + cipher_len
+    comp_len = h[p]
+    p += 1 + comp_len
+    ext_total = struct.unpack("!H", h[p : p + 2])[0]
+    p += 2
+    end = p + ext_total
+    while p + 4 <= end:
+        ty, length = struct.unpack("!HH", h[p : p + 4])
+        data = p + 4
+        if ty == 51:  # key_share: zero every group's payload, keep the group id and length
+            q = data + 2
+            while q + 4 <= data + length:
+                klen = struct.unpack("!H", h[q + 2 : q + 4])[0]
+                h[q + 4 : q + 4 + klen] = b"\x00" * klen
+                q += 4 + klen
+        p = data + length
+    return bytes(h)
+
+
+def normalize_head(raw: bytes) -> bytes:
+    """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id."""
+    head_bytes, sep, rest = raw.partition(b"\r\n\r\n")
+    lines = head_bytes.decode("latin1").split("\r\n")
+    out_lines = []
+    for line in lines:
+        name, colon, value = line.partition(":")
+        placeholder = HEADER_PLACEHOLDERS.get(name.strip().lower())
+        out_lines.append(f"{name}: {placeholder}" if colon and placeholder else line)
+    return "\r\n".join(out_lines).encode("latin1") + sep + rest
+
+
+def normalize_body(raw: bytes) -> bytes:
+    """Replace metadata.user_id's device_id and session_id; safe only here, not a claim about the hash gate."""
+    raw = re.sub(rb'(\\"device_id\\":\\")[^\\]*(\\")', rb"\1DEVICE-ID-PLACEHOLDER\2", raw)
+    raw = re.sub(rb'(\\"session_id\\":\\")[^\\]*(\\")', rb"\1SESSION-ID-PLACEHOLDER\2", raw)
+    return raw
+
+
+def normalize_tree(root: pathlib.Path) -> dict:
+    normalized = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(root))
+        raw = path.read_bytes()
+        if rel.endswith(".hex"):
+            raw = mask_hello(bytes.fromhex(raw.decode().strip())).hex().encode() + b"\n"
+        elif rel.endswith(".http"):
+            raw = normalize_head(raw)
+        elif rel.startswith("body_") and rel.endswith(".json"):
+            raw = normalize_body(raw)
+        normalized[rel] = raw
+    return normalized
+
+
+def check(capture_dir: pathlib.Path) -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh_dir = pathlib.Path(tmp) / "fixtures"
+        build(capture_dir, fresh_dir)
+        committed = normalize_tree(FIXTURES)
+        fresh = normalize_tree(fresh_dir)
+        names = sorted(set(committed) | set(fresh))
+        diffs = [name for name in names if committed.get(name) != fresh.get(name)]
+        if diffs:
+            print("fixtures differ:")
+            for name in diffs:
+                print(f"  {name}")
+            return 1
+        print("fixtures match")
+        return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "capture_dir", nargs="?", default=str(DEFAULT_CAPTURE), help="capture directory to build fixtures from"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="diff the capture's fixtures against crates/profile/fixtures instead"
+    )
+    args = parser.parse_args()
+    src = pathlib.Path(args.capture_dir).expanduser()
+    if args.check:
+        return check(src)
+    build(src, FIXTURES)
+    print("fixtures written:", sorted(p.name for p in FIXTURES.rglob("*") if p.is_file()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
