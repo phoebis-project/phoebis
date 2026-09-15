@@ -618,6 +618,9 @@ impl Relay {
                     &request_id,
                     generations,
                 );
+                // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
+                // drained above, so the default here is the empty body of a head that carried none. A row
+                // added for a status outside that set would forward nothing instead of its own body.
                 let buffered = buffered.unwrap_or_default();
                 if portable && attempt < self.limits.max_attempts {
                     last_failed = Some((head, buffered, outcome));

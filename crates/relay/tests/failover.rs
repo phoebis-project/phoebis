@@ -1,4 +1,6 @@
 mod common;
+use std::time::Duration;
+
 use phoebis_store::{AccountState, ServedModelWrite};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -638,11 +640,14 @@ async fn a_credit_balance_400_marks_funding_required_and_fails_over() {
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "b")
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert_eq!(
-        h.store.account("k1").unwrap().unwrap().state,
-        AccountState::FundingRequired
-    );
+    // The mark travels through the router task and its writer, so it lands after the client's response.
+    wait_for(Duration::from_secs(2), || {
+        h.store
+            .account("k1")
+            .unwrap()
+            .filter(|row| row.state == AccountState::FundingRequired)
+    })
+    .await;
     up.shutdown().await;
 }
 
@@ -752,7 +757,10 @@ async fn an_account_deleted_between_admission_and_selection_is_never_selected() 
             .await
             .unwrap()
     });
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    wait_for(Duration::from_secs(2), || {
+        credentials_seen(&up).contains(&A.to_string()).then_some(())
+    })
+    .await;
     // `b` is the account the stale candidate list would fail over to next, so deleting it while `a` holds the
     // gated request is what proves the second selection reads the registry as it is then.
     h.store.delete_account("b", "test").unwrap();
@@ -769,6 +777,48 @@ async fn an_account_deleted_between_admission_and_selection_is_never_selected() 
         !credentials_seen(&up).contains(&B.to_string()),
         "the deleted account was not tried"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_the_account_holding_an_in_flight_request_answers_account_cancelled_and_closes_the_upstream(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(A, "/v1/messages", Respond::Gated(Box::new(json_200())));
+    let h = two_accounts(&up).await;
+    let app = h.app.clone();
+    let pending = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(2), || {
+        credentials_seen(&up).contains(&A.to_string()).then_some(())
+    })
+    .await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "account_cancelled"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [A],
+        "an answer about a credential that is gone is nothing to fail over from"
+    );
+    // The attempt's future owns the upstream connection, so cancelling it takes the socket with it.
+    wait_for(Duration::from_secs(2), || {
+        (up.open_connections() == 0).then_some(())
+    })
+    .await;
     up.shutdown().await;
 }
 
@@ -809,13 +859,14 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
         .requests()
         .iter()
         .all(|r| !r.line.starts_with("POST /v1/oauth/token")));
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // The round trip is the anchor for the absence below: a mark would have been queued on this channel
+    // before the response was returned, so by the time the router answers, it would have been handled.
+    assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
         AccountState::Ready,
         "nothing conclusive happened, so no mark"
     );
-    assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
     up.shutdown().await;
 }
 

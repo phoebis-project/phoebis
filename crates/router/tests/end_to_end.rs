@@ -19,7 +19,7 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
-#[ignore = "the registry replaces the routes block; the acceptance task rewrites this test"]
+#[ignore = "re-enable once the registry wiring replaces the routes block"]
 async fn the_binary_relays_a_fixture_request_through_a_configured_api_key_account() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

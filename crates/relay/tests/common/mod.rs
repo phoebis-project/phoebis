@@ -454,6 +454,23 @@ pub fn outcome(resp: &axum::http::Response<Body>) -> RelayOutcome {
         .clone()
 }
 
+/// Waits for something a background task of the router or the fake produces. The deadline is generous because
+/// it is only ever reached when the thing never happens, and the poll is short so a passing test does not pay
+/// for it.
+pub async fn wait_for<T>(deadline: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
+    let give_up = std::time::Instant::now() + deadline;
+    loop {
+        if let Some(value) = probe() {
+            return value;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within {deadline:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {
     up.requests()
         .iter()
