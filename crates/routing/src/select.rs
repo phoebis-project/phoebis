@@ -66,7 +66,10 @@ pub fn select(
     else {
         return (SelectResult::Exhausted(Exhaustion::Untimed), writes);
     };
-    let ttl_ms = pool.affinity_ttl_seconds as i64 * 1_000;
+    let ttl_ms = i64::try_from(pool.affinity_ttl_seconds)
+        .ok()
+        .and_then(|s| s.checked_mul(1_000))
+        .unwrap_or(i64::MAX);
     let session = request.session_id.as_deref().filter(|_| ttl_ms > 0);
 
     // Step 1: the pin, expired when idle past the TTL or when its account can no longer serve the model here. A
@@ -279,10 +282,9 @@ fn obstacle(
     now: i64,
     fallback_ms: i64,
 ) -> Option<Obstacle> {
-    if attempted.iter().any(|a| a == &candidate.account_id) {
-        return Some(Obstacle::Attempted);
-    }
-    // A candidate the registry no longer holds was deleted after admission; it is nobody's to select.
+    let tried = attempted.iter().any(|a| a == &candidate.account_id);
+    // A candidate the registry no longer holds was deleted after admission; it is nobody's to select, and a
+    // cooldown row it left behind must not date an exhaustion no wait can clear.
     let Some(account) = snapshot.account(&candidate.account_id) else {
         return Some(Obstacle::Operator);
     };
@@ -311,6 +313,11 @@ fn obstacle(
             });
         }
     }
+    // An account this request already tried is out of the set either way, so its cooldown is reported ahead of
+    // the attempt: three accounts rate-limited inside one request answer with the earliest reset, not untimed.
+    if tried {
+        return Some(Obstacle::Attempted);
+    }
     None
 }
 
@@ -329,12 +336,13 @@ fn renew(
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {
         account_id: current.account_id.clone(),
-        // Step 1 checked that the pinned account still serves the model, so its spelling is among the candidates.
         upstream_model: candidates
             .iter()
             .find(|c| c.account_id == current.account_id)
             .map(|c| c.upstream_model.clone())
-            .unwrap_or_default(),
+            .expect(
+                "a renewed pin passed the eligible-set test, which is built from the candidates",
+            ),
         pin: Some(PinRef {
             key_id: current.key_id.clone(),
             session_id: current.session_id.clone(),
@@ -377,10 +385,14 @@ fn choose<'a>(
                 .iter()
                 .map(|c| utilization(c))
                 .fold(f64::INFINITY, f64::min);
-            let ties: Vec<&Candidate> = tier
-                .into_iter()
+            let mut ties: Vec<&Candidate> = tier
+                .iter()
+                .copied()
                 .filter(|c| utilization(c) == lowest)
                 .collect();
+            if ties.is_empty() {
+                ties = tier;
+            }
             Some(ties[rng.random_range(0..ties.len())])
         }
     }

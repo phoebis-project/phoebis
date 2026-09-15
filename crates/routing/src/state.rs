@@ -194,29 +194,16 @@ impl RoutingState {
 
     /// Only newer evidence replaces the current state, so a slow response cannot roll it back.
     pub fn record_overage(&mut self, account_id: &str, evidence: OverageEvidence) -> bool {
-        match self.overage.get(account_id) {
-            Some(current) if current.observed_at >= evidence.observed_at => false,
-            Some(current) => {
-                let since = if evidence.in_use {
-                    if current.in_use {
-                        current.since
-                    } else {
-                        evidence.since.or(Some(evidence.observed_at))
-                    }
-                } else {
-                    None
-                };
-                self.overage.insert(
-                    account_id.to_string(),
-                    OverageEvidence { since, ..evidence },
-                );
-                true
-            }
-            None => {
-                self.overage.insert(account_id.to_string(), evidence);
-                true
-            }
+        let current = self.overage.get(account_id);
+        if current.is_some_and(|c| c.observed_at >= evidence.observed_at) {
+            return false;
         }
+        let since = since_of(current, &evidence);
+        self.overage.insert(
+            account_id.to_string(),
+            OverageEvidence { since, ..evidence },
+        );
+        true
     }
 
     pub fn in_overage(&self, account_id: &str) -> bool {
@@ -322,5 +309,18 @@ impl RoutingState {
             self.pins.remove(key);
         }
         Purged { cooldowns, pins }
+    }
+}
+
+/// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of
+/// overage has none, one already in it keeps the start it had, and one just entering falls back to the time the
+/// evidence was observed.
+fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Option<i64> {
+    if !evidence.in_use {
+        return None;
+    }
+    match current {
+        Some(current) if current.in_use => current.since,
+        _ => evidence.since.or(Some(evidence.observed_at)),
     }
 }

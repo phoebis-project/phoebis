@@ -574,29 +574,35 @@ fn pin_renewal_follows_the_pool_ttl_and_affinity_off_writes_no_pin() {
     let s = snapshot(Pool::default());
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let mut r = rng();
-    let first = picked(
-        &select(
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 0),
+        &mut r,
+    );
+    let SelectResult::Selected(opening) = result else {
+        panic!()
+    };
+    let first = opening.account_id.clone();
+    let epoch = opening.pin.as_ref().unwrap().epoch;
+    for at in [3_500_000, 7_000_000] {
+        let (result, _) = select(
             &mut st,
             &s,
-            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 0),
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], at),
             &mut r,
-        )
-        .0,
-    )
-    .to_string();
-    for at in [3_500_000, 7_000_000] {
-        assert_eq!(
-            picked(
-                &select(
-                    &mut st,
-                    &s,
-                    &request(&s, Some("s1"), "claude-sonnet-5", true, &[], at),
-                    &mut r
-                )
-                .0
-            ),
-            first
         );
+        let SelectResult::Selected(sel) = result else {
+            panic!()
+        };
+        assert_eq!(sel.account_id, first);
+        assert_eq!(
+            sel.pin.as_ref().unwrap().epoch,
+            epoch,
+            "a renewal keeps the pin, so its epoch does not move"
+        );
+        assert_eq!(st.pins()[0].created_at, 0, "and neither does created_at");
+        assert_eq!(st.pins()[0].last_used_at, at, "only last_used_at does");
     }
     let (_, writes) = select(
         &mut st,
@@ -770,10 +776,11 @@ fn a_candidate_the_snapshot_no_longer_holds_is_never_eligible() {
         priority: 0,
         upstream_model: "claude-sonnet-5".into(),
     });
+    let mut r = rng();
     for i in 0..10 {
         req.now = i;
         assert_eq!(
-            picked(&select(&mut st, &s, &req, &mut rng()).0),
+            picked(&select(&mut st, &s, &req, &mut r).0),
             "a",
             "a deleted priority-zero account never wins"
         );
@@ -811,4 +818,99 @@ fn a_paused_account_serves_no_request() {
             "b"
         );
     }
+}
+
+#[test]
+fn an_attempted_account_still_dates_the_exhaustion_with_its_cooldown() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "account", 8_000, "five_hour"));
+    st.record_cooldown(cooled("b", "account", 5_000, "seven_day"));
+    st.record_cooldown(cooled("c", "account", 6_000, "retry_after"));
+    let all = &["a", "b", "c"];
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, all, 1_000),
+        &mut rng(),
+    );
+    assert!(
+        matches!(result, SelectResult::Exhausted(Exhaustion::Timed { deadline: 5_000, ref window }) if window == "seven_day"),
+        "three accounts rate-limited inside one request answer with the earliest reset"
+    );
+    st.clear_cooldown("b", "account");
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, all, 1_000),
+        &mut rng(),
+    );
+    assert!(
+        matches!(
+            result,
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: 6_000,
+                ..
+            })
+        ),
+        "one attempted account without a cooldown does not hide the others' deadlines"
+    );
+    st.clear_cooldown("a", "account");
+    st.clear_cooldown("c", "account");
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, all, 1_000),
+        &mut rng(),
+    );
+    assert!(
+        matches!(result, SelectResult::Exhausted(Exhaustion::Untimed)),
+        "an attempt on its own is not a deadline anyone can wait for"
+    );
+}
+
+#[test]
+fn a_tier_of_nan_samples_still_selects() {
+    let s = snapshot(Pool {
+        strategy: Strategy::LeastUtilized,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    for account in ["a", "b", "c"] {
+        st.record_sample(account, sample(f64::NAN, f64::NAN, 1));
+    }
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert!(["a", "b", "c"].contains(&picked(&result)));
+}
+
+#[test]
+fn the_first_overage_evidence_normalizes_since_like_every_later_one() {
+    let mut clear = RoutingState::from_load(RoutingLoad::default());
+    clear.record_overage("a", overage(false, 100, None));
+    assert_eq!(
+        clear.overage("a").unwrap().since,
+        None,
+        "an account out of overage has no start"
+    );
+    let mut entering = RoutingState::from_load(RoutingLoad::default());
+    entering.record_overage(
+        "a",
+        OverageEvidence {
+            in_use: true,
+            since: None,
+            reset: None,
+            observed_at: 100,
+            source: EvidenceSource::Sample,
+        },
+    );
+    assert_eq!(
+        entering.overage("a").unwrap().since,
+        Some(100),
+        "evidence with no start of its own takes the observation time"
+    );
 }
