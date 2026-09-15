@@ -859,14 +859,14 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
         .requests()
         .iter()
         .all(|r| !r.line.starts_with("POST /v1/oauth/token")));
-    // The round trip is the anchor for the absence below: a mark would have been queued on this channel
-    // before the response was returned, so by the time the router answers, it would have been handled.
+    // A mark's write is asynchronous, so this window bounds how long one would have to appear rather than
+    // proving none is coming. What guarantees the absence is the path itself: a 401 the budget cannot refresh
+    // builds no mark at all, because nothing conclusive happened.
+    stays_for(Duration::from_millis(200), || {
+        h.store.account("a").unwrap().unwrap().state == AccountState::Ready
+    })
+    .await;
     assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
-    assert_eq!(
-        h.store.account("a").unwrap().unwrap().state,
-        AccountState::Ready,
-        "nothing conclusive happened, so no mark"
-    );
     up.shutdown().await;
 }
 

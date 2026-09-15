@@ -471,6 +471,16 @@ pub async fn wait_for<T>(deadline: Duration, mut probe: impl FnMut() -> Option<T
     }
 }
 
+/// The dual of `wait_for`, for a state that must not move. The window bounds how long a background write has
+/// to land; it is never proof that none is still coming.
+pub async fn stays_for(window: Duration, mut probe: impl FnMut() -> bool) {
+    let until = std::time::Instant::now() + window;
+    while std::time::Instant::now() < until {
+        assert!(probe(), "the state moved within {window:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {
     up.requests()
         .iter()
