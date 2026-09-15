@@ -296,7 +296,12 @@ impl RoutingState {
                 let ttl = snapshot
                     .key(&p.key_id)
                     .and_then(|k| snapshot.pool(&k.pool_id))
-                    .map(|pool| pool.affinity_ttl_seconds as i64 * 1_000);
+                    .map(|pool| {
+                        i64::try_from(pool.affinity_ttl_seconds)
+                            .ok()
+                            .and_then(|s| s.checked_mul(1_000))
+                            .unwrap_or(i64::MAX)
+                    });
                 match ttl {
                     None => true,
                     Some(0) => true,
