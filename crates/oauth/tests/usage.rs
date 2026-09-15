@@ -72,6 +72,63 @@ mod service {
         store
     }
 
+    /// A `Ready` account with a bundle far from expiry, so `acquire` never triggers a refresh of its own
+    /// against the fake upstream under test.
+    fn store_with_valid_bundle() -> Arc<Store> {
+        let store = store_with_account();
+        store
+            .commit_credentials(
+                "a",
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("rt")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+        store
+    }
+
+    fn service_for(
+        up: &FakeUpstream,
+        store: Arc<Store>,
+        cache_ttl: Duration,
+        now: &Arc<AtomicI64>,
+    ) -> UsageService {
+        let p = claude_code_2_1_269_linux_x64();
+        let mut b = connector_builder(p, Plane::Control).unwrap();
+        phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+        let addr = up.addr();
+        let resolver: Resolver = Arc::new(move |_| Some(addr));
+        let control = Arc::new(ControlClient::new(p, b.build(), resolver));
+        let n = now.clone();
+        let clock: Clock = Arc::new(move || n.load(Ordering::SeqCst));
+        let manager = Arc::new(CredentialManager::new(
+            store,
+            control.clone(),
+            p,
+            clock.clone(),
+        ));
+        UsageService::new(manager, control, p, cache_ttl, 4, clock)
+    }
+
+    fn rate_limited(retry_after_seconds: &str) -> Rule {
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 429,
+                headers: vec![("Retry-After".to_string(), retry_after_seconds.to_string())],
+                body: b"{}".to_vec(),
+            },
+        }
+    }
+
     #[tokio::test]
     async fn usage_is_cached_and_survives_a_rate_limited_refresh() {
         let now = Arc::new(AtomicI64::new(1_000_000));
@@ -167,6 +224,71 @@ mod service {
                 "the previous windows are kept while the account is rate-limited"
             );
         }
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_first_fetch_that_is_rate_limited_backs_off_with_no_prior_snapshot() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited("120")]).await;
+        let service = service_for(
+            &up,
+            store_with_valid_bundle(),
+            Duration::from_secs(60),
+            &now,
+        );
+        let requests = || {
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .count()
+        };
+
+        let first = service.snapshot("a").await.unwrap();
+        assert!(
+            first.error.is_some(),
+            "nothing was ever cached to fall back on"
+        );
+        assert_eq!(requests(), 1);
+
+        now.store(1_030_000, Ordering::SeqCst); // 30 s later, still inside the 60 s TTL
+        let second = service.snapshot("a").await.unwrap();
+        now.store(1_090_000, Ordering::SeqCst); // 90 s later: past the TTL, still inside the 120 s Retry-After
+        let third = service.snapshot("a").await.unwrap();
+
+        assert_eq!(
+            requests(),
+            1,
+            "the not-before survives a first fetch with no prior snapshot to attach it to"
+        );
+        assert!(second.error.is_some());
+        assert!(third.error.is_some());
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_retry_after_outlasts_a_shorter_cache_ttl() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited("120")]).await;
+        let service = service_for(&up, store_with_valid_bundle(), Duration::from_secs(1), &now);
+        let requests = || {
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .count()
+        };
+
+        service.snapshot("a").await.unwrap();
+        assert_eq!(requests(), 1);
+
+        now.store(1_005_000, Ordering::SeqCst); // past the 1 s TTL, well before the 120 s Retry-After
+        let second = service.snapshot("a").await.unwrap();
+        assert_eq!(
+            requests(),
+            1,
+            "the retry-after, not the cache TTL, governs when the next fetch is allowed"
+        );
+        assert!(second.error.is_some());
         up.shutdown().await;
     }
 }

@@ -152,11 +152,33 @@ struct ParsedUsage {
     raw_keys: Vec<String>,
 }
 
-/// Why a fetch did not produce a usable payload. Kept apart from `UsageError`, whose only public case is
-/// the one a caller can actually see: nothing cached and the fetch failed.
+/// Why a fetch did not produce a usable payload. Kept apart from `UsageError`, which surfaces only when the
+/// fetch task itself panicked; an ordinary upstream failure always yields a snapshot instead, empty on a
+/// first-ever fetch, so the not-before that gates the next attempt is never lost for want of one to attach to.
 enum FetchFailure {
     Message(String),
     RateLimited(Option<i64>),
+}
+
+/// The snapshot cached for a first-ever fetch that failed: no windows to fall back on, but a real snapshot
+/// all the same, so its `not_before` survives in the same cache entry instead of being discarded for lack
+/// of a prior one to update.
+fn empty_snapshot(
+    account_id: &str,
+    generation: Option<u64>,
+    fetched_at: i64,
+    error: String,
+) -> UsageSnapshot {
+    UsageSnapshot {
+        account_id: account_id.to_string(),
+        identity_generation: generation.unwrap_or_default(),
+        fetched_at,
+        windows: Vec::new(),
+        fable_window: None,
+        extra_usage: None,
+        raw_keys: Vec::new(),
+        error: Some(error),
+    }
 }
 
 struct CachedEntry {
@@ -424,13 +446,13 @@ impl Inner {
                         fetched_at.saturating_add(delay.unwrap_or(0)),
                     ),
                 };
-                let Some(previous) = previous else {
-                    return Err(message);
-                };
-                let snapshot = UsageSnapshot {
-                    error: Some(message),
-                    fetched_at,
-                    ..previous
+                let snapshot = match previous {
+                    Some(previous) => UsageSnapshot {
+                        error: Some(message),
+                        fetched_at,
+                        ..previous
+                    },
+                    None => empty_snapshot(account_id, ended_generation, fetched_at, message),
                 };
                 cache.insert(
                     account_id.to_string(),
