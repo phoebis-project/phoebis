@@ -385,3 +385,61 @@ fn gzip(payload: &[u8]) -> Vec<u8> {
         .expect("a Vec never fails a write");
     encoder.finish().expect("the encoder flushes into the Vec")
 }
+
+#[tokio::test]
+async fn a_reused_connection_that_died_is_retried_on_a_fresh_one() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let first = app
+        .clone()
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    // A connection returns to the pool only once its body has been read to the end.
+    first.into_body().collect().await.unwrap();
+    assert_eq!(
+        up.connections(),
+        1,
+        "the first request opened one connection"
+    );
+    up.close_idle();
+    let second = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(
+        second.status(),
+        200,
+        "the request went out again on a fresh connection"
+    );
+    assert_eq!(
+        second
+            .extensions()
+            .get::<phoebis_relay::RelayOutcome>()
+            .expect("a relayed response carries its outcome")
+            .attempt,
+        2,
+        "the first attempt died on the pooled connection before a byte came back"
+    );
+    second.into_body().collect().await.unwrap();
+    assert_eq!(
+        up.requests().len(),
+        2,
+        "the dead pooled connection carried nothing, so the upstream saw the second request once"
+    );
+    assert_eq!(
+        up.connections(),
+        2,
+        "the retry opened a connection rather than reusing the dead one"
+    );
+    up.shutdown().await;
+}

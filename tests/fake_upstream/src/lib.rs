@@ -1,6 +1,7 @@
 //! Loopback HTTP(S) upstream double: records every request verbatim and answers per configured rule, terminating
 //! TLS for the `api.anthropic.com` / `platform.claude.com` SNI or speaking plain HTTP via `start_plain`.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,7 @@ use bytes::{Buf, BytesMut};
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
 pub struct Rule {
@@ -90,6 +91,7 @@ impl FakeUpstream {
             rules: Mutex::new(rules.into_iter().map(RuleState::from).collect()),
             requests: Mutex::new(Vec::new()),
             connections: AtomicU64::new(0),
+            conns: Mutex::new(HashMap::new()),
             gate: Notify::new(),
             released: AtomicBool::new(false),
         });
@@ -138,6 +140,16 @@ impl FakeUpstream {
         self.shared.connections.load(Ordering::SeqCst) as usize
     }
 
+    /// Closes every connection that is sitting between requests, the way an upstream reaps a socket it
+    /// considers idle. A connection in the middle of a request is left to finish it.
+    pub fn close_idle(&self) {
+        for handle in self.shared.conns.lock().unwrap().values() {
+            if !handle.in_request.load(Ordering::SeqCst) {
+                let _ = handle.close.send(true);
+            }
+        }
+    }
+
     /// Lets every gated `SseGated` responder continue past its first event, including ones that gate after this
     /// call. The gate latches open: once released, it stays open for the lifetime of this `FakeUpstream`, so a
     /// second `release()` is never required.
@@ -177,8 +189,15 @@ struct Shared {
     rules: Mutex<Vec<RuleState>>,
     requests: Mutex<Vec<RecordedRequest>>,
     connections: AtomicU64,
+    conns: Mutex<HashMap<u64, ConnHandle>>,
     gate: Notify,
     released: AtomicBool,
+}
+
+/// What `close_idle` needs about a live connection: whether it is busy, and a way to wake its serve loop.
+struct ConnHandle {
+    close: watch::Sender<bool>,
+    in_request: Arc<AtomicBool>,
 }
 
 struct RuleState {
@@ -214,6 +233,23 @@ enum SwitchKind {
 impl Shared {
     fn record(&self, req: RecordedRequest) {
         self.requests.lock().unwrap().push(req);
+    }
+
+    fn register_connection(&self, conn_id: u64) -> (watch::Receiver<bool>, Arc<AtomicBool>) {
+        let (close, closed) = watch::channel(false);
+        let in_request = Arc::new(AtomicBool::new(false));
+        self.conns.lock().unwrap().insert(
+            conn_id,
+            ConnHandle {
+                close,
+                in_request: in_request.clone(),
+            },
+        );
+        (closed, in_request)
+    }
+
+    fn forget_connection(&self, conn_id: u64) {
+        self.conns.lock().unwrap().remove(&conn_id);
     }
 
     /// The ordinal (0-based) among all accepted connections; also applies any due connection-count switch, since
@@ -318,18 +354,34 @@ async fn handle_connection(shared: Arc<Shared>, sock: TcpStream, conn_id: u64, w
     }
 }
 
-async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
-    shared: Arc<Shared>,
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(shared: Arc<Shared>, stream: S, conn_id: u64) {
+    let (closed, in_request) = shared.register_connection(conn_id);
+    serve_requests(&shared, stream, conn_id, closed, &in_request).await;
+    shared.forget_connection(conn_id);
+}
+
+async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
+    shared: &Arc<Shared>,
     mut stream: S,
     conn_id: u64,
+    mut closed: watch::Receiver<bool>,
+    in_request: &AtomicBool,
 ) {
     let mut buf = BytesMut::new();
     loop {
-        let recorded = match read_request(&mut stream, &mut buf, conn_id).await {
+        // Biased so a connection asked to close never answers one more request first, which is the whole
+        // point of reaping it: the client must find the socket gone when it writes into it.
+        let read = tokio::select! {
+            biased;
+            _ = closed.changed() => return,
+            read = read_request(&mut stream, &mut buf, conn_id) => read,
+        };
+        let recorded = match read {
             Ok(Some(r)) => r,
             Ok(None) => return, // the peer closed cleanly between requests
             Err(_) => return,   // a malformed or truncated head leaves nothing to answer
         };
+        in_request.store(true, Ordering::SeqCst);
         let path = path_of(&recorded.line).to_string();
         let close_after = wants_close(&recorded.headers);
         shared.record(recorded);
@@ -377,10 +429,11 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                 headers,
                 events,
             } => {
-                let _ = write_sse_gated(&shared, &mut stream, status, headers, events).await;
+                let _ = write_sse_gated(shared, &mut stream, status, headers, events).await;
                 return;
             }
         }
+        in_request.store(false, Ordering::SeqCst);
         if close_after {
             return;
         }
