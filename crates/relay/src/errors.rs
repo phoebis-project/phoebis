@@ -5,6 +5,7 @@ use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use phoebis_oauth::AcquireError;
+use phoebis_routing::KeyRefusal;
 
 use crate::auth::AuthError;
 use crate::RelayError;
@@ -118,6 +119,17 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     }
 }
 
+/// Every refused key is the same 401 the static table answered: telling the caller which of the six ways it
+/// failed would help an attacker enumerate, so the variant reaches the log line only.
+pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
+    Failure {
+        status: StatusCode::UNAUTHORIZED,
+        error_type: "authentication_error",
+        code: "auth_unknown",
+        message: "the presented API key is not valid",
+    }
+}
+
 pub(crate) fn acquire_failure(error: &AcquireError) -> Failure {
     match error {
         // Both need an operator to pair the account again, and both leave the caller's own key valid; the 401
@@ -145,6 +157,15 @@ pub(crate) const ACCOUNTS_UNAVAILABLE: Failure = Failure {
     message: "the bound account cannot serve requests",
 };
 
+/// The account the request was bound to went away while it was in flight, so its credential is gone and no
+/// answer about it can be trusted.
+pub(crate) const ACCOUNT_CANCELLED: Failure = Failure {
+    status: StatusCode::SERVICE_UNAVAILABLE,
+    error_type: "api_error",
+    code: "account_cancelled",
+    message: "the bound account was disconnected while the request was in flight",
+};
+
 pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     status: StatusCode::METHOD_NOT_ALLOWED,
     error_type: "invalid_request_error",
@@ -152,11 +173,32 @@ pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     message: "the method is not supported on this route",
 };
 
+pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
+    status: StatusCode::NOT_FOUND,
+    error_type: "not_found_error",
+    code: "model_not_allowed",
+    message: "model not allowed for this key",
+};
+
+pub(crate) const MODEL_UNSERVED: Failure = Failure {
+    status: StatusCode::NOT_FOUND,
+    error_type: "not_found_error",
+    code: "model_unserved",
+    message: "no account in this pool serves the model",
+};
+
 pub(crate) const NOT_FOUND: Failure = Failure {
     status: StatusCode::NOT_FOUND,
     error_type: "not_found_error",
     code: "not_found",
     message: "the requested resource was not found",
+};
+
+pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
+    status: StatusCode::SERVICE_UNAVAILABLE,
+    error_type: "api_error",
+    code: "router_unavailable",
+    message: "the router is not available",
 };
 
 /// The upstream may or may not have received the request; either way the relay has no response to forward.

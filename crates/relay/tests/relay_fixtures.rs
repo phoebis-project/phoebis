@@ -1,8 +1,8 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{KeyTable, RelayOutcome, Route};
-use phoebis_store::{AccountKind, Secret};
+use phoebis_relay::RelayOutcome;
+use phoebis_store::AccountKind;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -204,26 +204,6 @@ async fn model_suffix_is_stripped_without_changing_the_cch() {
         "the suffix is gone and the cch equals the unsuffixed edit"
     );
     up.shutdown().await;
-}
-
-#[test]
-fn duplicate_route_secrets_are_rejected() {
-    let routes = [
-        Route {
-            key_id: "desktop".into(),
-            secret: Secret::new("phoebis-testkey"),
-            account_id: "acct".into(),
-        },
-        Route {
-            key_id: "laptop".into(),
-            secret: Secret::new("phoebis-testkey"),
-            account_id: "other".into(),
-        },
-    ];
-    assert!(
-        KeyTable::from_routes(&routes).is_err(),
-        "one secret must not bind two accounts"
-    );
 }
 
 #[tokio::test]

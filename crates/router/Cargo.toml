@@ -21,6 +21,7 @@ phoebis-cch = { path = "../cch" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
 phoebis-relay = { path = "../relay" }
+phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 clap = { workspace = true }

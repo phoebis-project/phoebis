@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{KeyTable, Limits, Relay, Route};
+use phoebis_relay::{Limits, Relay};
 use phoebis_store::{AccountRow, AccountState, Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::pool::Pool;
@@ -25,10 +25,20 @@ use crate::config::{AccountKind, Config};
 /// going to end sooner because the process keeps waiting.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long an account is cooled when the upstream rejected it without saying for how long.
+const COOLDOWN_FALLBACK: Duration = Duration::from_secs(60);
+
 /// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
 /// response head nor the wait between stream events gives up before the caller itself would.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// A stream that has not reached its first committing event by then is forwarded as it stands, because the
+/// caller is waiting and a longer hold buys no better verdict.
+const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Upstream submissions one caller request may cost across every account it tries.
+const MAX_ATTEMPTS: u8 = 3;
 
 const HTTPS_PORT: u16 = 443;
 
@@ -107,22 +117,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         POOL_MAX_IDLE,
         POOL_IDLE_TTL,
     ));
-    // The key table refuses two routes that share a secret on its own. `load` refuses the same file
-    // earlier, and deliberately so: neither check is allowed to depend on the other existing.
-    let keys = KeyTable::from_routes(&routes(&config))?;
-    let relay = Arc::new(Relay::new(
-        profile,
-        store.clone(),
-        manager.clone(),
-        pool.clone(),
-        keys,
-        resolver,
-        Limits {
-            max_request_bytes: MAX_REQUEST_BYTES,
-            head_timeout: HEAD_TIMEOUT,
-            idle_timeout: IDLE_TIMEOUT,
-        },
-    ));
     let usage = Arc::new(UsageService::new(
         manager.clone(),
         control.clone(),
@@ -130,6 +124,29 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Duration::from_secs(config.usage.cache_ttl_seconds),
         config.usage.refresh_concurrency,
         clock.clone(),
+    ));
+    let router_task = phoebis_routing::spawn(
+        store.clone(),
+        Some(usage.clone()),
+        clock.clone(),
+        phoebis_routing::RouterConfig::default(),
+    )?;
+    let relay = Arc::new(Relay::new(
+        profile,
+        store.clone(),
+        manager.clone(),
+        pool.clone(),
+        router_task,
+        resolver,
+        clock.clone(),
+        Limits {
+            cooldown_fallback: COOLDOWN_FALLBACK,
+            head_timeout: HEAD_TIMEOUT,
+            hold_timeout: HOLD_TIMEOUT,
+            idle_timeout: IDLE_TIMEOUT,
+            max_attempts: MAX_ATTEMPTS,
+            max_request_bytes: MAX_REQUEST_BYTES,
+        },
     ));
     let admin = Arc::new(AdminState {
         store,
@@ -253,18 +270,6 @@ fn sync_accounts(store: &Store, config: &Config) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn routes(config: &Config) -> Vec<Route> {
-    config
-        .routes
-        .iter()
-        .map(|route| Route {
-            key_id: route.key_id.clone(),
-            secret: Secret::new(route.secret.expose()),
-            account_id: route.account_id.clone(),
-        })
-        .collect()
 }
 
 fn resolver_for(config: &Config) -> Resolver {

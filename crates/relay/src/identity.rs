@@ -7,8 +7,8 @@ use crate::RelayError;
 /// The agent a request without an agent header belongs to.
 const MAIN_AGENT: &str = "main";
 
-/// Marker a downstream client appends to ask for the long-context tier. It is a client-side routing hint that
-/// the upstream never sees, so it is stripped from the model before the request goes out.
+/// Marker a downstream client appends to ask for the long-context tier. It is a client-side routing hint, so
+/// it is folded out of the canonical model the registry resolves against.
 const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
 /// Bound on an identifier or model name the relay repeats into logs and ledger keys.
@@ -50,21 +50,6 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         model,
         canonical_model,
     })
-}
-
-/// The model the upstream is asked for: the caller's value without the long-context marker, with its case
-/// left alone, because only the relay's own bookkeeping is case-folded.
-pub(crate) fn upstream_model(model: &str) -> &str {
-    let Some(head) = model.len().checked_sub(LONG_CONTEXT_SUFFIX.len()) else {
-        return model;
-    };
-    // The suffix is ASCII, so a split that lands inside a multi-byte character cannot be one: without this
-    // guard slicing there would panic on a model ending in one.
-    if model.is_char_boundary(head) && model[head..].eq_ignore_ascii_case(LONG_CONTEXT_SUFFIX) {
-        &model[..head]
-    } else {
-        model
-    }
 }
 
 /// Brackets are allowed on top of the identifier charset because a client may name a tier with them, as the
@@ -112,17 +97,7 @@ mod tests {
         assert_eq!(identity.session_id, None);
         assert_eq!(identity.agent_id, "main");
         assert_eq!(identity.canonical_model, "claude-sonnet-4-5");
-        assert_eq!(upstream_model(&identity.model), "claude-sonnet-4-5");
-    }
-
-    #[test]
-    fn a_model_ending_in_multibyte_characters_is_left_alone() {
-        assert_eq!(
-            upstream_model("claude-sonnet-4-5\u{20ac}\u{20ac}"),
-            "claude-sonnet-4-5\u{20ac}\u{20ac}"
-        );
-        assert_eq!(upstream_model("claude-sonnet-4-5[1M]"), "claude-sonnet-4-5");
-        assert_eq!(upstream_model("[1m]"), "");
+        assert_eq!(identity.model, "claude-sonnet-4-5[1M]");
     }
 
     #[test]

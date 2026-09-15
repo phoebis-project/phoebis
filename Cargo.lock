@@ -376,6 +376,7 @@ dependencies = [
  "phoebis-cch",
  "phoebis-oauth",
  "phoebis-profile",
+ "phoebis-routing",
  "phoebis-store",
  "phoebis-transport",
  "fake-upstream",
@@ -390,6 +391,7 @@ dependencies = [
  "subtle",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
 ]
@@ -405,6 +407,7 @@ dependencies = [
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-relay",
+ "phoebis-routing",
  "phoebis-store",
  "phoebis-transport",
  "clap",

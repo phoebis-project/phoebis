@@ -11,6 +11,7 @@ bytes = { workspace = true }
 phoebis-cch = { path = "../cch" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
+phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 futures = { workspace = true }
@@ -22,6 +23,7 @@ sha2 = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

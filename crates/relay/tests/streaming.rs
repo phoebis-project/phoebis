@@ -78,7 +78,17 @@ async fn upstream_429_and_529_are_forwarded_with_their_headers_and_body() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    // One attempt in the budget, so the rejection is committed to the caller rather than failed over: with a
+    // budget left, a rate-limited pool with nothing else to select answers its own exhaustion instead.
+    let app = common::relay_with_limits(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        phoebis_relay::Limits {
+            max_attempts: 1,
+            ..common::default_limits()
+        },
+    )
+    .await;
     let resp = app
         .oneshot(common::stream_request("phoebis-testkey"))
         .await

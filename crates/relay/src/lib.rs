@@ -4,8 +4,10 @@
 mod auth;
 mod body;
 mod classify;
+mod dispatch;
 mod drift;
 mod errors;
+mod exhaustion;
 mod headers;
 mod hold;
 mod identity;
@@ -15,7 +17,7 @@ mod ratelimit;
 mod sse;
 mod stream;
 
-pub use auth::{AuthError, KeyTable, KeyTableError, Route};
+pub use auth::{presented_key, AuthError};
 pub use body::{edit_body, BodyEdits};
 pub use classify::{
     classify, classify_transport, exhaustion_window, Cooldown, HeadContext, Scope, TransportPhase,
@@ -23,6 +25,7 @@ pub use classify::{
 };
 pub use drift::DriftGuard;
 pub use errors::anthropic_error;
+pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
 pub use hold::{hold, Commit, Held, Inspect};
 pub use identity::{identify, RequestIdentity};

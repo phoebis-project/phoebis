@@ -11,6 +11,7 @@ use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
 use phoebis_transport::TransportError;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
 /// moment does not stall the read loop, shallow enough that a caller that stops reading still pushes back on
@@ -24,6 +25,8 @@ pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
 /// Everything the body task needs once the head has been forwarded.
 pub(crate) struct Relayed {
+    /// Cancelled when the account this body belongs to is disconnected or deleted.
+    pub cancel: CancellationToken,
     pub decoder: Option<Box<dyn Decoder>>,
     pub idle_timeout: Duration,
     pub keep_alive: bool,
@@ -40,6 +43,7 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
     let (tx, rx) = mpsc::channel::<Result<Bytes, TransportError>>(CHANNEL_DEPTH);
     tokio::spawn(async move {
         let Relayed {
+            cancel,
             mut decoder,
             idle_timeout,
             keep_alive,
@@ -67,6 +71,12 @@ pub(crate) fn relay_body(relayed: Relayed) -> Body {
                 // for the next chunk would hold it until the idle timeout on a stream that has gone quiet.
                 let read = tokio::select! {
                     _ = tx.closed() => break false,
+                    // The credential this stream was opened with is gone, so the body ends in an error and
+                    // axum closes the caller's connection rather than letting a dead account keep streaming.
+                    _ = cancel.cancelled() => {
+                        let _ = tx.send(Err(cancelled())).await;
+                        break false;
+                    }
                     read = tokio::time::timeout(idle_timeout, reader.next_chunk()) => read,
                 };
                 let next = match read {
@@ -167,6 +177,13 @@ fn decode_piece(
         None => Ok(raw),
         Some(decoder) => decoder.feed(&raw).map(Bytes::from),
     }
+}
+
+fn cancelled() -> TransportError {
+    TransportError::Io(io::Error::new(
+        io::ErrorKind::ConnectionAborted,
+        "the bound account was disconnected",
+    ))
 }
 
 fn stalled() -> TransportError {
