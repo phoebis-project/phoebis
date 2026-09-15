@@ -30,7 +30,7 @@ use crate::errors::{
 };
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::identity::{identify, upstream_model};
-use crate::stream::{drain_bounded, relay_body, Drained, Relayed};
+use crate::stream::{drain_bounded, relay_body, Drained, Relayed, MAX_BUFFERED_BODY};
 use crate::{edit_body, KeyTable, RelayError};
 
 /// The one host the relay dials.
@@ -354,7 +354,7 @@ impl Relay {
                 if reusable {
                     self.pool.checkin(key.clone(), reader.into_inner());
                 }
-                if is_authentication_error(&buffered) {
+                if asks_for_a_refresh(&head, &buffered) {
                     match self
                         .manager
                         .refresh_now(&account.id, credential.generation)
@@ -652,6 +652,36 @@ fn user_agent(headers: &HeaderMap) -> &str {
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
+}
+
+/// Whether a rejection is the kind a refreshed token would fix. A compressed body is classified from a
+/// decoded copy, because the check reads JSON and a gzip, deflate, br, or zstd rejection would otherwise never
+/// ask for a refresh at all. The copy is inspection only: what the caller receives is the upstream's own bytes
+/// under the upstream's own headers.
+fn asks_for_a_refresh(head: &ResponseHead, buffered: &[u8]) -> bool {
+    match encoding(head) {
+        Ok(Encoding::Identity) => is_authentication_error(buffered),
+        // Anything that does not decode inside the bound is forwarded rather than acted on: a rejection the
+        // relay cannot read is not one it can claim to understand.
+        Ok(coding) => inspectable(decoder(coding).as_mut(), buffered)
+            .is_some_and(|decoded| is_authentication_error(&decoded)),
+        Err(_) => false,
+    }
+}
+
+/// Bytes decoded in pieces so the bound is checked as the copy grows, rather than after a small compressed
+/// body has already expanded into memory. `None` means the payload does not decode or does not fit.
+fn inspectable(decoder: &mut dyn Decoder, raw: &[u8]) -> Option<Vec<u8>> {
+    const PIECE: usize = 4096;
+    let mut out = Vec::new();
+    for piece in raw.chunks(PIECE) {
+        out.extend(decoder.feed(piece).ok()?);
+        if out.len() > MAX_BUFFERED_BODY {
+            return None;
+        }
+    }
+    out.extend(decoder.finish().ok()?);
+    (out.len() <= MAX_BUFFERED_BODY).then_some(out)
 }
 
 fn is_authentication_error(body: &[u8]) -> bool {

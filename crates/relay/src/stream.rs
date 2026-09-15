@@ -18,8 +18,9 @@ use tokio::sync::mpsc;
 const CHANNEL_DEPTH: usize = 64;
 
 /// Cap on a response the relay reads before it can decide what to do with it. Only an authentication failure
-/// takes that path and those bodies are a few hundred bytes, so a larger one is simply forwarded unread.
-const MAX_BUFFERED_BODY: usize = 64 * 1024;
+/// takes that path and those bodies are a few hundred bytes, so a larger one is simply forwarded unread. The
+/// same cap bounds the decoded copy a compressed rejection is classified from.
+pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
 /// Everything the body task needs once the head has been forwarded.
 pub(crate) struct Relayed {

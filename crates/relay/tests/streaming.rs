@@ -486,3 +486,54 @@ async fn an_upstream_that_reads_a_request_and_closes_is_not_retried() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_gzipped_401_is_decoded_before_it_is_classified() {
+    // The rejection that asks for a refresh says so in JSON, so a compressed one used to read as unclassifiable
+    // and reach the caller untouched.
+    let up = FakeUpstream::start(vec![
+        Rule { path_prefix: "/v1/oauth/token".into(), respond: Respond::Json { status: 200, headers: vec![], body: phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Token).to_vec() } },
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 401,
+                headers: vec![("Content-Encoding".into(), "gzip".into())],
+                body: gzip(br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#),
+            },
+        },
+    ])
+    .await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the caller gets the replay's answer");
+    let lines: Vec<String> = up.requests().iter().map(|r| r.line.clone()).collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("POST /v1/messages"))
+            .count(),
+        2,
+        "one rejection and one replay"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("POST /v1/oauth/token"))
+            .count(),
+        1,
+        "one refresh"
+    );
+    up.shutdown().await;
+}
