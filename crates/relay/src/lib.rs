@@ -3,18 +3,29 @@
 
 mod auth;
 mod body;
+mod classify;
+mod drift;
 mod errors;
 mod headers;
 mod identity;
 mod messages;
+mod portability;
+mod ratelimit;
 mod stream;
 
 pub use auth::{AuthError, KeyTable, KeyTableError, Route};
 pub use body::{edit_body, BodyEdits};
+pub use classify::{
+    classify, classify_transport, exhaustion_window, Cooldown, HeadContext, Scope, TransportPhase,
+    Verdict,
+};
+pub use drift::DriftGuard;
 pub use errors::anthropic_error;
 pub use headers::{outbound_headers, CredentialKind};
 pub use identity::{identify, RequestIdentity};
 pub use messages::{router, Limits, Relay, RelayOutcome};
+pub use portability::is_portable;
+pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
 
 /// A request the relay refuses before it reaches the upstream.
 #[derive(Debug, thiserror::Error)]

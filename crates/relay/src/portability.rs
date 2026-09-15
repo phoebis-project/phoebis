@@ -1,0 +1,59 @@
+//! Whether a request body can move between accounts: a reference to account-scoped state binds it to the
+//! account that holds that state.
+
+use serde_json::Value;
+
+pub fn is_portable(body: &[u8]) -> bool {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return true;
+    };
+    let Some(object) = root.as_object() else {
+        return true;
+    };
+    if object.contains_key("container") {
+        return false;
+    }
+    object
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_none_or(|messages| !messages.iter().any(references_account_state))
+}
+
+fn references_account_state(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("file_id") || map.contains_key("container") {
+                return true;
+            }
+            if map
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.ends_with("_tool_result") && t != "tool_result")
+            {
+                return true;
+            }
+            map.values().any(references_account_state)
+        }
+        Value::Array(items) => items.iter().any(references_account_state),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_portable;
+
+    #[test]
+    fn account_scoped_references_make_a_request_non_portable() {
+        assert!(is_portable(
+            br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#
+        ));
+        assert!(!is_portable(
+            br#"{"model":"m","container":"cont_1","messages":[]}"#
+        ));
+        assert!(!is_portable(br#"{"model":"m","messages":[{"role":"user","content":[{"type":"document","source":{"type":"file","file_id":"file_1"}}]}]}"#));
+        assert!(!is_portable(br#"{"model":"m","messages":[{"role":"user","content":[{"type":"code_execution_tool_result","tool_use_id":"x","content":{}}]}]}"#));
+        assert!(is_portable(br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}]}"#), "a client tool result is portable");
+        assert!(is_portable(br#"{"model":"m","messages":[{"role":"user","content":"the word file_id in text"}]}"#), "a string mentioning the key is not a reference");
+    }
+}

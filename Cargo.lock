@@ -383,6 +383,7 @@ dependencies = [
  "futures",
  "hmac",
  "http-body-util",
+ "jiff",
  "rand",
  "serde_json",
  "sha2",
