@@ -788,3 +788,58 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing_the_start() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    store
+        .insert_account(&AccountRow {
+            id: "b".into(),
+            kind: AccountKind::Oauth,
+            label: "b".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    let bundle = || NewBundle {
+        access_token: Secret::new("old"),
+        refresh_token: Some(Secret::new("rt")),
+        issued_at: 0,
+        expires_at: 1,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    };
+    let unreadable = store
+        .commit_credentials("a", 1, None, None, &bundle())
+        .unwrap();
+    let readable = store
+        .commit_credentials("b", 1, None, None, &bundle())
+        .unwrap();
+    store.open_refresh_attempt("a", 1, unreadable).unwrap();
+    store.open_refresh_attempt("b", 1, readable).unwrap();
+    // What a damaged row, a truncated write, or a storage key that no longer opens this row looks like from
+    // here: the bundle cannot be compared against the attempt at all.
+    store.debug_corrupt_credentials("a").unwrap();
+    assert!(store.credentials("a").is_err());
+
+    let quarantined = mgr.recover_on_start().unwrap();
+    assert_eq!(
+        quarantined,
+        vec!["a".to_string(), "b".to_string()],
+        "the account nobody can read is recovered like any other, and does not stop the one after it"
+    );
+    for account in ["a", "b"] {
+        assert!(
+            matches!(
+                store.account(account).unwrap().unwrap().state,
+                AccountState::ReauthRequired
+            ),
+            "{account} was left unrecovered"
+        );
+    }
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    up.shutdown().await;
+}

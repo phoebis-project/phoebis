@@ -323,6 +323,20 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Replaces a credential row's sealed blob with bytes that cannot be opened, so a test can drive the
+    /// paths that have to survive a row the store refuses to read. Compiled only under the `debug-hooks`
+    /// feature, which a dependent's dev-dependency turns on.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_corrupt_credentials(&self, account_id: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.execute(
+            "UPDATE credentials SET sealed = ?2 WHERE account_id = ?1",
+            params![account_id, vec![0u8; 32]],
+        )?;
+        Ok(())
+    }
+
     pub fn open_refresh_attempt(
         &self,
         account_id: &str,

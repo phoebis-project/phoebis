@@ -5,6 +5,11 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The startup-recovery test seam, see `debug_corrupt_credentials`. A dependent's dev-dependency turns it on for
+# a test build, so a release build carries no way to damage a stored credential.
+debug-hooks = []
+
 [dependencies]
 aes-gcm = { workspace = true }
 fd-lock = { workspace = true }
