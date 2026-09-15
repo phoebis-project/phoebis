@@ -38,35 +38,45 @@ pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 pub const NOW: i64 = 1_000_000;
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
-    let (router, up, _) = app_with(None, ACCOUNT_UUID, None).await;
+    let (router, up, _, _) = app_with(None, ACCOUNT_UUID, None).await;
     (router, up)
 }
 
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
-    let (router, up, _) = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
+    let (router, up, _, _) = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
     (router, up)
 }
 
 /// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
 /// presents somebody else's login to a slot that is already bound.
 pub async fn admin_app_paired_as(uuid: &str) -> (Router, FakeUpstream) {
-    let (router, up, _) = app_with(Some(fixture_identity()), uuid, None).await;
+    let (router, up, _, _) = app_with(Some(fixture_identity()), uuid, None).await;
     (router, up)
 }
 
 /// A paired slot whose last refresh resolved uncertain, which is the state an operator has to be shown.
 pub async fn admin_app_quarantined(detail: &str) -> (Router, FakeUpstream) {
-    let (router, up, store) = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
+    let (router, up, _, _) = quarantined_parts(detail).await;
+    (router, up)
+}
+
+/// The same slot with the store and the manager behind it, for the tests that have to look past the HTTP
+/// surface at what a confirmation did to the account's bookkeeping.
+pub async fn quarantined_parts(
+    detail: &str,
+) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
+    let (router, up, store, manager) =
+        app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
     let attempt = store.open_refresh_attempt("business", 1, 1).unwrap();
     store
         .resolve_refresh_attempt(attempt, AttemptOutcome::Uncertain(detail.to_string()))
         .unwrap();
-    (router, up)
+    (router, up, store, manager)
 }
 
 /// An app that pins its admin origin, as every configuration outside the loopback development mode must.
 pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
-    let (router, up, _) = app_with(None, ACCOUNT_UUID, Some(origin.to_string())).await;
+    let (router, up, _, _) = app_with(None, ACCOUNT_UUID, Some(origin.to_string())).await;
     (router, up)
 }
 
@@ -161,7 +171,7 @@ async fn app_with(
     identity: Option<Identity>,
     upstream_uuid: &str,
     origin: Option<String>,
-) -> (Router, FakeUpstream, Arc<Store>) {
+) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
@@ -260,7 +270,8 @@ async fn app_with(
         vault: Arc::new(PairingVault::new()),
         started_at: NOW,
     });
-    (router(state), up, store)
+    let manager = state.manager.clone();
+    (router(state), up, store, manager)
 }
 
 async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {

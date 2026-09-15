@@ -197,9 +197,24 @@ impl CredentialManager {
     /// Quarantines every account whose last refresh never resolved: the process died between sending a
     /// refresh and storing its result, so whether the upstream rotated the refresh token is unknowable and
     /// only re-pairing can settle it. Returns the quarantined account ids.
+    ///
+    /// An attempt whose generations no longer describe the stored bundle is closed instead of acted on. It
+    /// was about credentials that a later pairing or rotation has already replaced, and quarantining the
+    /// replacement over it would leave an account nobody can make ready again.
     pub fn recover_on_start(&self) -> Result<Vec<String>, StoreError> {
         let mut recovered: Vec<String> = Vec::new();
         for attempt in self.inner.store.pending_refresh_attempts()? {
+            let stored = self
+                .inner
+                .store
+                .credentials(&attempt.account_id)?
+                .map(|bundle| (bundle.lifecycle_generation, bundle.generation));
+            if stored != Some((attempt.lifecycle_generation, attempt.credential_generation)) {
+                self.inner
+                    .store
+                    .resolve_refresh_attempt(attempt.id, AttemptOutcome::Failed("superseded".into()))?;
+                continue;
+            }
             self.inner
                 .store
                 .set_state(&attempt.account_id, AccountState::ReauthRequired)?;

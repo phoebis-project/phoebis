@@ -397,3 +397,83 @@ async fn an_uncertain_refresh_shows_as_quarantined_with_its_detail() {
         "an uncertain refresh says why, not just that it happened"
     );
 }
+
+#[tokio::test]
+async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() {
+    use common::{get, json, login, post, NOW};
+    // No disconnect anywhere in this test: the operator pairs the quarantined slot again, which is the one
+    // way out that used to leave the uncertain attempt blocking every later refresh.
+    let (app, _up, store, manager) =
+        common::quarantined_parts("refresh response lost: connection closed").await;
+    let cookie = login(&app, "admin-secret").await;
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let started = json(started).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(
+            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 200);
+    assert_eq!(
+        post(
+            &app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+
+    let account = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(account["state"], "ready");
+    assert_eq!(account["credential"]["quarantined"], false);
+
+    // Inside its margin, so the acquire below can only answer by running a refresh.
+    let generation = store.credentials("business").unwrap().unwrap().generation;
+    store
+        .commit_credentials(
+            "business",
+            1,
+            Some(generation),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("expiring"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 1_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let token = manager
+        .acquire("business")
+        .await
+        .expect("the confirmed grant cleared the attempt that was blocking refreshes");
+    assert_eq!(token.secret.expose(), "sk-ant-oat01-PLACEHOLDER");
+    assert!(
+        manager.recover_on_start().unwrap().is_empty(),
+        "a restart has nothing left to quarantine"
+    );
+}

@@ -144,6 +144,39 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
         store.pending_refresh_attempts().unwrap().is_empty(),
         "a commit leaves no attempt behind"
     );
+    assert_eq!(
+        store.last_refresh_attempt("a").unwrap().unwrap().outcome,
+        Some("committed".to_string()),
+        "the commit's own attempt is the one that committed"
+    );
+}
+
+#[test]
+fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let g = store
+        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .unwrap();
+    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    store
+        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
+        .unwrap();
+    // A pairing confirmation commits a bundle of its own and has no attempt to name.
+    store
+        .commit_credentials("a", 1, Some(g), None, &bundle("at-2"))
+        .unwrap();
+    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    assert_eq!(attempt.outcome.as_deref(), Some("failed"));
+    assert_eq!(attempt.detail.as_deref(), Some("superseded"));
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "the committed bundle answers what the attempt was waiting on"
+    );
+    assert!(
+        store.open_refresh_attempt("a", 1, g + 1).is_ok(),
+        "the new bundle can be refreshed"
+    );
 }
 
 #[test]

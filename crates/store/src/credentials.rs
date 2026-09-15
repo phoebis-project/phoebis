@@ -71,6 +71,7 @@ pub struct PendingAttempt {
     pub id: u64,
     pub account_id: String,
     pub credential_generation: u64,
+    pub lifecycle_generation: u64,
     pub started_at: i64,
 }
 
@@ -247,6 +248,17 @@ impl Store {
             ],
         )?;
 
+        // Whatever else was still open for this account was waiting on the bundle this commit replaces, so
+        // it has its answer. Leaving one open would block every later refresh of the new credential and
+        // quarantine the account at the next start.
+        tx.execute(
+            &format!(
+                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'superseded' \
+                 WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
+            ),
+            params![account_id, now, attempt_id.map(|id| id as i64)],
+        )?;
+
         if let Some(id) = attempt_id {
             // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
             // be resolved by this commit, even by accident.
@@ -369,15 +381,16 @@ impl Store {
     pub fn pending_refresh_attempts(&self) -> Result<Vec<PendingAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, account_id, credential_generation, started_at FROM refresh_attempts \
-             WHERE {PENDING_WHERE} ORDER BY id"
+            "SELECT id, account_id, credential_generation, lifecycle_generation, started_at \
+             FROM refresh_attempts WHERE {PENDING_WHERE} ORDER BY id"
         ))?;
         let rows = stmt.query_map([], |row| {
             Ok(PendingAttempt {
                 id: row.get::<_, i64>(0)? as u64,
                 account_id: row.get(1)?,
                 credential_generation: row.get::<_, i64>(2)? as u64,
-                started_at: row.get(3)?,
+                lifecycle_generation: row.get::<_, i64>(3)? as u64,
+                started_at: row.get(4)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
