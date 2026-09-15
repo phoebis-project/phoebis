@@ -5,12 +5,19 @@ use xxhash_rust::xxh64::xxh64;
 pub const SEED: u64 = 0x4D65_9218_E32A_3268;
 const LEN: usize = 5;
 
+/// How deep the scanner follows nesting. The scanners recurse, and this runs on an authenticated but still
+/// caller-controlled body, so without a bound a few thousand nested arrays end the process rather than the
+/// request. Real Messages bodies nest a handful of levels.
+const MAX_DEPTH: usize = 128;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CchError {
     #[error("body is not valid JSON at byte {0}")]
     Json(usize),
     #[error("overlapping normalization edit at byte {0}")]
     Overlap(usize),
+    #[error("body nests deeper than the scanner reads at byte {0}")]
+    TooDeep(usize),
 }
 
 pub struct CchLocation {
@@ -51,6 +58,7 @@ pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
     let mut s = Scanner {
         body,
         pos: 0,
+        depth: 0,
         edits: Vec::new(),
     };
     s.ws();
@@ -140,6 +148,7 @@ struct Member {
 struct Scanner<'a> {
     body: &'a [u8],
     pos: usize,
+    depth: usize,
     edits: Vec<Edit>,
 }
 
@@ -157,6 +166,7 @@ pub fn normalize(body: &[u8]) -> Result<Vec<u8>, CchError> {
     let mut s = Scanner {
         body,
         pos: 0,
+        depth: 0,
         edits: Vec::new(),
     };
     s.value(true)?;
@@ -197,8 +207,21 @@ impl<'a> Scanner<'a> {
     fn value(&mut self, collect: bool) -> Result<(), CchError> {
         self.ws();
         match self.body.get(self.pos) {
-            Some(b'{') => self.object(collect),
-            Some(b'[') => self.array(collect),
+            // The one place either container is entered from, so counting here bounds the recursion for the
+            // collecting and the non-collecting walk alike.
+            Some(b'{') | Some(b'[') => {
+                if self.depth >= MAX_DEPTH {
+                    return Err(CchError::TooDeep(self.pos));
+                }
+                self.depth += 1;
+                let scanned = if self.body[self.pos] == b'{' {
+                    self.object(collect)
+                } else {
+                    self.array(collect)
+                };
+                self.depth -= 1;
+                scanned
+            }
             Some(b'"') => self.string().map(|_| ()),
             Some(_) => {
                 let start = self.pos;
@@ -352,5 +375,44 @@ impl<'a> Scanner<'a> {
             self.edits.push(edit);
             start = end + 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The billing block a first-party client stamps, which is what makes `sign` walk the whole body.
+    const BILLING: &str = r#""system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cc_entrypoint=sdk-cli; cch=00000;"}]"#;
+
+    /// A body whose `model` sits behind `depth` nested arrays, with the billing block ahead of them so the
+    /// scanner reaches the nesting rather than stopping short of it.
+    fn nested(depth: usize) -> Vec<u8> {
+        format!(
+            r#"{{{BILLING},"deep":{}1{},"model":"model-a"}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_body_nested_past_the_bound_is_refused_rather_than_overflowing_the_stack() {
+        let body = nested(10_000);
+        assert!(matches!(sign(&body), Err(CchError::TooDeep(_))));
+        assert_eq!(
+            string_member_span(&body, &["model"]),
+            None,
+            "the span scanner gives up at the same depth instead of recursing"
+        );
+    }
+
+    #[test]
+    fn a_body_within_the_bound_still_scans() {
+        let body = nested(100);
+        let signed = sign(&body).expect("a hundred levels is a body, not an attack");
+        assert_eq!(signed.len(), body.len());
+        let (start, end) = string_member_span(&body, &["model"]).expect("the model is readable");
+        assert_eq!(&body[start..end], br#""model-a""#);
     }
 }

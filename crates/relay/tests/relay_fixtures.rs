@@ -343,3 +343,29 @@ async fn a_wrong_key_is_refused_before_the_body_is_read() {
     assert!(up.requests().is_empty());
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_body_nested_past_the_scanner_bound_is_refused() {
+    // Authenticated, so it gets past the key check and reaches the body scanners; the process has to survive
+    // it and answer, rather than recursing until the stack ends.
+    let up = FakeUpstream::start(vec![]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let body = format!(
+        r#"{{"deep":{}1{},"model":"claude-sonnet-4-5"}}"#,
+        "[".repeat(10_000),
+        "]".repeat(10_000)
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("Authorization", "Bearer phoebis-testkey")
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        up.requests().is_empty(),
+        "a body the relay cannot read never reaches the upstream"
+    );
+    up.shutdown().await;
+}
