@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+axum = { workspace = true }
 phoebis-admin = { path = "../admin" }
 phoebis-cch = { path = "../cch" }
 phoebis-oauth = { path = "../oauth" }
@@ -22,6 +23,16 @@ phoebis-profile = { path = "../profile" }
 phoebis-relay = { path = "../relay" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
+clap = { workspace = true }
+jiff = { workspace = true }
+serde = { workspace = true }
+serde_norway = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+fake-upstream = { path = "../../tests/fake_upstream" }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
