@@ -323,3 +323,23 @@ async fn a_drifted_stamp_survives(stamp: &str) {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_wrong_key_is_refused_before_the_body_is_read() {
+    let up = FakeUpstream::start(vec![]).await;
+    let app = relay_with_limit(AccountKind::Oauth, &up, 1 << 10).await;
+    let oversized = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("Authorization", "Bearer wrong")
+        .body(Body::from(vec![b'x'; 8 << 10]))
+        .unwrap();
+    let resp = app.oneshot(oversized).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the key is checked before the body is buffered, so this is never a 413"
+    );
+    assert!(up.requests().is_empty());
+    up.shutdown().await;
+}

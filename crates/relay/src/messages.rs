@@ -182,14 +182,16 @@ impl Relay {
     async fn handle(&self, request: Request) -> Response {
         let request_id = new_request_id();
         let (parts, body) = request.into_parts();
+        // Before the body: an unauthenticated caller that could reach the read below would hold the whole
+        // request limit per connection for as long as it cared to keep sending.
+        let route = match self.keys.authenticate(&parts.headers) {
+            Ok(route) => route,
+            Err(error) => return auth_failure(&error).response(&request_id),
+        };
         let Ok(raw) = axum::body::to_bytes(body, self.limits.max_request_bytes).await else {
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
             // no complete request to relay.
             return relay_failure(&RelayError::BodyTooLarge).response(&request_id);
-        };
-        let route = match self.keys.authenticate(&parts.headers) {
-            Ok(route) => route,
-            Err(error) => return auth_failure(&error).response(&request_id),
         };
         let account_id = route.account_id.clone();
         let identity = match identify(&parts.headers, &raw) {

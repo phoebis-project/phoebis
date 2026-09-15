@@ -21,6 +21,15 @@ use std::{sync::Arc, time::Duration};
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 
 pub async fn relay_with(kind: AccountKind, up: &FakeUpstream) -> axum::Router {
+    relay_with_limit(kind, up, 32 << 20).await
+}
+
+/// The same relay with the request limit set by the caller, for the tests that have to send past it.
+pub async fn relay_with_limit(
+    kind: AccountKind,
+    up: &FakeUpstream,
+    max_request_bytes: usize,
+) -> axum::Router {
     let p = claude_code_2_1_269_linux_x64();
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let identity = if matches!(kind, AccountKind::Oauth) {
@@ -106,7 +115,7 @@ pub async fn relay_with(kind: AccountKind, up: &FakeUpstream) -> axum::Router {
         keys,
         resolver,
         Limits {
-            max_request_bytes: 32 << 20,
+            max_request_bytes,
             head_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(600),
         },
