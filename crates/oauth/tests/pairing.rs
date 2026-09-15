@@ -118,6 +118,9 @@ fn a_pasted_callback_url_is_validated_against_the_session() {
         matches!(after.status, PairingStatus::CodeReceived { ref code } if code == "abc"),
         "the stored code is the part before the '#'"
     );
+    let after_debug = format!("{after:?}");
+    assert!(!after_debug.contains("abc#xyz"));
+    assert!(!after_debug.contains("abc"));
     assert!(matches!(
         s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(ok), 1_002),
         Err(PairingError::AlreadyConsumed)

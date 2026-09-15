@@ -26,7 +26,7 @@ pub struct PairingSession {
     pub status: PairingStatus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum PairingStatus {
     Pending,
     CodeReceived { code: String },
@@ -35,6 +35,28 @@ pub enum PairingStatus {
     Cancelled,
     Expired,
     Failed(String),
+}
+
+// `code` is the live OAuth authorization code; redact it so it can't leak through a `{:?}` format,
+// including through `PairingSession`'s derived `Debug`. `pending` holds no secret, so it prints in full.
+impl std::fmt::Debug for PairingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PairingStatus::Pending => write!(f, "Pending"),
+            PairingStatus::CodeReceived { code: _ } => f
+                .debug_struct("CodeReceived")
+                .field("code", &"***")
+                .finish(),
+            PairingStatus::Exchanged { pending } => f
+                .debug_struct("Exchanged")
+                .field("pending", pending)
+                .finish(),
+            PairingStatus::Confirmed => write!(f, "Confirmed"),
+            PairingStatus::Cancelled => write!(f, "Cancelled"),
+            PairingStatus::Expired => write!(f, "Expired"),
+            PairingStatus::Failed(reason) => f.debug_tuple("Failed").field(reason).finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +220,9 @@ impl PairingSessions {
             return Err(PairingError::Forbidden);
         }
         expire_if_stale(session, now);
+        if matches!(session.status, PairingStatus::Expired) {
+            return Err(PairingError::Expired);
+        }
         session.status = PairingStatus::Cancelled;
         Ok(())
     }
