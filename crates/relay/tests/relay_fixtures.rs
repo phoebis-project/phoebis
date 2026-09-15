@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{KeyTable, Route};
+use phoebis_relay::{KeyTable, RelayOutcome, Route};
 use phoebis_store::{AccountKind, Secret};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -273,5 +273,53 @@ async fn local_rejections_are_anthropic_shaped() {
         StatusCode::NOT_FOUND
     );
     assert!(up.requests().is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_with_a_drifted_hash_is_forwarded_unedited() {
+    a_drifted_stamp_survives("cch=00000").await;
+}
+
+#[tokio::test]
+async fn an_uppercase_cch_counts_as_drift() {
+    a_drifted_stamp_survives("cch=9B244").await;
+}
+
+/// A first-party body whose billing hash this build cannot reproduce reaches the upstream byte for byte: no
+/// uuid spliced in, no restamp, and the outcome says why.
+async fn a_drifted_stamp_survives(stamp: &str) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen("cch=9b244", stamp, 1);
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            drifted.as_bytes(),
+            "phoebis-testkey",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let outcome = resp
+        .extensions()
+        .get::<RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(outcome.client_drift.as_deref(), Some("hash"));
+    assert_eq!(
+        up.requests()[0].body,
+        drifted.as_bytes(),
+        "a drifted body reaches the upstream exactly as the client sent it"
+    );
     up.shutdown().await;
 }

@@ -69,6 +69,9 @@ pub struct RelayOutcome {
     /// Whether the request was written to the upstream in full, which is what decides if it may have been
     /// billed even when no response came back.
     pub written: bool,
+    /// Names the kind of drift when the caller's billing hash was not this build's, in which case the body
+    /// went out unedited.
+    pub client_drift: Option<String>,
 }
 
 pub struct Relay {
@@ -218,13 +221,23 @@ impl Relay {
             Err(failure) => return refused(failure, &request_id, &account_id),
         };
         let mut edited = raw.to_vec();
-        if let Err(error) = edit_body(
+        let edits = match edit_body(
             &mut edited,
             credential.account_uuid.as_deref(),
             upstream_model(&identity.model),
         ) {
-            return refused(relay_failure(&error), &request_id, &account_id);
+            Ok(edits) => edits,
+            Err(error) => return refused(relay_failure(&error), &request_id, &account_id),
+        };
+        if let Some(kind) = edits.client_drift {
+            tracing::warn!(
+                account = %account.id,
+                drift = %kind,
+                user_agent = %user_agent(&parts.headers),
+                "a caller stamped a billing hash this build cannot reproduce, so its body goes out unedited",
+            );
         }
+        let client_drift = edits.client_drift.map(str::to_string);
         let edited = Bytes::from(edited);
         let host = INFERENCE_HOST.to_string();
         let Some(addr) = (self.resolver)(&host) else {
@@ -287,6 +300,7 @@ impl Relay {
                             upstream_status: 0,
                             attempt,
                             written,
+                            client_drift,
                         },
                     );
                 }
@@ -311,6 +325,7 @@ impl Relay {
                     upstream_status: head.status,
                     attempt,
                     written: true,
+                    client_drift: client_drift.clone(),
                 };
                 let buffered = match drain_bounded(&mut reader, self.limits.idle_timeout).await {
                     Ok(Drained::Complete(buffered)) => buffered,
@@ -366,6 +381,7 @@ impl Relay {
                 upstream_status: sent.head.status,
                 attempt,
                 written: true,
+                client_drift,
             };
             return self.forward(sent, &parts.headers, key, outcome);
         }
@@ -628,6 +644,14 @@ fn caller_accepts(caller: &HeaderMap, coding: &str) -> bool {
     })
 }
 
+/// The caller's own `User-Agent`, the only handle an operator has on which client drifted.
+fn user_agent(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+}
+
 fn is_authentication_error(body: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
@@ -665,6 +689,7 @@ fn refused(failure: Failure, request_id: &str, account_id: &str) -> Response {
             upstream_status: 0,
             attempt: 0,
             written: false,
+            client_drift: None,
         },
     )
 }
