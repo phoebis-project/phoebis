@@ -41,6 +41,17 @@ Pick your own names; those four are what the example file happens to use. `RUST_
 to `info`. The storage encryption key is a file rather than a variable: `storage.encryption_key_file` points at 32 raw
 bytes or 64 hex characters, and the database beside it is useless without that file.
 
+### Not yet configurable
+
+Four groups of limits are compiled into the binary, and the file has no key for any of them:
+
+| Limit | Value |
+| --- | --- |
+| Admin session lifetime | 15 minutes idle, 12 hours absolute. |
+| Drain window on shutdown | 30 seconds for requests still in flight. |
+| Relay waits | 600 seconds for a response head, 600 seconds between stream events, 32 MiB request cap. |
+| Upstream pool | 8 idle connections per host, discarded after 60 seconds idle. |
+
 ## Downstream client
 
 ```sh

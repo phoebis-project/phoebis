@@ -173,6 +173,42 @@ impl Store {
         Ok(())
     }
 
+    /// Brings a row in line with the bootstrap file. Identity, credentials, state, and the lifecycle
+    /// generation are not configuration's to touch, so they stay as they are.
+    pub fn update_account_config(
+        &self,
+        id: &str,
+        kind: AccountKind,
+        label: &str,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let stored: Option<AccountKind> = tx
+            .query_row(
+                "SELECT kind FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let stored = stored.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+        // A sealed bundle and a sealed API key are each reached through the account's kind, so flipping it
+        // under a stored credential would orphan one with nothing left to open it.
+        if stored != kind && holds_credentials(&tx, id)? {
+            return Err(StoreError::KindChange(id.to_string()));
+        }
+        tx.execute(
+            "UPDATE accounts SET kind = ?2, label = ?3, updated_at = ?4 WHERE id = ?1",
+            params![
+                id,
+                kind,
+                label,
+                jiff::Timestamp::now().as_millisecond()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
@@ -256,4 +292,14 @@ impl Store {
         tx.commit()?;
         Ok(new_generation as u64)
     }
+}
+
+fn holds_credentials(tx: &rusqlite::Transaction<'_>, id: &str) -> Result<bool, StoreError> {
+    let held: i64 = tx.query_row(
+        "SELECT (SELECT COUNT(*) FROM credentials WHERE account_id = ?1) \
+         + (SELECT COUNT(*) FROM api_key_secrets WHERE account_id = ?1)",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(held > 0)
 }

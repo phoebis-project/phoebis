@@ -20,7 +20,7 @@ use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
-use crate::config::{AccountConfig, AccountKind, Config};
+use crate::config::{AccountKind, Config};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
@@ -223,13 +223,18 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     Ok(())
 }
 
-/// Brings the configured accounts into the registry. An account the registry already holds keeps the row it
-/// has: pairing, credentials, and lifecycle generation live there, and no configuration reload may reset
-/// them. The API-key secret is the one thing configuration owns outright, so it is written every time.
+/// Brings the configured accounts into the registry: the file owns an account's kind, label,
+/// and API-key secret, and the registry owns everything pairing writes, so identity, credentials, state, and
+/// the lifecycle generation survive every reload. A slot the file no longer names keeps its row, since
+/// deleting it would take a paired account's credentials with it.
 fn sync_accounts(store: &Store, config: &Config) -> anyhow::Result<()> {
     for account in &config.accounts {
         match store.account(&account.id)? {
-            Some(stored) => report_drift(&stored, account),
+            Some(_) => store.update_account_config(
+                &account.id,
+                account.kind.store_kind(),
+                &account.label,
+            )?,
             None => store.insert_account(&AccountRow {
                 id: account.id.clone(),
                 kind: account.kind.store_kind(),
@@ -249,25 +254,6 @@ fn sync_accounts(store: &Store, config: &Config) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Says out loud which value is in force when the file and the registry disagree about an account, since
-/// the registry's row is the one every request is served under.
-fn report_drift(stored: &AccountRow, configured: &AccountConfig) {
-    if stored.kind != configured.kind.store_kind() {
-        tracing::warn!(
-            account = %stored.id,
-            stored = ?stored.kind,
-            "the configured account kind differs from the registry, which keeps its own"
-        );
-    }
-    if stored.label != configured.label {
-        tracing::warn!(
-            account = %stored.id,
-            stored = %stored.label,
-            "the configured label differs from the registry, which keeps its own"
-        );
-    }
 }
 
 fn routes(config: &Config) -> Vec<Route> {
@@ -316,4 +302,65 @@ fn init_tracing() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     // Two runs in one process, as the tests do it, must not take the process down over the second one.
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use phoebis_store::StorageKey;
+
+    fn configured_as(dir: &Path, label: &str) -> Config {
+        let yaml = format!(
+            r#"accounts:
+  - id: console
+    kind: api_key
+    label: {label}
+    secret_env: TEST_SYNC_CONSOLE_KEY
+admin:
+  listen: 127.0.0.1:0
+  secret_env: TEST_SYNC_ADMIN_SECRET
+  dev_loopback_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:0
+routes:
+  - key_id: desktop
+    secret_env: TEST_SYNC_DESKTOP_KEY
+    account_id: console
+storage:
+  encryption_key_file: {key}
+  path: {db}
+upstream:
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+            key = dir.join("storage.key").display(),
+            db = dir.join("router.sqlite").display()
+        );
+        let path = dir.join(format!("{label}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        crate::config::load(&path).unwrap()
+    }
+
+    #[test]
+    fn a_renamed_account_keeps_its_row_and_its_stored_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_SYNC_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
+        std::env::set_var("TEST_SYNC_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_SYNC_DESKTOP_KEY", "phoebis-testkey");
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        sync_accounts(&store, &configured_as(dir.path(), "Console")).unwrap();
+        sync_accounts(&store, &configured_as(dir.path(), "Renamed")).unwrap();
+        let rows = store.accounts().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "Renamed");
+        assert_eq!(
+            store.api_key_secret("console").unwrap().unwrap().expose(),
+            "sk-ant-api03-PLACEHOLDER"
+        );
+    }
 }

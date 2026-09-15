@@ -284,3 +284,45 @@ fn an_identity_is_bound_once_and_survives_a_disconnect() {
         Err(StoreError::AccountNotFound(_))
     ));
 }
+
+#[test]
+fn a_configuration_update_rewrites_the_kind_and_label() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .update_account_config("a", AccountKind::ApiKey, "Renamed")
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(row.kind, AccountKind::ApiKey);
+    assert_eq!(row.label, "Renamed");
+    assert_eq!(row.state, AccountState::Unpaired);
+    assert!(matches!(
+        store.update_account_config("gone", AccountKind::Oauth, "Gone"),
+        Err(StoreError::AccountNotFound(_))
+    ));
+}
+
+#[test]
+fn a_kind_change_is_refused_while_a_credential_is_stored() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .unwrap();
+    assert!(matches!(
+        store.update_account_config("a", AccountKind::ApiKey, "a"),
+        Err(StoreError::KindChange(_))
+    ));
+    // Only the kind is pinned by the stored bundle; the label still follows the file.
+    store
+        .update_account_config("a", AccountKind::Oauth, "Renamed")
+        .unwrap();
+    assert_eq!(store.account("a").unwrap().unwrap().label, "Renamed");
+
+    store.insert_account(&account("b")).unwrap();
+    store.set_api_key_secret("b", &Secret::new("sk-1")).unwrap();
+    assert!(matches!(
+        store.update_account_config("b", AccountKind::ApiKey, "b"),
+        Err(StoreError::KindChange(_))
+    ));
+}

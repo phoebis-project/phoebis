@@ -43,6 +43,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("account {0} already holds credentials, so its kind cannot change")]
+    KindChange(String),
     #[error("the data directory is locked by another process")]
     Locked,
     #[error(transparent)]
