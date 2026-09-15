@@ -145,6 +145,7 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
         "00000000-0000-4000-8000-000000000001"
     );
     assert!(acct["credential"]["access_expires_at"].is_number());
+    assert_eq!(acct["credential"]["quarantined"], false);
     let recorded = up.requests();
     let profile_calls = recorded
         .iter()
@@ -380,5 +381,19 @@ async fn mutations_require_the_configured_origin() {
         get(&app, "/admin/accounts", Some(&cookie)).await.status(),
         200,
         "a read carries no Origin and needs none"
+    );
+}
+
+#[tokio::test]
+async fn an_uncertain_refresh_shows_as_quarantined_with_its_detail() {
+    use common::{get, json, login};
+    let (app, _up) =
+        common::admin_app_quarantined("refresh response lost: connection closed").await;
+    let cookie = login(&app, "admin-secret").await;
+    let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(acct["credential"]["quarantined"], true);
+    assert_eq!(
+        acct["credential"]["last_error"], "refresh response lost: connection closed",
+        "an uncertain refresh says why, not just that it happened"
     );
 }

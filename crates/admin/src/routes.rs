@@ -688,6 +688,11 @@ fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
 fn account_json(state: &AdminState, row: &AccountRow) -> Value {
     let bundle = state.store.credentials(&row.id).ok().flatten();
     let attempt = state.store.last_refresh_attempt(&row.id).ok().flatten();
+    // The store refuses to open a second attempt while one is unresolved or uncertain, so the newest
+    // attempt is the only one either state can be hiding in.
+    let quarantined = attempt.as_ref().is_some_and(|attempt| {
+        attempt.resolved_at.is_none() || attempt.outcome.as_deref() == Some("uncertain")
+    });
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -706,8 +711,9 @@ fn account_json(state: &AdminState, row: &AccountRow) -> Value {
             "last_refresh_at": attempt.as_ref().and_then(|attempt| attempt.resolved_at),
             "last_error": attempt
                 .as_ref()
-                .filter(|attempt| attempt.outcome.as_deref() == Some("failed"))
+                .filter(|attempt| matches!(attempt.outcome.as_deref(), Some("failed") | Some("uncertain")))
                 .and_then(|attempt| attempt.detail.clone()),
+            "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
     })

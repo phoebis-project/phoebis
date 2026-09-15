@@ -272,6 +272,12 @@ async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines()
         "an uncertain rotation does not cost a usable token"
     );
     assert_eq!(store.pending_refresh_attempts().unwrap().len(), 1);
+    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    assert_eq!(attempt.outcome.as_deref(), Some("uncertain"));
+    assert!(
+        attempt.detail.is_some_and(|detail| !detail.is_empty()),
+        "an uncertain attempt says what went uncertain, or the operator has nothing to act on"
+    );
     now.store(1_300_000, Ordering::SeqCst);
     assert!(matches!(
         mgr.acquire("a").await,

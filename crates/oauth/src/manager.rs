@@ -357,8 +357,11 @@ impl Inner {
                     RefreshFailure::Unavailable(format!("refresh transport failure: {error}")),
                 );
             }
-            Err(_) => {
-                self.resolve(attempt, AttemptOutcome::Uncertain);
+            Err(error) => {
+                self.resolve(
+                    attempt,
+                    AttemptOutcome::Uncertain(format!("refresh response lost: {error}")),
+                );
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
@@ -392,7 +395,10 @@ impl Inner {
             // A 200 that cannot be read may still have rotated the refresh token upstream, which is the
             // same uncertainty as a lost response rather than something a retry can fix.
             Err(_) => {
-                self.resolve(attempt, AttemptOutcome::Uncertain);
+                self.resolve(
+                    attempt,
+                    AttemptOutcome::Uncertain("refresh response could not be read".into()),
+                );
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
@@ -442,7 +448,12 @@ impl Inner {
             // even though nothing about the exchange was uncertain. Recording it as uncertain is what stops
             // the next caller from spending that dead token.
             Err(error) => {
-                self.resolve(attempt, AttemptOutcome::Uncertain);
+                self.resolve(
+                    attempt,
+                    AttemptOutcome::Uncertain(format!(
+                        "commit failed after a rotated response: {error}"
+                    )),
+                );
                 self.stored_or(
                     &account,
                     &bundle,

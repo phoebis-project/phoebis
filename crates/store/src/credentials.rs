@@ -58,7 +58,9 @@ pub struct NewBundle {
 pub enum AttemptOutcome {
     Committed,
     Failed(String),
-    Uncertain,
+    /// The refresh may or may not have rotated the token upstream. The string says which way it went
+    /// uncertain, because that is all an operator has to act on before re-pairing the slot.
+    Uncertain(String),
 }
 
 #[derive(Debug, Clone)]
@@ -310,7 +312,7 @@ impl Store {
         let (label, detail) = match outcome {
             AttemptOutcome::Committed => ("committed", None),
             AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
-            AttemptOutcome::Uncertain => ("uncertain", None),
+            AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
         };
         let updated = conn.execute(
             "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 WHERE id = ?1",

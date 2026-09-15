@@ -121,7 +121,7 @@ fn an_uncertain_attempt_blocks_new_attempts() {
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain)
+        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     assert!(matches!(
         store.open_refresh_attempt("a", 1, g),
@@ -212,7 +212,7 @@ fn only_one_refresh_attempt_can_be_pending() {
         Err(StoreError::AttemptPending)
     ));
     store
-        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain)
+        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     assert_eq!(
         store.pending_refresh_attempts().unwrap().len(),
