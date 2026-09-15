@@ -70,7 +70,7 @@ usage:
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
-        db = dir.path().join("router.sqlite").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
         addr = up.addr(),
         ca = dir.path().join("ca.pem").display()
     );
@@ -88,6 +88,9 @@ usage:
         let _ = stop_rx.await;
     }));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // The store uses the configured file name as given rather than a name of its own.
+    assert!(dir.path().join("phoebis.sqlite").exists());
 
     let client = reqwest::Client::new();
     let head = inference_head(FixtureKind::ApiKey);
@@ -224,5 +227,21 @@ fn shared_secrets_and_cleartext_administration_off_loopback_are_rejected() {
     assert!(matches!(
         load(&config_with(dir.path(), "admin_dup", loopback_dev, &two)),
         Err(ConfigError::DuplicateSecret { .. })
+    ));
+
+    // A storage path that names no database file inside a directory never reaches the store.
+    let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_dev, one)).unwrap();
+    let rootless = dir.path().join("rootless.yaml");
+    std::fs::write(
+        &rootless,
+        text.replace(
+            &format!("path: {}", dir.path().join("router.sqlite").display()),
+            "path: /",
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        load(&rootless),
+        Err(ConfigError::StoragePath { .. })
     ));
 }

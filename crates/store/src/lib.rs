@@ -99,18 +99,22 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens (creating if needed) the on-disk registry: directory mode 0700, the process lock, then
-    /// `router.sqlite` at mode 0600.
-    pub fn open(dir: &Path, key: &StorageKey) -> Result<Store, StoreError> {
+    /// Opens (creating if needed) the on-disk registry at `db_path`: the directory holding it at mode 0700,
+    /// the process lock beside it, then the database file at mode 0600.
+    pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
+        // A bare file name has an empty parent, which is the current directory.
+        let dir = match db_path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
         let process_lock = lock::acquire(dir)?;
 
-        let db_path = dir.join("router.sqlite");
         if !db_path.exists() {
             // SQLite creates new database files honoring the process umask; create it ourselves first
             // so credentials never sit in a file readable by other local users, even briefly.
@@ -119,10 +123,10 @@ impl Store {
                 .truncate(false)
                 .write(true)
                 .mode(0o600)
-                .open(&db_path)?;
+                .open(db_path)?;
         }
 
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(db_path)?;
         conn.execute_batch(schema::SCHEMA)?;
         Ok(Store {
             conn: Mutex::new(conn),

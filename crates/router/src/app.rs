@@ -3,7 +3,6 @@
 
 use std::future::{Future, IntoFuture};
 use std::net::ToSocketAddrs;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,13 +62,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             config.storage.encryption_key_file.display()
         )
     })?;
-    // The store names the database file inside the directory it is given, so the configured path
-    // contributes its parent.
-    let dir = config.storage.path.parent().unwrap_or(Path::new("."));
     let store = Arc::new(
-        Store::open(dir, &key)
-            .with_context(|| format!("opening the store under {}", dir.display()))?,
+        Store::open(&config.storage.path, &key)
+            .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
     );
+    tracing::info!(database = %config.storage.path.display(), "store opened");
     sync_accounts(&store, &config)?;
 
     let extra_ca = match &config.upstream.extra_ca_pem {
@@ -178,8 +175,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         "listening"
     );
 
-    // The admin routes carry their full `/admin/...` paths, so they are merged rather than nested; the
-    // fallback below replaces the one that does not survive a merge.
+    // The admin routes carry their full `/admin/...` paths, so they are merged rather than nested. The admin
+    // router has no fallback of its own, so an unknown path would otherwise reach axum's bare 404, outside
+    // the gate that answers for every admin route.
     let admin_app = Router::new()
         .merge(phoebis_admin::router(admin))
         .fallback(unknown_admin_route);
@@ -308,6 +306,7 @@ fn init_tracing() {
 mod tests {
     use super::*;
     use phoebis_store::StorageKey;
+    use std::path::Path;
 
     fn configured_as(dir: &Path, label: &str) -> Config {
         let yaml = format!(

@@ -147,6 +147,8 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("storage.path {path} must name a database file inside a directory")]
+    StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
     #[error("route {key_id} names account {account_id}, which is not configured")]
@@ -256,6 +258,13 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     }
     if config.usage.refresh_concurrency == 0 {
         return Err(ConfigError::ZeroRefreshConcurrency);
+    }
+    // The store creates the database under exactly this name, in the directory that holds it, so a path
+    // that names one of the two and not the other is not a path it can honor.
+    if config.storage.path.parent().is_none() || config.storage.path.file_name().is_none() {
+        return Err(ConfigError::StoragePath {
+            path: config.storage.path.clone(),
+        });
     }
 
     let mut ids = HashSet::new();

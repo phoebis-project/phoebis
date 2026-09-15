@@ -35,11 +35,21 @@ secret that doubles as a route secret would turn an inference key into an admin 
 | `ROUTER_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
 | `ROUTER_CONSOLE_KEY` | `accounts[].secret_env` | The Anthropic API key of an `api_key` account. |
 | `ROUTER_DESKTOP_KEY` | `routes[].secret_env` | The key a downstream client presents to the proxy. |
-| `ROUTER_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. Optional. |
+| `ROUTER_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
 
-Pick your own names; those four are what the example file happens to use. `RUST_LOG` sets the log filter and defaults
-to `info`. The storage encryption key is a file rather than a variable: `storage.encryption_key_file` points at 32 raw
-bytes or 64 hex characters, and the database beside it is useless without that file.
+Pick your own names; those four are what the example file happens to use. All four are required as the example file
+stands, including the viewer secret: `admin.viewer_secret_env` is the one line you can delete outright if you want no
+read-only login. `RUST_LOG` sets the log filter and defaults to `info`.
+
+### Storage
+
+`storage.path` names the database file itself rather than a directory, and `phoebis` uses the name as given. It creates the
+parent directory at mode 0700 when it is missing, the database at mode 0600, and a `lock` file beside the database that
+keeps a second process off the same data. A path that names no file, or no directory to put it in, is rejected at
+startup, and the resolved path is logged when the store opens.
+
+`storage.encryption_key_file` points at a separate file holding 32 raw bytes or 64 hex characters. It seals every
+credential in the database, so keep it outside any backup that carries the database, which is useless without it.
 
 ### Not yet configurable
 
@@ -50,7 +60,7 @@ Four groups of limits are compiled into the binary, and the file has no key for 
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
 | Drain window on shutdown | 30 seconds for requests still in flight. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, 32 MiB request cap. |
-| Upstream pool | 8 idle connections per host, discarded after 60 seconds idle. |
+| Upstream pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
 
 ## Downstream client
 
@@ -79,8 +89,9 @@ unified rate-limit headers on a 429, and the automatic continue after a usage-li
 An `api_key` account needs no pairing; its key comes from the environment at startup. An `oauth` account is paired
 through the admin API, which hands the operator an authorization URL and takes the result back.
 
-Every admin mutation carries the `Origin` header the file configures in `admin.origin`, except under
-`dev_loopback_http`, where `phoebis` pins no origin. Log in first and keep the cookie:
+Whenever `admin.origin` is set, every admin mutation has to carry a matching `Origin` header, and `phoebis` refuses the
+request otherwise. The loopback development mode is the only configuration allowed to leave `origin` unset, and there
+no origin is checked. Log in first and keep the cookie:
 
 ```sh
 curl -sS -c jar.txt -X POST https://phoebis.example/admin/session \
