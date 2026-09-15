@@ -64,19 +64,29 @@ HTTP_PID=$!
 trap 'kill "$TLS_PID" "$HTTP_PID" 2>/dev/null; wait "$TLS_PID" "$HTTP_PID" 2>/dev/null' EXIT
 sleep 1
 
+VARIANT_COUNT=0
+VARIANT_FAILURES=0
+
 runcli() { # $1=label $2=base URL $3=prompt; remaining args are extra VAR=value assignments
   local label=$1 base=$2 prompt=$3; shift 3
-  local cfg cwd
+  local cfg cwd status
   cfg=$(mktemp -d) cwd=$(mktemp -d)
   echo "=== $label -> $base ==="
+  # tls_only.py never completes the TLS handshake, so the client is expected to fail or time out here;
+  # capture status explicitly (the `||` keeps `set -e` from aborting the whole script on that failure).
+  status=0
   ( cd "$cwd" && env -i \
       PATH="$PATH" HOME="$HOME" \
       CLAUDE_CONFIG_DIR="$cfg" ANTHROPIC_BASE_URL="$base" \
       DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1 \
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_COST_WARNINGS=1 \
       "$@" \
-      timeout 45 "$BINARY" -p "$prompt" --model claude-sonnet-4-5 2>&1 | tail -3 )
+      timeout 45 "$BINARY" -p "$prompt" --model claude-sonnet-4-5 2>&1 | tail -3 ) || status=$?
   rm -rf "$cfg" "$cwd"
+  echo "variant $label: client exited $status"
+  VARIANT_COUNT=$((VARIANT_COUNT + 1))
+  [[ "$status" -ne 0 ]] && VARIANT_FAILURES=$((VARIANT_FAILURES + 1))
+  return 0
 }
 
 runcli apikey            "https://127.0.0.1:$TLS_PORT" hi ANTHROPIC_API_KEY="$DUMMY_API_KEY"
@@ -91,4 +101,5 @@ runcli http-gzip-forced   "http://127.0.0.1:$HTTP_PORT" "$LONG" \
 kill "$TLS_PID" "$HTTP_PID" 2>/dev/null
 wait "$TLS_PID" "$HTTP_PID" 2>/dev/null
 trap - EXIT
+echo "ran $VARIANT_COUNT variants, $VARIANT_FAILURES exited non-zero"
 echo "capture written: $OUT/tls_only.json $OUT/http_raw.json"

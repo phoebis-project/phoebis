@@ -82,29 +82,84 @@ def mask_hello(raw: bytes) -> bytes:
     """Python port of transport::hello::mask; zeroes per-run randomness, leaves structure and lengths intact."""
     h = bytearray(raw)
     random = 11  # record(5) + handshake header(4) + version(2)
+    if len(h) < random + 32:
+        raise ValueError(f"ClientHello truncated before the client random ends at offset {random + 32}")
     h[random : random + 32] = b"\x00" * 32
+    if len(h) <= random + 32:
+        raise ValueError(f"ClientHello truncated at the session id length, offset {random + 32}")
     sid_len = h[random + 32]
     sid = random + 33
+    if len(h) < sid + sid_len:
+        raise ValueError(f"ClientHello truncated before the session id ends at offset {sid + sid_len}")
     h[sid : sid + sid_len] = b"\x00" * sid_len
     p = sid + sid_len
+    if len(h) < p + 2:
+        raise ValueError(f"ClientHello truncated at the cipher suite length, offset {p}")
     cipher_len = struct.unpack("!H", h[p : p + 2])[0]
     p += 2 + cipher_len
+    if len(h) <= p:
+        raise ValueError(f"ClientHello truncated at the compression method length, offset {p}")
     comp_len = h[p]
     p += 1 + comp_len
+    if len(h) < p + 2:
+        raise ValueError(f"ClientHello truncated at the extensions length, offset {p}")
     ext_total = struct.unpack("!H", h[p : p + 2])[0]
     p += 2
     end = p + ext_total
+    if len(h) < end:
+        raise ValueError(f"ClientHello truncated before the extensions block ends at offset {end}")
     while p + 4 <= end:
         ty, length = struct.unpack("!HH", h[p : p + 4])
         data = p + 4
+        if len(h) < data + length:
+            raise ValueError(f"ClientHello truncated inside extension {ty}, offset {data + length}")
         if ty == 51:  # key_share: zero every group's payload, keep the group id and length
             q = data + 2
             while q + 4 <= data + length:
                 klen = struct.unpack("!H", h[q + 2 : q + 4])[0]
+                if len(h) < q + 4 + klen:
+                    raise ValueError(f"ClientHello truncated inside a key share payload, offset {q + 4 + klen}")
                 h[q + 4 : q + 4 + klen] = b"\x00" * klen
                 q += 4 + klen
         p = data + length
     return bytes(h)
+
+
+def _self_test() -> None:
+    """Feeds mask_hello a key share declaring a 40-byte payload with only 5 bytes present; must raise ValueError."""
+    random_bytes = b"\x00" * 32
+    session_id = b""
+    ciphers = b"\x13\x01"
+    compression = b"\x00"
+    key_share_body = (
+        b"\x00\x09"  # key-share list length prefix, unused by mask_hello's own walk
+        + b"\x00\x1d"  # group id (x25519)
+        + struct.pack("!H", 40)  # declared key length: 40 bytes
+        + b"\x01\x02\x03\x04\x05"  # only 5 bytes actually present
+    )
+    extension = struct.pack("!HH", 51, len(key_share_body)) + key_share_body
+    handshake_body = (
+        b"\x03\x03"  # client_version
+        + random_bytes
+        + struct.pack("!B", len(session_id))
+        + session_id
+        + struct.pack("!H", len(ciphers))
+        + ciphers
+        + struct.pack("!B", len(compression))
+        + compression
+        + struct.pack("!H", len(extension))
+        + extension
+    )
+    handshake = struct.pack("!B", 1) + struct.pack("!I", len(handshake_body))[1:] + handshake_body
+    record = struct.pack("!B", 0x16) + b"\x03\x01" + struct.pack("!H", len(handshake)) + handshake
+    try:
+        mask_hello(record)
+    except ValueError as e:
+        if "key share" not in str(e):
+            raise AssertionError(f"mask_hello raised for the wrong reason: {e}") from e
+        print("self-test passed:", e)
+        return
+    raise AssertionError("mask_hello did not raise on a truncated key share payload")
 
 
 def normalize_head(raw: bytes) -> bytes:
@@ -168,7 +223,11 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="diff the capture's fixtures against crates/profile/fixtures instead"
     )
+    parser.add_argument("--self-test", action="store_true", help="run mask_hello's bounds-check self-test and exit")
     args = parser.parse_args()
+    if args.self_test:
+        _self_test()
+        return 0
     src = pathlib.Path(args.capture_dir).expanduser()
     if args.check:
         return check(src)
