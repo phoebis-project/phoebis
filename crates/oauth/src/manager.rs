@@ -31,6 +31,10 @@ const MAX_MARGIN_MS: i64 = 300_000;
 /// be a minute from expiring, and a long wait would turn a brief refusal into an outage.
 const TRANSIENT_BACKOFF_MS: i64 = 5_000;
 
+/// Floor on the backoff after a 5xx from the token endpoint, which unlike a 4xx may be hiding a rotation the
+/// endpoint already committed.
+const SERVER_ERROR_BACKOFF_MS: i64 = 60_000;
+
 /// Ceiling on any backoff, including one the upstream asks for through `Retry-After`. A token's own margin
 /// bounds how long a refresh can sensibly wait, and an upstream that asks for an hour would otherwise park
 /// the account for an hour; an operator who needs longer can re-pair.
@@ -408,11 +412,20 @@ impl Inner {
                 return Err(RefreshFailure::ReauthRequired);
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
-            // still the live one and the only thing to do is wait.
+            // still the live one and the only thing to do is wait. A 5xx is the one status where that is not
+            // certain: a gateway error can sit in front of a rotation the endpoint already committed. Failing
+            // it rather than quarantining is deliberate, because a token-endpoint outage would otherwise take
+            // out every account that reaches its margin while it lasts; the accepted cost is that a rotation
+            // hidden behind a 5xx is found later through invalid_grant, which ends in re-pairing either way,
+            // and the minute of backoff bounds how fast the dead token can be spent in the meantime.
             self.resolve(attempt, AttemptOutcome::Failed(detail.clone()));
+            let asked = retry_after_ms(&head, (self.clock)());
             self.arm_backoff(
                 account_id,
-                retry_after_ms(&head, (self.clock)()).unwrap_or(TRANSIENT_BACKOFF_MS),
+                match head.status {
+                    500..=599 => asked.unwrap_or(0).max(SERVER_ERROR_BACKOFF_MS),
+                    _ => asked.unwrap_or(TRANSIENT_BACKOFF_MS),
+                },
             );
             return self.stored_or(&account, &bundle, RefreshFailure::Unavailable(detail));
         }

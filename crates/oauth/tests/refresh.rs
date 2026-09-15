@@ -566,3 +566,55 @@ async fn a_panicking_refresh_does_not_poison_the_account() {
     assert_eq!(up.requests().len(), 1);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_server_error_from_the_token_endpoint_backs_off_a_minute() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 502,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    // 80 s left of a 400 s lifetime: inside the 100 s margin, so every acquire below drives the refresh path
+    // while the stored token still works.
+    now.store(1_120_000, Ordering::SeqCst);
+    store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 800_000,
+                expires_at: 1_200_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    assert_eq!(up.requests().len(), 1);
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "a 5xx fails its attempt rather than quarantining the account"
+    );
+
+    now.store(1_120_000 + 59_000, Ordering::SeqCst);
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "a 5xx waits out a minute, not the five seconds a 4xx gets"
+    );
+
+    now.store(1_120_000 + 60_000, Ordering::SeqCst);
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    assert_eq!(up.requests().len(), 2, "the backoff ends after the minute");
+    up.shutdown().await;
+}
