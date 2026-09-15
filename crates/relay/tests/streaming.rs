@@ -537,3 +537,50 @@ async fn a_gzipped_401_is_decoded_before_it_is_classified() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_timeout_with_the_request_in_the_socket_is_not_retried() {
+    // The upstream reads the whole request and then says nothing at all, which is the shape of a request that
+    // may already have been acted on: the relay has to give up on it rather than send it a second time.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        })),
+    }])
+    .await;
+    let app = common::relay_with_head_timeout(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        std::time::Duration::from_millis(100),
+    )
+    .await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome")
+        .clone();
+    assert!(
+        outcome.written,
+        "the request reached the upstream, so it counts as possibly billed"
+    );
+    assert_eq!(outcome.attempt, 1);
+    let recorded = up.requests();
+    assert_eq!(recorded.len(), 1, "the timed-out request is not sent again");
+    assert!(
+        recorded[0].complete,
+        "the upstream read it in full before the relay gave up"
+    );
+    up.shutdown().await;
+}

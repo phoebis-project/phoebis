@@ -21,7 +21,7 @@ use std::{sync::Arc, time::Duration};
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 
 pub async fn relay_with(kind: AccountKind, up: &FakeUpstream) -> axum::Router {
-    relay_with_limit(kind, up, 32 << 20).await
+    relay_with_limits(kind, up, default_limits()).await
 }
 
 /// The same relay with the request limit set by the caller, for the tests that have to send past it.
@@ -29,6 +29,48 @@ pub async fn relay_with_limit(
     kind: AccountKind,
     up: &FakeUpstream,
     max_request_bytes: usize,
+) -> axum::Router {
+    relay_with_limits(
+        kind,
+        up,
+        Limits {
+            max_request_bytes,
+            ..default_limits()
+        },
+    )
+    .await
+}
+
+/// The same relay with a head timeout a test can actually reach, for the cases about a stalled upstream.
+pub async fn relay_with_head_timeout(
+    kind: AccountKind,
+    up: &FakeUpstream,
+    head_timeout: Duration,
+) -> axum::Router {
+    relay_with_limits(
+        kind,
+        up,
+        Limits {
+            head_timeout,
+            ..default_limits()
+        },
+    )
+    .await
+}
+
+/// Bounds no test is meant to reach unless it asks for them.
+fn default_limits() -> Limits {
+    Limits {
+        max_request_bytes: 32 << 20,
+        head_timeout: Duration::from_secs(10),
+        idle_timeout: Duration::from_secs(600),
+    }
+}
+
+pub async fn relay_with_limits(
+    kind: AccountKind,
+    up: &FakeUpstream,
+    limits: Limits,
 ) -> axum::Router {
     let p = claude_code_2_1_269_linux_x64();
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
@@ -108,17 +150,7 @@ pub async fn relay_with_limit(
     }])
     .unwrap();
     router(Arc::new(Relay::new(
-        p,
-        store,
-        manager,
-        pool,
-        keys,
-        resolver,
-        Limits {
-            max_request_bytes,
-            head_timeout: Duration::from_secs(10),
-            idle_timeout: Duration::from_secs(600),
-        },
+        p, store, manager, pool, keys, resolver, limits,
     )))
 }
 

@@ -425,20 +425,22 @@ impl Relay {
         addr: SocketAddr,
         fresh: bool,
     ) -> Result<Sent, AttemptFailure> {
-        // Read by the timeout arms, which cannot see how far the attempt itself got.
-        let written = AtomicBool::new(false);
+        // Read by the timeout arms, which cannot see how far the attempt itself got. It is raised before the
+        // first byte goes out rather than after the last one, because a timeout that fires part way through
+        // the write leaves the request in the socket for an upstream that may already be acting on it.
+        let sending = AtomicBool::new(false);
         match tokio::time::timeout(
             self.limits.head_timeout,
-            self.attempt_once(request, key, host, addr, fresh, &written),
+            self.attempt_once(request, key, host, addr, fresh, &sending),
         )
         .await
         {
             Ok(result) => result,
-            Err(_) if !written.load(Ordering::SeqCst) => Err(AttemptFailure::Unsent(
-                "timed out before the request was written".into(),
+            Err(_) if !sending.load(Ordering::SeqCst) => Err(AttemptFailure::Unsent(
+                "timed out before a connection was ready".into(),
             )),
             Err(_) => Err(AttemptFailure::Lost(
-                "timed out waiting for the response head".into(),
+                "timed out sending the request or waiting for the response head".into(),
             )),
         }
     }
@@ -450,7 +452,7 @@ impl Relay {
         host: &str,
         addr: SocketAddr,
         fresh: bool,
-        written: &AtomicBool,
+        sending: &AtomicBool,
     ) -> Result<Sent, AttemptFailure> {
         let mut conn = if fresh {
             checkout_fresh(&self.pool, key, host, addr).await?
@@ -461,6 +463,9 @@ impl Relay {
                 .map(|(conn, _)| conn)
                 .map_err(unsent)?
         };
+        // From here on the request may be on the wire, which is what the timeout arms need to know; the
+        // write's own failures carry their progress and are classified below.
+        sending.store(true, Ordering::SeqCst);
         write_request(&mut conn, request)
             .await
             .map_err(|failure| match failure.progress {
@@ -471,7 +476,6 @@ impl Relay {
                 // read the whole request.
                 WriteProgress::BodyWritten => AttemptFailure::Lost(failure.error.to_string()),
             })?;
-        written.store(true, Ordering::SeqCst);
         let mut leftover = BytesMut::new();
         match read_head(&mut conn, &mut leftover).await {
             Ok(head) => Ok(Sent {
