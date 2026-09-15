@@ -37,8 +37,9 @@ const SERVER_ERROR_BACKOFF_MS: i64 = 60_000;
 
 /// Ceiling on any backoff, including one the upstream asks for through `Retry-After`. A token's own margin
 /// bounds how long a refresh can sensibly wait, and an upstream that asks for an hour would otherwise park
-/// the account for an hour; an operator who needs longer can re-pair.
-const MAX_NOT_BEFORE_MS: i64 = 300_000;
+/// the account for an hour even when its limit lifts early; retrying every quarter hour costs a few 429s
+/// against the token endpoint and lands the refresh soon after the limit is gone.
+const MAX_NOT_BEFORE_MS: i64 = 900_000;
 
 /// A refresh response is a small JSON document, so 30 s covers a slow upstream without letting one stalled
 /// connection hold an account's only refresh slot.

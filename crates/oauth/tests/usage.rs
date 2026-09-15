@@ -308,7 +308,7 @@ mod service {
 
     #[tokio::test]
     async fn an_hour_long_retry_after_is_honored_in_full() {
-        // The credential refresh clamps a Retry-After to five minutes because it races a token's expiry; a
+        // The credential refresh clamps a Retry-After to fifteen minutes because it races a token's expiry; a
         // usage fetch races nothing, so ignoring the hour the endpoint asked for would only earn a harder
         // rate limit.
         let now = Arc::new(AtomicI64::new(1_000_000));
@@ -329,13 +329,13 @@ mod service {
         service.snapshot("a").await.unwrap();
         assert_eq!(requests(), 1);
 
-        // Past the old five-minute ceiling, and one second short of the hour that was asked for.
+        // Past the refresh path's fifteen-minute ceiling, and one second short of the hour that was asked for.
         now.store(1_000_000 + 3_599_000, Ordering::SeqCst);
         assert!(service.snapshot("a").await.unwrap().error.is_some());
         assert_eq!(
             requests(),
             1,
-            "the whole hour is waited out, not the refresh path's five minutes"
+            "the whole hour is waited out, not the refresh path's fifteen minutes"
         );
 
         now.store(1_000_000 + 3_600_000, Ordering::SeqCst);
