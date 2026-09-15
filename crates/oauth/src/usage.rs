@@ -453,9 +453,12 @@ impl Inner {
                     ),
                 };
                 let snapshot = match previous {
+                    // The snapshot's timestamp says when its windows were read, and a failed attempt read
+                    // none, so it keeps the one from the last success rather than passing stale quota off as
+                    // freshly fetched. The cache entry's own timestamp is this attempt's, and that is what
+                    // the TTL and the not-before are measured from.
                     Some(previous) => UsageSnapshot {
                         error: Some(message),
-                        fetched_at,
                         ..previous
                     },
                     None => empty_snapshot(account_id, ended_generation, fetched_at, message),

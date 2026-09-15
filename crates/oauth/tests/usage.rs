@@ -334,4 +334,46 @@ mod service {
         assert_eq!(requests(), 2, "the wait ends when the endpoint said it would");
         up.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn a_failed_fetch_keeps_the_timestamp_of_the_last_successful_one() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(&up, store_with_valid_bundle(), Duration::from_secs(60), &now);
+
+        let first = service.snapshot("a").await.unwrap();
+        assert_eq!(first.fetched_at, 1_000_000);
+        assert!(first.error.is_none());
+
+        up.set_rule_after(
+            0,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        );
+        now.store(1_061_000, Ordering::SeqCst); // past the 60 s TTL, so the next call really fetches
+        let second = service.snapshot("a").await.unwrap();
+        assert!(second.error.is_some(), "the failure is surfaced");
+        assert_eq!(
+            second.fetched_at, 1_000_000,
+            "these windows were read at t0 and a failed attempt read none"
+        );
+        assert_eq!(
+            second.windows.len(),
+            first.windows.len(),
+            "the last good windows are what is still on offer"
+        );
+        up.shutdown().await;
+    }
 }
