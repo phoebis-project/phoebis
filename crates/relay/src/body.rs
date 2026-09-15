@@ -9,9 +9,6 @@ pub struct BodyEdits {
     pub account_uuid_replaced: bool,
     pub model_replaced: bool,
     pub cch_restamped: bool,
-    /// Names the kind of disagreement when the client's own billing hash was not computed by this build's
-    /// rules, in which case the edits that would force a restamp were skipped.
-    pub client_drift: Option<&'static str>,
 }
 
 /// `"account_uuid":"` as it appears escaped inside the `metadata.user_id` string.
@@ -35,15 +32,10 @@ pub fn edit_body(
         return Err(RelayError::NotAnObject);
     }
     if let Some(client_drift) = drift(body)? {
-        // The client hashes by rules this build no longer shares, so its hash is the only one that can still
-        // satisfy the upstream: every edit that would force a restamp is dropped and the body travels as it
-        // arrived. The model edit stays because the hash view empties the model string anyway.
-        return Ok(BodyEdits {
-            account_uuid_replaced: false,
-            model_replaced: replace_model(body, upstream_model),
-            cch_restamped: false,
-            client_drift: Some(client_drift),
-        });
+        // The client hashes by rules this build no longer shares. Neither a restamp by the old rules nor the
+        // client's own hash over an edited body is known to satisfy the upstream, so nothing is sent until the
+        // router is re-pinned; the caller still learns which kind of drift it was.
+        return Err(RelayError::ClientDrift { kind: client_drift });
     }
     let account_uuid_replaced = match account_uuid {
         None => false,
@@ -62,7 +54,6 @@ pub fn edit_body(
         account_uuid_replaced,
         model_replaced,
         cch_restamped,
-        client_drift: None,
     })
 }
 

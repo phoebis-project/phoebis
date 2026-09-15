@@ -223,23 +223,34 @@ impl Relay {
             Err(failure) => return refused(failure, &request_id, &account_id),
         };
         let mut edited = raw.to_vec();
-        let edits = match edit_body(
+        if let Err(error) = edit_body(
             &mut edited,
             credential.account_uuid.as_deref(),
             upstream_model(&identity.model),
         ) {
-            Ok(edits) => edits,
-            Err(error) => return refused(relay_failure(&error), &request_id, &account_id),
-        };
-        if let Some(kind) = edits.client_drift {
-            tracing::warn!(
-                account = %account.id,
-                drift = %kind,
-                user_agent = %user_agent(&parts.headers),
-                "a caller stamped a billing hash this build cannot reproduce, so its body goes out unedited",
-            );
+            if let RelayError::ClientDrift { kind } = error {
+                tracing::warn!(
+                    account = %account.id,
+                    drift = %kind,
+                    user_agent = %user_agent(&parts.headers),
+                    "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
+                );
+                return with_outcome(
+                    relay_failure(&error).response(&request_id),
+                    RelayOutcome {
+                        request_id,
+                        account_id,
+                        upstream_status: 0,
+                        attempt: 0,
+                        written: false,
+                        client_drift: Some(kind.to_string()),
+                    },
+                );
+            }
+            return refused(relay_failure(&error), &request_id, &account_id);
         }
-        let client_drift = edits.client_drift.map(str::to_string);
+        // Version drift is a later sub-project's tag; a hash drift never gets this far.
+        let client_drift: Option<String> = None;
         let edited = Bytes::from(edited);
         let host = INFERENCE_HOST.to_string();
         let Some(addr) = (self.resolver)(&host) else {

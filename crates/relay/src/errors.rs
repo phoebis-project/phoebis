@@ -95,6 +95,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             code: "invalid_body",
             message: "the request body is not a valid Messages request",
         },
+        // Fail closed: a hash the pinned rules cannot reproduce means the client moved past the profile, and
+        // the operator re-pins rather than the relay guessing what the upstream now expects.
+        RelayError::ClientDrift { .. } => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "client_drift",
+            message: "the client's billing hash does not match the pinned profile; re-pin the router to this client version",
+        },
         RelayError::InvalidModel => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",

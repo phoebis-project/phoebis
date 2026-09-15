@@ -277,18 +277,19 @@ async fn local_rejections_are_anthropic_shaped() {
 }
 
 #[tokio::test]
-async fn a_client_with_a_drifted_hash_is_forwarded_unedited() {
-    a_drifted_stamp_survives("cch=00000").await;
+async fn a_client_with_a_drifted_hash_is_refused() {
+    a_drifted_stamp_is_refused("cch=00000").await;
 }
 
 #[tokio::test]
 async fn an_uppercase_cch_counts_as_drift() {
-    a_drifted_stamp_survives("cch=9B244").await;
+    a_drifted_stamp_is_refused("cch=9B244").await;
 }
 
-/// A first-party body whose billing hash this build cannot reproduce reaches the upstream byte for byte: no
-/// uuid spliced in, no restamp, and the outcome says why.
-async fn a_drifted_stamp_survives(stamp: &str) {
+/// A first-party body whose billing hash this build cannot reproduce never reaches the upstream: the client
+/// moved past the pinned profile, the caller gets a 400 that names the drift, and the outcome carries it for
+/// the ledger.
+async fn a_drifted_stamp_is_refused(stamp: &str) {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -310,16 +311,26 @@ async fn a_drifted_stamp_survives(stamp: &str) {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let outcome = resp
         .extensions()
         .get::<RelayOutcome>()
-        .expect("a relayed response carries its outcome");
+        .expect("a refused request carries its outcome")
+        .clone();
     assert_eq!(outcome.client_drift.as_deref(), Some("hash"));
+    assert_eq!(outcome.attempt, 0);
     assert_eq!(
-        up.requests()[0].body,
-        drifted.as_bytes(),
-        "a drifted body reaches the upstream exactly as the client sent it"
+        resp.headers()
+            .get("x-phoebis-error-code")
+            .and_then(|v| v.to_str().ok()),
+        Some("client_drift")
+    );
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    assert!(
+        up.requests().is_empty(),
+        "a drifted body is not sent upstream in any form"
     );
     up.shutdown().await;
 }

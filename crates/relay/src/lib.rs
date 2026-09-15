@@ -25,6 +25,8 @@ pub enum RelayError {
     BodyTooLarge,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
+    #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
+    ClientDrift { kind: &'static str },
     #[error("request body names a model the relay will not repeat")]
     InvalidModel,
     #[error("request body has no model")]
