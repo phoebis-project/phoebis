@@ -108,18 +108,19 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions \
   -d '{"account_id":"business","login":"claude_ai"}'
 ```
 
-Open the `authorization_url` in a browser and sign in. The provider sends the browser to its own callback page at
-`https://platform.claude.com/oauth/code/callback`, which shows the authorization code. Paste the full URL of that page
-back:
+Open the `authorization_url` in a browser and sign in. The provider sends the browser to the loopback redirect the
+session registered, `http://localhost:<port>/callback?code=...&state=...`, which is the same redirect the desktop
+client uses. Nothing listens on that port, so the page fails to load; the URL in the address bar is still complete.
+Paste it back (the answer to the start request names the exact `redirect_uri`):
 
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/callback \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
-  -d '{"url":"https://platform.claude.com/oauth/code/callback?code=...&state=..."}'
+  -d '{"url":"http://localhost:<port>/callback?code=...&state=..."}'
 ```
 
-The page also shows the code on its own, with the session state appended after a `#`. Pasting that works as well, with
-the state repeated in its own field:
+The code alone works as well, with the session state in its own field; the provider appends the state after a `#`
+in the code it issues, and that suffix may stay:
 
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/callback \
@@ -127,8 +128,8 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/cal
   -d '{"code":"<code>#<state>","state":"<state>"}'
 ```
 
-The provider knows a second redirect, a loopback URL on an OS-assigned port, which is what the desktop client uses.
-This build does not offer that flow: a pairing started here always ends on the platform callback page above.
+`phoebis` parses the pasted URL and never fetches it; a URL whose scheme, host, port, or path differs from the
+session's redirect is refused, as is a state that differs from the session's.
 
 `phoebis` exchanges the code and answers with the upstream account and organization it reached. Check that they are the
 ones you meant to pair, then commit the credentials:

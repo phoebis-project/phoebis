@@ -13,9 +13,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use phoebis_oauth::{
-    authorization_url, control_request, exchange_body, parse_profile, parse_token_response,
-    CallbackInput, ControlKind, LoginKind, OauthError, PairingError, PairingSession, PairingStatus,
-    PendingIdentity, UsageSnapshot,
+    authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
+    parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
+    PairingError, PairingSession, PairingStatus, PendingIdentity, UsageSnapshot,
 };
 use phoebis_profile::{HeaderSlot, Profile};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Identity, NewBundle, StoreError};
@@ -318,14 +318,14 @@ async fn pairing_start(
             "only an OAuth account is paired this way",
         );
     }
-    // The provider knows two redirects for this client: an OS-port loopback, and the manual page whose code
-    // the operator copies by hand. Only the second one fits a flow driven over the admin API, and registering
-    // anything else is answered with a redirect mismatch.
-    let redirect_uri = state.profile.control.manual_redirect;
+    // The provider knows two redirects for this client: a loopback URL on an OS-assigned port, and a page on
+    // platform.claude.com that shows the code. The loopback one keeps the browser off the provider's page: the
+    // navigation to localhost fails to load and the operator pastes the URL from the address bar, or the code.
+    let redirect_uri = loopback_redirect_uri(ephemeral_port());
     let session =
         match state
             .pairing
-            .start(&row.id, &caller.session_id, redirect_uri, (state.clock)())
+            .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
         {
             Ok(session) => session,
             Err(error) => return pairing_failure(error),
@@ -339,7 +339,7 @@ async fn pairing_start(
     let url = authorization_url(
         state.profile,
         kind,
-        redirect_uri,
+        &redirect_uri,
         state.profile.control.default_login_scopes,
         &session.pkce.challenge,
         &session.state,
@@ -349,6 +349,7 @@ async fn pairing_start(
         Json(json!({
             "id": session.id,
             "authorization_url": url,
+            "redirect_uri": redirect_uri,
             "expires_at": session.deadline,
         })),
     )

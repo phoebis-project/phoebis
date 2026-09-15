@@ -84,17 +84,20 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     let id = v["id"].as_str().unwrap().to_string();
     let url = v["authorization_url"].as_str().unwrap();
     assert!(url.starts_with("https://claude.com/cai/oauth/authorize?code=true&client_id="));
+    let redirect = v["redirect_uri"].as_str().unwrap().to_string();
     assert!(
-        url.contains("redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"),
-        "the authorization URL registers the provider's manual redirect: {url}"
+        redirect.starts_with("http://localhost:") && redirect.ends_with("/callback"),
+        "the redirect is the client's loopback form: {redirect}"
+    );
+    assert!(
+        url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A"),
+        "the authorization URL registers the loopback redirect: {url}"
     );
     let state = url.split("state=").nth(1).unwrap().to_string();
     let cb = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(
-            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
-        ),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
         Some(&cookie),
     )
     .await;
@@ -217,6 +220,7 @@ async fn re_pairing_to_a_different_upstream_account_is_rejected() {
     )
     .await;
     let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
     let state = started["authorization_url"]
         .as_str()
         .unwrap()
@@ -227,9 +231,7 @@ async fn re_pairing_to_a_different_upstream_account_is_rejected() {
     let cb = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(
-            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
-        ),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
         Some(&cookie),
     )
     .await;
@@ -416,6 +418,7 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
     assert_eq!(started.status(), 201);
     let started = json(started).await;
     let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
     let state = started["authorization_url"]
         .as_str()
         .unwrap()
@@ -426,9 +429,7 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
     let callback = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(
-            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
-        ),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
         Some(&cookie),
     )
     .await;
@@ -495,6 +496,7 @@ async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
     let start = r#"{"account_id":"business","login":"claude_ai"}"#;
     let started = json(post(&app, "/admin/oauth/sessions", start, Some(&cookie)).await).await;
     let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
     let state = started["authorization_url"]
         .as_str()
         .unwrap()
@@ -505,9 +507,7 @@ async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
     let callback = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(
-            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
-        ),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
         Some(&cookie),
     )
     .await;
@@ -544,6 +544,7 @@ async fn exchanged_session(app: &axum::Router, cookie: &str) -> String {
     )
     .await;
     let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
     let state = started["authorization_url"]
         .as_str()
         .unwrap()
@@ -554,9 +555,7 @@ async fn exchanged_session(app: &axum::Router, cookie: &str) -> String {
     let callback = post(
         app,
         &format!("/admin/oauth/sessions/{id}/callback"),
-        &format!(
-            r#"{{"url":"https://platform.claude.com/oauth/code/callback?code=CODE123&state={state}"}}"#
-        ),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
         Some(cookie),
     )
     .await;

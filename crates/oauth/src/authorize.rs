@@ -2,6 +2,19 @@
 
 use phoebis_profile::Profile;
 
+/// The redirect Claude Code registers with the provider: a loopback URL on a port the OS hands out at login.
+/// The router listens on no such port; the browser's navigation there fails to load and the operator copies
+/// the URL from the address bar. Drawing the port from the same dynamic range the OS would keeps the
+/// authorization request inside what the provider has seen from this client.
+pub fn loopback_redirect_uri(port: u16) -> String {
+    format!("http://localhost:{port}/callback")
+}
+
+/// A port from the IANA dynamic range, which is where `listen(0)` lands on every platform the client runs on.
+pub fn ephemeral_port() -> u16 {
+    rand::random_range(49_152..=65_535)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginKind {
     ClaudeAi,

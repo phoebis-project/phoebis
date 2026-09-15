@@ -8,7 +8,7 @@ mod pkce;
 mod session;
 mod usage;
 
-pub use authorize::{authorization_url, LoginKind};
+pub use authorize::{authorization_url, ephemeral_port, loopback_redirect_uri, LoginKind};
 pub use exchange::{
     control_request, exchange_body, parse_profile, parse_token_response, refresh_body, ControlKind,
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
