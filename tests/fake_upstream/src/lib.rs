@@ -21,6 +21,12 @@ pub struct Rule {
 
 #[derive(Clone)]
 pub enum Respond {
+    /// A body in chunked framing, for the cases that need it without the SSE event shape.
+    Chunked {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    },
     CloseAfterRequest,
     CloseImmediately,
     DropAfterHead,
@@ -328,6 +334,18 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         let close_after = wants_close(&recorded.headers);
         shared.record(recorded);
         match shared.resolve(&path) {
+            Respond::Chunked {
+                status,
+                headers,
+                body,
+            } => {
+                if write_chunked(&mut stream, status, headers, body)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
             Respond::CloseImmediately | Respond::CloseAfterRequest => return,
             Respond::DropAfterHead => {
                 let _ = write_drop_head(&mut stream).await;
@@ -476,6 +494,18 @@ async fn write_json<S: AsyncWrite + Unpin>(
     out.extend_from_slice(&body);
     stream.write_all(&out).await?;
     stream.flush().await
+}
+
+/// The head writer is shared with the SSE responders: all it adds is the chunked framing they have in common.
+async fn write_chunked<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+) -> std::io::Result<()> {
+    write_sse_head(stream, status, headers).await?;
+    write_chunk(stream, &body).await?;
+    write_chunk_terminator(stream).await
 }
 
 async fn write_drop_head<S: AsyncWrite + Unpin>(stream: &mut S) -> std::io::Result<()> {

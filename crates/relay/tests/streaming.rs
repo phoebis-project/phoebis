@@ -144,6 +144,46 @@ async fn a_401_triggers_one_refresh_and_one_replay() {
 }
 
 #[tokio::test]
+async fn a_chunked_rejection_is_read_and_replayed() {
+    // A real upstream does not have to declare a length; the rejection still has to be read and acted on.
+    let up = FakeUpstream::start(vec![
+        Rule { path_prefix: "/v1/oauth/token".into(), respond: Respond::Json { status: 200, headers: vec![], body: phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Token).to_vec() } },
+        Rule { path_prefix: "/v1/messages".into(), respond: Respond::Chunked { status: 401, headers: vec![], body: br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#.to_vec() } },
+    ]).await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let lines: Vec<String> = up.requests().iter().map(|r| r.line.clone()).collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("POST /v1/messages"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("POST /v1/oauth/token"))
+            .count(),
+        1
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_rejection_too_large_to_read_is_forwarded_rather_than_replayed() {
     // The relay cannot tell whether this rejection is the one that warrants a refresh without holding 200 KiB
     // of it in memory, so the caller gets the upstream's own answer instead of a local error.
@@ -168,9 +208,9 @@ async fn a_rejection_too_large_to_read_is_forwarded_rather_than_replayed() {
     assert_eq!(resp.status(), 401);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
-        bytes.len(),
-        body.len(),
-        "the whole rejection reaches the caller"
+        bytes,
+        body.as_bytes(),
+        "the whole rejection reaches the caller, byte for byte"
     );
     assert_eq!(
         up.requests().len(),

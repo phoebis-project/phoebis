@@ -21,7 +21,7 @@ use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
-use phoebis_transport::response::{framing, keep_alive, read_head, Framing, ResponseHead};
+use phoebis_transport::response::{framing, keep_alive, read_head, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
 
 use crate::errors::{
@@ -30,7 +30,7 @@ use crate::errors::{
 };
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::identity::{identify, upstream_model};
-use crate::stream::{read_bounded, relay_body, Relayed, MAX_BUFFERED_BODY};
+use crate::stream::{drain_bounded, relay_body, Drained, Relayed};
 use crate::{edit_body, KeyTable, RelayError};
 
 /// The one host the relay dials.
@@ -292,45 +292,50 @@ impl Relay {
                 }
             };
 
-            // A rejected OAuth token is the one upstream answer the relay acts on itself, and only once, and
-            // only when the rejection is small enough to read first.
+            // A rejected OAuth token is the one upstream answer the relay acts on itself, and only once.
             if !replayed
                 && matches!(account.kind, AccountKind::Oauth)
                 && matches!(sent.head.status, 401 | 403)
-                && inspectable(&framing(&sent.head))
             {
                 let Sent {
-                    mut conn,
+                    conn,
                     head,
                     leftover,
                 } = sent;
                 let framing = framing(&head);
                 let reusable = keep_alive(&head, &framing);
-                let buffered = match read_bounded(
-                    &mut conn,
-                    leftover,
-                    framing,
-                    self.limits.idle_timeout,
-                )
-                .await
-                {
-                    Ok(buffered) => buffered,
+                let mut reader = BodyReader::new(conn, leftover, framing);
+                let outcome = RelayOutcome {
+                    request_id: request_id.clone(),
+                    account_id: account_id.clone(),
+                    upstream_status: head.status,
+                    attempt,
+                    written: true,
+                };
+                let buffered = match drain_bounded(&mut reader, self.limits.idle_timeout).await {
+                    Ok(Drained::Complete(buffered)) => buffered,
+                    // Too much of it to hold, so the relay cannot tell whether a refresh would help. The
+                    // caller gets the upstream's own rejection, prefix first and then the rest of the stream,
+                    // rather than a local error invented because the body was large.
+                    Ok(Drained::TooLarge(prefix)) => {
+                        tracing::debug!(account = %account.id, "forwarding a rejection too large to inspect");
+                        return self.stream(Forward {
+                            caller: &parts.headers,
+                            head: &head,
+                            keep_alive: reusable,
+                            key,
+                            outcome,
+                            prefix,
+                            reader,
+                        });
+                    }
                     Err(error) => {
                         tracing::warn!(account = %account.id, %error, "the rejection body was not readable");
-                        return with_outcome(
-                            UPSTREAM_UNREACHABLE.response(&request_id),
-                            RelayOutcome {
-                                request_id,
-                                account_id,
-                                upstream_status: head.status,
-                                attempt,
-                                written: true,
-                            },
-                        );
+                        return with_outcome(UPSTREAM_UNREACHABLE.response(&request_id), outcome);
                     }
                 };
                 if reusable {
-                    self.pool.checkin(key.clone(), conn);
+                    self.pool.checkin(key.clone(), reader.into_inner());
                 }
                 if is_authentication_error(&buffered) {
                     match self
@@ -352,18 +357,7 @@ impl Relay {
                         }
                     }
                 }
-                return forward_buffered(
-                    &head,
-                    buffered,
-                    &parts.headers,
-                    RelayOutcome {
-                        request_id,
-                        account_id,
-                        upstream_status: head.status,
-                        attempt,
-                        written: true,
-                    },
-                );
+                return forward_buffered(&head, buffered, &parts.headers, outcome);
             }
 
             let outcome = RelayOutcome {
@@ -487,27 +481,58 @@ impl Relay {
             head,
             leftover,
         } = sent;
-        let (builder, decoder) = match forward_head(&head, caller) {
+        let framing = framing(&head);
+        let keep_alive = keep_alive(&head, &framing);
+        self.stream(Forward {
+            caller,
+            head: &head,
+            keep_alive,
+            key,
+            outcome,
+            prefix: Bytes::new(),
+            reader: BodyReader::new(conn, leftover, framing),
+        })
+    }
+
+    fn stream(&self, forward: Forward<'_>) -> Response {
+        let Forward {
+            caller,
+            head,
+            keep_alive,
+            key,
+            outcome,
+            prefix,
+            reader,
+        } = forward;
+        let (builder, decoder) = match forward_head(head, caller) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
                 return with_outcome(UPSTREAM_UNREACHABLE.response(&outcome.request_id), outcome);
             }
         };
-        let framing = framing(&head);
-        let keep = keep_alive(&head, &framing);
         let body = relay_body(Relayed {
-            conn,
             decoder,
-            framing,
             idle_timeout: self.limits.idle_timeout,
-            keep_alive: keep,
+            keep_alive,
             key,
-            leftover,
             pool: self.pool.clone(),
+            prefix,
+            reader,
         });
         with_outcome(built(builder, body), outcome)
     }
+}
+
+/// A response whose head is settled and whose body is still on the wire.
+struct Forward<'a> {
+    caller: &'a HeaderMap,
+    head: &'a ResponseHead,
+    keep_alive: bool,
+    key: PoolKey,
+    outcome: RelayOutcome,
+    prefix: Bytes,
+    reader: BodyReader<Conn>,
 }
 
 fn forward_buffered(
@@ -614,14 +639,6 @@ fn is_authentication_error(body: &[u8]) -> bool {
                 .map(str::to_string)
         })
         .is_some_and(|error_type| error_type == "authentication_error")
-}
-
-/// Whether a rejection can be read into memory before it is forwarded, which is what the replay decision needs.
-/// A body whose length is not declared, or is declared past the inspection bound, is forwarded like any other
-/// response and simply not replayed: the caller has to see the upstream's own rejection rather than a local
-/// error invented because the body was large.
-fn inspectable(framing: &Framing) -> bool {
-    matches!(framing, Framing::ContentLength(length) if *length <= MAX_BUFFERED_BODY as u64)
 }
 
 /// States a request may be served in. Listing the admissible ones rather than the refused ones means a state

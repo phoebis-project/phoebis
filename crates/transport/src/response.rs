@@ -141,6 +141,12 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
         }
     }
 
+    /// Gives the source back once the body has ended, so a caller that owns a pooled connection can return it.
+    /// Calling this earlier hands back a stream still positioned inside the body.
+    pub fn into_inner(self) -> R {
+        self.r
+    }
+
     pub async fn next_chunk(&mut self) -> Result<Option<Bytes>, TransportError> {
         if self.done {
             return Ok(None);
