@@ -1,7 +1,13 @@
-import socket, threading, sys, time, json, signal, base64
+# Records every HTTP/1.1 request sent to it and answers a canned 400; it never connects anywhere.
+# Usage: http_raw.py <port> <output-dir> <seconds>
+# Writes <output-dir>/clean_modes.json, the shape scripts/build-fixtures.py reads, plus one
+# <output-dir>/clean_body_<i>.json per recorded request holding that request's body as raw bytes. The bodies need
+# their own files because the JSON copy is decoded with replacement, which is lossy for a gzipped body.
+import json, os, signal, socket, sys, threading, time
 PORT=int(sys.argv[1]); OUT=sys.argv[2]; DUR=int(sys.argv[3]); reqs=[]; lock=threading.RLock()
+os.makedirs(OUT,exist_ok=True)
 def dump(*_):
-    with lock: json.dump(reqs,open(OUT,'w'),indent=1)
+    with lock: json.dump(reqs,open(os.path.join(OUT,'clean_modes.json'),'w'),indent=1)
 signal.signal(signal.SIGTERM, lambda *a:(dump(),sys.exit(0)))
 def handle(c):
     try:
@@ -18,7 +24,10 @@ def handle(c):
             d=c.recv(65536)
             if not d: break
             rest+=d
-        with lock: reqs.append({'request_line':lines[0].decode(),'headers':[l.decode() for l in lines[1:]],'body_b64':base64.b64encode(rest).decode()}); dump()
+        with lock:
+            open(os.path.join(OUT,'clean_body_%d.json'%len(reqs)),'wb').write(rest)
+            reqs.append({'t':round(time.time(),2),'request_line':lines[0].decode(),'headers':[l.decode() for l in lines[1:]],'body':rest.decode('utf8','replace')})
+            dump()
         body=b'{"type":"error","error":{"type":"invalid_request_error","message":"capture"}}'
         c.sendall(b'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: close\r\n\r\n'+body)
     finally: c.close()
