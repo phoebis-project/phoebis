@@ -37,29 +37,45 @@ pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 pub const NOW: i64 = 1_000_000;
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
-    app_with(None, ACCOUNT_UUID).await
+    app_with(None, ACCOUNT_UUID, None).await
 }
 
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
-    app_with(Some(fixture_identity()), ACCOUNT_UUID).await
+    app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await
 }
 
 /// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
 /// presents somebody else's login to a slot that is already bound.
 pub async fn admin_app_paired_as(uuid: &str) -> (Router, FakeUpstream) {
-    app_with(Some(fixture_identity()), uuid).await
+    app_with(Some(fixture_identity()), uuid, None).await
+}
+
+/// An app that pins its admin origin, as every configuration outside the loopback development mode must.
+pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
+    app_with(None, ACCOUNT_UUID, Some(origin.to_string())).await
 }
 
 pub async fn get(app: &Router, path: &str, cookie: Option<&str>) -> Response<Body> {
-    send(app, "GET", path, "", cookie).await
+    send(app, "GET", path, "", cookie, None).await
 }
 
 pub async fn post(app: &Router, path: &str, body: &str, cookie: Option<&str>) -> Response<Body> {
-    send(app, "POST", path, body, cookie).await
+    send(app, "POST", path, body, cookie, None).await
+}
+
+/// A POST carrying the `Origin` header a browser attaches to every cross-site write.
+pub async fn post_from(
+    app: &Router,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: &str,
+) -> Response<Body> {
+    send(app, "POST", path, body, cookie, Some(origin)).await
 }
 
 pub async fn delete(app: &Router, path: &str, cookie: Option<&str>) -> Response<Body> {
-    send(app, "DELETE", path, "", cookie).await
+    send(app, "DELETE", path, "", cookie, None).await
 }
 
 pub async fn json(response: Response<Body>) -> serde_json::Value {
@@ -100,6 +116,7 @@ async fn send(
     path: &str,
     body: &str,
     cookie: Option<&str>,
+    origin: Option<&str>,
 ) -> Response<Body> {
     let mut request = Request::builder()
         .method(method)
@@ -107,6 +124,9 @@ async fn send(
         .header("content-type", "application/json");
     if let Some(cookie) = cookie {
         request = request.header("cookie", format!("phoebis_admin={cookie}"));
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
     }
     app.clone()
         .oneshot(request.body(Body::from(body.to_owned())).unwrap())
@@ -122,7 +142,11 @@ fn fixture_identity() -> Identity {
     }
 }
 
-async fn app_with(identity: Option<Identity>, upstream_uuid: &str) -> (Router, FakeUpstream) {
+async fn app_with(
+    identity: Option<Identity>,
+    upstream_uuid: &str,
+    origin: Option<String>,
+) -> (Router, FakeUpstream) {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
@@ -215,8 +239,9 @@ async fn app_with(identity: Option<Identity>, upstream_uuid: &str) -> (Router, F
             viewer: Some(Secret::new("viewer-secret")),
         },
         clock,
-        dev_loopback_http: true,
-        origin: None,
+        // The two go together: an origin is pinned exactly where the admin API is not on loopback.
+        dev_loopback_http: origin.is_none(),
+        origin,
         vault: Arc::new(PairingVault::new()),
         started_at: NOW,
     });

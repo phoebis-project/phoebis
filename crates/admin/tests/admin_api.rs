@@ -322,3 +322,63 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
         "an OAuth account has no key to verify"
     );
 }
+
+#[tokio::test]
+async fn mutations_require_the_configured_origin() {
+    use common::{cookie_of, get, post, post_from};
+    const ORIGIN: &str = "https://phoebis.example";
+    let (app, _up) = common::admin_app_with_origin(ORIGIN).await;
+    assert_eq!(
+        post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None)
+            .await
+            .status(),
+        403,
+        "a forced login is the one mutation an unauthenticated caller can reach"
+    );
+    let ok = post_from(
+        &app,
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        ORIGIN,
+    )
+    .await;
+    assert_eq!(ok.status(), 204);
+    let cookie = cookie_of(&ok);
+    let bare = post(&app, "/admin/accounts/business/pause", "", Some(&cookie)).await;
+    assert_eq!(bare.status(), 403);
+    assert_eq!(
+        bare.headers().get("cache-control").unwrap(),
+        "no-store",
+        "a refusal is no more cacheable than an answer"
+    );
+    assert_eq!(
+        post_from(
+            &app,
+            "/admin/accounts/business/pause",
+            "",
+            Some(&cookie),
+            "https://evil.example"
+        )
+        .await
+        .status(),
+        403
+    );
+    assert_eq!(
+        post_from(
+            &app,
+            "/admin/accounts/business/pause",
+            "",
+            Some(&cookie),
+            ORIGIN
+        )
+        .await
+        .status(),
+        204
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts", Some(&cookie)).await.status(),
+        200,
+        "a read carries no Origin and needs none"
+    );
+}
