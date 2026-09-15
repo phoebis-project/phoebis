@@ -75,6 +75,11 @@ mod service {
     /// A `Ready` account with a bundle far from expiry, so `acquire` never triggers a refresh of its own
     /// against the fake upstream under test.
     fn store_with_valid_bundle() -> Arc<Store> {
+        store_with_bundle_until(1_000_000 + 3_600_000)
+    }
+
+    /// The same, for a test whose clock has to run further than an hour.
+    fn store_with_bundle_until(expires_at: i64) -> Arc<Store> {
         let store = store_with_account();
         store
             .commit_credentials(
@@ -86,7 +91,7 @@ mod service {
                     access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
                     refresh_token: Some(Secret::new("rt")),
                     issued_at: 1_000_000,
-                    expires_at: 1_000_000 + 3_600_000,
+                    expires_at,
                     refresh_expires_at: None,
                     scopes: "user:profile user:inference".into(),
                 },
@@ -289,6 +294,44 @@ mod service {
             "the retry-after, not the cache TTL, governs when the next fetch is allowed"
         );
         assert!(second.error.is_some());
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_hour_long_retry_after_is_honored_in_full() {
+        // The credential refresh clamps a Retry-After to five minutes because it races a token's expiry; a
+        // usage fetch races nothing, so ignoring the hour the endpoint asked for would only earn a harder
+        // rate limit.
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited("3600")]).await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+        let requests = || {
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .count()
+        };
+
+        service.snapshot("a").await.unwrap();
+        assert_eq!(requests(), 1);
+
+        // Past the old five-minute ceiling, and one second short of the hour that was asked for.
+        now.store(1_000_000 + 3_599_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_some());
+        assert_eq!(
+            requests(),
+            1,
+            "the whole hour is waited out, not the refresh path's five minutes"
+        );
+
+        now.store(1_000_000 + 3_600_000, Ordering::SeqCst);
+        service.snapshot("a").await.unwrap();
+        assert_eq!(requests(), 2, "the wait ends when the endpoint said it would");
         up.shutdown().await;
     }
 }

@@ -434,7 +434,7 @@ impl Inner {
             // hidden behind a 5xx is found later through invalid_grant, which ends in re-pairing either way,
             // and the minute of backoff bounds how fast the dead token can be spent in the meantime.
             self.resolve(attempt, AttemptOutcome::Failed(detail.clone()));
-            let asked = retry_after_ms(&head, (self.clock)());
+            let asked = retry_after_ms(&head, (self.clock)(), MAX_NOT_BEFORE_MS);
             self.arm_backoff(
                 account_id,
                 match head.status {
@@ -644,10 +644,12 @@ fn error_code(body: &[u8]) -> Option<String> {
     }
 }
 
-/// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to
-/// `MAX_NOT_BEFORE_MS`. The HTTP-date form names an instant rather than a delay, so it is read against the
-/// caller's clock, which is also what keeps an upstream clock that runs ahead from parking the account.
-pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
+/// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to `max_ms`. The
+/// ceiling belongs to the caller because what an overlong wait costs differs: a refresh races a token's own
+/// expiry, a usage fetch races nothing. The HTTP-date form names an instant rather than a delay, so it is read
+/// against the caller's clock, which is also what keeps an upstream clock that runs ahead from parking the
+/// account.
+pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64, max_ms: i64) -> Option<i64> {
     let value = head.get("retry-after")?.trim();
     let delay = match value.parse::<i64>() {
         Ok(seconds) => seconds.saturating_mul(1000),
@@ -657,7 +659,7 @@ pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64) -> Option<i64> {
             .as_millisecond()
             .saturating_sub(now),
     };
-    Some(delay.clamp(0, MAX_NOT_BEFORE_MS))
+    Some(delay.clamp(0, max_ms))
 }
 
 #[cfg(test)]
@@ -761,26 +763,27 @@ mod tests {
     }
 
     #[test]
-    fn a_retry_after_delay_is_bounded() {
+    fn a_retry_after_delay_is_bounded_by_the_callers_ceiling() {
         let now = 1_000_000;
-        assert_eq!(retry_after_ms(&head_with("30"), now), Some(30_000));
+        let capped = |value: &str| retry_after_ms(&head_with(value), now, MAX_NOT_BEFORE_MS);
+        assert_eq!(capped("30"), Some(30_000));
+        assert_eq!(capped("99999999999999"), Some(MAX_NOT_BEFORE_MS));
+        assert_eq!(capped("-5"), Some(0));
+        assert_eq!(capped("whenever"), None);
         assert_eq!(
-            retry_after_ms(&head_with("99999999999999"), now),
-            Some(MAX_NOT_BEFORE_MS)
+            retry_after_ms(&head_with("3600"), now, 86_400_000),
+            Some(3_600_000),
+            "a caller with room for a longer wait gets the full value"
         );
-        assert_eq!(retry_after_ms(&head_with("-5"), now), Some(0));
-        assert_eq!(retry_after_ms(&head_with("whenever"), now), None);
     }
 
     #[test]
     fn a_retry_after_date_is_read_against_our_own_clock() {
         let date = "Wed, 21 Oct 2015 07:28:00 GMT";
         let at = 1_445_412_480_000;
-        assert_eq!(retry_after_ms(&head_with(date), at - 45_000), Some(45_000));
-        assert_eq!(
-            retry_after_ms(&head_with(date), at - 86_400_000),
-            Some(MAX_NOT_BEFORE_MS)
-        );
-        assert_eq!(retry_after_ms(&head_with(date), at + 1_000), Some(0));
+        let capped = |now: i64| retry_after_ms(&head_with(date), now, MAX_NOT_BEFORE_MS);
+        assert_eq!(capped(at - 45_000), Some(45_000));
+        assert_eq!(capped(at - 86_400_000), Some(MAX_NOT_BEFORE_MS));
+        assert_eq!(capped(at + 1_000), Some(0));
     }
 }

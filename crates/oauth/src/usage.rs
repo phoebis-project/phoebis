@@ -22,6 +22,11 @@ const LOCK_POISONED: &str = "usage service mutex poisoned by a prior panic";
 /// slot for long.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Ceiling on a `Retry-After` from the usage endpoint. A quota view that is a day stale is a cosmetic
+/// problem, while ignoring the wait the endpoint asked for is how an account gets rate-limited harder, so the
+/// bound is generous and exists only to keep an absurd value from parking the view forever.
+const MAX_RETRY_AFTER_MS: i64 = 24 * 60 * 60 * 1_000;
+
 /// Top-level keys the 2.1.270 binary and the Management Center source use for the Fable weekly window,
 /// read only when `limits[]` is absent from the response.
 const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
@@ -378,6 +383,7 @@ impl Inner {
             return Err(FetchFailure::RateLimited(retry_after_ms(
                 &head,
                 (self.clock)(),
+                MAX_RETRY_AFTER_MS,
             )));
         }
         if head.status != 200 {
