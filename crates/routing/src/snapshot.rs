@@ -25,6 +25,9 @@ pub enum KeyRefusal {
 /// consistent registry from authentication to selection.
 pub struct RegistrySnapshot {
     accounts: HashMap<String, AccountRow>,
+    /// Refreshed with the rest of the snapshot, so a report arriving on the hot path can be fenced without a
+    /// store read. It lags a rotation by one reload, which the fence allows for.
+    credential_generations: HashMap<String, u64>,
     digest_key: [u8; 32],
     keys: HashMap<String, ApiKeyRow>,
     keys_by_digest: HashMap<[u8; 32], String>,
@@ -75,6 +78,7 @@ impl RegistrySnapshot {
                 .into_iter()
                 .map(|a| (a.id.clone(), a))
                 .collect(),
+            credential_generations: load.credential_generations.into_iter().collect(),
             digest_key,
             keys: load.keys.into_iter().map(|k| (k.id.clone(), k)).collect(),
             keys_by_digest,
@@ -125,6 +129,10 @@ impl RegistrySnapshot {
 
     pub fn account(&self, id: &str) -> Option<&AccountRow> {
         self.accounts.get(id)
+    }
+    /// The credential generation this snapshot was loaded with, `None` for an account holding none.
+    pub fn credential_generation(&self, account_id: &str) -> Option<u64> {
+        self.credential_generations.get(account_id).copied()
     }
     pub fn accounts(&self) -> impl Iterator<Item = &AccountRow> {
         self.accounts.values()

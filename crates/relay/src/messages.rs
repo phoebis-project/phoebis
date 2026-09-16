@@ -1044,12 +1044,16 @@ pub(crate) fn report_failover(
             account_id: account_id.to_string(),
             row,
             pin,
+            lifecycle_generation: generations.0,
+            credential_generation: generations.1,
         });
     } else if let Some(pin) = pin {
         // A mark without a cooldown still ends the pin: the account cannot serve until an operator acts.
         router.report(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
+            lifecycle_generation: generations.0,
+            credential_generation: generations.1,
         });
     }
     if let Some(state) = mark {

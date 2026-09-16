@@ -275,6 +275,8 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             source_request_id: None,
         },
         pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
     });
     handle.shutdown().await.unwrap();
     let load = store.load_routing().unwrap();
@@ -364,6 +366,8 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
                 source_request_id: None,
             },
             pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
         });
         wait_for(WRITTEN, || {
             store
@@ -564,4 +568,87 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
     assert!(sample_from_usage(&snapshot(12.5, 40.0, true))
         .1
         .is_some_and(|o| !o.in_use));
+}
+
+#[tokio::test]
+async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(_)));
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.first().cloned()
+    })
+    .await;
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
+        .unwrap();
+    handle.reload().await.unwrap();
+    // A rejection that left the upstream while the first key was still in use.
+    handle.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: 1_000 + HOUR,
+            reason: "permission".into(),
+            window: "none".into(),
+            source_request_id: None,
+        },
+        pin: Some(pin_of(&handle).await),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
+    stays_for(NOT_WRITTEN, || {
+        store.load_routing().unwrap().cooldowns.is_empty()
+    })
+    .await;
+    assert!(
+        handle.cooldowns().await.unwrap().is_empty(),
+        "the entitlements the rejection was about belong to a key the account no longer holds"
+    );
+    assert_eq!(
+        handle.pins().await.unwrap().len(),
+        1,
+        "and the session it would have moved keeps its account"
+    );
+    // The same report against the key the account holds now is recorded.
+    handle.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: 1_000 + HOUR,
+            reason: "permission".into(),
+            window: "none".into(),
+            source_request_id: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 2,
+    });
+    wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
+}
+
+/// The pin the one session in these tests holds, as the relay would name it in a report.
+async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinRef {
+    let row = handle
+        .pins()
+        .await
+        .unwrap()
+        .pop()
+        .expect("a pinned session");
+    phoebis_routing::PinRef {
+        key_id: row.key_id,
+        session_id: row.session_id,
+        model: row.model,
+        epoch: row.epoch,
+    }
 }

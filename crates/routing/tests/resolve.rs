@@ -78,6 +78,7 @@ fn served(account: &str, upstream: &str, selected: bool) -> ServedModel {
 fn snapshot() -> RegistrySnapshot {
     let load = RegistryLoad {
         accounts: vec![account("a"), account("b"), account("f")],
+        credential_generations: Vec::new(),
         keys: vec![
             key("desktop", "main", "phoebis-desktopsecret0000", None),
             ApiKeyRow {
@@ -251,6 +252,10 @@ fn the_key_list_overrides_the_pool_list_and_unserved_models_are_refused() {
 fn load_of(s: &RegistrySnapshot) -> RegistryLoad {
     RegistryLoad {
         accounts: s.accounts().cloned().collect(),
+        credential_generations: s
+            .accounts()
+            .filter_map(|a| Some((a.id.clone(), s.credential_generation(&a.id)?)))
+            .collect(),
         keys: s.keys().cloned().collect(),
         members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
         models: s

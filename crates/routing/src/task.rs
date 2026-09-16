@@ -53,6 +53,8 @@ pub enum Report {
         account_id: String,
         row: CooldownRow,
         pin: Option<PinRef>,
+        lifecycle_generation: u64,
+        credential_generation: u64,
     },
     Overage {
         account_id: String,
@@ -61,6 +63,8 @@ pub enum Report {
     PinInvalidated {
         account_id: String,
         pin: PinRef,
+        lifecycle_generation: u64,
+        credential_generation: u64,
     },
     PinRenewed {
         pin: PinRef,
@@ -456,7 +460,12 @@ impl Task {
                 account_id,
                 row,
                 pin,
+                lifecycle_generation,
+                credential_generation,
             } => {
+                if self.superseded(&account_id, lifecycle_generation, credential_generation) {
+                    return;
+                }
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     writes.push(StateWrite::UpsertCooldown(row));
@@ -487,7 +496,15 @@ impl Task {
                     }
                 }
             }
-            Report::PinInvalidated { account_id, pin } => {
+            Report::PinInvalidated {
+                account_id,
+                pin,
+                lifecycle_generation,
+                credential_generation,
+            } => {
+                if self.superseded(&account_id, lifecycle_generation, credential_generation) {
+                    return;
+                }
                 if self.state.invalidate_pin(&pin, &account_id) {
                     self.write(vec![StateWrite::DeletePin(
                         pin.key_id,
@@ -546,6 +563,42 @@ impl Task {
                 });
             }
         }
+    }
+
+    /// Whether a report is about a slot or a credential the registry has moved past. A delayed rejection
+    /// carries the pair its own attempt went out with, and acting on it would cool an account, or end a
+    /// session's affinity, over entitlements that have since been replaced.
+    ///
+    /// The snapshot's credential generation lags a rotation by one reload, so a report naming a generation it
+    /// has not seen yet is applied: a false drop loses a cooldown the registry wanted, while a false keep
+    /// records one a moment before the reload would have made it obviously right.
+    fn superseded(
+        &self,
+        account_id: &str,
+        lifecycle_generation: u64,
+        credential_generation: u64,
+    ) -> bool {
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone();
+        let Some(account) = snapshot.account(account_id) else {
+            tracing::debug!(account = %account_id, "a report named an account the registry no longer holds");
+            return true;
+        };
+        if account.lifecycle_generation != lifecycle_generation {
+            tracing::debug!(account = %account_id, "a report named a lifecycle the account has moved past");
+            return true;
+        }
+        if snapshot
+            .credential_generation(account_id)
+            .is_some_and(|current| current > credential_generation)
+        {
+            tracing::debug!(account = %account_id, "a report named a credential the account has replaced");
+            return true;
+        }
+        false
     }
 
     async fn reload(&mut self) -> Result<(), String> {

@@ -337,6 +337,21 @@ impl Store {
         Ok(())
     }
 
+    /// The generation of whatever credential the account holds, whichever of the two tables holds it. An
+    /// account holds one kind at a time, so at most one row answers.
+    pub fn credential_generation(&self, account_id: &str) -> Result<Option<u64>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT generation FROM credentials WHERE account_id = ?1 \
+             UNION ALL SELECT generation FROM api_key_secrets WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|generation| generation.map(|g| g as u64))
+        .map_err(StoreError::from)
+    }
+
     /// The secret with the generation that names it, so a verdict formed while it was in use can be told
     /// apart from one about its replacement.
     pub fn api_key_credential(

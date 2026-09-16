@@ -399,6 +399,8 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
             source_request_id: None,
         },
         pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
     });
     // The task records the cooldown in its own state before it queues the write, so a row on disk means the
     // snapshot the admin route reads already has it.

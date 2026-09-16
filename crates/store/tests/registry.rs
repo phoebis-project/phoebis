@@ -400,6 +400,12 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
     let (secret, generation) = store.api_key_credential("a").unwrap().unwrap();
     assert_eq!((secret.expose(), generation), ("k2", 2));
+    assert_eq!(
+        store.credential_generation("a").unwrap(),
+        Some(2),
+        "the kind-agnostic read answers the same generation"
+    );
+    assert_eq!(store.credential_generation("nobody").unwrap(), None);
     assert!(
         !store
             .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1)

@@ -67,6 +67,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
     };
     let load = RegistryLoad {
         accounts: ["a", "b", "c"].map(account).to_vec(),
+        credential_generations: Vec::new(),
         keys: vec![ApiKeyRow {
             id: "k".into(),
             label: "k".into(),

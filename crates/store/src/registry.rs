@@ -186,6 +186,9 @@ pub struct RegistryChange {
 #[derive(Clone, Debug, Default)]
 pub struct RegistryLoad {
     pub accounts: Vec<crate::AccountRow>,
+    /// The generation of each account's credential, for accounts that hold one. The snapshot carries it so a
+    /// verdict about a replaced credential can be told from a current one without reading the store.
+    pub credential_generations: Vec<(String, u64)>,
     pub keys: Vec<ApiKeyRow>,
     pub members: Vec<PoolMember>,
     pub models: Vec<ServedModel>,
@@ -270,6 +273,15 @@ impl Store {
         let tx = conn.transaction()?;
         let load = RegistryLoad {
             accounts: crate::accounts::all_accounts(&tx)?,
+            credential_generations: tx
+                .prepare(
+                    "SELECT a.id, COALESCE(c.generation, k.generation) FROM accounts a \
+                     LEFT JOIN credentials c ON c.account_id = a.id \
+                     LEFT JOIN api_key_secrets k ON k.account_id = a.id \
+                     WHERE c.generation IS NOT NULL OR k.generation IS NOT NULL",
+                )?
+                .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
             keys: all_keys(&tx)?,
             members: tx
                 .prepare("SELECT pool_id, account_id, priority FROM pool_members ORDER BY pool_id, account_id")?

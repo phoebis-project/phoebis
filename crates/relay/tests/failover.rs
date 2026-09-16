@@ -277,6 +277,8 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
             source_request_id: None,
         },
         pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
     });
     let resp = h
         .app
