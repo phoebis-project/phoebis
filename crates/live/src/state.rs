@@ -417,11 +417,21 @@ impl LiveState {
             t.usage.merge(usage);
         }
         if let Some(last) = t.entry.attempts.last_mut() {
+            let cancelled = c.error_code.as_deref() == Some("account_cancelled");
             if last.outcome == "in_flight" {
-                last.outcome = if c.error_code.as_deref() == Some("account_cancelled") {
+                last.outcome = if cancelled {
                     "canceled"
                 } else {
                     "transport_error"
+                }
+                .into();
+            } else if last.outcome == "succeeded" && c.outcome.as_str() != "succeeded" {
+                // The head committed before the stream failed, so the attempt reads succeeded while the
+                // request it served does not: the request's terminal cause is this attempt's too.
+                last.outcome = if cancelled {
+                    "canceled"
+                } else {
+                    c.outcome.as_str()
                 }
                 .into();
             }
@@ -691,7 +701,7 @@ fn text_of(body: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use phoebis_bus::{Kind, Origin};
+    use phoebis_bus::{Kind, Origin, Outcome};
     use phoebis_ledger::PriceTable;
 
     fn observed(id: &str) -> Event {
@@ -728,6 +738,81 @@ mod tests {
                 },
             }),
         })
+    }
+
+    fn selected(id: &str) -> Event {
+        Event::AccountSelected(AccountSelected {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            pin_epoch: None,
+            started_at: 1_010,
+        })
+    }
+
+    fn head(id: &str) -> Event {
+        Event::ResponseHead(ResponseHead {
+            request_id: id.into(),
+            attempt: 1,
+            status: 200,
+            headers: Vec::new(),
+            first_event: None,
+            outcome: AttemptOutcome::Succeeded,
+            cooldown: None,
+            written_at: 1_050,
+            observed_at: 1_060,
+        })
+    }
+
+    fn complete(id: &str, outcome: Outcome, error_code: Option<&str>) -> Event {
+        Event::RequestComplete(RequestComplete {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: Some("a".into()),
+            outcome,
+            status: 200,
+            usage: None,
+            ttfb_ms: Some(60),
+            ttfc_ms: Some(70),
+            error_code: error_code.map(String::from),
+            client_drift: None,
+            client_version: None,
+            response_bytes: Some(10),
+            finished_at: 1_500,
+        })
+    }
+
+    fn state() -> LiveState {
+        LiveState::new(
+            Arc::new(Pricing::new(PriceTable::shipped())),
+            Arc::new(|| 1_000),
+        )
+    }
+
+    /// The head commits before the stream can fail, so the attempt reads succeeded while the request it
+    /// served did not. What the console shows for the attempt has to agree with the request beside it.
+    #[test]
+    fn a_terminal_failure_after_a_committed_head_reaches_the_attempt() {
+        let mut state = state();
+        for id in ["a", "b"] {
+            state.apply(observed(id));
+            state.apply(selected(id));
+            state.apply(head(id));
+        }
+        state.apply(complete("a", Outcome::Failed, Some("overloaded_error")));
+        state.apply(complete("b", Outcome::Canceled, Some("account_cancelled")));
+        let past = state.past(0, i64::MAX);
+        let outcome = |id: &str| {
+            past.entries
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| r.attempts[0].outcome.as_str())
+        };
+        assert_eq!(
+            (outcome("a"), outcome("b")),
+            (Some("failed"), Some("canceled"))
+        );
     }
 
     #[test]
