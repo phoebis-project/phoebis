@@ -594,7 +594,9 @@ impl Task {
             }
         }
         *self.snapshot.write().expect("snapshot lock poisoned") = next;
-        // Pins of a deleted key or pool, or of an account that left its pool, go now rather than at the next tick.
+        // Pins of a deleted key or pool, and a cooldown past its deadline, go now rather than at the next
+        // tick. An account that left its pool is not one of them: `select` step 1 decides that per request,
+        // since a non-portable request keeps such a pin by design.
         self.purge();
         Ok(())
     }
