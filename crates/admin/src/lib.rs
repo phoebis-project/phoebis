@@ -1,11 +1,15 @@
 //! Admin API: cookie sessions, account views, OAuth pairing, and usage.
 
 mod accounts;
+mod keys;
+mod pools;
 mod routes;
 mod session;
+mod sessions;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
 use phoebis_profile::Profile;
@@ -43,6 +47,8 @@ pub struct AdminState {
     /// The longest body capture a route may ask for. A capture holds request and response bodies on disk, so
     /// the ceiling is the operator's, not the caller's.
     pub body_capture_max_hours: u32,
+    /// How long ago a pin's `last_used_at` may be and still count as live for `GET /admin/sessions`.
+    pub session_expiry: Duration,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

@@ -56,19 +56,19 @@ struct Parts {
 }
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
-    let parts = app_with(None, ACCOUNT_UUID, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up)
 }
 
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up)
 }
 
 /// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
 /// presents somebody else's login to a slot that is already bound.
 pub async fn admin_app_paired_as(uuid: &str) -> (Router, FakeUpstream) {
-    let parts = app_with(Some(fixture_identity()), uuid, None).await;
+    let parts = app_with(Some(fixture_identity()), uuid, None, None).await;
     (parts.app, parts.up)
 }
 
@@ -81,7 +81,14 @@ pub async fn admin_app_quarantined(detail: &str) -> (Router, FakeUpstream) {
 /// The unpaired app with the store and the router behind it, for the tests that have to look past the HTTP
 /// surface at what a write did to the registry or to the published snapshot.
 pub async fn admin_parts() -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
-    let parts = app_with(None, ACCOUNT_UUID, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    (parts.app, parts.up, parts.store, parts.router)
+}
+
+/// A second app over a store another `Parts` already opened, so its router task loads whatever the store
+/// holds at this moment rather than what it held when the first app started.
+pub async fn admin_parts_on(store: Arc<Store>) -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
+    let parts = app_with(None, ACCOUNT_UUID, None, Some(store)).await;
     (parts.app, parts.up, parts.store, parts.router)
 }
 
@@ -90,7 +97,7 @@ pub async fn admin_parts() -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
 pub async fn quarantined_parts(
     detail: &str,
 ) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
     let attempt = parts.store.open_refresh_attempt("business", 1, 1).unwrap();
     parts
         .store
@@ -101,7 +108,7 @@ pub async fn quarantined_parts(
 
 /// An app that pins its admin origin, as every configuration outside the loopback development mode must.
 pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
-    let parts = app_with(None, ACCOUNT_UUID, Some(origin.to_string())).await;
+    let parts = app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await;
     (parts.app, parts.up)
 }
 
@@ -204,62 +211,67 @@ async fn app_with(
     identity: Option<Identity>,
     upstream_uuid: &str,
     origin: Option<String>,
+    store: Option<Arc<Store>>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store =
+        store.unwrap_or_else(|| Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()));
     let paired = identity.is_some();
-    store
-        .insert_account(&AccountRow {
-            id: "business".into(),
-            kind: AccountKind::Oauth,
-            label: "Business".into(),
-            enabled: true,
-            identity,
-            lifecycle_generation: 1,
-            state: if paired {
-                AccountState::Ready
-            } else {
-                AccountState::Unpaired
-            },
-        })
-        .unwrap();
-    if paired {
-        // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
+    // A store handed in by the caller already carries its own accounts; seeding it again would collide.
+    if store.accounts().unwrap().is_empty() {
         store
-            .commit_credentials(
-                "business",
-                1,
-                None,
-                None,
-                &NewBundle {
-                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
-                    refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
-                    issued_at: NOW,
-                    expires_at: NOW + 3_600_000,
-                    refresh_expires_at: None,
-                    scopes: "user:profile user:inference".into(),
+            .insert_account(&AccountRow {
+                id: "business".into(),
+                kind: AccountKind::Oauth,
+                label: "Business".into(),
+                enabled: true,
+                identity,
+                lifecycle_generation: 1,
+                state: if paired {
+                    AccountState::Ready
+                } else {
+                    AccountState::Unpaired
                 },
-            )
+            })
+            .unwrap();
+        if paired {
+            // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
+            store
+                .commit_credentials(
+                    "business",
+                    1,
+                    None,
+                    None,
+                    &NewBundle {
+                        access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                        refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                        issued_at: NOW,
+                        expires_at: NOW + 3_600_000,
+                        refresh_expires_at: None,
+                        scopes: "user:profile user:inference".into(),
+                    },
+                )
+                .unwrap();
+        }
+
+        // Every app carries an API-key slot as well, since verification is the one route that only an
+        // API-key account reaches.
+        store
+            .insert_account(&AccountRow {
+                id: "direct".into(),
+                kind: AccountKind::ApiKey,
+                label: "Direct".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        store
+            .set_api_key_secret("direct", &Secret::new(API_KEY))
             .unwrap();
     }
-
-    // Every app carries an API-key slot as well, since verification is the one route that only an
-    // API-key account reaches.
-    store
-        .insert_account(&AccountRow {
-            id: "direct".into(),
-            kind: AccountKind::ApiKey,
-            label: "Direct".into(),
-            enabled: true,
-            identity: None,
-            lifecycle_generation: 1,
-            state: AccountState::Ready,
-        })
-        .unwrap();
-    store
-        .set_api_key_secret("direct", &Secret::new(API_KEY))
-        .unwrap();
 
     let addr = up.addr();
     // An authority with an explicit port names another loopback fake on that port; everything else is `up`.
@@ -334,6 +346,7 @@ async fn app_with(
         router: router_handle.clone(),
         catalog,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        session_expiry: Duration::from_secs(86_400),
     });
     Parts {
         app: router(state),

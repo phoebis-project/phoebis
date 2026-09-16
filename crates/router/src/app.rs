@@ -53,6 +53,9 @@ const POOL_MAX_IDLE: usize = 8;
 /// The ceiling on a key's body-capture window, so no capture can be left recording for weeks.
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 
+/// How long a session pin stays listed on `GET /admin/sessions` after its last use.
+const SESSION_EXPIRY: Duration = Duration::from_secs(86_400);
+
 /// A models list is one small request; a host that has not answered by then is not going to.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -190,6 +193,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router: router_task,
         catalog,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        session_expiry: SESSION_EXPIRY,
     });
 
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)

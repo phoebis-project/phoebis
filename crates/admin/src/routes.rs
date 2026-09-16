@@ -10,7 +10,7 @@ use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
@@ -25,7 +25,7 @@ use phoebis_store::{
 use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
-use crate::{accounts, AdminState, LoginError, Role};
+use crate::{accounts, keys, pools, sessions, AdminState, LoginError, Role};
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
 /// for minutes.
@@ -63,6 +63,10 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage))
         .route("/admin/accounts/{id}/usage/refresh", post(usage))
         .route("/admin/accounts/{id}/verify", post(verify))
+        .route("/admin/keys", get(keys::list).post(keys::create))
+        .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
+        .route("/admin/keys/{id}/revoke", post(keys::revoke))
+        .route("/admin/keys/{id}/rotate", post(keys::rotate))
         .route("/admin/oauth/sessions", post(pairing_start))
         .route(
             "/admin/oauth/sessions/{id}",
@@ -73,7 +77,18 @@ pub fn router(state: Arc<AdminState>) -> Router {
             post(pairing_callback),
         )
         .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
+        .route("/admin/pools", get(pools::list).post(pools::create))
+        .route(
+            "/admin/pools/{id}",
+            patch(pools::patch).delete(pools::remove),
+        )
+        .route("/admin/pools/{id}/members", put(pools::set_members))
         .route("/admin/session", post(login).delete(logout))
+        .route("/admin/sessions", get(sessions::list))
+        .route(
+            "/admin/sessions/{key}/{session}/release",
+            post(sessions::release),
+        )
         .route("/admin/system", get(system))
         .layer(from_fn_with_state(state.clone(), gate))
         .with_state(state)
