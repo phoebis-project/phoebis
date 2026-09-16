@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{
-    bucket_index, delta_of, read_rollups, AttemptRecord, Histogram, LedgerDb, RequestRecord,
-    RollupRow, UNATTRIBUTED,
+    bucket_index, delta_of, read_account_rollups, read_rollups, AttemptRecord, Histogram, LedgerDb,
+    RequestRecord, RollupRow, UNATTRIBUTED,
 };
 use rand::{RngExt, SeedableRng};
 
@@ -288,6 +288,77 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
             );
         }
     }
+}
+
+/// One request the replace path rewrites, always under the same id.
+fn replaced(id: &str) -> RequestRecord {
+    RequestRecord {
+        id: id.into(),
+        received_at: 3_700_000,
+        finished_at: Some(3_700_900),
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        model: "m".into(),
+        canonical_model: "m".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    }
+}
+
+/// Its one attempt, carrying the 5h utilization the account rollup takes a maximum of.
+fn reading(id: &str, account: &str, utilization: f64) -> AttemptRecord {
+    AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: account.into(),
+        account_kind: "oauth".into(),
+        started_at: 3_700_000,
+        outcome: "succeeded".into(),
+        ratelimit_5h_utilization: Some(utilization),
+        ..Default::default()
+    }
+}
+
+fn peak(db: &LedgerDb, account: &str) -> Option<f64> {
+    db.read(|c| read_account_rollups(c, 0, i64::MAX))
+        .unwrap()
+        .into_iter()
+        .find(|r| r.account_id == account)
+        .and_then(|r| r.utilization_5h_max)
+}
+
+#[test]
+fn a_replace_that_lowers_a_reading_lowers_the_accounts_hourly_peak() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&replaced("r1"), &[reading("r1", "a", 0.9)], None)
+        .unwrap();
+    assert_eq!(peak(&db, "a"), Some(0.9));
+    db.insert_request(&replaced("r1"), &[reading("r1", "a", 0.2)], None)
+        .unwrap();
+    assert_eq!(
+        peak(&db, "a"),
+        Some(0.2),
+        "the peak is a maximum over the attempts the ledger holds, not over every one it ever held"
+    );
+}
+
+#[test]
+fn a_replace_that_moves_the_serving_attempt_empties_the_old_accounts_reading() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&replaced("r1"), &[reading("r1", "a", 0.9)], None)
+        .unwrap();
+    db.insert_request(&replaced("r1"), &[reading("r1", "b", 0.4)], None)
+        .unwrap();
+    assert_eq!(
+        peak(&db, "a"),
+        None,
+        "nothing is left in the hour to read the vacated account's utilization from"
+    );
+    assert_eq!(peak(&db, "b"), Some(0.4));
 }
 
 #[test]

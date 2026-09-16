@@ -1,7 +1,7 @@
 //! The hourly fold: each completed request adds one delta to the row for its hour and its six-part key, in the
 //! same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
@@ -405,10 +405,7 @@ pub fn fold_request(
     row.add(&delta);
     write_rollup(tx, &row)?;
     for a in attempts {
-        if a.ratelimit_5h_utilization.is_some()
-            || a.ratelimit_7d_utilization.is_some()
-            || a.ratelimit_7d_oi_utilization.is_some()
-        {
+        if reads_utilization(a) {
             fold_account(
                 tx,
                 &AccountRollupRow {
@@ -422,6 +419,52 @@ pub fn fold_request(
             )?;
         }
     }
+    // The three utilization columns are maxima, so a replaced attempt's reading cannot be subtracted out of
+    // them: every hour and account its old attempts fed is read again from the raw attempts that remain.
+    if let Some((_, old_attempts)) = previous {
+        let touched: BTreeSet<(i64, &str)> = old_attempts
+            .iter()
+            .filter(|a| reads_utilization(a))
+            .map(|a| (hour_of(a.started_at), a.account_id.as_str()))
+            .collect();
+        for (hour, account_id) in touched {
+            reread_utilization(tx, hour, account_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn reads_utilization(a: &AttemptRecord) -> bool {
+    a.ratelimit_5h_utilization.is_some()
+        || a.ratelimit_7d_utilization.is_some()
+        || a.ratelimit_7d_oi_utilization.is_some()
+}
+
+/// One hour and account's utilization maxima, taken again from the raw attempts and written back over the
+/// three columns alone: the counters beside them come from cooldown, overage and pin events, which no
+/// replaced request has anything to say about.
+fn reread_utilization(
+    tx: &Transaction<'_>,
+    hour: i64,
+    account_id: &str,
+) -> Result<(), LedgerError> {
+    let (five, seven, oi) = tx.query_row(
+        "SELECT MAX(ratelimit_5h_utilization), MAX(ratelimit_7d_utilization), MAX(ratelimit_7d_oi_utilization) \
+         FROM attempts WHERE account_id = ?1 AND started_at >= ?2 AND started_at < ?3",
+        params![account_id, hour * 1_000, (hour + 3_600) * 1_000],
+        |r| {
+            Ok((
+                r.get::<_, Option<f64>>(0)?,
+                r.get::<_, Option<f64>>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+            ))
+        },
+    )?;
+    tx.execute(
+        "UPDATE account_rollups_hourly SET utilization_5h_max = ?1, utilization_7d_max = ?2, utilization_7d_oi_max = ?3 \
+         WHERE hour = ?4 AND account_id = ?5",
+        params![five, seven, oi, hour, account_id],
+    )?;
     Ok(())
 }
 
@@ -878,6 +921,14 @@ mod tests {
         let mut expected = delta_of(&req, &attempts);
         expected.add(&delta_of(&req2, &attempts2));
         assert_eq!(rows[0], expected, "two requests, two contributions");
+        let accounts = db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(
+            (
+                accounts[0].account_id.as_str(),
+                accounts[0].utilization_5h_max
+            ),
+            ("a", Some(0.5))
+        );
         // The first request is written again with more output and a different split: its earlier split goes,
         // the new one lands whole, never mixed with what it replaced.
         let more = vec![AttemptRecord {
@@ -920,14 +971,6 @@ mod tests {
                 && rows[0].cache_write_usd >= 0.0
                 && rows[0].output_usd >= 0.0,
             "a replace never drives a stored split column negative"
-        );
-        let accounts = db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap();
-        assert_eq!(
-            (
-                accounts[0].account_id.as_str(),
-                accounts[0].utilization_5h_max
-            ),
-            ("a", Some(0.5))
         );
     }
 }
