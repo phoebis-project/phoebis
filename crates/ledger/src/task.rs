@@ -245,7 +245,14 @@ async fn land(db: &Arc<LedgerDb>, stats: &Arc<LedgerStats>, batch: Vec<Record>) 
                         attempts,
                         bodies,
                     } => {
-                        let _previous = insert_request_in(&tx, request, attempts, bodies.as_ref())?;
+                        let previous = insert_request_in(&tx, request, attempts, bodies.as_ref())?;
+                        crate::rollup::fold_request(
+                            &tx,
+                            request,
+                            attempts,
+                            &crate::rollup::CostSplit::default(),
+                            previous.as_ref().map(|(r, a)| (r, a.as_slice())),
+                        )?;
                     }
                 }
             }

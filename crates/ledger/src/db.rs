@@ -92,7 +92,14 @@ impl LedgerDb {
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
             let tx = conn.transaction()?;
-            let _previous = insert_request_in(&tx, request, attempts, bodies)?;
+            let previous = insert_request_in(&tx, request, attempts, bodies)?;
+            crate::rollup::fold_request(
+                &tx,
+                request,
+                attempts,
+                &crate::rollup::CostSplit::default(),
+                previous.as_ref().map(|(r, a)| (r, a.as_slice())),
+            )?;
             tx.commit()?;
             Ok(())
         })

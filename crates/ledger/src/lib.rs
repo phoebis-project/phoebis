@@ -5,6 +5,7 @@ mod assemble;
 mod db;
 mod histogram;
 mod record;
+mod rollup;
 mod schema;
 mod task;
 
@@ -14,6 +15,10 @@ pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
+};
+pub use rollup::{
+    bucket_of, delta_of, fold_account, fold_request, hour_of, read_account_rollups, read_rollups,
+    AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 
