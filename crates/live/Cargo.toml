@@ -1,0 +1,29 @@
+[package]
+name = "phoebis-live"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+phoebis-bus = { path = "../bus" }
+phoebis-ledger = { path = "../ledger" }
+phoebis-oauth = { path = "../oauth" }
+phoebis-relay = { path = "../relay" }
+phoebis-transport = { path = "../transport" }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+phoebis-profile = { path = "../profile" }
+phoebis-routing = { path = "../routing" }
+phoebis-store = { path = "../store" }
+fake-upstream = { path = "../../tests/fake_upstream" }
+http-body-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tower = { workspace = true }
