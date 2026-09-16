@@ -1,10 +1,16 @@
 //! Label cardinality stays bounded across a run with 10,000 distinct session ids and 10,000 distinct model
 //! strings, and the text format carries what the spec's table names.
+mod common;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use phoebis_bus::SubscriberStats;
-use phoebis_ledger::{AttemptRecord, Metrics, PriceTable, RequestRecord, RoutingGauges};
+use phoebis_ledger::{AttemptRecord, LedgerConfig, Metrics, PriceTable, RequestRecord, RoutingGauges};
+use common::*;
+use fake_upstream::{FakeUpstream, Rule};
+use tower::ServiceExt;
 
 fn series_of(text: &str) -> BTreeSet<String> {
     text.lines()
@@ -126,7 +132,6 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
         ],
         overage: vec![("a".into(), true), ("b".into(), false)],
         pins_by_pool: vec![("main".into(), 7)],
-        model_labels: vec![],
     };
     let text = metrics.render(&gauges, &[], 0);
     for line in [
@@ -195,4 +200,38 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_landed_request_reaches_the_request_and_attempt_series() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // The observation follows the commit, so the row can be readable a moment before the series moves.
+    let text = wait_for(Duration::from_secs(5), || {
+        let text = h.metrics.render(&RoutingGauges::default(), &[], 0);
+        text.contains("phoebis_requests_total{").then_some(text)
+    })
+    .await;
+    assert!(
+        text.contains(
+            r#"phoebis_requests_total{key="desktop",kind="inference",outcome="succeeded"} 1"#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"phoebis_attempts_total{account="a",model="other",outcome="succeeded"} 1"#),
+        "the shipped table does not price claude-sonnet-4-5, so the label is other:\n{text}"
+    );
+    up.shutdown().await;
 }

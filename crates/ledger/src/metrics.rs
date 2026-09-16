@@ -289,7 +289,6 @@ pub struct RoutingGauges {
     pub cooldowns: Vec<(String, String, i64)>,
     pub overage: Vec<(String, bool)>,
     pub pins_by_pool: Vec<(String, u64)>,
-    pub model_labels: Vec<(String, String)>,
 }
 
 pub async fn gather(router: &RouterHandle, table: &PriceTable, now: i64) -> RoutingGauges {
@@ -313,15 +312,18 @@ pub async fn gather(router: &RouterHandle, table: &PriceTable, now: i64) -> Rout
             .map(|((account, scope), seconds)| (account, scope, seconds))
             .collect();
     }
+    // One ask for the whole map: a scrape must not queue one command per account in front of selection.
+    let overages: BTreeMap<String, bool> = router
+        .overages()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, e)| (id, e.in_use))
+        .collect();
     let mut accounts: Vec<String> = snapshot.accounts().map(|a| a.id.clone()).collect();
     accounts.sort();
     for id in accounts {
-        let in_use = router
-            .overage(&id)
-            .await
-            .ok()
-            .flatten()
-            .is_some_and(|e| e.in_use);
+        let in_use = overages.get(&id).copied().unwrap_or(false);
         gauges.overage.push((id, in_use));
     }
     if let Ok(pins) = router.pins().await {

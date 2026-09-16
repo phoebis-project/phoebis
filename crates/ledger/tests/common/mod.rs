@@ -37,6 +37,7 @@ pub struct Harness {
     pub clock: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
+    pub metrics: Arc<Metrics>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
@@ -266,6 +267,7 @@ pub async fn harness_on(
     ));
     let bus = Bus::new();
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let metrics = Arc::new(Metrics::new());
     let ledger = spawn(
         db.clone(),
         pricing,
@@ -274,7 +276,7 @@ pub async fn harness_on(
         &bus,
         router_handle.clone(),
         clock.clone(),
-        Arc::new(Metrics::new()),
+        metrics.clone(),
         config,
     );
     let limits = Limits {
@@ -304,6 +306,7 @@ pub async fn harness_on(
         clock: clock_cell,
         db,
         ledger,
+        metrics,
         router: router_handle,
         store,
     }

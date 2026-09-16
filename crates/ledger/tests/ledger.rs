@@ -250,6 +250,14 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
         (36..=100).contains(&dropped),
         "the overflow did not fit: {dropped}"
     );
+    assert!(
+        h.metrics
+            .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+            .contains(&format!(
+                r#"phoebis_ledger_dropped_total{{table="events"}} {dropped}"#
+            )),
+        "every record that did not fit is charged to its table"
+    );
     hold_tx.send(()).unwrap();
     holder.join().unwrap();
     let gap = wait_for(Duration::from_secs(5), || {
