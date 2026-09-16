@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use phoebis_store::{CooldownRow, OverageRow, PinRow, RoutingLoad};
+use phoebis_store::{AccountState, CooldownRow, OverageRow, PinRow, RoutingLoad};
 
 use crate::RegistrySnapshot;
 
@@ -49,6 +49,14 @@ pub struct UtilizationSample {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StateWrite {
+    /// The relay's verdict on an account, fenced by the generations the attempt that formed it went out
+    /// with. It travels with the rest of the routing writes so shutdown drains it like any other.
+    AccountState {
+        account_id: String,
+        state: AccountState,
+        lifecycle_generation: u64,
+        credential_generation: u64,
+    },
     DeleteCooldown(String, String),
     DeletePin(String, String, String),
     UpsertCooldown(CooldownRow),

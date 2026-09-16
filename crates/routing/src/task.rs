@@ -264,6 +264,9 @@ pub fn spawn(
         tx: tx.clone(),
     };
     let writer_store = store.clone();
+    // Weak for the same reason the task's own sender is: a strong one here would keep the loop running after
+    // the last handle is gone, and with it the process lock a reopened on-disk store needs back.
+    let writer_tx = tx.downgrade();
     tokio::spawn(async move {
         // One batch at a time, in order: two blocking writes racing on separate threads could land a delete
         // before the upsert it was meant to follow.
@@ -271,7 +274,16 @@ pub fn spawn(
             let store = writer_store.clone();
             let size = batch.len();
             match tokio::task::spawn_blocking(move || apply(&store, batch)).await {
-                Ok(Ok(())) => {}
+                // An account-state mark that moved the row changes what the snapshot has to say, so the
+                // loop is asked for a reload once the write is on disk rather than before.
+                Ok(Ok(moved)) => {
+                    if moved {
+                        if let Some(tx) = writer_tx.upgrade() {
+                            let (reply, _rx) = oneshot::channel();
+                            let _ = tx.send(Command::Reload { reply }).await;
+                        }
+                    }
+                }
                 Ok(Err(error)) => {
                     tracing::error!(%error, batch = size, "a routing state write failed")
                 }
@@ -322,9 +334,25 @@ pub fn spawn(
     Ok(handle)
 }
 
-fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<(), StoreError> {
+/// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
+/// that the registry snapshot has to be rebuilt from.
+fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
+    let mut moved = false;
     for write in batch {
         match write {
+            StateWrite::AccountState {
+                account_id,
+                state,
+                lifecycle_generation,
+                credential_generation,
+            } => {
+                moved |= store.set_state_if_generations(
+                    &account_id,
+                    state,
+                    lifecycle_generation,
+                    credential_generation,
+                )?;
+            }
             StateWrite::DeleteCooldown(account_id, scope) => {
                 store.delete_cooldown(&account_id, &scope)?;
             }
@@ -338,7 +366,7 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<(), StoreError> {
             StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
         }
     }
-    Ok(())
+    Ok(moved)
 }
 
 impl Task {
@@ -539,28 +567,16 @@ impl Task {
                 credential_generation,
             } => {
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
-                // first and the reload follows on the loop's next turn. The write is fenced by both generations:
-                // a verdict about a credential that was replaced, or a slot that was disconnected, lands nowhere.
-                let store = self.store.clone();
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    let id = account_id.clone();
-                    let moved = tokio::task::spawn_blocking(move || {
-                        store.set_state_if_generations(
-                            &id,
-                            state,
-                            lifecycle_generation,
-                            credential_generation,
-                        )
-                    })
-                    .await;
-                    if !matches!(moved, Ok(Ok(true))) {
-                        return;
-                    }
-                    let Some(tx) = tx.upgrade() else { return };
-                    let (reply, _rx) = oneshot::channel();
-                    let _ = tx.send(Command::Reload { reply }).await;
-                });
+                // first and the reload follows once it has landed. The write is fenced by both generations:
+                // a verdict about a credential that was replaced, or a slot that was disconnected, lands
+                // nowhere. It goes through the writer every other routing write uses, so shutdown drains it
+                // rather than leaving a mark in a detached task the runtime may drop unpolled.
+                self.write(vec![StateWrite::AccountState {
+                    account_id,
+                    state,
+                    lifecycle_generation,
+                    credential_generation,
+                }]);
             }
         }
     }

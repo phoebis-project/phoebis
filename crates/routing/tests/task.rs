@@ -256,6 +256,9 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
 async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
     let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
     for i in 0..200 {
         let answer = handle
@@ -278,12 +281,23 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
         lifecycle_generation: 1,
         credential_generation: 1,
     });
+    handle.report(Report::AccountState {
+        account_id: "a".into(),
+        state: AccountState::ReauthRequired,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
     handle.shutdown().await.unwrap();
     let load = store.load_routing().unwrap();
     assert_eq!(
         (load.pins.len(), load.cooldowns.len()),
         (200, 1),
         "nothing acknowledged was lost"
+    );
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "including the mark queued last, which shutdown drains like any other write"
     );
     assert!(
         handle.select(request(&handle, None, 2_000)).await.is_err(),
