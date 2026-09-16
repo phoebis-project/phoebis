@@ -174,6 +174,8 @@ pub enum ConfigError {
     RetentionTooShort { field: &'static str },
     #[error("sessions.expire_after_seconds must be at least 60")]
     SessionExpiryTooShort,
+    #[error("stats.ledger_path and storage.path must name different files, not {path}")]
+    SharedDatabasePath { path: PathBuf },
     #[error("storage.path {path} must name a database file inside a directory")]
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
@@ -325,6 +327,20 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if config.stats.ledger_path.parent().is_none() || config.stats.ledger_path.file_name().is_none()
     {
         return Err(ConfigError::LedgerPath {
+            path: config.stats.ledger_path.clone(),
+        });
+    }
+    // Two schemas in one file open quietly and then lose everything: `LedgerDb::open` creates its tables
+    // inside the registry file, reads the store's `meta.schema_version`, skips every ledger migration, and
+    // leaves `requests` without the columns the writer inserts. The comparison folds the spellings of one
+    // path without asking the filesystem, which has no answer before either file exists.
+    if config
+        .stats
+        .ledger_path
+        .components()
+        .eq(config.storage.path.components())
+    {
+        return Err(ConfigError::SharedDatabasePath {
             path: config.stats.ledger_path.clone(),
         });
     }

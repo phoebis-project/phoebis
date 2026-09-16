@@ -451,6 +451,16 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
         load(&with("ledger", "stats:\n  ledger_path: /\n")),
         Err(ConfigError::LedgerPath { .. })
     ));
+    assert!(matches!(
+        load(&with(
+            "shared",
+            &format!(
+                "stats:\n  ledger_path: {}\n",
+                dir.path().join("router.sqlite").display()
+            )
+        )),
+        Err(ConfigError::SharedDatabasePath { .. })
+    ));
     assert!(
         load(&with("unknown", "stats:\n  nope: 1\n")).is_err(),
         "unknown fields reject the configuration"

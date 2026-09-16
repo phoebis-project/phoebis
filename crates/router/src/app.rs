@@ -353,11 +353,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
     drop(catalog);
-    // The relay was the bus's publisher: with it gone the ledger's subscriber sees the end of its queues and
-    // the drain below lands every record the channel held before the router task, the last writer of the
-    // registry, shuts down.
+    // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
+    // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its
+    // stop watch before the router task, the last writer of the registry, shuts down.
     drop(bus);
-    drop(live);
     // The ledger's event mirror reads routing state, so it stops before the task that answers it.
     if let Err(error) = ledger.shutdown().await {
         tracing::warn!(%error, "the ledger task had already stopped");
