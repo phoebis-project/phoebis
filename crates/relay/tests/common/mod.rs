@@ -16,7 +16,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, Relay, RelayOutcome};
+use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
@@ -85,6 +85,8 @@ pub struct Harness {
     pub app: axum::Router,
     pub catalog: Arc<CatalogService>,
     pub clock: Arc<AtomicI64>,
+    /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
+    pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
@@ -406,7 +408,6 @@ async fn build(
         limits.head_timeout,
     ));
     let relay = Relay::new(
-        p,
         store.clone(),
         manager,
         pool,
@@ -421,9 +422,10 @@ async fn build(
     };
     let relay = Arc::new(relay);
     Harness {
-        app: router(relay),
+        app: router(relay.clone()),
         catalog,
         clock: clock_cell,
+        relay,
         router: router_handle,
         store,
     }
@@ -448,26 +450,51 @@ pub fn default_limits() -> Limits {
     }
 }
 
+/// A fixture request as it would have arrived on the proxy listener: the caller presents the router's key
+/// rather than the upstream credential, and the head the recorder would have taken from the socket rides
+/// along, because that record is what the outbound builder walks for order and spelling.
 pub fn request_from_fixture(head: &[u8], body: &[u8], key: &str) -> Request<Body> {
-    let (line, headers) = parse_head(head).unwrap();
+    let (line, _) = parse_head(head).unwrap();
     let target = line.split(' ').nth(1).unwrap();
-    let mut req = Request::builder().method("POST").uri(target);
-    for (n, v) in headers {
-        // The caller presents the router's key, not the upstream credential; Host and Content-Length are transport-owned.
-        match n.to_ascii_lowercase().as_str() {
-            "authorization" => {
-                req = req.header("Authorization", format!("Bearer {key}"));
-            }
-            "x-api-key" => {
-                req = req.header("x-api-key", key);
-            }
-            "host" | "content-length" => {}
-            _ => {
-                req = req.header(n, v);
-            }
+    let mut original = OriginalHead::parse(head).expect("a measured fixture head parses");
+    for (name, value) in &mut original.headers {
+        if name.eq_ignore_ascii_case("authorization") {
+            *value = format!("Bearer {key}");
+        } else if name.eq_ignore_ascii_case("x-api-key") {
+            *value = key.to_string();
         }
     }
-    req.body(Body::from(body.to_vec())).unwrap()
+    let mut req = Request::builder().method("POST").uri(target);
+    for (name, value) in &original.headers {
+        // Host and Content-Length belong to the transport an in-process request never has; the recorded head
+        // keeps both, which is what a socket would have carried.
+        if !name.eq_ignore_ascii_case("host") && !name.eq_ignore_ascii_case("content-length") {
+            req = req.header(name, value);
+        }
+    }
+    let mut req = req.body(Body::from(body.to_vec())).unwrap();
+    req.extensions_mut().insert(original);
+    req
+}
+
+/// Sets a header on a fixture request the way a caller that sent it would have: on the map the relay reads
+/// and on the recorded head the outbound builder walks, so the two never disagree about what arrived.
+pub fn set_header(req: &mut Request<Body>, name: &str, value: &str) {
+    req.headers_mut().insert(
+        axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+        value.parse().unwrap(),
+    );
+    let Some(head) = req.extensions_mut().get_mut::<OriginalHead>() else {
+        return;
+    };
+    match head
+        .headers
+        .iter_mut()
+        .find(|(held, _)| held.eq_ignore_ascii_case(name))
+    {
+        Some((_, held)) => *held = value.into(),
+        None => head.headers.push((name.into(), value.into())),
+    }
 }
 
 /// The OAuth non-first-party fixture with its model rewritten; that fixture carries no billing hash, so the
@@ -485,8 +512,7 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
         native.as_bytes(),
         key,
     );
-    req.headers_mut()
-        .insert("x-claude-code-session-id", session.parse().unwrap());
+    set_header(&mut req, "x-claude-code-session-id", session);
     req
 }
 
@@ -500,8 +526,7 @@ pub fn non_portable_request(key: &str, session: &str) -> Request<Body> {
         native.as_bytes(),
         key,
     );
-    req.headers_mut()
-        .insert("x-claude-code-session-id", session.parse().unwrap());
+    set_header(&mut req, "x-claude-code-session-id", session);
     req
 }
 

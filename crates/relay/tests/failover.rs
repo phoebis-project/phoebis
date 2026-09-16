@@ -873,7 +873,7 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
 }
 
 #[tokio::test]
-async fn a_revoked_key_answers_401_at_once_and_a_foreign_client_version_is_tagged() {
+async fn a_revoked_key_answers_401_at_once_and_a_newer_client_is_relayed_untagged() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -881,16 +881,21 @@ async fn a_revoked_key_answers_401_at_once_and_a_foreign_client_version_is_tagge
     .await;
     let h = two_accounts(&up).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
-    req.headers_mut().insert(
-        "user-agent",
-        "claude-cli/2.1.300 (external, cli)".parse().unwrap(),
-    );
+    set_header(&mut req, "user-agent", "claude-cli/2.1.300 (external, cli)");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
     let o = outcome(&resp);
     assert_eq!(
         (o.client_drift.as_deref(), o.client_version.as_deref()),
-        (Some("version"), Some("2.1.300"))
+        (None, Some("2.1.300")),
+        "a version the profile never measured is read for the ledger and tagged as nothing"
+    );
+    assert!(
+        up.requests()[0]
+            .headers
+            .iter()
+            .any(|(n, v)| n == "User-Agent" && v == "claude-cli/2.1.300 (external, cli)"),
+        "the caller's own agent reaches the upstream, spelling included"
     );
     h.store.revoke_api_key("desktop", NOW, "test").unwrap();
     h.router.reload().await.unwrap();
@@ -1017,7 +1022,7 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
 }
 
 #[tokio::test]
-async fn a_pre_selection_refusal_carries_the_client_version_tag() {
+async fn a_pre_selection_refusal_carries_the_client_version() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -1033,10 +1038,7 @@ async fn a_pre_selection_refusal_carries_the_client_version_tag() {
     )
     .await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
-    req.headers_mut().insert(
-        "user-agent",
-        "claude-cli/2.1.300 (external, cli)".parse().unwrap(),
-    );
+    set_header(&mut req, "user-agent", "claude-cli/2.1.300 (external, cli)");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 404);
     let o = outcome(&resp);
@@ -1047,12 +1049,7 @@ async fn a_pre_selection_refusal_carries_the_client_version_tag() {
             o.client_version.as_deref(),
             o.attempt
         ),
-        (
-            Some("model_not_allowed"),
-            Some("version"),
-            Some("2.1.300"),
-            0
-        ),
+        (Some("model_not_allowed"), None, Some("2.1.300"), 0),
         "a refusal before selection still names the client build that was refused"
     );
     assert!(up.requests().is_empty());

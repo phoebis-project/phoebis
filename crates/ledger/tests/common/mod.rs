@@ -289,7 +289,6 @@ pub async fn harness_on(
     };
     let relay = Arc::new(
         Relay::new(
-            p,
             store.clone(),
             manager,
             pool,

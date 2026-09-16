@@ -144,12 +144,11 @@ async fn an_oauth_client_served_by_an_api_key_account_loses_the_oauth_beta() {
     assert!(!beta.contains("oauth-2025-04-20"));
     assert!(!got.headers.iter().any(|(n, _)| n == "Authorization"));
     let names: Vec<&str> = got.headers.iter().map(|(n, _)| n.as_str()).collect();
-    let av = names
-        .iter()
-        .position(|n| *n == "anthropic-version")
-        .unwrap();
-    assert_eq!(names[av + 1], "x-api-key");
-    assert_eq!(names[av + 2], "x-app");
+    assert_eq!(
+        names[..2],
+        ["Accept", "x-api-key"],
+        "the key takes the slot the caller's own credential header held"
+    );
     up.shutdown().await;
 }
 
@@ -311,6 +310,59 @@ async fn a_drifted_stamp_is_refused(stamp: &str) {
     assert!(
         up.requests().is_empty(),
         "a drifted body is not sent upstream in any form"
+    );
+    up.shutdown().await;
+}
+
+/// A body the account identity cannot be written into would be billed against whatever the caller wrote, so
+/// it is refused before any account is tried rather than relayed as it stands.
+#[tokio::test]
+async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("Authorization", "Bearer phoebis-testkey")
+        .body(Body::from(r#"{"model":"claude-sonnet-4-5","messages":[]}"#))
+        .unwrap();
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.headers()
+            .get("x-phoebis-error-code")
+            .and_then(|v| v.to_str().ok()),
+        Some("body_shape")
+    );
+    let outcome = resp
+        .extensions()
+        .get::<RelayOutcome>()
+        .expect("a refused request carries its outcome")
+        .clone();
+    assert_eq!(
+        (outcome.error_code.as_deref(), outcome.attempt),
+        (Some("body_shape"), 0),
+        "the ledger row names the refusal and no attempt was spent"
+    );
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("metadata.user_id") && !message.contains("claude-sonnet-4-5"),
+        "the refusal names the member it could not find and nothing of the body: {message}"
+    );
+    assert!(
+        up.requests().is_empty(),
+        "a body the relay cannot bind is not sent upstream in any form"
     );
     up.shutdown().await;
 }

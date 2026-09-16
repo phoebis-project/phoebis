@@ -326,8 +326,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_still_yields_usage_and_a_hu
     let mut sub = bus.subscribe("test");
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
-    req.headers_mut()
-        .insert("accept-encoding", "gzip".parse().unwrap());
+    set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(
         resp.headers()
@@ -737,8 +736,7 @@ async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage()
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     // A non-portable request keeps its account, so the rejection is forwarded instead of failing over.
     let mut req = non_portable_request(KEY, "s1");
-    req.headers_mut()
-        .insert("accept-encoding", "gzip".parse().unwrap());
+    set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 429);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -798,8 +796,7 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     let mut sub = bus.subscribe("test");
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = stream_request(KEY);
-    req.headers_mut()
-        .insert("accept-encoding", "gzip".parse().unwrap());
+    set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.into_body().collect().await.unwrap().to_bytes();

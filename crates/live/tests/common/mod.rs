@@ -198,7 +198,6 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     };
     let relay = Arc::new(
         Relay::new(
-            p,
             store.clone(),
             manager,
             pool,

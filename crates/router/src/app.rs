@@ -180,7 +180,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     ));
     let relay = Arc::new(
         Relay::new(
-            profile,
             store.clone(),
             manager.clone(),
             pool.clone(),
@@ -302,11 +301,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
-    let mut proxy = tokio::spawn(
-        axum::serve(proxy_listener, phoebis_relay::router(relay.clone()))
-            .with_graceful_shutdown(stopped(proxy_stop))
-            .into_future(),
-    );
+    // The relayed surface is served through the relay's own accept loop rather than `axum::serve`: only there
+    // can each connection be wrapped so the caller's original header spelling survives hyper's parse.
+    let mut proxy = tokio::spawn(phoebis_relay::serve(proxy_listener, relay.clone(), proxy_stop));
     let mut admin_server = tokio::spawn(
         axum::serve(admin_listener, admin_app)
             .with_graceful_shutdown(stopped(stop_rx.clone()))

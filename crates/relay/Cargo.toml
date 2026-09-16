@@ -18,6 +18,9 @@ phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 futures = { workspace = true }
 hmac = { workspace = true }
+httparse = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 jiff = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }

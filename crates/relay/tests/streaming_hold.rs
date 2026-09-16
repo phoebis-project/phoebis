@@ -412,8 +412,7 @@ async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the
     )
     .await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
-    req.headers_mut()
-        .insert("accept-encoding", "gzip".parse().unwrap());
+    set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),

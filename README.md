@@ -86,6 +86,11 @@ The third line is optional and switches the client to the full first-party reque
 the client sends the reduced shape and `phoebis` relays that as it arrives. The variable is an internal one that a later
 client build may drop.
 
+Request headers travel as the client sent them, in its own order and spelling: `phoebis` drops the hop-by-hop and
+forwarding headers, puts the account's credential where the client put yours, adjusts `anthropic-beta` to what the
+account may claim, and owns `Host` and `Content-Length`. Nothing is added for a header the client left out, so any
+Claude Code version relays on its own shape rather than on the measured one.
+
 Remote Control is unavailable behind the router with or without that override. The client reports that
 `ANTHROPIC_BASE_URL` does not point at `api.anthropic.com`, and it states that the override does not apply to Remote
 Control.

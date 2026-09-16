@@ -3,6 +3,8 @@
 pub mod catalog;
 pub mod fixtures;
 
+/// The measured client's own SDK headers. The relay emits none of them: a caller's headers travel as it sent
+/// them, so these are the record of the capture the fixture suites are compared against.
 pub struct Stainless {
     pub arch: &'static str,
     pub lang: &'static str,
@@ -12,6 +14,8 @@ pub struct Stainless {
     pub runtime_version: &'static str,
     pub timeout: &'static str,
 }
+/// The beta lists the measured client sends in each of its three shapes. The relay emits none of them either;
+/// it adjusts the caller's own list by one entry, the one the credential decides.
 pub struct Betas {
     pub oauth_non_first_party: &'static str,
     pub oauth_first_party: &'static str,
@@ -35,20 +39,6 @@ pub struct TlsProfiles {
     pub control_cipher_list: &'static str,
 }
 
-/// One position in the measured inference header sequence.
-pub enum HeaderSlot {
-    /// Always emitted with this value unless the caller sent the same name, in which case the caller's value wins.
-    Fixed(&'static str, &'static str),
-    /// `Authorization: Bearer` for OAuth accounts; API-key accounts emit nothing here and insert `x-api-key` later.
-    Credential,
-    /// Copied from the caller when present, otherwise omitted.
-    Optional(&'static str),
-    /// Copied from the caller when present, otherwise the profile baseline value is used.
-    FromCaller(&'static str),
-    Host,
-    ContentLength,
-}
-
 pub struct Profile {
     pub name: &'static str,
     pub cli_version: &'static str,
@@ -57,8 +47,6 @@ pub struct Profile {
     pub user_agent_cli: &'static str,
     pub stainless: Stainless,
     pub betas: Betas,
-    pub inference_header_order: &'static [HeaderSlot],
-    pub api_key_slot_after: &'static str,
     pub control: Control,
     pub tls: TlsProfiles,
 }
@@ -75,36 +63,6 @@ static PROFILE_2_1_269: Profile = Profile {
         oauth_first_party: "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
         api_key_non_first_party: "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
     },
-    inference_header_order: &[
-        HeaderSlot::Fixed("Accept", "application/json"),
-        HeaderSlot::Credential,
-        HeaderSlot::Fixed("Content-Type", "application/json"),
-        HeaderSlot::FromCaller("User-Agent"),
-        HeaderSlot::Optional("X-Claude-Code-Session-Id"),
-        HeaderSlot::FromCaller("X-Stainless-Arch"),
-        HeaderSlot::FromCaller("X-Stainless-Lang"),
-        HeaderSlot::FromCaller("X-Stainless-OS"),
-        HeaderSlot::FromCaller("X-Stainless-Package-Version"),
-        HeaderSlot::FromCaller("X-Stainless-Retry-Count"),
-        HeaderSlot::FromCaller("X-Stainless-Runtime"),
-        HeaderSlot::FromCaller("X-Stainless-Runtime-Version"),
-        HeaderSlot::FromCaller("X-Stainless-Timeout"),
-        HeaderSlot::FromCaller("anthropic-beta"),
-        HeaderSlot::Fixed("anthropic-dangerous-direct-browser-access", "true"),
-        HeaderSlot::Fixed("anthropic-version", "2023-06-01"),
-        HeaderSlot::Fixed("x-app", "cli"),
-        HeaderSlot::Optional("x-client-request-id"),
-        HeaderSlot::Optional("x-claude-remote-container-id"),
-        HeaderSlot::Optional("x-claude-remote-session-id"),
-        HeaderSlot::Optional("x-claude-code-agent-id"),
-        HeaderSlot::Optional("x-claude-code-parent-agent-id"),
-        HeaderSlot::Fixed("Connection", "keep-alive"),
-        HeaderSlot::Host,
-        HeaderSlot::Fixed("Accept-Encoding", "gzip, deflate, br, zstd"),
-        HeaderSlot::ContentLength,
-    ],
-    // Measured: an API key sits between anthropic-version and x-app.
-    api_key_slot_after: "anthropic-version",
     control: Control {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
         authorize_console: "https://platform.claude.com/oauth/authorize",

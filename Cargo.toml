@@ -37,6 +37,8 @@ futures = "0.3"
 hmac = "0.12"
 http-body-util = "0.1"
 httparse = "1.10.1"
+hyper = { version = "1.11.1", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1.20", features = ["server", "server-auto", "server-graceful", "service", "tokio"] }
 jiff = "0.2.37"
 rand = "0.10.2"
 rcgen = "0.13"

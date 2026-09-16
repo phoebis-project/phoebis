@@ -1,8 +1,9 @@
-//! The Messages relay: caller authentication, request identity, the measured outbound header sequence, the two
-//! body edits, and the upstream round trip with its retry and refresh rules.
+//! The Messages relay: caller authentication, request identity, the caller's own headers passed through to
+//! the account's endpoint, the two body edits, and the upstream round trip with its retry and refresh rules.
 
 mod auth;
 mod body;
+mod casing;
 mod catalog;
 mod classify;
 mod dispatch;
@@ -16,11 +17,13 @@ mod messages;
 mod observe;
 mod portability;
 mod ratelimit;
+mod serve;
 mod sse;
 mod stream;
 
 pub use auth::{presented_key, AuthError};
-pub use body::{edit_body, BodyEdits};
+pub use body::{edit_body, BodyEdits, BodyMember};
+pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};
 pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};
 pub use drift::DriftGuard;
@@ -32,6 +35,7 @@ pub use identity::{identify, RequestIdentity};
 pub use messages::{router, Limits, Probe, Relay, RelayOutcome};
 pub use portability::is_portable;
 pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
+pub use serve::serve;
 pub use sse::{SseEvent, SseParser};
 
 /// A request the relay refuses before it reaches the upstream.
@@ -39,6 +43,8 @@ pub use sse::{SseEvent, SseParser};
 pub enum RelayError {
     #[error("the bound account's identity cannot be written into the request body")]
     AccountUuid,
+    #[error("request body has no {} member to edit", .0.path())]
+    BodyShape(BodyMember),
     #[error("request body is larger than the configured limit")]
     BodyTooLarge,
     #[error("billing header: {0}")]

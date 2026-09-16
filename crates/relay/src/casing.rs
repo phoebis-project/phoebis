@@ -1,0 +1,318 @@
+//! The caller's request head as it arrived on the wire.
+//!
+//! hyper 1.11 keeps the original header spellings in an extension with no server-side accessor, so the only
+//! way to relay a caller's own casing and order is to read the head before hyper parses it: the recorder below
+//! wraps the accepted stream, copies what hyper reads until the head terminator, parses that head once, and
+//! leaves it in a queue the connection's service drains into the request's extensions.
+
+use std::collections::VecDeque;
+use std::io;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+/// Header slots one head may carry. A head with more is not recorded rather than recorded in part.
+const MAX_HEADERS: usize = 64;
+
+/// Bytes one head may span before the recorder gives up on the connection, so a caller that never terminates
+/// its head cannot grow the copy without bound.
+const MAX_HEAD: usize = 64 << 10;
+
+const TERMINATOR: &[u8] = b"\r\n\r\n";
+
+/// One caller's head as it was spelled on the wire: each name as the caller wrote it, each value as it was
+/// sent, in the order they arrived. `http::HeaderMap` documents its iteration order as arbitrary, so this list
+/// is the only authoritative record of either.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OriginalHead {
+    pub headers: Vec<(String, String)>,
+}
+
+impl OriginalHead {
+    /// One `httparse` pass over a complete request head, terminator included. `None` for anything that is not
+    /// a complete HTTP/1 head, which is also what an HTTP/2 preface and a head past `MAX_HEADERS` yield.
+    pub fn parse(raw: &[u8]) -> Option<OriginalHead> {
+        let mut slots = [httparse::EMPTY_HEADER; MAX_HEADERS];
+        let mut request = httparse::Request::new(&mut slots);
+        if !matches!(request.parse(raw), Ok(httparse::Status::Complete(_))) {
+            return None;
+        }
+        Some(OriginalHead {
+            headers: request
+                .headers
+                .iter()
+                // A value that is not UTF-8 cannot be re-emitted as the caller wrote it, and the `HeaderMap`
+                // walk the relay falls back to drops it just the same.
+                .filter_map(|h| {
+                    Some((
+                        h.name.to_string(),
+                        std::str::from_utf8(h.value).ok()?.into(),
+                    ))
+                })
+                .collect(),
+        })
+    }
+
+    /// The first value under `name`, matched without regard to case.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Heads recorded on one connection, waiting for the requests hyper parses out of the same bytes.
+pub type HeadQueue = Arc<Mutex<VecDeque<OriginalHead>>>;
+
+pub fn head_queue() -> HeadQueue {
+    Arc::new(Mutex::new(VecDeque::new()))
+}
+
+/// Body bytes the head declares, or `None` for framing the recorder cannot skip. Chunked is the one that
+/// matters: its length lives in the body, so the recorder would have to decode the framing to find the next
+/// head and instead stops recording the connection.
+fn declared_body(head: &OriginalHead) -> Option<u64> {
+    if head.get("transfer-encoding").is_some() {
+        return None;
+    }
+    match head.get("content-length") {
+        None => Some(0),
+        Some(value) => value.trim().parse().ok(),
+    }
+}
+
+enum Recording {
+    /// Copying bytes into `head` until the terminator.
+    Head,
+    /// Skipping the declared body, with this many bytes left of it.
+    Body(u64),
+    /// Nothing more on this connection is recorded; its requests reach the relay without a head and the
+    /// outbound builder falls back to the `HeaderMap`.
+    Off,
+}
+
+/// The accepted stream with a copy of each request head taken as hyper reads it. Writes are delegated
+/// untouched; the response half is the relay's own bytes and needs no record.
+pub struct HeadRecorder<S> {
+    head: Vec<u8>,
+    inner: S,
+    queue: HeadQueue,
+    state: Recording,
+}
+
+impl<S> HeadRecorder<S> {
+    pub fn new(inner: S, queue: HeadQueue) -> HeadRecorder<S> {
+        HeadRecorder {
+            head: Vec::new(),
+            inner,
+            queue,
+            state: Recording::Head,
+        }
+    }
+
+    fn observe(&mut self, data: &[u8]) {
+        // Each head found hands back whatever followed it in the same read, so a keep-alive connection whose
+        // next head arrived in the same segment is picked up without recursing per request.
+        let mut pending = self.feed(data);
+        while let Some(rest) = pending {
+            pending = self.feed(&rest);
+        }
+    }
+
+    /// Consumes `data` up to and including the next head, returning the bytes after it.
+    fn feed(&mut self, mut data: &[u8]) -> Option<Vec<u8>> {
+        loop {
+            match self.state {
+                Recording::Off => return None,
+                Recording::Body(remaining) => {
+                    let take = remaining.min(data.len() as u64);
+                    data = &data[take as usize..];
+                    self.state = if take == remaining {
+                        Recording::Head
+                    } else {
+                        Recording::Body(remaining - take)
+                    };
+                    if data.is_empty() {
+                        return None;
+                    }
+                }
+                Recording::Head => {
+                    // The terminator may straddle two reads, so the search starts just far enough back to see
+                    // the bytes already held.
+                    let from = self.head.len().saturating_sub(TERMINATOR.len() - 1);
+                    self.head.extend_from_slice(data);
+                    let Some(at) = find(&self.head[from..], TERMINATOR) else {
+                        if self.head.len() > MAX_HEAD {
+                            self.stop();
+                        }
+                        return None;
+                    };
+                    let end = from + at + TERMINATOR.len();
+                    if end > MAX_HEAD {
+                        self.stop();
+                        return None;
+                    }
+                    let rest = self.head.split_off(end);
+                    self.state = match OriginalHead::parse(&self.head)
+                        .and_then(|head| declared_body(&head).map(|body| (head, body)))
+                    {
+                        Some((head, body)) => {
+                            self.queue
+                                .lock()
+                                .expect("head queue poisoned")
+                                .push_back(head);
+                            match body {
+                                0 => Recording::Head,
+                                n => Recording::Body(n),
+                            }
+                        }
+                        None => Recording::Off,
+                    };
+                    self.head.clear();
+                    return Some(rest);
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        self.state = Recording::Off;
+        self.head = Vec::new();
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for HeadRecorder<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let polled = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if matches!(polled, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            this.observe(&buf.filled()[before..]);
+        }
+        polled
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for HeadRecorder<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    const HEAD: &[u8] = b"POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\nX-Stainless-Arch: x64\r\nContent-Length: 2\r\n\r\n{}";
+
+    async fn drain(bytes: Vec<u8>) -> VecDeque<OriginalHead> {
+        let queue = head_queue();
+        let mut recorder = HeadRecorder::new(std::io::Cursor::new(bytes), queue.clone());
+        let mut sink = Vec::new();
+        recorder.read_to_end(&mut sink).await.unwrap();
+        let heads = queue.lock().unwrap().clone();
+        heads
+    }
+
+    #[tokio::test]
+    async fn a_head_is_recorded_with_the_callers_spelling_and_order() {
+        let heads = drain(HEAD.to_vec()).await;
+        assert_eq!(
+            heads[0].headers,
+            vec![
+                ("Host".to_string(), "api.anthropic.com".to_string()),
+                ("X-Stainless-Arch".to_string(), "x64".to_string()),
+                ("Content-Length".to_string(), "2".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_declared_body_is_skipped_so_the_next_head_on_the_connection_is_read() {
+        let heads = drain([HEAD, HEAD].concat()).await;
+        assert_eq!(heads.len(), 2, "both heads of a keep-alive connection");
+        assert_eq!(heads[0], heads[1]);
+    }
+
+    #[tokio::test]
+    async fn a_chunked_request_stops_the_recording_for_the_rest_of_the_connection() {
+        let chunked =
+            b"POST /v1/messages HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n";
+        let heads = drain([chunked.as_slice(), HEAD].concat()).await;
+        assert!(
+            heads.is_empty(),
+            "neither the chunked request nor what follows it on the connection is recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_head_past_the_cap_and_one_that_does_not_parse_are_not_recorded() {
+        let oversized = format!(
+            "POST / HTTP/1.1\r\nX-Big: {}\r\n\r\n",
+            "x".repeat(MAX_HEAD + 1)
+        );
+        assert!(drain(oversized.into_bytes()).await.is_empty());
+        // The HTTP/2 preface is the shape a caller that negotiated h2 opens with; httparse refuses its
+        // version, so the connection falls back rather than recording a head with no headers.
+        let preface = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        assert!(drain(preface.to_vec()).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_terminator_split_across_two_reads_is_still_found() {
+        let queue = head_queue();
+        let (head, body) = HEAD.split_at(HEAD.len() - 4);
+        let mut recorder = HeadRecorder::new(std::io::Cursor::new(Vec::<u8>::new()), queue.clone());
+        recorder.observe(head);
+        recorder.observe(body);
+        assert_eq!(queue.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_head_with_more_slots_than_the_parser_holds_is_refused() {
+        let mut raw = b"POST / HTTP/1.1\r\n".to_vec();
+        for n in 0..=MAX_HEADERS {
+            raw.extend_from_slice(format!("X-{n}: v\r\n").as_bytes());
+        }
+        raw.extend_from_slice(b"\r\n");
+        assert_eq!(OriginalHead::parse(&raw), None);
+    }
+}

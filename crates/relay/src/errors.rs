@@ -7,7 +7,7 @@ use axum::response::Response;
 use phoebis_routing::KeyRefusal;
 
 use crate::auth::AuthError;
-use crate::RelayError;
+use crate::{BodyMember, RelayError};
 
 /// Carries the adapter's own failure code, which is finer grained than the Anthropic error type a downstream
 /// client reads, so an operator can tell two failures apart without a log line.
@@ -82,6 +82,19 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "api_error",
             code: "accounts_unavailable",
             message: "the bound account cannot serve requests",
+        },
+        // Naming the member is what lets a client author see which part of its body the relay has to find;
+        // no value of the body is echoed back.
+        RelayError::BodyShape(member) => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "body_shape",
+            message: match member {
+                BodyMember::MetadataUserId => {
+                    "the request body has no metadata.user_id the account can be bound to"
+                }
+                BodyMember::Model => "the request body has no top-level model to resolve",
+            },
         },
         RelayError::BodyTooLarge => Failure {
             status: StatusCode::PAYLOAD_TOO_LARGE,

@@ -17,7 +17,6 @@ use phoebis_bus::{
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
-use phoebis_profile::Profile;
 use phoebis_routing::{
     resolve, EvidenceSource, Exhaustion, OverageEvidence, PinRef, Report, ResolveError,
     RouterHandle, SelectRequest, SelectResult, Selection,
@@ -32,6 +31,7 @@ use phoebis_transport::TransportError;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 
+use crate::casing::OriginalHead;
 use crate::classify::{classify, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
@@ -93,8 +93,8 @@ pub struct RelayOutcome {
     /// Whether the request was written to the upstream in full, which is what decides if it may have been
     /// billed even when no response came back.
     pub written: bool,
-    /// Names the kind of drift when the caller was not the pinned client: `hash` for a billing hash this
-    /// build cannot reproduce, in which case the body went out unedited, and `version` for a foreign build.
+    /// `hash` when the caller stamped a billing hash this build cannot reproduce, in which case nothing was
+    /// sent upstream. Every client version is relayed, so a version is never drift.
     pub client_drift: Option<String>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
@@ -116,7 +116,6 @@ pub struct Relay {
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
     pub(crate) pool: Arc<Pool>,
-    profile: &'static Profile,
     resolver: Resolver,
     router: RouterHandle,
     store: Arc<Store>,
@@ -125,7 +124,6 @@ pub struct Relay {
 impl Relay {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        profile: &'static Profile,
         store: Arc<Store>,
         manager: Arc<CredentialManager>,
         pool: Arc<Pool>,
@@ -137,11 +135,10 @@ impl Relay {
         Relay {
             bus: None,
             clock,
-            drift: DriftGuard::new(profile),
+            drift: DriftGuard,
             limits,
             manager,
             pool,
-            profile,
             resolver,
             router,
             store,
@@ -421,6 +418,7 @@ impl Relay {
             },
         };
         let (parts, body) = request.into_parts();
+        let original = parts.extensions.get::<OriginalHead>();
         // Before the body: an unauthenticated caller that could reach the read below would hold the whole
         // request limit per connection for as long as it cared to keep sending.
         let presented = match presented_key(&parts.headers) {
@@ -492,8 +490,6 @@ impl Relay {
             stream,
             capture_hours,
         );
-        // Version drift is a tag on a relayed request; hash drift is a refusal, below.
-        let client_drift = client_version.as_ref().map(|_| "version".to_string());
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
@@ -533,11 +529,11 @@ impl Relay {
         );
         let admitted = Admitted {
             caller: &parts.headers,
-            client_drift,
             client_version,
             fallback_ms,
             identity: &identity,
             key: &key,
+            original,
             portable,
             raw: &raw,
             request_id: &trace.request_id,
@@ -621,7 +617,7 @@ impl Relay {
                         0,
                         attempt,
                         false,
-                        admitted.client_drift.clone(),
+                        None,
                         admitted.client_version.clone(),
                         Some(code),
                         None,
@@ -743,7 +739,6 @@ impl Relay {
                 attempt: *attempt,
                 caller: admitted.caller,
                 cancel,
-                client_drift: admitted.client_drift.clone(),
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 fallback_ms: admitted.fallback_ms,
@@ -761,8 +756,8 @@ impl Relay {
                     method: "POST",
                     target: admitted.target.to_string(),
                     headers: outbound_headers(
-                        self.profile,
                         admitted.caller,
+                        admitted.original,
                         &credential.kind,
                         &authority,
                         edited.len(),
@@ -809,7 +804,7 @@ impl Relay {
                         0,
                         *attempt,
                         false,
-                        admitted.client_drift.clone(),
+                        None,
                         admitted.client_version.clone(),
                         Some("account_cancelled"),
                         pin_epoch,
@@ -834,7 +829,7 @@ impl Relay {
                         0,
                         *attempt,
                         written,
-                        admitted.client_drift.clone(),
+                        None,
                         admitted.client_version.clone(),
                         Some("upstream_unreachable"),
                         pin_epoch,
@@ -889,7 +884,7 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
-            ctx.client_drift.clone(),
+            None,
             ctx.client_version.clone(),
             None,
             ctx.pin_epoch,
@@ -1234,7 +1229,7 @@ impl Relay {
             0,
             0,
             false,
-            client_version.map(|_| "version".to_string()),
+            None,
             client_version.map(str::to_string),
             Some(failure.code),
             None,
@@ -1290,7 +1285,7 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
-            ctx.client_drift.clone(),
+            None,
             ctx.client_version.clone(),
             Some("account_cancelled"),
             ctx.pin_epoch,
@@ -1554,7 +1549,6 @@ struct Responding<'a> {
     attempt: u8,
     caller: &'a HeaderMap,
     cancel: &'a CancellationToken,
-    client_drift: Option<String>,
     client_version: Option<String>,
     credential_generation: u64,
     fallback_ms: i64,
@@ -1581,11 +1575,13 @@ enum Next {
 /// account the request tries.
 struct Admitted<'a> {
     caller: &'a HeaderMap,
-    client_drift: Option<String>,
     client_version: Option<String>,
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
+    /// The caller's head as it arrived, absent for an in-process caller and for a connection the recorder
+    /// gave up on.
+    original: Option<&'a OriginalHead>,
     portable: bool,
     raw: &'a Bytes,
     request_id: &'a str,

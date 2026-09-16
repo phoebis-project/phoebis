@@ -351,10 +351,7 @@ async fn a_gzipped_response_is_decoded_for_a_caller_that_refuses_it() {
     let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
     let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
     let mut request = common::stream_request("phoebis-testkey");
-    request.headers_mut().insert(
-        axum::http::header::ACCEPT_ENCODING,
-        axum::http::HeaderValue::from_static("identity"),
-    );
+    common::set_header(&mut request, "accept-encoding", "identity");
     let resp = app.oneshot(request).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert!(
