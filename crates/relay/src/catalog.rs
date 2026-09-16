@@ -43,6 +43,10 @@ pub struct Discovered {
 pub struct SyncOutcome {
     pub delta: Option<SyncDelta>,
     pub error: Option<String>,
+    /// The catalog landed in the store but the router could not be told about it, so routing still serves
+    /// the previous one. The caller decides what that is worth: an operator asking for a sync is refused,
+    /// the scheduler logs it and tries again on its next pass.
+    pub reload_failed: Option<String>,
     pub seeded: bool,
     /// The account moved while discovery was in flight, so what came back describes an endpoint or a
     /// credential the account no longer holds and was dropped rather than written.
@@ -198,6 +202,7 @@ impl CatalogService {
                     Ok(delta) => SyncOutcome {
                         delta: Some(delta),
                         error: None,
+                        reload_failed: None,
                         seeded: false,
                         stale: false,
                     },
@@ -208,6 +213,7 @@ impl CatalogService {
                         SyncOutcome {
                             delta: None,
                             error: Some(error),
+                            reload_failed: None,
                             seeded: false,
                             stale: false,
                         }
@@ -217,6 +223,7 @@ impl CatalogService {
                         SyncOutcome {
                             delta: None,
                             error: None,
+                            reload_failed: None,
                             seeded: false,
                             stale: true,
                         }
@@ -237,14 +244,18 @@ impl CatalogService {
                 SyncOutcome {
                     delta: None,
                     error: Some(message),
+                    reload_failed: None,
                     seeded,
                     stale: false,
                 }
             }
         };
         tracing::info!(account = %account_id, seeded = outcome.seeded, error = ?outcome.error, "catalog sync");
-        let _ = self.router.reload().await;
-        Ok(outcome)
+        let reload_failed = self.router.reload().await.err().map(|e| e.to_string());
+        Ok(SyncOutcome {
+            reload_failed,
+            ..outcome
+        })
     }
 
     pub fn spawn_scheduler(self: Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
@@ -262,8 +273,15 @@ impl CatalogService {
                     ) {
                         continue;
                     }
-                    if let Err(error) = self.sync(&account.id, "scheduler").await {
-                        tracing::warn!(account = %account.id, %error, "scheduled catalog sync failed in the store");
+                    match self.sync(&account.id, "scheduler").await {
+                        Ok(outcome) => {
+                            if let Some(error) = outcome.reload_failed {
+                                tracing::warn!(account = %account.id, %error, "a scheduled catalog sync could not be published");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(account = %account.id, %error, "scheduled catalog sync failed in the store");
+                        }
                     }
                 }
             }

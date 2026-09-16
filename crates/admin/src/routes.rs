@@ -894,17 +894,23 @@ pub(crate) async fn reload_or_refuse(state: &AdminState) -> Result<(), Response>
         Ok(()) => Ok(()),
         Err(ReloadError::Load(error)) => {
             tracing::error!(%error, "a registry write could not be published");
-            Err(failure_with_code(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "registry_unavailable",
-                "the registry was written but could not be reloaded; the next successful reload publishes it",
-            ))
+            Err(registry_unavailable())
         }
         Err(ReloadError::Gone(_)) => Err(failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "the router is not available",
         )),
     }
+}
+
+/// The answer to a write that landed but that routing has not been told about. Shared, so a route that
+/// publishes through something other than `reload_or_refuse` gives a console the same thing to branch on.
+pub(crate) fn registry_unavailable() -> Response {
+    failure_with_code(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "registry_unavailable",
+        "the registry was written but could not be reloaded; the next successful reload publishes it",
+    )
 }
 
 pub(crate) fn store_failure(error: StoreError) -> Response {

@@ -15,7 +15,9 @@ use phoebis_store::{
 };
 use serde_json::{json, Value};
 
-use crate::routes::{account, account_json, failure, reload_or_refuse, store_failure};
+use crate::routes::{
+    account, account_json, failure, registry_unavailable, reload_or_refuse, store_failure,
+};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
@@ -178,6 +180,22 @@ async fn verify_staged(
     }
 }
 
+/// The first discovered id whose canonical form the account already serves under a different upstream id.
+fn stored_clash(
+    state: &AdminState,
+    account_id: &str,
+    discovered: &[(String, bool)],
+) -> Result<Option<String>, StoreError> {
+    let stored = state.store.served_models(account_id)?;
+    Ok(discovered.iter().find_map(|(upstream_id, _)| {
+        let canonical = canonical_id(upstream_id);
+        stored
+            .iter()
+            .any(|m| m.canonical_id == canonical && m.upstream_id != *upstream_id)
+            .then_some(canonical)
+    }))
+}
+
 /// The first canonical id a discovered list names twice, whatever the spellings.
 fn clashing_canonical_id(models: &[(String, bool)]) -> Option<String> {
     let mut seen = std::collections::HashSet::new();
@@ -217,6 +235,20 @@ pub(crate) async fn patch(
         let verified = match verify_staged(&state, &staged, &secret).await {
             Ok(verified) => verified,
             Err(refusal) => return refusal,
+        };
+        // A stored row under another spelling of a discovered id breaks the catalog's canonical-id
+        // uniqueness inside the commit, which would roll the verified secret or URL back with a 500. It is
+        // the same clash the intra-list check finds, so it is recorded the same way and the stored catalog
+        // is left as it is.
+        let verified = match verified {
+            Verified::Catalog(models) => match stored_clash(&state, &id, &models) {
+                Ok(Some(canonical)) => Verified::Error(format!(
+                    "{canonical} is already served under another spelling"
+                )),
+                Ok(None) => Verified::Catalog(models),
+                Err(error) => return store_failure(error),
+            },
+            error => error,
         };
         let (catalog, catalog_error) = match &verified {
             Verified::Catalog(models) => (Some(models.as_slice()), None),
@@ -351,13 +383,21 @@ pub(crate) async fn sync(State(state): State<Arc<AdminState>>, Path(id): Path<St
         return refusal;
     }
     match state.catalog.sync(&id, ACTOR).await {
-        Ok(outcome) => Json(json!({
-            "added": outcome.delta.as_ref().map(|d| d.added.clone()).unwrap_or_default(),
-            "missing": outcome.delta.as_ref().map(|d| d.missing.clone()).unwrap_or_default(),
-            "error": outcome.error,
-            "seeded": outcome.seeded,
-        }))
-        .into_response(),
+        Ok(outcome) => {
+            // The rows are in the store either way, so the refusal is about publication alone, which is what
+            // the same answer means everywhere else an admin write cannot reach the router.
+            if let Some(error) = &outcome.reload_failed {
+                tracing::error!(account = %id, %error, "a catalog sync could not be published");
+                return registry_unavailable();
+            }
+            Json(json!({
+                "added": outcome.delta.as_ref().map(|d| d.added.clone()).unwrap_or_default(),
+                "missing": outcome.delta.as_ref().map(|d| d.missing.clone()).unwrap_or_default(),
+                "error": outcome.error,
+                "seeded": outcome.seeded,
+            }))
+            .into_response()
+        }
         Err(error) => store_failure(error),
     }
 }

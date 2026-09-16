@@ -545,3 +545,112 @@ async fn creating_an_account_whose_catalog_carries_two_spellings_records_the_cla
         "and the account can still be edited"
     );
 }
+
+#[tokio::test]
+async fn a_sync_that_cannot_publish_answers_503_with_the_catalog_written() {
+    let (app, up, store, router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
+        },
+    );
+    store.debug_fail_next_load();
+    let refused = post(
+        &app,
+        "/admin/accounts/direct/models/sync",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        refused.headers().get("x-phoebis-error-code").unwrap(),
+        "registry_unavailable"
+    );
+    assert!(
+        store
+            .served_models("direct")
+            .unwrap()
+            .iter()
+            .any(|m| m.upstream_id == "claude-sonnet-4-5"),
+        "the rows were written; only the publication failed"
+    );
+    assert!(
+        router
+            .snapshot()
+            .served("direct", "claude-sonnet-4-5")
+            .is_none(),
+        "and routing still serves the catalog it had"
+    );
+    router.reload().await.unwrap();
+    assert!(router
+        .snapshot()
+        .served("direct", "claude-sonnet-4-5")
+        .is_some());
+}
+
+#[tokio::test]
+async fn a_discovered_id_clashing_with_a_stored_spelling_is_recorded_as_a_catalog_error() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        put(
+            &app,
+            "/admin/accounts/direct/models",
+            r#"{"models":[{"upstream_id":"Vendor/Model-A","selected":true}]}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    up.add_credential_rule(
+        "sk-ant-api03-NEW",
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"vendor/model-a"}]}"#.to_vec(),
+        },
+    );
+    let patched = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let listed = json(get(&app, "/admin/accounts/direct/models", Some(&cookie)).await).await;
+    assert!(
+        listed["catalog_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("vendor/model-a")),
+        "the clash is recorded rather than rolling the edit back"
+    );
+    assert_eq!(
+        store
+            .served_models("direct")
+            .unwrap()
+            .iter()
+            .map(|m| m.upstream_id.clone())
+            .collect::<Vec<_>>(),
+        ["Vendor/Model-A"],
+        "the stored catalog is untouched"
+    );
+    assert_eq!(
+        store
+            .api_key_credential("direct")
+            .unwrap()
+            .unwrap()
+            .0
+            .expose(),
+        "sk-ant-api03-NEW",
+        "and the verified secret still committed"
+    );
+}
