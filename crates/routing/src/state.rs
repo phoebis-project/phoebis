@@ -220,6 +220,15 @@ impl RoutingState {
     pub fn overage(&self, account_id: &str) -> Option<&OverageEvidence> {
         self.overage.get(account_id)
     }
+    pub fn overages(&self) -> Vec<(String, OverageEvidence)> {
+        let mut v: Vec<_> = self
+            .overage
+            .iter()
+            .map(|(id, e)| (id.clone(), e.clone()))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
 
     /// When the account counts as cooled under `never`: the latest reset among its exhausted shared windows (the
     /// evidence's `reset` is built that way on both paths), else `fallback_ms` (the bootstrap's

@@ -818,6 +818,17 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::OverageEnded { account_id, since: Some(1_200), .. } if account_id == b)
     );
+    assert_eq!(
+        handle
+            .overages()
+            .await
+            .unwrap()
+            .iter()
+            .map(|(id, e)| (id.as_str(), e.in_use))
+            .collect::<Vec<_>>(),
+        vec![(b.as_str(), false)],
+        "one ask lists every account with evidence, by id"
+    );
     // Clearing the cooldown, releasing the session, and the purge each say so.
     assert!(handle.clear_cooldown(&a, "account").await.unwrap());
     assert!(

@@ -166,6 +166,9 @@ enum Command {
         account_id: String,
         reply: oneshot::Sender<Option<OverageEvidence>>,
     },
+    Overages {
+        reply: oneshot::Sender<Vec<(String, OverageEvidence)>>,
+    },
     Pins {
         reply: oneshot::Sender<Vec<PinRow>>,
     },
@@ -267,6 +270,10 @@ impl RouterHandle {
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
+    }
+    /// One ask for the whole map: a scrape must not queue one command per account in front of selection.
+    pub async fn overages(&self) -> Result<Vec<(String, OverageEvidence)>, RouterGone> {
+        self.ask(|reply| Command::Overages { reply }).await
     }
     pub async fn overage(&self, account_id: &str) -> Result<Option<OverageEvidence>, RouterGone> {
         let a = account_id.to_string();
@@ -660,6 +667,9 @@ impl Task {
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
+            }
+            Command::Overages { reply } => {
+                let _ = reply.send(self.state.overages());
             }
             Command::Overage { account_id, reply } => {
                 let _ = reply.send(self.state.overage(&account_id).cloned());
