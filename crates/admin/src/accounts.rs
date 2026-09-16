@@ -412,10 +412,8 @@ fn models_json(state: &AdminState, id: &str) -> Result<Value, StoreError> {
     // current list is.
     let built_in = state
         .store
-        .registry_changes_after(0, 10_000)?
-        .into_iter()
-        .rfind(|c| c.target == id && (c.kind == "catalog_seeded" || c.kind == "catalog_synced"))
-        .is_some_and(|c| c.kind == "catalog_seeded");
+        .latest_catalog_change(id)?
+        .is_some_and(|kind| kind == "catalog_seeded");
     Ok(json!({
         "models": rows.iter().map(|m| json!({
             "upstream_id": m.upstream_id,

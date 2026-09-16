@@ -874,6 +874,20 @@ impl Store {
         Ok(())
     }
 
+    /// The kind of the newest catalog change the account carries, which says whether what it serves now came
+    /// from a discovery or from the built-in seed. Scanning the change log from the oldest row instead would
+    /// read stale history once the log outgrows any fixed limit.
+    pub fn latest_catalog_change(&self, account_id: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT kind FROM registry_changes WHERE target = ?1 AND kind IN ('catalog_seeded', 'catalog_synced') ORDER BY id DESC LIMIT 1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
     pub fn registry_changes_after(
         &self,
         id: u64,

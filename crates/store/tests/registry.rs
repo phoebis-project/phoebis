@@ -56,16 +56,86 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
 fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
-    let store = Store::open(&dir.path().join("router.sqlite"), &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 3);
     drop(store);
-    let again = Store::open(&dir.path().join("router.sqlite"), &key).unwrap();
+    let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        2,
+        3,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
+    drop(again);
+    // What a database written before the change-log index existed looks like on disk.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX registry_changes_target; UPDATE meta SET value = '2' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        3,
+        "a store left at version 2 is carried up"
+    );
+    drop(migrated);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'registry_changes_target'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "and the index it was missing is there"
+    );
+}
+
+#[test]
+fn the_newest_catalog_change_is_what_the_account_serves_now() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    store
+        .insert_account(&account("b", AccountKind::Oauth))
+        .unwrap();
+    assert_eq!(store.latest_catalog_change("a").unwrap(), None);
+    assert!(store
+        .seed_catalog("a", &[("claude-sonnet-4-5".into(), false)], 1, "test")
+        .unwrap());
+    assert_eq!(
+        store.latest_catalog_change("a").unwrap().as_deref(),
+        Some("catalog_seeded")
+    );
+    store
+        .apply_catalog_sync("a", &[("claude-opus-4-1".into(), false)], 2, "test")
+        .unwrap();
+    assert_eq!(
+        store.latest_catalog_change("a").unwrap().as_deref(),
+        Some("catalog_synced"),
+        "a discovery replaces the seed as what the account serves"
+    );
+    // A discovery that answered an empty list leaves nothing to serve, which is the one case a later seed
+    // still fills.
+    store.apply_catalog_sync("b", &[], 3, "test").unwrap();
+    assert!(store
+        .seed_catalog("b", &[("claude-sonnet-4-5".into(), false)], 4, "test")
+        .unwrap());
+    assert_eq!(
+        store.latest_catalog_change("b").unwrap().as_deref(),
+        Some("catalog_seeded"),
+        "and a seed after a sync is what it serves in turn"
+    );
+    assert_eq!(
+        store.latest_catalog_change("a").unwrap().as_deref(),
+        Some("catalog_synced"),
+        "each account reads its own log"
+    );
 }
 
 #[test]
