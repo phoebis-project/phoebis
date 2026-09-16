@@ -19,16 +19,25 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
-#[ignore = "re-enable once the registry wiring replaces the routes block"]
-async fn the_binary_relays_a_fixture_request_through_a_configured_api_key_account() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: b"{\"ok\":true}".to_vec(),
+async fn the_binary_is_populated_through_the_admin_api_and_routes_without_a_restart() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
         },
-    }])
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
     .await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
@@ -41,11 +50,6 @@ async fn the_binary_relays_a_fixture_request_through_a_configured_api_key_accoun
     let admin_port = free_port();
     let yaml = format!(
         r#"
-accounts:
-  - id: console
-    kind: api_key
-    label: Console
-    secret_env: TEST_CONSOLE_KEY
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
@@ -56,10 +60,8 @@ compatibility:
   usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
-routes:
-  - key_id: desktop
-    secret_env: TEST_DESKTOP_KEY
-    account_id: console
+routing:
+  max_attempts: 2
 storage:
   encryption_key_file: {key}
   path: {db}
@@ -79,9 +81,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-        std::env::set_var("TEST_DESKTOP_KEY", "phoebis-testkey");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -89,39 +89,162 @@ usage:
         let _ = stop_rx.await;
     }));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-    // The store uses the configured file name as given rather than a name of its own.
     assert!(dir.path().join("phoebis.sqlite").exists());
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    let login = client
+        .post(admin("/session"))
+        .header("content-type", "application/json")
+        .body(r#"{"secret":"admin-secret"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204);
+
+    // An empty registry refuses every key, and nothing reaches the upstream.
+    let refused = client
+        .post(format!("http://127.0.0.1:{proxy_port}/v1/messages"))
+        .header("x-api-key", "phoebis-nothing")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 401);
+
+    let created = client
+        .post(admin("/accounts"))
+        .json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        created.status(),
+        201,
+        "verified against the fake's models endpoint"
+    );
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "console", "priority": 0 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("phoebis-"));
+
     let head = inference_head(FixtureKind::ApiKey);
-    let (line, headers) = phoebis_transport::request::parse_head(head).unwrap();
-    let _ = line;
-    let mut req = client
-        .post(format!(
-            "http://127.0.0.1:{proxy_port}/v1/messages?beta=true"
-        ))
-        .body(body(BodyFixture::ApiKey).to_vec());
-    for (n, v) in headers {
-        match n.to_ascii_lowercase().as_str() {
-            "x-api-key" => {
-                req = req.header("x-api-key", "phoebis-testkey");
-            }
-            "host" | "content-length" => {}
-            _ => {
-                req = req.header(n, v);
+    let (_, headers) = phoebis_transport::request::parse_head(head).unwrap();
+    let send = |secret: String| {
+        let mut req = client
+            .post(format!(
+                "http://127.0.0.1:{proxy_port}/v1/messages?beta=true"
+            ))
+            .body(body(BodyFixture::ApiKey).to_vec());
+        for (n, v) in headers.clone() {
+            match n.to_ascii_lowercase().as_str() {
+                "x-api-key" => {
+                    req = req.header("x-api-key", secret.clone());
+                }
+                // The fixture head carries its own capture-time session id; `reqwest::header` appends rather
+                // than replaces, so it must be dropped here or the server would see it ahead of the one set below.
+                "host" | "content-length" | "x-claude-code-session-id" => {}
+                _ => {
+                    req = req.header(n, v);
+                }
             }
         }
-    }
-    let resp = req.send().await.unwrap();
+        req.header("x-claude-code-session-id", "e2e-1").send()
+    };
+    let resp = send(secret.clone()).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().await.unwrap(), "{\"ok\":true}");
-    let got = &up.requests()[0];
-    assert!(got
+    let relayed = up
+        .requests()
+        .iter()
+        .find(|r| r.line.starts_with("POST /v1/messages"))
+        .unwrap()
+        .clone();
+    assert!(relayed
         .headers
         .iter()
         .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-PLACEHOLDER"));
-    assert_eq!(got.body, body(BodyFixture::ApiKey));
+    assert_eq!(relayed.body, body(BodyFixture::ApiKey));
+    let sessions: serde_json::Value = client
+        .get(admin("/sessions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sessions["sessions"][0]["account_id"], "console");
+
+    // Registry edits show in the next selection: no member, no candidate; a revoked key, a 401.
+    assert_eq!(
+        client
+            .put(admin("/pools/main/members"))
+            .json(&serde_json::json!({ "members": [] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let unserved = send(secret.clone()).await.unwrap();
+    assert_eq!(
+        (
+            unserved.status().as_u16(),
+            unserved.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (404, "model_unserved")
+    );
+    assert_eq!(
+        client
+            .put(admin("/pools/main/members"))
+            .json(&serde_json::json!({ "members": [{ "account_id": "console", "priority": 0 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(send(secret.clone()).await.unwrap().status(), 200);
+    assert_eq!(
+        client
+            .post(admin("/keys/desktop/revoke"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    assert_eq!(send(secret.clone()).await.unwrap().status(), 401);
+    // The pin under `e2e-1` stays on `console` for the shutdown assertion below; the account is not deleted here.
+    let listed: serde_json::Value = client
+        .get(admin("/accounts"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["accounts"].as_array().unwrap().len(), 1);
 
     let hello = client
         .head(format!("http://127.0.0.1:{proxy_port}/api/hello"))
@@ -129,26 +252,32 @@ usage:
         .await
         .unwrap();
     assert_eq!(hello.status(), 200);
-    let admin = client
-        .post(format!("http://127.0.0.1:{admin_port}/admin/session"))
-        .body(r#"{"secret":"admin-secret"}"#)
-        .header("content-type", "application/json")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(admin.status(), 204);
-    // Merging the admin router into the listener's app drops its own fallback, so an unknown admin path
-    // must still be refused rather than answered by whatever axum falls back to.
-    let unknown = client
-        .get(format!("http://127.0.0.1:{admin_port}/admin/nope"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(unknown.status(), 401);
-    assert_eq!(unknown.headers()["cache-control"], "no-store");
+    let unknown = client.get(admin("/nope")).send().await.unwrap();
+    assert_eq!(
+        (
+            unknown.status().as_u16(),
+            unknown.headers()["cache-control"].to_str().unwrap()
+        ),
+        (401, "no-store")
+    );
 
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
+    // The pin the last relayed request renewed was acknowledged before the stop; the drain landed it.
+    let store = phoebis_store::Store::open(
+        &dir.path().join("phoebis.sqlite"),
+        &phoebis_store::StorageKey::from_file(&dir.path().join("storage.key")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .iter()
+            .any(|p| p.session_id == "e2e-1"),
+        "acknowledged routing state survives shutdown"
+    );
     up.shutdown().await;
 }
 
