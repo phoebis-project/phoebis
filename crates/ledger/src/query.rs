@@ -118,6 +118,22 @@ fn in_list(
     clauses.push(format!("{column} IN ({})", marks.join(", ")));
 }
 
+/// `key_id` and `pool_id` are NULL where the rollups say `-`, so a drill-down from the unattributed analytics
+/// row must reach the NULL the reserved id stands for.
+fn in_list_or_null(
+    column: &str,
+    values: &[String],
+    args: &mut Vec<Box<dyn ToSql>>,
+    clauses: &mut Vec<String>,
+) {
+    if !values.iter().any(|v| v == UNATTRIBUTED) {
+        return in_list(column, values, args, clauses);
+    }
+    let mut inner = Vec::new();
+    in_list(column, values, args, &mut inner);
+    clauses.push(format!("({} OR {column} IS NULL)", inner.remove(0)));
+}
+
 pub fn list_requests(
     conn: &Connection,
     filter: &RequestFilter,
@@ -131,8 +147,8 @@ pub fn list_requests(
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} OR session_id LIKE ?{n} OR key_id LIKE ?{n} OR model LIKE ?{n} OR error_code LIKE ?{n} OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id LIKE ?{n}))"));
     }
-    in_list("key_id", &filter.keys, &mut args, &mut clauses);
-    in_list("pool_id", &filter.pools, &mut args, &mut clauses);
+    in_list_or_null("key_id", &filter.keys, &mut args, &mut clauses);
+    in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
     in_list(
         "canonical_model",
         &filter
@@ -164,7 +180,13 @@ pub fn list_requests(
                 format!("?{}", args.len())
             })
             .collect();
-        clauses.push(format!("EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id IN ({}))", marks.join(", ")));
+        let served = format!("EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id IN ({}))", marks.join(", "));
+        // The rollups file a request that never reached an account under the reserved id.
+        if filter.accounts.iter().any(|v| v == UNATTRIBUTED) {
+            clauses.push(format!("({served} OR NOT EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id))"));
+        } else {
+            clauses.push(served);
+        }
     }
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
         clauses.push("kind != 'probe'".into());

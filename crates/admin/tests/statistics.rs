@@ -222,6 +222,23 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         ),
         (Some("-"), Some(1))
     );
+    for filter in ["keys=-", "pools=-", "accounts=-"] {
+        let drilled = json(
+            get(
+                &parts.app,
+                &format!("/admin/requests?{filter}&limit=500"),
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            drilled["requests"].as_array().unwrap().len(),
+            1,
+            "the reserved id reaches the keyless request: {filter}"
+        );
+        assert_eq!(drilled["requests"][0]["id"], "nokey", "{filter}");
+    }
     let filtered = json(
         get(
             &parts.app,
