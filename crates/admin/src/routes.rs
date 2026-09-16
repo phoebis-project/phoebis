@@ -665,9 +665,18 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let uptime = (now - state.started_at).max(0) / 1_000;
     let stats = state.ledger.stats();
     let load = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
-    let gaps = state.ledger.db().read(|c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
+    let read = state.ledger.db().read(|c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
         .query_map(rusqlite::params![now - 86_400_000], |r| Ok(phoebis_ledger::EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? }))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)).unwrap_or_default();
+        .collect::<rusqlite::Result<Vec<_>>>()?));
+    let gaps = match read {
+        Ok(gaps) => gaps,
+        // The gap counter in the same response is whatever the writer reached, so an empty list from a read
+        // that failed would tell the operator the counter has nothing behind it.
+        Err(error) => {
+            tracing::warn!(%error, "the ledger's gap events could not be read");
+            Vec::new()
+        }
+    };
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,

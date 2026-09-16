@@ -438,6 +438,72 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
 }
 
+/// The request count on a session row is the ledger's. A pin the ledger has no row for has no count, and
+/// saying zero would read as "this session made no requests" rather than "nothing was recorded".
+#[tokio::test]
+async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
+    // The router loads the pins at spawn and purges any whose key names no pool, so the pool, the key, and
+    // the pins are written through one harness and the store is handed to the one under test.
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let now = common::NOW;
+    for session in ["served", "silent"] {
+        seed.store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "desktop".into(),
+                session_id: session.into(),
+                model: "claude-sonnet-5".into(),
+                account_id: "business".into(),
+                epoch: 1,
+                created_at: now - 10,
+                last_used_at: now - 5,
+            })
+            .unwrap();
+    }
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for i in 0..3 {
+        parts.ledger.record(record(
+            &format!("p{i}"),
+            now - i * HOUR,
+            "claude-sonnet-5",
+            "served",
+        ));
+    }
+    fake_upstream::wait_for(Duration::from_secs(5), || parts.db.request("p2").unwrap()).await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = |session: &str| {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == session)
+            .unwrap_or_else(|| panic!("{session} is listed"))
+            .clone()
+    };
+    assert_eq!(
+        (
+            row("served")["requests"].as_u64(),
+            row("served")["pinned"].as_bool()
+        ),
+        (Some(3), Some(true)),
+        "a pin the ledger saw carries the ledger's count"
+    );
+    assert!(
+        row("silent")["requests"].is_null(),
+        "a pin with no ledger row has no count to report"
+    );
+    assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
+}
+
 #[tokio::test]
 async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     let parts = common::admin_parts_full().await;
@@ -589,6 +655,17 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         .await
         .status(),
         400
+    );
+    assert_eq!(
+        get(
+            &parts.app,
+            &format!("/admin/live/snapshot?at={}", i64::MIN),
+            Some(&admin)
+        )
+        .await
+        .status(),
+        200,
+        "the window an instant at the bound asks for is clamped, not wrapped"
     );
     assert_eq!(
         get(&parts.app, "/admin/live", Some(&admin)).await.status(),

@@ -36,7 +36,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
             (p.key_id.clone(), p.session_id.clone()),
             json!({
                 "key_id": p.key_id, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
-                "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": 0, "pinned": true,
+                "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
             }),
         );
     }

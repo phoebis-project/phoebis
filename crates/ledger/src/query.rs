@@ -627,7 +627,7 @@ pub fn dashboard(conn: &Connection, now: i64) -> Result<Dashboard, LedgerError> 
         };
         for r in rows.iter().filter(|r| r.hour == hour) {
             point.requests += r.requests;
-            point.errors += r.requests - r.succeeded;
+            point.errors += r.requests.saturating_sub(r.succeeded);
             point.cost += r.estimated_usd;
             point.tokens += r.input_tokens
                 + r.cache_read_tokens
@@ -757,7 +757,7 @@ pub fn pool_traffic(
             .filter(|r| r.hour >= at && r.hour < at + bucket_seconds)
         {
             bucket.requests += r.requests;
-            bucket.failed += r.requests - r.succeeded;
+            bucket.failed += r.requests.saturating_sub(r.succeeded);
             bucket.tokens += r.input_tokens
                 + r.cache_read_tokens
                 + r.cache_write_5m_tokens

@@ -98,6 +98,12 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await)
 }
 
+/// The full harness over a store the caller already holds. The router task reads the routing state once, at
+/// spawn, so a test that needs a pin in the list has to write it before this call.
+pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
+    full_from(app_with(None, ACCOUNT_UUID, None, Some(store)).await)
+}
+
 fn full_from(parts: Parts) -> Full {
     Full {
         app: parts.app,

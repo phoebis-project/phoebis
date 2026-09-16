@@ -58,13 +58,13 @@ pub(crate) async fn past(
             Ok(a) => a,
             Err(r) => return r,
         };
-        (at - PAST_WINDOW_MS, at)
+        (at.saturating_sub(PAST_WINDOW_MS), at)
     } else {
         let to = match number("to", now) {
             Ok(t) => t,
             Err(r) => return r,
         };
-        let from = match number("from", to - PAST_WINDOW_MS) {
+        let from = match number("from", to.saturating_sub(PAST_WINDOW_MS)) {
             Ok(f) => f,
             Err(r) => return r,
         };
