@@ -629,11 +629,19 @@ impl Relay {
                     .await
                 {
                     Ok(token) => return Next::Replay(Credential::from(token)),
-                    // The manager marks the account itself when the refresh ended in invalid_grant; anything
-                    // else is inconclusive, so the upstream's 401 goes back with no mark from here.
+                    // Nothing was replaced, so nothing conclusive happened: the upstream's 401 goes back as
+                    // it came, and the account keeps its state and its pin. Failing over would spend another
+                    // account on a request whose own credential may work again in a minute, and invalidating
+                    // the pin would move a session that has no reason to move. The manager marks the account
+                    // itself when the refresh ended in invalid_grant.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        (None, None)
+                        return Next::Respond(forward_buffered(
+                            &head,
+                            buffered.unwrap_or_default(),
+                            ctx.caller,
+                            outcome,
+                        ));
                     }
                 }
             }

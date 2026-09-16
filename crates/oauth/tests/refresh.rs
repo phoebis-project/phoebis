@@ -910,3 +910,52 @@ async fn a_lost_response_after_a_re_pair_quarantines_rather_than_serving_the_rep
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_refresh_that_rotates_nothing_answers_that_no_newer_token_exists() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 1_000_000,
+                expires_at: 1_400_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            mgr.refresh_now("a", 1).await,
+            Err(AcquireError::NotRefreshed)
+        ),
+        "the token endpoint rotated nothing, so the rejected generation is still all there is"
+    );
+    assert_eq!(up.requests().len(), 1);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "old",
+        "the unexpired stored token is still served to everything that has not been rejected"
+    );
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "a token endpoint having a bad minute is not a reason to ask for re-pairing"
+    );
+    up.shutdown().await;
+}

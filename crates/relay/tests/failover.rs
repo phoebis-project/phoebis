@@ -952,3 +952,64 @@ async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 401,
+                headers: vec![],
+                body:
+                    br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
+                        .to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        },
+    ])
+    .await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5"],
+        default_limits(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "the upstream's own answer");
+    assert_eq!(
+        credentials_seen(&up),
+        [A],
+        "the token the upstream rejected is not sent a second time"
+    );
+    assert_eq!(
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .count(),
+        1,
+        "one refresh was tried and none followed it"
+    );
+    // A mark's write is asynchronous, so this window bounds how long one would have to appear rather than
+    // proving none is coming.
+    stays_for(Duration::from_millis(200), || {
+        h.store.account("a").unwrap().unwrap().state == AccountState::Ready
+    })
+    .await;
+    assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
+    up.shutdown().await;
+}

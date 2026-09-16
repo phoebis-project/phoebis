@@ -71,6 +71,8 @@ impl Clone for AccessToken {
 pub enum AcquireError {
     #[error("account is disconnected")]
     Disconnected,
+    #[error("the refresh produced no newer credential")]
+    NotRefreshed,
     #[error("account is quarantined after a refresh of unknown outcome")]
     Quarantined,
     #[error("account has to be paired again")]
@@ -183,6 +185,11 @@ impl CredentialManager {
     /// A stored generation newer than `rejected_generation` means another caller already replaced the
     /// rejected token, so the stored one is served as is: rotating again would burn a working refresh
     /// token to solve a problem that is already solved.
+    ///
+    /// A refresh that could not rotate still hands back the stored token, because an unexpired credential
+    /// must not be lost to a token endpoint having a bad minute. That token is the one the upstream just
+    /// rejected, so `NotRefreshed` says so rather than letting the caller replay it into a second 401 and
+    /// the operator-cleared lockout that follows.
     pub async fn refresh_now(
         &self,
         account_id: &str,
@@ -192,7 +199,11 @@ impl CredentialManager {
         if bundle.generation > rejected_generation {
             return Ok(access_token(&account, &bundle));
         }
-        self.join_or_start(account_id, bundle.generation).await
+        let token = self.join_or_start(account_id, bundle.generation).await?;
+        if token.generation <= rejected_generation {
+            return Err(AcquireError::NotRefreshed);
+        }
+        Ok(token)
     }
 
     /// Quarantines every account whose last refresh never resolved: the process died between sending a
