@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use phoebis_relay::Relay;
-use phoebis_store::AccountKind;
+use phoebis_store::{AccountKind, ApiKeyRow};
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -343,6 +343,82 @@ async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
         value(got, "anthropic-beta"),
         Some("oauth-2025-04-20,claude-code-20250219"),
         "the credential's beta leads the list the caller sent, once"
+    );
+    let _ = stop.send(true);
+    up.shutdown().await;
+}
+
+/// A request head written with one line ending or the other, so a test can send what hyper accepts and the
+/// recorder has to agree with.
+fn session_request(addr: SocketAddr, eol: &str, session: &str, key: &str) -> Vec<u8> {
+    let mut out = [
+        "POST /v1/messages?beta=true HTTP/1.1",
+        &format!("Host: {addr}"),
+        &format!("X-Session: {session}"),
+        &format!("x-api-key: {key}"),
+        "anthropic-version: 2023-06-01",
+        &format!("Content-Length: {}", BODY.len()),
+        "",
+        "",
+    ]
+    .join(eol)
+    .into_bytes();
+    out.extend_from_slice(BODY);
+    out
+}
+
+/// hyper ends a head at a bare-LF blank line, so a recorder that waits for `\r\n\r\n` is still holding the
+/// first request when the second one arrives and hands the second request the first one's headers.
+#[tokio::test]
+async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
+    const SECOND: &str = "phoebis-secondkey";
+    let up = upstream().await;
+    let h = socket_harness(&up).await;
+    h.store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "second".into(),
+                label: "second".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                allowed_models: None,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: h.store.api_key_digest(SECOND).to_vec(),
+                prefix: phoebis_store::key_prefix(SECOND),
+                created_at: NOW,
+                rotated_at: None,
+                last_used_at: None,
+            },
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let (addr, stop) = listening(h.relay.clone()).await;
+    let mut socket = TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(&session_request(addr, "\n", "first", KEY))
+        .await
+        .unwrap();
+    assert!(read_response(&mut socket)
+        .await
+        .starts_with("HTTP/1.1 200 "));
+    socket
+        .write_all(&session_request(addr, "\r\n", "second", SECOND))
+        .await
+        .unwrap();
+    assert!(read_response(&mut socket)
+        .await
+        .starts_with("HTTP/1.1 200 "));
+    let seen = up.requests();
+    assert_eq!(seen.len(), 2, "both requests reached the upstream");
+    assert_eq!(
+        value(&seen[1], "x-session"),
+        Some("second"),
+        "the second request travels under its own head, not the head hyper already finished with"
     );
     let _ = stop.send(true);
     up.shutdown().await;

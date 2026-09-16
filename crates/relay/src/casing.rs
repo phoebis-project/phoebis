@@ -2,8 +2,8 @@
 //!
 //! hyper 1.11 keeps the original header spellings in an extension with no server-side accessor, so the only
 //! way to relay a caller's own casing and order is to read the head before hyper parses it: the recorder below
-//! wraps the accepted stream, copies what hyper reads until the head terminator, parses that head once, and
-//! leaves it in a queue the connection's service drains into the request's extensions.
+//! wraps the accepted stream, copies what hyper reads until `httparse` calls the head complete, and leaves it
+//! in a queue the connection's service drains into the request's extensions.
 
 use std::collections::VecDeque;
 use std::io;
@@ -21,8 +21,6 @@ const MAX_HEADERS: usize = 64;
 /// its head cannot grow the copy without bound.
 const MAX_HEAD: usize = 64 << 10;
 
-const TERMINATOR: &[u8] = b"\r\n\r\n";
-
 /// One caller's head as it was spelled on the wire: each name as the caller wrote it, each value as it was
 /// sent, in the order they arrived. `http::HeaderMap` documents its iteration order as arbitrary, so this list
 /// is the only authoritative record of either.
@@ -36,30 +34,14 @@ pub struct OriginalHead {
 }
 
 impl OriginalHead {
-    /// One `httparse` pass over a complete request head, terminator included. `None` for anything that is not
-    /// a complete HTTP/1 head, which is also what an HTTP/2 preface and a head past `MAX_HEADERS` yield.
-    pub fn parse(raw: &[u8]) -> Option<OriginalHead> {
-        let mut slots = [httparse::EMPTY_HEADER; MAX_HEADERS];
-        let mut request = httparse::Request::new(&mut slots);
-        if !matches!(request.parse(raw), Ok(httparse::Status::Complete(_))) {
-            return None;
+    /// One `httparse` pass over the bytes read so far, with the length the head spans beside it. `None` for
+    /// anything that is not (yet) a complete HTTP/1 head, which is also what an HTTP/2 preface and a head past
+    /// `MAX_HEADERS` yield.
+    pub fn parse(raw: &[u8]) -> Option<(OriginalHead, usize)> {
+        match scan(raw) {
+            Parsed::Complete(head, used) => Some((head, used)),
+            Parsed::Failed | Parsed::Partial => None,
         }
-        Some(OriginalHead {
-            method: request.method?.to_string(),
-            target: request.path?.to_string(),
-            headers: request
-                .headers
-                .iter()
-                // A value that is not UTF-8 cannot be re-emitted as the caller wrote it, and the `HeaderMap`
-                // walk the relay falls back to drops it just the same.
-                .filter_map(|h| {
-                    Some((
-                        h.name.to_string(),
-                        std::str::from_utf8(h.value).ok()?.into(),
-                    ))
-                })
-                .collect(),
-        })
     }
 
     /// Whether hyper parsed this head out of the same bytes. A head that does not match means the recorder
@@ -80,6 +62,49 @@ impl OriginalHead {
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     }
+}
+
+/// What one `httparse` pass over the bytes read so far found.
+enum Parsed {
+    /// A head and the bytes it spans. hyper runs the same `httparse` version over the same bytes with the
+    /// same default configuration, so this length is the boundary hyper reads too, bare LF or CRLF.
+    Complete(OriginalHead, usize),
+    /// No head yet; more bytes may finish one.
+    Partial,
+    /// Not an HTTP/1 head at all, or one past `MAX_HEADERS`.
+    Failed,
+}
+
+fn scan(raw: &[u8]) -> Parsed {
+    let mut slots = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut request = httparse::Request::new(&mut slots);
+    let used = match request.parse(raw) {
+        Ok(httparse::Status::Complete(used)) => used,
+        Ok(httparse::Status::Partial) => return Parsed::Partial,
+        Err(_) => return Parsed::Failed,
+    };
+    let (Some(method), Some(target)) = (request.method, request.path) else {
+        return Parsed::Failed;
+    };
+    Parsed::Complete(
+        OriginalHead {
+            method: method.to_string(),
+            target: target.to_string(),
+            headers: request
+                .headers
+                .iter()
+                // A value that is not UTF-8 cannot be re-emitted as the caller wrote it, and the `HeaderMap`
+                // walk the relay falls back to drops it just the same.
+                .filter_map(|h| {
+                    Some((
+                        h.name.to_string(),
+                        std::str::from_utf8(h.value).ok()?.into(),
+                    ))
+                })
+                .collect(),
+        },
+        used,
+    )
 }
 
 /// Heads recorded on one connection, waiting for the requests hyper parses out of the same bytes.
@@ -103,7 +128,7 @@ fn declared_body(head: &OriginalHead) -> Option<u64> {
 }
 
 enum Recording {
-    /// Copying bytes into `head` until the terminator.
+    /// Copying bytes into `head` until `httparse` calls one complete.
     Head,
     /// Skipping the declared body, with this many bytes left of it.
     Body(u64),
@@ -158,26 +183,30 @@ impl<S> HeadRecorder<S> {
                     }
                 }
                 Recording::Head => {
-                    // The terminator may straddle two reads, so the search starts just far enough back to see
-                    // the bytes already held.
-                    let from = self.head.len().saturating_sub(TERMINATOR.len() - 1);
+                    // A head may straddle two reads, so every read re-parses what the connection has sent so
+                    // far: the boundary has to be the parser's, not a search of its own, or the recorder and
+                    // hyper end the head in different places and the next request travels under this one.
                     self.head.extend_from_slice(data);
-                    let Some(at) = find(&self.head[from..], TERMINATOR) else {
-                        if self.head.len() > MAX_HEAD {
-                            self.stop();
+                    let (head, used) = match scan(&self.head) {
+                        Parsed::Complete(head, used) => (head, used),
+                        Parsed::Partial => {
+                            if self.head.len() > MAX_HEAD {
+                                self.stop();
+                            }
+                            return None;
                         }
-                        return None;
+                        Parsed::Failed => {
+                            self.stop();
+                            return None;
+                        }
                     };
-                    let end = from + at + TERMINATOR.len();
-                    if end > MAX_HEAD {
+                    if used > MAX_HEAD {
                         self.stop();
                         return None;
                     }
-                    let rest = self.head.split_off(end);
-                    self.state = match OriginalHead::parse(&self.head)
-                        .and_then(|head| declared_body(&head).map(|body| (head, body)))
-                    {
-                        Some((head, body)) => {
+                    let rest = self.head.split_off(used);
+                    self.state = match declared_body(&head) {
+                        Some(body) => {
                             self.queue
                                 .lock()
                                 .expect("head queue poisoned")
@@ -248,12 +277,6 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for HeadRecorder<S> {
     }
 }
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,7 +338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_terminator_split_across_two_reads_is_still_found() {
+    async fn a_head_split_across_two_reads_is_still_found() {
         let queue = head_queue();
         let (head, body) = HEAD.split_at(HEAD.len() - 4);
         let mut recorder = HeadRecorder::new(std::io::Cursor::new(Vec::<u8>::new()), queue.clone());
@@ -326,7 +349,7 @@ mod tests {
 
     #[test]
     fn a_head_matches_only_the_request_it_was_read_from() {
-        let head = OriginalHead::parse(HEAD).expect("the head parses");
+        let (head, _) = OriginalHead::parse(HEAD).expect("the head parses");
         let request = |method: &str, target: &str| {
             Request::builder()
                 .method(method)

@@ -457,7 +457,7 @@ pub fn default_limits() -> Limits {
 pub fn request_from_fixture(head: &[u8], body: &[u8], key: &str) -> Request<Body> {
     let (line, _) = parse_head(head).unwrap();
     let target = line.split(' ').nth(1).unwrap();
-    let mut original = OriginalHead::parse(head).expect("a measured fixture head parses");
+    let (mut original, _) = OriginalHead::parse(head).expect("a measured fixture head parses");
     for (name, value) in &mut original.headers {
         if name.eq_ignore_ascii_case("authorization") {
             *value = format!("Bearer {key}");
