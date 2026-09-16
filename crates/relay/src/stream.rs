@@ -47,6 +47,9 @@ pub(crate) struct Publish {
     /// Decodes the raw chunk for the bus when the caller receives the upstream's coding as it is; `None`
     /// when the relay already decodes for the caller and the piece is text.
     pub decoder: Option<Box<dyn Decoder>>,
+    /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
+    /// than the piece that failed.
+    pub decode_failed: bool,
     /// Parses the decoded copy for phases on an event stream; `None` for any other body, and dropped on
     /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks.
     pub parser: Option<SseParser>,
@@ -67,18 +70,25 @@ pub(crate) struct Publish {
 impl Publish {
     /// `raw` is the wire chunk and `piece` what the caller is sent; one of the two is the text.
     fn chunk(&mut self, raw: &[u8], piece: &Bytes) {
+        // The size is what the caller received, which stands whether or not the bus could read it.
+        self.bytes += piece.len() as u64;
+        if self.decode_failed {
+            return;
+        }
         let text = match self.decoder.as_mut() {
             None => piece.clone(),
             Some(decoder) => match decoder.feed(raw) {
                 Ok(out) => Bytes::from(out),
+                // A consumer of a chunk was promised text, so nothing is better than bytes that are not.
                 Err(_) => {
+                    self.decode_failed = true;
                     self.decoder = None;
                     self.parser = None;
+                    self.json = None;
                     return;
                 }
             },
         };
-        self.bytes += piece.len() as u64;
         if let Some(json) = self.json.as_mut() {
             if json.len() + text.len() > MAX_BUFFERED_BODY {
                 // Past the bound nothing is read; the usage stays unknown rather than half parsed.

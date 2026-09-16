@@ -1424,6 +1424,7 @@ impl Relay {
                         .map(phoebis_transport::decode::decoder)
                 })
                 .flatten(),
+            decode_failed: false,
             parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
             // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
             json: (!event_stream && head.status == 200).then(Vec::new),
@@ -1487,19 +1488,23 @@ impl Relay {
             },
         };
         // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
-        // reaches the bus as text.
-        let text = inspectable_copy(head, &raw)
-            .map(Bytes::from)
-            .unwrap_or_else(|| payload.clone());
-        trace.publish_chunk(ResponseChunk {
-            request_id: trace.request_id.clone(),
-            attempt: outcome.attempt,
-            index: 0,
-            body: text.clone(),
-            phase: None,
-        });
-        // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the body task.
-        let usage = (head.status == 200).then(|| usage_from_json(&text, &[]));
+        // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
+        // chunk was promised text and coded bytes are worse than none.
+        let usage = match inspectable_copy(head, &raw).map(Bytes::from) {
+            None => None,
+            Some(text) => {
+                trace.publish_chunk(ResponseChunk {
+                    request_id: trace.request_id.clone(),
+                    attempt: outcome.attempt,
+                    index: 0,
+                    body: text.clone(),
+                    phase: None,
+                });
+                // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
+                // body task.
+                (head.status == 200).then(|| usage_from_json(&text, &[]))
+            }
+        };
         self.answer(
             trace,
             built(builder, Body::from(payload.clone())),

@@ -717,3 +717,125 @@ async fn a_relay_without_a_bus_publishes_nothing_and_still_answers() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage() {
+    // A rejection that names a coding its body does not use. The caller takes that coding as it is, so the
+    // relay never decodes and only the bus copy would be wrong.
+    let rejection = br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 429,
+            headers: vec![("content-encoding".into(), "gzip".into())],
+            body: rejection.to_vec(),
+        },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    // A non-portable request keeps its account, so the rejection is forwarded instead of failing over.
+    let mut req = non_portable_request(KEY, "s1");
+    req.headers_mut()
+        .insert("accept-encoding", "gzip".parse().unwrap());
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 429);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        rejection,
+        "the caller got the bytes unchanged"
+    );
+    let (events, chunks) = drain_until_complete(&mut sub).await;
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| match e {
+            Event::RequestObserved(_) => "observed",
+            Event::AccountSelected(_) => "selected",
+            Event::ResponseHead(_) => "head",
+            Event::RequestComplete(_) => "complete",
+            Event::ResponseChunk(_) => "chunk",
+        })
+        .collect();
+    assert_eq!(kinds, ["observed", "selected", "head", "complete"]);
+    assert!(
+        chunks.is_empty(),
+        "a copy that will not decode is published as nothing"
+    );
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!()
+    };
+    assert!(complete.usage.is_none());
+    assert_eq!(complete.response_bytes, Some(body.len() as u64));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes() {
+    let sse = vec![
+        ev(
+            "message_start",
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":9}}}"#,
+        ),
+        ev(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+        ),
+        ev("message_stop", r#"{"type":"message_stop"}"#),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![("content-encoding".into(), "gzip".into())],
+            events: sse.clone(),
+            delay_between: Duration::from_millis(2),
+        },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut req = stream_request(KEY);
+    req.headers_mut()
+        .insert("accept-encoding", "gzip".parse().unwrap());
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let expected: String = sse
+        .iter()
+        .map(|e| format!("event: {}\ndata: {}\n\n", e.event, e.data))
+        .collect();
+    assert_eq!(
+        body.as_ref(),
+        expected.as_bytes(),
+        "the caller got every byte"
+    );
+    let (events, chunks) = drain_until_complete(&mut sub).await;
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| match e {
+            Event::RequestObserved(_) => "observed",
+            Event::AccountSelected(_) => "selected",
+            Event::ResponseHead(_) => "head",
+            Event::RequestComplete(_) => "complete",
+            Event::ResponseChunk(_) => "chunk",
+        })
+        .collect();
+    assert_eq!(kinds, ["observed", "selected", "head", "complete"]);
+    assert!(
+        chunks.is_empty(),
+        "not one piece decoded, so not one chunk is published"
+    );
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!()
+    };
+    assert!(complete.usage.is_none());
+    assert_eq!(
+        complete.response_bytes,
+        Some(body.len() as u64),
+        "every piece the caller got still counts toward the size"
+    );
+    up.shutdown().await;
+}
