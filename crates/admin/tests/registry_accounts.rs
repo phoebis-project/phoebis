@@ -485,3 +485,51 @@ async fn a_second_slot_cannot_be_paired_to_an_upstream_account_the_first_holds()
         .unwrap()
         .contains("already paired"));
 }
+
+#[tokio::test]
+async fn creating_an_account_whose_catalog_carries_two_spellings_records_the_clash() {
+    let (app, up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"Vendor/Model-A"},{"id":"vendor/model-a"}]}"#.to_vec(),
+        },
+    );
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"vendor","kind":"api_key","label":"Vendor","secret":"vendor-secret"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let body = json(created).await;
+    assert_eq!(
+        (body["state"].as_str(), body["served_models_count"].as_u64()),
+        (Some("ready"), Some(0)),
+        "the row is stored with no catalog rows"
+    );
+    assert!(
+        body["catalog_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("two spellings")),
+        "the clash is recorded: {}",
+        body["catalog_error"]
+    );
+    assert_eq!(
+        patch(
+            &app,
+            "/admin/accounts/vendor",
+            r#"{"label":"Vendor 2"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200,
+        "and the account can still be edited"
+    );
+}

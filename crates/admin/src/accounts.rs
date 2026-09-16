@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ModelSource, Secret, ServedModelWrite,
-    StoreError,
+    canonical_id, AccountKind, AccountRow, AccountState, AccountUpdate, ModelSource, Secret,
+    ServedModelWrite, StoreError,
 };
 use serde_json::{json, Value};
 
@@ -159,13 +159,30 @@ async fn verify_staged(
     secret: &Secret,
 ) -> Result<Verified, Response> {
     match state.catalog.discover_with(staged, Some(secret)).await {
-        Ok(discovered) => Ok(Verified::Catalog(discovered.models)),
+        // A list carrying two spellings of one canonical id would roll the store transaction back and refuse
+        // the whole write, leaving the operator no way to hold the account at all; the scheduled sync records
+        // the same clash as a catalog error, so the row lands here too and the models are added by hand.
+        Ok(discovered) => Ok(match clashing_canonical_id(&discovered.models) {
+            Some(canonical) => {
+                Verified::Error(format!("two spellings of {canonical} in one response"))
+            }
+            None => Verified::Catalog(discovered.models),
+        }),
         Err(DiscoveryError::Unauthorized) => Err(failure(
             StatusCode::BAD_REQUEST,
             "credential rejected by the upstream",
         )),
         Err(error) => Ok(Verified::Error(error.to_string())),
     }
+}
+
+/// The first canonical id a discovered list names twice, whatever the spellings.
+fn clashing_canonical_id(models: &[(String, bool)]) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    models
+        .iter()
+        .map(|(upstream_id, _)| canonical_id(upstream_id))
+        .find(|canonical| !seen.insert(canonical.clone()))
 }
 
 pub(crate) async fn patch(
