@@ -333,6 +333,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoebis-bus"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "phoebis-cch"
 version = "0.1.0"
 dependencies = [

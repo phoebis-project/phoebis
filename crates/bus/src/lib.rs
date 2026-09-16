@@ -1,0 +1,269 @@
+//! The in-process observation bus: bounded per-subscriber queues the relay publishes into without ever
+//! waiting, so a slow consumer loses events rather than slowing a client stream.
+
+mod event;
+
+use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use futures::FutureExt;
+use tokio::sync::mpsc;
+
+pub use event::{
+    header_allowed, AccountSelected, AttemptOutcome, CooldownSet, Event, Kind, Origin, Outcome,
+    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, Usage, HEADER_ALLOWLIST,
+};
+
+/// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
+/// subscriber that stays behind loses events rather than growing without bound.
+pub const QUEUE_DEPTH: usize = 4_096;
+
+const LOCK_POISONED: &str = "bus subscriber list poisoned by a prior panic";
+
+#[derive(Debug, Default)]
+pub struct SubscriberStats {
+    pub dropped: AtomicU64,
+    pub panics: AtomicU64,
+}
+
+pub struct Subscriber {
+    pub name: &'static str,
+    pub events: mpsc::Receiver<Event>,
+    pub stats: Arc<SubscriberStats>,
+}
+
+struct Slot {
+    name: &'static str,
+    events: mpsc::Sender<Event>,
+    stats: Arc<SubscriberStats>,
+}
+
+#[derive(Clone, Default)]
+pub struct Bus {
+    slots: Arc<Mutex<Vec<Slot>>>,
+}
+
+impl Bus {
+    pub fn new() -> Bus {
+        Bus::default()
+    }
+
+    pub fn subscribe(&self, name: &'static str) -> Subscriber {
+        let (events_tx, events) = mpsc::channel(QUEUE_DEPTH);
+        let stats = Arc::new(SubscriberStats::default());
+        self.slots.lock().expect(LOCK_POISONED).push(Slot {
+            name,
+            events: events_tx,
+            stats: stats.clone(),
+        });
+        Subscriber {
+            name,
+            events,
+            stats,
+        }
+    }
+
+    /// Never waits: one clone per live subscriber, `try_send`, and a drop counted where the queue is full.
+    pub fn publish(&self, event: Event) {
+        let mut slots = self.slots.lock().expect(LOCK_POISONED);
+        slots.retain(|slot| match slot.events.try_send(event.clone()) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                slot.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!(subscriber = slot.name, "a bus subscriber went away");
+                false
+            }
+        });
+    }
+
+    pub fn stats(&self) -> Vec<(&'static str, Arc<SubscriberStats>)> {
+        self.slots
+            .lock()
+            .expect(LOCK_POISONED)
+            .iter()
+            .map(|slot| (slot.name, slot.stats.clone()))
+            .collect()
+    }
+}
+
+/// A subscriber's task, with its panic caught and counted rather than left to the runtime: the relay shares
+/// nothing with the task, so nothing of a panic reaches it, and the counter is what says a consumer died.
+pub fn spawn_subscriber<F, Fut>(subscriber: Subscriber, run: F) -> tokio::task::JoinHandle<()>
+where
+    F: FnOnce(Subscriber) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let stats = subscriber.stats.clone();
+    let name = subscriber.name;
+    tokio::spawn(async move {
+        if std::panic::AssertUnwindSafe(run(subscriber))
+            .catch_unwind()
+            .await
+            .is_err()
+        {
+            stats.panics.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(subscriber = name, "a bus subscriber panicked and stopped");
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    fn observed(id: &str) -> Event {
+        Event::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            session_id: None,
+            agent_id: Some("main".into()),
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            stream: false,
+            headers: vec![],
+            body: Bytes::from_static(b"{}"),
+            body_capture_hours: 0,
+            received_at: 1,
+        })
+    }
+
+    fn chunk(id: &str, index: u32) -> ResponseChunk {
+        ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::from_static(b"x"),
+            phase: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_drops_and_counts_without_holding_the_relay() {
+        let bus = Bus::new();
+        let mut reader = bus.subscribe("reader");
+        let sleeper = bus.subscribe("sleeper");
+        let started = std::time::Instant::now();
+        for i in 0..QUEUE_DEPTH {
+            bus.publish(observed(&format!("r{i}")));
+            // The reader keeps up; the sleeper never reads.
+            if let Ok(event) = reader.events.try_recv() {
+                assert_eq!(event.request_id(), format!("r{i}"));
+            }
+        }
+        // Chunks share the queue: the sleeper's is full, so these drop, and they drop in order after the
+        // observations that fit.
+        for i in 0..40 {
+            bus.publish(Event::ResponseChunk(chunk("r0", i)));
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "publishing never waits on a subscriber"
+        );
+        assert_eq!(sleeper.stats.dropped.load(Ordering::SeqCst), 40);
+        assert_eq!(reader.stats.dropped.load(Ordering::SeqCst), 0);
+        let mut seen = 0;
+        while let Ok(event) = reader.events.try_recv() {
+            assert!(matches!(event, Event::ResponseChunk(_)));
+            seen += 1;
+        }
+        assert_eq!(
+            seen, 40,
+            "the reader got every chunk, after every observation"
+        );
+        assert_eq!(bus.stats().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_subscriber_that_went_away_is_forgotten_and_a_panic_is_counted() {
+        let bus = Bus::new();
+        let gone = bus.subscribe("gone");
+        let stats = gone.stats.clone();
+        drop(gone);
+        bus.publish(observed("r1"));
+        assert!(
+            bus.stats().is_empty(),
+            "a closed queue is removed at the next publish"
+        );
+        assert_eq!(
+            stats.dropped.load(Ordering::SeqCst),
+            0,
+            "a closed queue is not a drop"
+        );
+
+        let panicking = bus.subscribe("panicking");
+        let stats = panicking.stats.clone();
+        let handle = spawn_subscriber(panicking, |mut s| async move {
+            let _ = s.events.recv().await;
+            panic!("subscriber bug");
+        });
+        bus.publish(observed("r2"));
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.panics.load(Ordering::SeqCst), 1);
+        // The relay side is untouched: publishing after the panic neither fails nor panics.
+        bus.publish(observed("r3"));
+        assert!(bus.stats().is_empty());
+    }
+
+    #[test]
+    fn the_header_allowlist_keeps_client_identity_and_never_a_credential() {
+        for name in [
+            "anthropic-beta",
+            "anthropic-version",
+            "content-type",
+            "user-agent",
+            "x-app",
+            "x-claude-code-session-id",
+            "X-Stainless-Lang",
+        ] {
+            assert!(header_allowed(name), "{name}");
+        }
+        for name in [
+            "authorization",
+            "x-api-key",
+            "cookie",
+            "host",
+            "content-length",
+        ] {
+            assert!(!header_allowed(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn usage_merges_field_by_field_and_the_later_value_wins() {
+        let mut usage = Usage {
+            input_tokens: Some(10),
+            cache_read_tokens: Some(4),
+            ..Default::default()
+        };
+        usage.merge(&Usage {
+            output_tokens: Some(7),
+            cache_read_tokens: Some(5),
+            ..Default::default()
+        });
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens
+            ),
+            (Some(10), Some(7), Some(5))
+        );
+        assert!(!usage.is_empty());
+        assert!(Usage::default().is_empty());
+    }
+}

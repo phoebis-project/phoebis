@@ -109,6 +109,71 @@ pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
     None
 }
 
+/// Raw span of the `true` or `false` literal at `path` from the top-level object, walking the body as
+/// `string_member_span` does: a member of the same name inside a nested value is skipped with that value, so a
+/// tool schema cannot stand in for the request's own flag.
+pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    s.ws();
+    for (depth, key) in path.iter().enumerate() {
+        let last = depth + 1 == path.len();
+        if let Ok(index) = key.parse::<usize>() {
+            if !s.eat(b'[') {
+                return None;
+            }
+            for _ in 0..index {
+                s.value(false).ok()?;
+                s.ws();
+                if !s.eat(b',') {
+                    return None;
+                }
+            }
+            s.ws();
+        } else {
+            if !s.eat(b'{') {
+                return None;
+            }
+            loop {
+                s.ws();
+                let (ks, ke) = s.string().ok()?;
+                s.ws();
+                if !s.eat(b':') {
+                    return None;
+                }
+                s.ws();
+                if s.body[ks + 1..ke - 1] == *key.as_bytes() {
+                    break;
+                }
+                s.value(false).ok()?;
+                s.ws();
+                if !s.eat(b',') {
+                    return None;
+                }
+            }
+        }
+        if last {
+            let start = s.pos;
+            for literal in [&b"true"[..], &b"false"[..]] {
+                if s.body[start..].starts_with(literal) {
+                    let end = start + literal.len();
+                    let terminated = s.body.get(end).is_none_or(|c| {
+                        matches!(c, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+                    });
+                    return terminated.then_some((start, end));
+                }
+            }
+            return None;
+        }
+        s.ws();
+    }
+    None
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -444,5 +509,28 @@ mod tests {
             "the placeholder was replaced, so the comparison below is not two unsigned bodies"
         );
         assert_eq!(digits(&deep), digits(&shallow));
+    }
+
+    #[test]
+    fn a_boolean_member_is_found_at_the_top_level_and_not_inside_a_nested_value() {
+        let body = br#"{"model":"m","tools":[{"input_schema":{"properties":{"stream":{"default":false}}}}],"stream": true}"#;
+        let (start, end) = bool_member_span(body, &["stream"]).unwrap();
+        assert_eq!(
+            &body[start..end],
+            b"true",
+            "the nested stream member is skipped as part of the tools value"
+        );
+        assert_eq!(
+            bool_member_span(br#"{"stream":false,"model":"m"}"#, &["stream"]).map(|(s, e)| s..e),
+            Some(1 + 9..1 + 14)
+        );
+        assert!(
+            bool_member_span(br#"{"stream":"true"}"#, &["stream"]).is_none(),
+            "a string is not a boolean"
+        );
+        assert!(bool_member_span(br#"{"model":"m"}"#, &["stream"]).is_none());
+        assert!(
+            bool_member_span(br#"{"metadata":{"stream":true}}"#, &["metadata", "stream"]).is_some()
+        );
     }
 }
