@@ -181,10 +181,13 @@ impl CatalogService {
         let now = (self.clock)();
         let outcome = match self.discover(&account).await {
             Ok(discovered) => {
-                match self
-                    .store
-                    .apply_catalog_sync(account_id, &discovered.models, now, actor)
-                {
+                match self.store.apply_catalog_sync(
+                    account_id,
+                    &discovered.models,
+                    None,
+                    now,
+                    actor,
+                ) {
                     Ok(delta) => SyncOutcome {
                         delta: Some(delta),
                         error: None,

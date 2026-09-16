@@ -209,6 +209,7 @@ pub async fn harness_on(
                     enabled: true,
                     identity,
                     lifecycle_generation: 1,
+                    revision: 1,
                     state: AccountState::Ready,
                 })
                 .unwrap();
@@ -305,6 +306,7 @@ pub async fn harness_on(
                         .iter()
                         .map(|m| (m.to_string(), false))
                         .collect::<Vec<_>>(),
+                    None,
                     NOW,
                     "test",
                 )

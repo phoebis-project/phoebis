@@ -26,11 +26,12 @@ fn seeded(ids: &[&str]) -> Arc<Store> {
                 enabled: true,
                 identity: None,
                 lifecycle_generation: 1,
+                revision: 1,
                 state: AccountState::Ready,
             })
             .unwrap();
         store
-            .apply_catalog_sync(id, &[("claude-sonnet-5".into(), false)], 1, "test")
+            .apply_catalog_sync(id, &[("claude-sonnet-5".into(), false)], None, 1, "test")
             .unwrap();
     }
     store
@@ -140,11 +141,12 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             enabled: true,
             identity: None,
             lifecycle_generation: 1,
+            revision: 1,
             state: AccountState::Ready,
         })
         .unwrap();
     store
-        .apply_catalog_sync("b", &[("claude-sonnet-5".into(), false)], 1, "test")
+        .apply_catalog_sync("b", &[("claude-sonnet-5".into(), false)], None, 1, "test")
         .unwrap();
     store
         .set_pool_members("p", &[("b".into(), 0)], "test")

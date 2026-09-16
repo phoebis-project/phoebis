@@ -242,6 +242,7 @@ async fn app_with(
                 enabled: true,
                 identity,
                 lifecycle_generation: 1,
+                revision: 1,
                 state: if paired {
                     AccountState::Ready
                 } else {
@@ -279,6 +280,7 @@ async fn app_with(
                 enabled: true,
                 identity: None,
                 lifecycle_generation: 1,
+                revision: 1,
                 state: AccountState::Ready,
             })
             .unwrap();

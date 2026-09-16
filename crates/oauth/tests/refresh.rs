@@ -112,6 +112,7 @@ fn store_with_account() -> Arc<Store> {
                 organization_uuid: None,
             }),
             lifecycle_generation: 1,
+            revision: 1,
             state: AccountState::Ready,
         })
         .unwrap();
@@ -801,6 +802,7 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
             enabled: true,
             identity: None,
             lifecycle_generation: 1,
+            revision: 1,
             state: AccountState::Ready,
         })
         .unwrap();

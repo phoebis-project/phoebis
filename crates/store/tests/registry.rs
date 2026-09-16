@@ -11,6 +11,7 @@ fn account(id: &str, kind: AccountKind) -> AccountRow {
         enabled: true,
         identity: None,
         lifecycle_generation: 1,
+        revision: 1,
         state: AccountState::Ready,
     }
 }
@@ -58,27 +59,50 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        3,
+        4,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
+    again
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
     drop(again);
-    // What a database written before the change-log index existed looks like on disk.
+    // What a database written before the account revision existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP INDEX registry_changes_target; UPDATE meta SET value = '2' WHERE key = 'schema_version';",
+        "ALTER TABLE accounts DROP COLUMN revision; UPDATE meta SET value = '3' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        3,
+        4,
+        "a store left at version 3 is carried up"
+    );
+    assert_eq!(
+        migrated.account("a").unwrap().unwrap().revision,
+        1,
+        "and the row it already held starts at the first revision"
+    );
+    drop(migrated);
+    // And what one written before the change-log index existed looks like.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX registry_changes_target; ALTER TABLE accounts DROP COLUMN revision; \
+         UPDATE meta SET value = '2' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        4,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -113,7 +137,7 @@ fn the_newest_catalog_change_is_what_the_account_serves_now() {
         Some("catalog_seeded")
     );
     store
-        .apply_catalog_sync("a", &[("claude-opus-4-1".into(), false)], 2, "test")
+        .apply_catalog_sync("a", &[("claude-opus-4-1".into(), false)], None, 2, "test")
         .unwrap();
     assert_eq!(
         store.latest_catalog_change("a").unwrap().as_deref(),
@@ -122,7 +146,7 @@ fn the_newest_catalog_change_is_what_the_account_serves_now() {
     );
     // A discovery that answered an empty list leaves nothing to serve, which is the one case a later seed
     // still fills.
-    store.apply_catalog_sync("b", &[], 3, "test").unwrap();
+    store.apply_catalog_sync("b", &[], None, 3, "test").unwrap();
     assert!(store
         .seed_catalog("b", &[("claude-sonnet-4-5".into(), false)], 4, "test")
         .unwrap());
@@ -256,6 +280,7 @@ fn a_catalog_sync_adds_new_ids_unselected_flags_vanished_ones_and_keeps_manual_r
                 ("claude-sonnet-5".into(), false),
                 ("claude-opus-5".into(), true),
             ],
+            None,
             10,
             "catalog",
         )
@@ -296,6 +321,7 @@ fn a_catalog_sync_adds_new_ids_unselected_flags_vanished_ones_and_keeps_manual_r
                 ("claude-sonnet-5".into(), false),
                 ("claude-haiku-4-5".into(), false),
             ],
+            None,
             20,
             "catalog",
         )
@@ -386,6 +412,7 @@ fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() 
     );
     let update = AccountUpdate {
         id: "a",
+        expected_revision: 1,
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
@@ -421,6 +448,79 @@ fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() 
         "Renamed",
         "a stale update writes nothing"
     );
+    // The commit above moved the revision, so the same edit verified against the row before it is now about
+    // an account whose endpoint and secret nobody checked together.
+    let superseded = AccountUpdate {
+        label: "Never",
+        ..update
+    };
+    assert!(matches!(
+        store.commit_account_update(&superseded),
+        Err(StoreError::Stale)
+    ));
+    assert_eq!(
+        (
+            store.account("a").unwrap().unwrap().label,
+            store.api_key_credential("a").unwrap().unwrap().0.expose()
+        ),
+        ("Renamed".to_string(), "k2"),
+        "an edit verified against a superseded revision writes nothing"
+    );
+}
+
+#[test]
+fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    let revision = || store.account("a").unwrap().unwrap().revision;
+    assert_eq!(
+        (revision(), store.account_revision("a").unwrap()),
+        (1, Some(1))
+    );
+    store.update_account("a", "Renamed", "admin").unwrap();
+    assert_eq!(revision(), 2, "a label update");
+    store.set_enabled("a", false).unwrap();
+    assert_eq!(revision(), 3, "an enable flip");
+    store.set_api_key_secret("a", &Secret::new("k1")).unwrap();
+    assert_eq!(revision(), 4, "a secret rotation");
+    store.set_state("a", AccountState::FundingRequired).unwrap();
+    assert_eq!(revision(), 5, "a state change");
+    store
+        .apply_catalog_sync(
+            "a",
+            &[("claude-sonnet-5".into(), false)],
+            None,
+            6,
+            "catalog",
+        )
+        .unwrap();
+    assert_eq!(
+        revision(),
+        5,
+        "a catalog sync changes no dispatch input, so it leaves the revision alone"
+    );
+    assert_eq!(store.account_revision("nobody").unwrap(), None);
+}
+
+#[test]
+fn a_catalog_sync_verified_against_a_superseded_revision_is_refused() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    let discovered = [("claude-sonnet-5".into(), false)];
+    store.update_account("a", "Renamed", "admin").unwrap();
+    assert!(matches!(
+        store.apply_catalog_sync("a", &discovered, Some(1), 10, "catalog"),
+        Err(StoreError::Stale)
+    ));
+    assert!(store.served_models("a").unwrap().is_empty());
+    store
+        .apply_catalog_sync("a", &discovered, Some(2), 10, "catalog")
+        .unwrap();
+    assert_eq!(store.served_models("a").unwrap().len(), 1);
 }
 
 #[test]
@@ -434,7 +534,13 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
         .set_pool_members("main", &[("a".into(), 0)], "test")
         .unwrap();
     store
-        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], 1, "catalog")
+        .apply_catalog_sync(
+            "a",
+            &[("claude-sonnet-5".into(), false)],
+            None,
+            1,
+            "catalog",
+        )
         .unwrap();
     let load = store.load_registry().unwrap();
     assert_eq!(
@@ -482,6 +588,7 @@ fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
                 ("Vendor/Model-A".into(), true),
                 ("claude-sonnet-5".into(), false),
             ],
+            None,
             10,
             "catalog",
         )
@@ -504,7 +611,13 @@ fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
     assert!(!new_row.selected && new_row.is_new);
 
     let second = store
-        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], 20, "catalog")
+        .apply_catalog_sync(
+            "a",
+            &[("claude-sonnet-5".into(), false)],
+            None,
+            20,
+            "catalog",
+        )
         .unwrap();
     assert!(
         second.missing.is_empty(),

@@ -11,6 +11,7 @@ fn account(id: &str) -> AccountRow {
         enabled: true,
         identity: None,
         lifecycle_generation: 1,
+        revision: 1,
         state: AccountState::Unpaired,
     }
 }

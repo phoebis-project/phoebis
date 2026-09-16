@@ -317,9 +317,15 @@ impl Store {
         Ok(Some(Secret::new(&value)))
     }
 
+    /// The rotation moves the account's revision too: the secret is one half of what a dispatch pairs with
+    /// an endpoint, so a holder that captured the row before the rotation has to see that it moved.
     pub fn set_api_key_secret(&self, account_id: &str, secret: &Secret) -> Result<(), StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        store_api_key_secret(&conn, &self.key, account_id, secret)
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        store_api_key_secret(&tx, &self.key, account_id, secret)?;
+        crate::accounts::bump_revision(&tx, account_id)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// The secret with the generation that names it, so a verdict formed while it was in use can be told

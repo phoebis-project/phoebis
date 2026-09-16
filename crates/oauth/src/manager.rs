@@ -720,6 +720,7 @@ mod tests {
                     organization_uuid: None,
                 }),
                 lifecycle_generation: 1,
+                revision: 1,
                 state: AccountState::Ready,
             })
             .unwrap();

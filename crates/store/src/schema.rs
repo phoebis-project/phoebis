@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS refresh_attempts_pending ON refresh_attempts (account
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. Every statement is
 /// additive so a downgrade can still read the older tables.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4)];
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -86,4 +86,10 @@ ALTER TABLE api_key_secrets ADD COLUMN generation INTEGER NOT NULL DEFAULT 1;
 
 const V3: &str = r#"
 CREATE INDEX IF NOT EXISTS registry_changes_target ON registry_changes (target, id);
+"#;
+
+// Rows written before this column existed start at 1, which is the same value a fresh row takes, so a
+// verdict formed against a pre-migration row is only stale once something actually changes the account.
+const V4: &str = r#"
+ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
 "#;

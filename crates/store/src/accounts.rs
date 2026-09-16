@@ -97,6 +97,10 @@ pub struct AccountRow {
     pub enabled: bool,
     pub identity: Option<Identity>,
     pub lifecycle_generation: u64,
+    /// Bumped by every write that changes what a request dispatches with, or what an operator verified an
+    /// edit against. A holder that captured the row before a slow step compares it to tell whether the
+    /// endpoint and the credential it is about to pair are still the ones it looked at.
+    pub revision: u64,
     pub state: AccountState,
 }
 
@@ -120,6 +124,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
         enabled: row.get("enabled")?,
         identity,
         lifecycle_generation: row.get::<_, i64>("lifecycle_generation")? as u64,
+        revision: row.get::<_, i64>("revision")? as u64,
         state: row.get("state")?,
     })
 }
@@ -128,7 +133,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, state \
+        "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, revision, state \
          FROM accounts ORDER BY id",
     )?;
     let rows = stmt.query_map([], row_to_account)?;
@@ -145,7 +150,7 @@ impl Store {
     pub fn account(&self, id: &str) -> Result<Option<AccountRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, state \
+            "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, revision, state \
              FROM accounts WHERE id = ?1",
             params![id],
             row_to_account,
@@ -163,8 +168,8 @@ impl Store {
             .transpose()?;
         let now = jiff::Timestamp::now().as_millisecond();
         conn.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, revision, state, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
             params![
                 row.id,
                 row.kind,
@@ -203,7 +208,8 @@ impl Store {
             return Err(StoreError::KindChange(id.to_string()));
         }
         tx.execute(
-            "UPDATE accounts SET kind = ?2, label = ?3, updated_at = ?4 WHERE id = ?1",
+            "UPDATE accounts SET kind = ?2, label = ?3, revision = revision + 1, updated_at = ?4 \
+             WHERE id = ?1",
             params![
                 id,
                 kind,
@@ -218,7 +224,7 @@ impl Store {
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE accounts SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE accounts SET enabled = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
             params![id, enabled, jiff::Timestamp::now().as_millisecond()],
         )?;
         Ok(())
@@ -244,7 +250,7 @@ impl Store {
             }
         }
         let written = conn.execute(
-            "UPDATE accounts SET identity_json = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE accounts SET identity_json = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
             params![
                 id,
                 serde_json::to_string(identity)?,
@@ -265,7 +271,7 @@ impl Store {
     pub fn set_state(&self, id: &str, state: AccountState) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
             params![id, state, jiff::Timestamp::now().as_millisecond()],
         )?;
         Ok(())
@@ -288,7 +294,8 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let updated = conn.execute(
-            "UPDATE accounts SET state = ?2, updated_at = ?3 WHERE id = ?1 AND lifecycle_generation = ?4 \
+            "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND lifecycle_generation = ?4 \
              AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
                   OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
             params![
@@ -309,7 +316,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = jiff::Timestamp::now().as_millisecond();
         let updated = tx.execute(
-            "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
+             revision = revision + 1, updated_at = ?3 WHERE id = ?1",
             params![id, AccountState::Disconnected, now],
         )?;
         if updated == 0 {
@@ -360,7 +368,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = jiff::Timestamp::now().as_millisecond();
         if tx.execute(
-            "UPDATE accounts SET label = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE accounts SET label = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1",
             params![id, label, now],
         )? == 0
         {
@@ -370,6 +379,20 @@ impl Store {
         crate::registry::record_change(&tx, now, actor, "account_updated", id, &diff)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// The account's current revision, for a holder that wants to know whether the row moved without
+    /// paying for the whole row and its identity.
+    pub fn account_revision(&self, id: &str) -> Result<Option<u64>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT revision FROM accounts WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|revision| revision.map(|r| r as u64))
+        .map_err(StoreError::from)
     }
 
     pub fn catalog_status(&self, id: &str) -> Result<(Option<i64>, Option<String>), StoreError> {
@@ -396,6 +419,15 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// The revision bump for a write that changes a dispatch input without touching the account row itself.
+pub(crate) fn bump_revision(conn: &rusqlite::Connection, id: &str) -> Result<(), StoreError> {
+    conn.execute(
+        "UPDATE accounts SET revision = revision + 1, updated_at = ?2 WHERE id = ?1",
+        params![id, jiff::Timestamp::now().as_millisecond()],
+    )?;
+    Ok(())
 }
 
 fn holds_credentials(tx: &rusqlite::Transaction<'_>, id: &str) -> Result<bool, StoreError> {

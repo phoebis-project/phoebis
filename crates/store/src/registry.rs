@@ -196,6 +196,9 @@ pub struct RegistryLoad {
 #[derive(Clone, Copy, Debug)]
 pub struct AccountUpdate<'a> {
     pub id: &'a str,
+    /// The revision the discovery ran against. The commit only lands while the row still carries it, so two
+    /// edits verified in parallel cannot combine into an endpoint and a secret nothing ever checked together.
+    pub expected_revision: u64,
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
@@ -598,15 +601,34 @@ impl Store {
 
     /// A manual row the discovery reports keeps its source and selection, but takes the discovery's
     /// long-context flag.
+    ///
+    /// `expected_revision` is the revision discovery ran against, where the caller has one: a catalog
+    /// fetched from an endpoint the account no longer holds answers `Stale` instead of overwriting what the
+    /// replacement endpoint serves.
     pub fn apply_catalog_sync(
         &self,
         account_id: &str,
         discovered: &[(String, bool)],
+        expected_revision: Option<u64>,
         at: i64,
         actor: &str,
     ) -> Result<SyncDelta, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(expected) = expected_revision {
+            let current: Option<i64> = tx
+                .query_row(
+                    "SELECT revision FROM accounts WHERE id = ?1",
+                    params![account_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match current {
+                None => return Err(StoreError::AccountNotFound(account_id.to_string())),
+                Some(current) if current as u64 != expected => return Err(StoreError::Stale),
+                Some(_) => {}
+            }
+        }
         let delta = apply_catalog_in(&tx, account_id, discovered, at, actor)?;
         tx.commit()?;
         Ok(delta)
@@ -631,8 +653,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()?;
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, state, catalog_error, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, revision, state, catalog_error, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?9)",
             params![
                 row.id,
                 row.kind,
@@ -669,8 +691,9 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = ?3, catalog_error = ?4, updated_at = ?5 WHERE id = ?1 AND lifecycle_generation = ?6",
-            params![u.id, u.label, u.state, u.catalog_error, u.at, u.lifecycle_generation as i64],
+            "UPDATE accounts SET label = ?2, state = ?3, catalog_error = ?4, revision = revision + 1, updated_at = ?5 \
+             WHERE id = ?1 AND lifecycle_generation = ?6 AND revision = ?7",
+            params![u.id, u.label, u.state, u.catalog_error, u.at, u.lifecycle_generation as i64, u.expected_revision as i64],
         )?;
         if updated == 0 {
             let exists: i64 = tx.query_row(

@@ -109,6 +109,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         enabled: true,
         identity: None,
         lifecycle_generation: 1,
+        revision: 1,
         state: match kind {
             AccountKind::Oauth => AccountState::Unpaired,
             AccountKind::ApiKey => AccountState::Ready,
@@ -222,6 +223,7 @@ pub(crate) async fn patch(
         };
         let update = AccountUpdate {
             id: &id,
+            expected_revision: row.revision,
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: Some(&secret),
