@@ -37,7 +37,7 @@ httparse = "1.10.1"
 jiff = "0.2.37"
 rand = "0.10.2"
 rcgen = "0.13"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["cookies", "json", "rustls-tls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }

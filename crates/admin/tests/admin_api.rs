@@ -589,3 +589,18 @@ async fn a_confirmation_from_another_admin_session_changes_nothing() {
     let account = json(get(&app, "/admin/accounts/business", Some(&owner)).await).await;
     assert_eq!(account["state"], "ready");
 }
+
+#[tokio::test]
+async fn an_abandoned_exchange_is_swept_at_its_deadline() {
+    use common::login;
+    let (app, _up, _store, _router, vault) = common::admin_parts_with_vault().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    assert_eq!(
+        vault.sweep(common::NOW + 600_000),
+        0,
+        "the deadline has not passed"
+    );
+    assert_eq!(vault.sweep(common::NOW + 600_001), 1);
+    assert!(vault.take_exchange(&id).is_none(), "the bundle is gone");
+}

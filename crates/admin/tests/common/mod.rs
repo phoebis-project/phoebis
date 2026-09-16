@@ -53,6 +53,7 @@ struct Parts {
     router: RouterHandle,
     store: Arc<Store>,
     up: FakeUpstream,
+    vault: Arc<PairingVault>,
 }
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
@@ -83,6 +84,19 @@ pub async fn admin_app_quarantined(detail: &str) -> (Router, FakeUpstream) {
 pub async fn admin_parts() -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
     let parts = app_with(None, ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up, parts.store, parts.router)
+}
+
+/// The unpaired app with the vault behind it, for the tests that have to look at what the vault still
+/// holds after a pairing was left unfinished.
+pub async fn admin_parts_with_vault() -> (
+    Router,
+    FakeUpstream,
+    Arc<Store>,
+    RouterHandle,
+    Arc<PairingVault>,
+) {
+    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    (parts.app, parts.up, parts.store, parts.router, parts.vault)
 }
 
 /// A second app over a store another `Parts` already opened, so its router task loads whatever the store
@@ -322,6 +336,7 @@ async fn app_with(
         clock.clone(),
         DISCOVERY_TIMEOUT,
     ));
+    let vault = Arc::new(PairingVault::new());
     let state = Arc::new(AdminState {
         store: store.clone(),
         manager: manager.clone(),
@@ -341,7 +356,7 @@ async fn app_with(
         // The two go together: an origin is pinned exactly where the admin API is not on loopback.
         dev_loopback_http: origin.is_none(),
         origin,
-        vault: Arc::new(PairingVault::new()),
+        vault: vault.clone(),
         started_at: NOW,
         router: router_handle.clone(),
         catalog,
@@ -354,6 +369,7 @@ async fn app_with(
         router: router_handle,
         store,
         up,
+        vault,
     }
 }
 

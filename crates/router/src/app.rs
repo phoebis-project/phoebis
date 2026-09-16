@@ -14,19 +14,16 @@ use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{CatalogService, Limits, Relay};
-use phoebis_store::{AccountRow, AccountState, Secret, StorageKey, Store};
+use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
-use crate::config::{AccountKind, Config};
+use crate::config::{Config, UpstreamConfig};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How long an account is cooled when the upstream rejected it without saying for how long.
-const COOLDOWN_FALLBACK: Duration = Duration::from_secs(60);
 
 /// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
 /// response head nor the wait between stream events gives up before the caller itself would.
@@ -36,9 +33,6 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// A stream that has not reached its first committing event by then is forwarded as it stands, because the
 /// caller is waiting and a longer hold buys no better verdict.
 const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Upstream submissions one caller request may cost across every account it tries.
-const MAX_ATTEMPTS: u8 = 3;
 
 const HTTPS_PORT: u16 = 443;
 
@@ -50,14 +44,12 @@ const MAX_REQUEST_BYTES: usize = 32 << 20;
 const POOL_IDLE_TTL: Duration = Duration::from_secs(60);
 const POOL_MAX_IDLE: usize = 8;
 
-/// The ceiling on a key's body-capture window, so no capture can be left recording for weeks.
-const BODY_CAPTURE_MAX_HOURS: u32 = 72;
-
-/// How long a session pin stays listed on `GET /admin/sessions` after its last use.
-const SESSION_EXPIRY: Duration = Duration::from_secs(86_400);
-
 /// A models list is one small request; a host that has not answered by then is not going to.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A pairing session lives ten minutes, so a sweep this often frees an abandoned exchange within a minute
+/// of the deadline it can no longer meet.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// An unattended browser must not keep an admin session usable, and no session outlives the day it was
 /// opened on.
@@ -86,7 +78,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
     );
     tracing::info!(database = %config.storage.path.display(), "store opened");
-    sync_accounts(&store, &config)?;
 
     let extra_ca = match &config.upstream.extra_ca_pem {
         None => None,
@@ -103,7 +94,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     }
 
     let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
-    let resolver = resolver_for(&config);
+    let resolver = resolver_for(&config.upstream);
     let control = Arc::new(ControlClient::new(
         profile,
         control_builder.build(),
@@ -150,6 +141,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock.clone(),
         DISCOVERY_TIMEOUT,
     ));
+    let scheduler = catalog.clone().spawn_scheduler(Duration::from_secs(
+        config.routing.catalog_sync_interval_seconds,
+    ));
     let relay = Arc::new(
         Relay::new(
             profile,
@@ -160,15 +154,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             resolver,
             clock.clone(),
             Limits {
-                cooldown_fallback: COOLDOWN_FALLBACK,
+                cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
                 head_timeout: HEAD_TIMEOUT,
                 hold_timeout: HOLD_TIMEOUT,
                 idle_timeout: IDLE_TIMEOUT,
-                max_attempts: MAX_ATTEMPTS,
+                max_attempts: config.routing.max_attempts,
                 max_request_bytes: MAX_REQUEST_BYTES,
             },
         )
     );
+    let vault = Arc::new(PairingVault::new());
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -188,12 +183,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock: clock.clone(),
         dev_loopback_http: config.admin.dev_loopback_http,
         origin: config.admin.origin.clone(),
-        vault: Arc::new(PairingVault::new()),
+        vault: vault.clone(),
         started_at: (clock)(),
-        router: router_task,
-        catalog,
-        body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
-        session_expiry: SESSION_EXPIRY,
+        router: router_task.clone(),
+        catalog: catalog.clone(),
+        body_capture_max_hours: config.stats.body_capture_max_hours,
+        session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
     });
 
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
@@ -215,6 +210,21 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let admin_app = Router::new()
         .merge(phoebis_admin::router(admin))
         .fallback(unknown_admin_route);
+    // An exchange nobody confirms holds a credential bundle in memory, and only this sweep frees one whose
+    // pairing session has run out.
+    let sweeper = {
+        let clock = clock.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(SWEEP_INTERVAL);
+            loop {
+                tick.tick().await;
+                let swept = vault.sweep(clock());
+                if swept > 0 {
+                    tracing::debug!(swept, "abandoned pairing exchanges dropped");
+                }
+            }
+        })
+    };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
     let mut proxy = tokio::spawn(
@@ -249,62 +259,47 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin_server.abort();
         }
     }
+    scheduler.abort();
+    sweeper.abort();
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
+    drop(catalog);
+    // The router task is the last writer: a pin or a cooldown the relay acknowledged reaches the store while
+    // this waits, rather than dying with the process.
+    if let Err(error) = router_task.shutdown().await {
+        tracing::warn!(%error, "the router task had already stopped");
+    }
     drop(pool);
     Ok(())
 }
 
-/// Brings the configured accounts into the registry: the file owns an account's kind, label,
-/// and API-key secret, and the registry owns everything pairing writes, so identity, credentials, state, and
-/// the lifecycle generation survive every reload. A slot the file no longer names keeps its row, since
-/// deleting it would take a paired account's credentials with it.
-fn sync_accounts(store: &Store, config: &Config) -> anyhow::Result<()> {
-    for account in &config.accounts {
-        match store.account(&account.id)? {
-            Some(_) => store.update_account_config(
-                &account.id,
-                account.kind.store_kind(),
-                &account.label,
-            )?,
-            None => store.insert_account(&AccountRow {
-                id: account.id.clone(),
-                kind: account.kind.store_kind(),
-                label: account.label.clone(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                // An API key is usable as soon as it is stored; an OAuth slot has to be paired first.
-                state: match account.kind {
-                    AccountKind::ApiKey => AccountState::Ready,
-                    AccountKind::Oauth => AccountState::Unpaired,
-                },
-            })?,
-        }
-        if let Some(secret) = &account.secret {
-            store.set_api_key_secret(&account.id, secret)?;
-            // A slot the file has just moved from OAuth to an API key has everything it needs the moment its
-            // key is stored, but it still carries the unpaired state the OAuth row was created with, which
-            // the relay refuses and which no pairing will ever clear for an API-key account.
-            let unpaired = store
-                .account(&account.id)?
-                .is_some_and(|row| matches!(row.state, AccountState::Unpaired));
-            if matches!(account.kind, AccountKind::ApiKey) && unpaired {
-                store.set_state(&account.id, AccountState::Ready)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn resolver_for(config: &Config) -> Resolver {
-    if let Some(addr) = config.upstream.resolve_override {
+fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
+    if let Some(addr) = upstream.resolve_override {
         // Every host goes to the one address, which is how a lab upstream stands in for the real one.
         return Arc::new(move |_| Some(addr));
     }
     // Blocking name resolution: the contract is a synchronous closure, and the control plane and the relay
-    // ask for a name once per new connection rather than per request.
-    Arc::new(|host: &str| (host, HTTPS_PORT).to_socket_addrs().ok()?.next())
+    // ask for a name once per new connection rather than per request. The port travels with the authority
+    // the caller passes in; a bare host defaults to 443.
+    Arc::new(|authority: &str| {
+        let (host, port) = match split_authority(authority) {
+            Some(split) => split,
+            None => (authority, HTTPS_PORT),
+        };
+        (host, port).to_socket_addrs().ok()?.next()
+    })
+}
+
+/// `host:port` or `[v6]:port`; `None` when there is no port.
+fn split_authority(authority: &str) -> Option<(&str, u16)> {
+    let (host, port) = authority.rsplit_once(':')?;
+    if host.contains(':') && !host.starts_with('[') {
+        return None;
+    }
+    Some((
+        host.trim_start_matches('[').trim_end_matches(']'),
+        port.parse().ok()?,
+    ))
 }
 
 /// Unauthenticated callers learn nothing about the admin surface from a path that does not exist, and no
@@ -336,89 +331,13 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoebis_store::StorageKey;
-    use std::path::Path;
-
-    fn configured_as(dir: &Path, label: &str) -> Config {
-        let yaml = format!(
-            r#"accounts:
-  - id: console
-    kind: api_key
-    label: {label}
-    secret_env: TEST_SYNC_CONSOLE_KEY
-admin:
-  listen: 127.0.0.1:0
-  secret_env: TEST_SYNC_ADMIN_SECRET
-  dev_loopback_http: true
-compatibility:
-  outbound_gzip: false
-  profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
-proxy:
-  listen: 127.0.0.1:0
-routes:
-  - key_id: desktop
-    secret_env: TEST_SYNC_DESKTOP_KEY
-    account_id: console
-storage:
-  encryption_key_file: {key}
-  path: {db}
-upstream:
-usage:
-  cache_ttl_seconds: 60
-  refresh_concurrency: 2
-"#,
-            key = dir.join("storage.key").display(),
-            db = dir.join("router.sqlite").display()
-        );
-        let path = dir.join(format!("{label}.yaml"));
-        std::fs::write(&path, yaml).unwrap();
-        crate::config::load(&path).unwrap()
-    }
 
     #[test]
-    fn a_renamed_account_keeps_its_row_and_its_stored_key() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_SYNC_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
-        std::env::set_var("TEST_SYNC_ADMIN_SECRET", "admin-secret");
-        std::env::set_var("TEST_SYNC_DESKTOP_KEY", "phoebis-testkey");
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-        sync_accounts(&store, &configured_as(dir.path(), "Console")).unwrap();
-        sync_accounts(&store, &configured_as(dir.path(), "Renamed")).unwrap();
-        let rows = store.accounts().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].label, "Renamed");
-        assert_eq!(
-            store.api_key_secret("console").unwrap().unwrap().expose(),
-            "sk-ant-api03-PLACEHOLDER"
-        );
-    }
-
-    #[test]
-    fn an_unpaired_slot_reconfigured_as_an_api_key_is_ready_once_its_key_is_stored() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_SYNC_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
-        std::env::set_var("TEST_SYNC_ADMIN_SECRET", "admin-secret");
-        std::env::set_var("TEST_SYNC_DESKTOP_KEY", "phoebis-testkey");
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-        store
-            .insert_account(&AccountRow {
-                id: "console".into(),
-                kind: phoebis_store::AccountKind::Oauth,
-                label: "Console".into(),
-                enabled: true,
-                identity: None,
-                lifecycle_generation: 1,
-                state: AccountState::Unpaired,
-            })
-            .unwrap();
-        sync_accounts(&store, &configured_as(dir.path(), "Console")).unwrap();
-        let row = store.account("console").unwrap().unwrap();
-        assert_eq!(row.kind, phoebis_store::AccountKind::ApiKey);
-        assert_eq!(
-            row.state,
-            AccountState::Ready,
-            "nothing else would ever move an api_key slot out of unpaired"
-        );
+    fn the_production_resolver_honours_an_explicit_port_and_defaults_to_443() {
+        let resolve = resolver_for(&UpstreamConfig::default());
+        assert_eq!(resolve("127.0.0.1:8317").map(|a| a.port()), Some(8317));
+        assert_eq!(resolve("127.0.0.1").map(|a| a.port()), Some(443));
+        assert_eq!(resolve("[::1]:8443").map(|a| a.port()), Some(8443));
+        assert!(resolve("no-such-host.invalid").is_none());
     }
 }

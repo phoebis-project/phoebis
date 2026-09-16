@@ -378,6 +378,7 @@ async fn pairing_start(
         &row.id,
         &caller.session_id,
         row.lifecycle_generation,
+        session.deadline,
     );
     let url = authorization_url(
         state.profile,

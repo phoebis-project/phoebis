@@ -82,6 +82,9 @@ pub struct TakenExchange {
 struct PairingRecord {
     account_id: String,
     admin_session_id: String,
+    /// Unix milliseconds the pairing session expires at, which is also when the bundle it may hold becomes
+    /// unusable.
+    deadline: i64,
     exchange: Option<Exchange>,
     /// The account's lifecycle generation when the pairing started. A bundle confirmed past a bump was
     /// issued for a slot that has since been disconnected.
@@ -113,12 +116,14 @@ impl PairingVault {
         account_id: &str,
         admin_session_id: &str,
         lifecycle_generation: u64,
+        deadline: i64,
     ) {
         self.records.lock().expect(LOCK_POISONED).insert(
             session_id.to_string(),
             PairingRecord {
                 account_id: account_id.to_string(),
                 admin_session_id: admin_session_id.to_string(),
+                deadline,
                 exchange: None,
                 lifecycle_generation,
                 status: VaultStatus::Started,
@@ -200,5 +205,22 @@ impl PairingVault {
             }
         }
         cancelled
+    }
+
+    /// Drops every exchange whose pairing session has run out: the bundle it holds can never be confirmed,
+    /// and nothing else would free it before the process ends.
+    pub fn sweep(&self, now: i64) -> usize {
+        let mut records = self.records.lock().expect(LOCK_POISONED);
+        let mut swept = 0;
+        for record in records.values_mut() {
+            if matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged)
+                && now > record.deadline
+            {
+                record.exchange = None;
+                record.status = VaultStatus::Discarded;
+                swept += 1;
+            }
+        }
+        swept
     }
 }

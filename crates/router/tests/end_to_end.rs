@@ -6,8 +6,8 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::net::TcpListener;
 use std::sync::Mutex;
 
-/// Secrets are read from the process environment inside `load`, and both tests in this binary name
-/// `TEST_DESKTOP_KEY` with different values, so each holds this across its whole set-then-load sequence.
+/// Secrets are read from the process environment inside `load`, and the tests in this binary name the same
+/// variables with different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
 fn free_port() -> u16 {
@@ -152,8 +152,8 @@ usage:
     up.shutdown().await;
 }
 
-/// Writes a configuration built from the given admin and routes blocks, and returns its path.
-fn config_with(dir: &std::path::Path, name: &str, admin: &str, routes: &str) -> std::path::PathBuf {
+/// Writes a configuration built from the given admin block, and returns its path.
+fn config_with(dir: &std::path::Path, name: &str, admin: &str) -> std::path::PathBuf {
     let key = dir.join("storage.key");
     std::fs::write(
         &key,
@@ -161,12 +161,7 @@ fn config_with(dir: &std::path::Path, name: &str, admin: &str, routes: &str) -> 
     )
     .unwrap();
     let yaml = format!(
-        r#"accounts:
-  - id: console
-    kind: api_key
-    label: Console
-    secret_env: TEST_CONSOLE_KEY
-admin:
+        r#"admin:
 {admin}
 compatibility:
   outbound_gzip: false
@@ -174,12 +169,9 @@ compatibility:
   usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:0
-routes:
-{routes}
 storage:
   encryption_key_file: {key}
   path: {db}
-upstream:
 usage:
   cache_ttl_seconds: 60
   refresh_concurrency: 2
@@ -197,41 +189,31 @@ fn shared_secrets_and_cleartext_administration_off_loopback_are_rejected() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("TEST_CONSOLE_KEY", "sk-ant-api03-PLACEHOLDER");
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-    std::env::set_var("TEST_DESKTOP_KEY", "phoebis-desktop");
-    std::env::set_var("TEST_LAPTOP_KEY", "phoebis-desktop");
-    let loopback_dev =
-        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret");
+    std::env::set_var("TEST_SHARED_SECRET", "admin-secret");
+    let loopback_dev = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  dev_loopback_http: true";
+    let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  dev_loopback_http: true";
     let public_dev =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
     let public_plain =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: false";
-    let one = "  - key_id: desktop\n    secret_env: TEST_DESKTOP_KEY\n    account_id: console";
-    let two = format!(
-        "{one}\n  - key_id: laptop\n    secret_env: TEST_LAPTOP_KEY\n    account_id: console"
-    );
-    assert!(load(&config_with(dir.path(), "ok", loopback_dev, one)).is_ok());
+    assert!(load(&config_with(dir.path(), "ok", loopback_dev)).is_ok());
     assert!(matches!(
-        load(&config_with(dir.path(), "dup", loopback_dev, &two)),
+        load(&config_with(dir.path(), "dup", shared)),
         Err(ConfigError::DuplicateSecret { .. })
     ));
     assert!(matches!(
-        load(&config_with(dir.path(), "dev", public_dev, one)),
+        load(&config_with(dir.path(), "dev", public_dev)),
         Err(ConfigError::DevModeNotLoopback { .. })
     ));
     assert!(matches!(
-        load(&config_with(dir.path(), "origin", public_plain, one)),
+        load(&config_with(dir.path(), "origin", public_plain)),
         Err(ConfigError::MissingOrigin)
-    ));
-    std::env::set_var("TEST_LAPTOP_KEY", "admin-secret");
-    assert!(matches!(
-        load(&config_with(dir.path(), "admin_dup", loopback_dev, &two)),
-        Err(ConfigError::DuplicateSecret { .. })
     ));
 
     // A storage path that names no database file inside a directory never reaches the store.
-    let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_dev, one)).unwrap();
+    let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_dev)).unwrap();
     let rootless = dir.path().join("rootless.yaml");
     std::fs::write(
         &rootless,

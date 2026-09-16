@@ -4,7 +4,6 @@
 //! Secrets are named here, never written here: every one of them is the name of an environment variable
 //! that `load` resolves, so a configuration file can be read by anyone who may read the deployment.
 
-use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -18,12 +17,16 @@ pub struct Config {
     pub admin: AdminConfig,
     pub compatibility: CompatConfig,
     pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+    #[serde(default)]
+    pub sessions: SessionsConfig,
+    #[serde(default)]
+    pub stats: StatsConfig,
     pub storage: StorageConfig,
-    pub usage: UsageConfig,
-    pub accounts: Vec<AccountConfig>,
-    pub routes: Vec<RouteConfig>,
     #[serde(default)]
     pub upstream: UpstreamConfig,
+    pub usage: UsageConfig,
 }
 
 #[derive(Deserialize)]
@@ -79,34 +82,30 @@ pub struct UsageConfig {
     pub refresh_concurrency: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AccountConfig {
-    pub id: String,
-    pub kind: AccountKind,
-    pub label: String,
-    #[serde(default, skip)]
-    pub secret: Option<Secret>,
-    #[serde(default)]
-    pub secret_env: Option<String>,
+pub struct RoutingConfig {
+    #[serde(default = "default_catalog_interval")]
+    pub catalog_sync_interval_seconds: u64,
+    #[serde(default = "default_cooldown_fallback")]
+    pub cooldown_fallback_seconds: u64,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountKind {
-    ApiKey,
-    Oauth,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionsConfig {
+    #[serde(default = "default_session_expiry")]
+    pub expire_after_seconds: u64,
 }
 
-/// One downstream client's key and the account it may spend.
-#[derive(Deserialize)]
+/// The one `stats` field this build reads; the ledger settings arrive with the statistics sub-project.
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RouteConfig {
-    pub account_id: String,
-    pub key_id: String,
-    #[serde(default = "unresolved", skip)]
-    pub secret: Secret,
-    pub secret_env: String,
+pub struct StatsConfig {
+    #[serde(default = "default_body_capture_max")]
+    pub body_capture_max_hours: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -124,20 +123,18 @@ pub struct UpstreamConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("account {account_id} is an api_key account, so it needs secret_env")]
-    AccountSecretMissing { account_id: String },
-    #[error("account {account_id} is an oauth account, whose credentials come from pairing rather than from secret_env")]
-    AccountSecretUnused { account_id: String },
+    #[error("stats.body_capture_max_hours must be between 1 and 168, not {value}")]
+    BodyCaptureMaxOutOfRange { value: u32 },
+    #[error("routing.catalog_sync_interval_seconds must be at least 300")]
+    CatalogIntervalTooShort,
     #[error("admin.dev_loopback_http serves the session cookie over cleartext, so admin.listen must be a loopback address, not {listen}")]
     DevModeNotLoopback { listen: SocketAddr },
-    #[error("account id {id} is configured twice")]
-    DuplicateAccount { id: String },
-    #[error("route key_id {key_id} is configured twice")]
-    DuplicateKeyId { key_id: String },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
     GzipUnsupported,
+    #[error("routing.max_attempts must be between 1 and 8, not {value}")]
+    MaxAttemptsOutOfRange { value: u8 },
     #[error("admin.origin is required unless admin.dev_loopback_http is set")]
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
@@ -147,12 +144,12 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("sessions.expire_after_seconds must be at least 60")]
+    SessionExpiryTooShort,
     #[error("storage.path {path} must name a database file inside a directory")]
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
-    #[error("route {key_id} names account {account_id}, which is not configured")]
-    UnknownAccount { account_id: String, key_id: String },
     #[error("compatibility.profile {name} is not a profile this build carries")]
     UnknownProfile { name: String },
     #[error("compatibility.usage_entrypoint must be cli or sdk-cli, not {value}")]
@@ -174,23 +171,6 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-impl AccountKind {
-    /// The spelling the bootstrap file uses, for messages that quote configuration back at an operator.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AccountKind::ApiKey => "api_key",
-            AccountKind::Oauth => "oauth",
-        }
-    }
-
-    pub fn store_kind(self) -> phoebis_store::AccountKind {
-        match self {
-            AccountKind::ApiKey => phoebis_store::AccountKind::ApiKey,
-            AccountKind::Oauth => phoebis_store::AccountKind::Oauth,
-        }
-    }
-}
-
 impl fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdminConfig")
@@ -205,26 +185,29 @@ impl fmt::Debug for AdminConfig {
     }
 }
 
-impl fmt::Debug for AccountConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccountConfig")
-            .field("id", &self.id)
-            .field("kind", &self.kind)
-            .field("label", &self.label)
-            .field("secret", &self.secret.as_ref().map(|_| "***"))
-            .field("secret_env", &self.secret_env)
-            .finish()
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        RoutingConfig {
+            catalog_sync_interval_seconds: default_catalog_interval(),
+            cooldown_fallback_seconds: default_cooldown_fallback(),
+            max_attempts: default_max_attempts(),
+        }
     }
 }
 
-impl fmt::Debug for RouteConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RouteConfig")
-            .field("account_id", &self.account_id)
-            .field("key_id", &self.key_id)
-            .field("secret", &"***")
-            .field("secret_env", &self.secret_env)
-            .finish()
+impl Default for SessionsConfig {
+    fn default() -> Self {
+        SessionsConfig {
+            expire_after_seconds: default_session_expiry(),
+        }
+    }
+}
+
+impl Default for StatsConfig {
+    fn default() -> Self {
+        StatsConfig {
+            body_capture_max_hours: default_body_capture_max(),
+        }
     }
 }
 
@@ -267,41 +250,23 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         });
     }
 
-    let mut ids = HashSet::new();
-    for account in &config.accounts {
-        if !ids.insert(account.id.as_str()) {
-            return Err(ConfigError::DuplicateAccount {
-                id: account.id.clone(),
-            });
-        }
-        match (account.kind, &account.secret_env) {
-            (AccountKind::ApiKey, None) => {
-                return Err(ConfigError::AccountSecretMissing {
-                    account_id: account.id.clone(),
-                })
-            }
-            (AccountKind::Oauth, Some(_)) => {
-                return Err(ConfigError::AccountSecretUnused {
-                    account_id: account.id.clone(),
-                })
-            }
-            _ => {}
-        }
+    if !(1..=8).contains(&config.routing.max_attempts) {
+        return Err(ConfigError::MaxAttemptsOutOfRange {
+            value: config.routing.max_attempts,
+        });
     }
-
-    let mut key_ids = HashSet::new();
-    for route in &config.routes {
-        if !key_ids.insert(route.key_id.as_str()) {
-            return Err(ConfigError::DuplicateKeyId {
-                key_id: route.key_id.clone(),
-            });
-        }
-        if !ids.contains(route.account_id.as_str()) {
-            return Err(ConfigError::UnknownAccount {
-                account_id: route.account_id.clone(),
-                key_id: route.key_id.clone(),
-            });
-        }
+    // A sync walks every account against its upstream, so a short interval turns into a standing load on
+    // hosts that change their model list a few times a year.
+    if config.routing.catalog_sync_interval_seconds < 300 {
+        return Err(ConfigError::CatalogIntervalTooShort);
+    }
+    if config.sessions.expire_after_seconds < 60 {
+        return Err(ConfigError::SessionExpiryTooShort);
+    }
+    if !(1..=168).contains(&config.stats.body_capture_max_hours) {
+        return Err(ConfigError::BodyCaptureMaxOutOfRange {
+            value: config.stats.body_capture_max_hours,
+        });
     }
     Ok(())
 }
@@ -312,29 +277,16 @@ fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
         None => None,
         Some(name) => Some(from_env(name)?),
     };
-    for account in &mut config.accounts {
-        account.secret = match &account.secret_env {
-            None => None,
-            Some(name) => Some(from_env(name)?),
-        };
-    }
-    for route in &mut config.routes {
-        route.secret = from_env(&route.secret_env)?;
-    }
     Ok(())
 }
 
-/// Two routes sharing a secret collapse into one key-table entry, so one account binding silently wins;
-/// an administration secret that doubles as a route secret turns an inference key into an administration
-/// login. Both are configuration mistakes that only show up as a surprise in production.
+/// A viewer secret equal to the administration one silently turns the read-only login into a full one,
+/// which is a configuration mistake that only shows up as a surprise in production.
 fn check_secrets_are_distinct(config: &Config) -> Result<(), ConfigError> {
     let mut held: Vec<(String, &Secret)> =
         vec![("the admin secret".to_string(), &config.admin.secret)];
     if let Some(viewer) = &config.admin.viewer_secret {
         held.push(("the viewer secret".to_string(), viewer));
-    }
-    for route in &config.routes {
-        held.push((format!("route {}", route.key_id), &route.secret));
     }
     for (index, (first, left)) in held.iter().enumerate() {
         for (second, right) in held.iter().skip(index + 1) {
@@ -359,8 +311,108 @@ fn from_env(name: &str) -> Result<Secret, ConfigError> {
     }
 }
 
+fn default_body_capture_max() -> u32 {
+    72
+}
+
+fn default_catalog_interval() -> u64 {
+    86_400
+}
+
+fn default_cooldown_fallback() -> u64 {
+    60
+}
+
+fn default_max_attempts() -> u8 {
+    3
+}
+
+fn default_session_expiry() -> u64 {
+    86_400
+}
+
 /// Stands in for a secret until `load` resolves it. `load` is the only way to obtain a `Config`, and it
 /// replaces every one of these before it returns.
 fn unresolved() -> Secret {
     Secret::new("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let key = dir.join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_routing_and_sessions_blocks_default_validate_and_reject_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        assert_eq!(
+            (
+                config.routing.max_attempts,
+                config.routing.cooldown_fallback_seconds,
+                config.routing.catalog_sync_interval_seconds
+            ),
+            (3, 60, 86_400)
+        );
+        assert_eq!(
+            (
+                config.sessions.expire_after_seconds,
+                config.stats.body_capture_max_hours
+            ),
+            (86_400, 72)
+        );
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_sync_interval_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        assert_eq!(
+            (
+                config.routing.max_attempts,
+                config.sessions.expire_after_seconds,
+                config.stats.body_capture_max_hours
+            ),
+            (5, 7_200, 24)
+        );
+        assert!(matches!(
+            load(&file(dir.path(), "zero", "routing:\n  max_attempts: 0\n")),
+            Err(ConfigError::MaxAttemptsOutOfRange { value: 0 })
+        ));
+        assert!(matches!(
+            load(&file(dir.path(), "nine", "routing:\n  max_attempts: 9\n")),
+            Err(ConfigError::MaxAttemptsOutOfRange { value: 9 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "hours",
+                "stats:\n  body_capture_max_hours: 0\n"
+            )),
+            Err(ConfigError::BodyCaptureMaxOutOfRange { .. })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "unknown",
+                "routing:\n  max_attempts: 3\n  strategy: x\n"
+            )),
+            Err(ConfigError::Syntax(_))
+        ));
+        assert!(
+            matches!(
+                load(&file(dir.path(), "legacy", "accounts: []\nroutes: []\n")),
+                Err(ConfigError::Syntax(_))
+            ),
+            "the registry blocks left the file"
+        );
+    }
 }

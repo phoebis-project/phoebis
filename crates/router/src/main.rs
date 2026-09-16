@@ -34,23 +34,40 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::CheckConfig) => {
             println!("{} is valid", cli.config.display());
-            for account in &config.accounts {
-                println!("account {} ({})", account.id, account.kind.as_str());
-            }
-            for route in &config.routes {
-                println!("route {} spends account {}", route.key_id, route.account_id);
-            }
+            println!("proxy listens on {}", config.proxy.listen);
+            println!("admin listens on {}", config.admin.listen);
+            println!("profile {}", config.compatibility.profile);
+            println!(
+                "routing: max_attempts {}, cooldown_fallback {}s, catalog sync every {}s",
+                config.routing.max_attempts,
+                config.routing.cooldown_fallback_seconds,
+                config.routing.catalog_sync_interval_seconds
+            );
             Ok(())
         }
         None => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
             .block_on(phoebis_router::app::run(config, async {
-                if let Err(error) = tokio::signal::ctrl_c().await {
-                    // A handler that could not be installed is not a request to stop, so the process keeps
-                    // serving and says why no interrupt will reach it.
-                    tracing::error!(%error, "no interrupt handler; stop this process by other means");
-                    std::future::pending::<()>().await;
+                let ctrl_c = tokio::signal::ctrl_c();
+                let mut terminate =
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                        Ok(signal) => signal,
+                        Err(error) => {
+                            tracing::error!(%error, "no SIGTERM handler; a service manager's stop will not drain");
+                            return ctrl_c.await.unwrap_or(());
+                        }
+                    };
+                tokio::select! {
+                    result = ctrl_c => {
+                        if let Err(error) = result {
+                            // A handler that could not be installed is not a request to stop, so the process
+                            // keeps serving and says why no interrupt will reach it.
+                            tracing::error!(%error, "no interrupt handler; stop this process by other means");
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                    _ = terminate.recv() => {}
                 }
             })),
     }

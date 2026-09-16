@@ -1,12 +1,5 @@
 # Bootstrap settings only. Every secret is named here and read from the environment at startup, so this file
 # can be committed and read by anyone who may read the deployment.
-accounts:
-  # One upstream subscription or API key each. An oauth account is paired through the admin API and carries
-  # no secret here; an api_key account reads its key from secret_env.
-  - id: console
-    kind: api_key
-    label: Console
-    secret_env: ROUTER_CONSOLE_KEY
 admin:
   # With dev_loopback_http the session cookie is served without Secure over cleartext, which only a loopback
   # listener makes defensible. Left false here, so origin is required and TLS is terminated in front.
@@ -21,12 +14,18 @@ compatibility:
   usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:8317
-routes:
-  # One downstream client's key and the account it spends. This build binds each key to a single account;
-  # pools and account selection arrive with the router.
-  - account_id: console
-    key_id: desktop
-    secret_env: ROUTER_DESKTOP_KEY
+routing:
+  # How often the router re-discovers each account's served models, jittered so accounts do not sync
+  # together.
+  catalog_sync_interval_seconds: 86400
+  cooldown_fallback_seconds: 60
+  # Upstream attempts per client request across distinct accounts, 1 to 8.
+  max_attempts: 3
+sessions:
+  expire_after_seconds: 86400
+stats:
+  # The longest a key or pool may keep captured bodies; the capture itself arrives with the statistics build.
+  body_capture_max_hours: 72
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
