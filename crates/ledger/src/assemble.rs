@@ -12,6 +12,7 @@ use phoebis_relay::UnifiedHeaders;
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
+use crate::bodies::MAX_CAPTURED_BODY;
 use crate::quota::samples_from_unified;
 use crate::record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
@@ -73,12 +74,13 @@ impl Assembler {
         let now = (self.clock)();
         match event {
             Event::RequestObserved(observed) => {
+                let response_body = (observed.body_capture_hours > 0).then(Vec::new);
                 self.in_flight.insert(
                     observed.request_id.clone(),
                     InFlight {
                         observed,
                         attempts: Vec::new(),
-                        response_body: None,
+                        response_body,
                         next_index: 0,
                         gapped: false,
                         seen_at: now,
@@ -149,7 +151,8 @@ impl Assembler {
         }
         entry.next_index = chunk.index.saturating_add(1);
         if let Some(body) = entry.response_body.as_mut() {
-            body.extend_from_slice(&chunk.body);
+            let room = MAX_CAPTURED_BODY.saturating_sub(body.len());
+            body.extend_from_slice(&chunk.body[..chunk.body.len().min(room)]);
         }
         records
     }
@@ -296,6 +299,15 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
+    // A capture with a skipped chunk is not a body the operator can read; it is dropped with the gap on record.
+    let bodies = response_body
+        .filter(|_| !gapped)
+        .map(|assembled| BodyRecord {
+            request_id: observed.request_id.clone(),
+            request_body: observed.body.to_vec(),
+            response_body: (!assembled.is_empty()).then_some(assembled),
+            expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
+        });
     let request = RequestRecord {
         id: observed.request_id.clone(),
         received_at: observed.received_at,
@@ -324,10 +336,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         duration_ms: Some(complete.finished_at - observed.received_at),
         error_code: complete.error_code.clone(),
         kept_warm: false,
-        bodies_captured: response_body.is_some() && !gapped,
+        bodies_captured: bodies.is_some(),
     };
-    // A capture only becomes a row once the chunks that fed it are complete; nothing arms one yet.
-    let bodies = None;
     records.push(Record::Request {
         request,
         attempts,

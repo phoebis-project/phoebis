@@ -11,6 +11,7 @@ use phoebis_store::Store;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
+use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::pricing::{price_attempts, Pricing};
 use crate::quota::QuotaPoll;
@@ -333,6 +334,11 @@ async fn land(
     }
 }
 
-/// The retention purge runs on this tick; the tick exists so the writer's shape does not change when the
-/// purge itself lands.
-async fn run_purge(_db: &Arc<LedgerDb>, _config: &LedgerConfig, _now: i64) {}
+async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, now: i64) {
+    let (db, config) = (db.clone(), config.clone());
+    match tokio::task::spawn_blocking(move || run_retention(&db, &config, now)).await {
+        Ok(Ok(purged)) => tracing::debug!(?purged, "ledger retention ran"),
+        Ok(Err(error)) => tracing::warn!(%error, "ledger retention failed"),
+        Err(error) => tracing::error!(%error, "ledger retention panicked"),
+    }
+}

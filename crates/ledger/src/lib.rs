@@ -2,6 +2,7 @@
 //! read by the admin routes and the metrics listener.
 
 mod assemble;
+mod bodies;
 mod db;
 mod histogram;
 mod pricing;
@@ -12,6 +13,7 @@ mod schema;
 mod task;
 
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
+pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS};
 pub use db::LedgerDb;
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use pricing::{
