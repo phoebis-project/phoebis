@@ -16,7 +16,7 @@ The binary is `target/release/phoebis`.
 
 | Command | Effect |
 | --- | --- |
-| `phoebis --config ./config.yaml` | Serves both listeners until Ctrl-C, then drains for up to 30 seconds. |
+| `phoebis --config ./config.yaml` | Serves both listeners until Ctrl-C or SIGTERM, then drains for up to 30 seconds. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
 | `phoebis --version` | Prints the version. |
 
