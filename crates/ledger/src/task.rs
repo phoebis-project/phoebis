@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::db::{insert_event_in, insert_request_in};
+use crate::pricing::{price_attempts, Pricing};
 use crate::record::EventRecord;
 use crate::{LedgerDb, LedgerError};
 
@@ -94,7 +95,13 @@ impl Ledger {
     }
 }
 
-pub fn spawn(db: Arc<LedgerDb>, bus: &Bus, clock: Clock, config: LedgerConfig) -> Ledger {
+pub fn spawn(
+    db: Arc<LedgerDb>,
+    pricing: Arc<Pricing>,
+    bus: &Bus,
+    clock: Clock,
+    config: LedgerConfig,
+) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
     let stats = Arc::new(LedgerStats::default());
     let (done_tx, done_rx) = oneshot::channel();
@@ -115,6 +122,7 @@ pub fn spawn(db: Arc<LedgerDb>, bus: &Bus, clock: Clock, config: LedgerConfig) -
     });
     tokio::spawn(writer(
         db.clone(),
+        pricing,
         rx,
         stopped,
         assembler,
@@ -170,6 +178,7 @@ async fn assemble(
 #[allow(clippy::too_many_arguments)]
 async fn writer(
     db: Arc<LedgerDb>,
+    pricing: Arc<Pricing>,
     mut rx: mpsc::Receiver<Record>,
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
@@ -207,7 +216,7 @@ async fn writer(
                 Err(_) => break,
             }
         }
-        land(&db, &stats, batch).await;
+        land(&db, &pricing, &stats, batch).await;
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
             let dropped = stats.dropped.load(Ordering::Relaxed);
@@ -218,7 +227,7 @@ async fn writer(
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 };
-                if land(&db, &stats, vec![Record::Event(gap)]).await {
+                if land(&db, &pricing, &stats, vec![Record::Event(gap)]).await {
                     reported = dropped;
                     stats.gaps.fetch_add(1, Ordering::Relaxed);
                     stats.last_gap_at.store(clock(), Ordering::Relaxed);
@@ -231,8 +240,14 @@ async fn writer(
 
 /// One transaction per batch on a blocking thread. A batch that fails is lost as a whole and counted, so the
 /// gap that follows names it.
-async fn land(db: &Arc<LedgerDb>, stats: &Arc<LedgerStats>, batch: Vec<Record>) -> bool {
+async fn land(
+    db: &Arc<LedgerDb>,
+    pricing: &Arc<Pricing>,
+    stats: &Arc<LedgerStats>,
+    batch: Vec<Record>,
+) -> bool {
     let db = db.clone();
+    let pricing = pricing.clone();
     let size = batch.len() as u64;
     let written = tokio::task::spawn_blocking(move || {
         db.write(|conn| {
@@ -245,11 +260,19 @@ async fn land(db: &Arc<LedgerDb>, stats: &Arc<LedgerStats>, batch: Vec<Record>) 
                         attempts,
                         bodies,
                     } => {
-                        let previous = insert_request_in(&tx, request, attempts, bodies.as_ref())?;
+                        let table = pricing.current();
+                        let mut attempts = attempts.to_vec();
+                        price_attempts(
+                            &table,
+                            &request.canonical_model,
+                            &mut attempts,
+                            pricing.unknown_counter(),
+                        );
+                        let previous = insert_request_in(&tx, request, &attempts, bodies.as_ref())?;
                         crate::rollup::fold_request(
                             &tx,
                             request,
-                            attempts,
+                            &attempts,
                             previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                         )?;
                     }

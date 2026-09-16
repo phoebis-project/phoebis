@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::Request;
 use phoebis_bus::Bus;
-use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb};
+use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb, PriceTable, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -239,7 +239,8 @@ pub async fn harness_on(
         Duration::from_secs(10),
     ));
     let bus = Bus::new();
-    let ledger = spawn(db.clone(), &bus, clock.clone(), config);
+    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let ledger = spawn(db.clone(), pricing, &bus, clock.clone(), config);
     let limits = Limits {
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),

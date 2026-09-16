@@ -3,6 +3,7 @@
 mod accounts;
 mod credentials;
 mod lock;
+mod pricing;
 mod registry;
 mod routing;
 mod schema;
@@ -23,6 +24,7 @@ pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, Secret,
 };
+pub use pricing::PricingVersion;
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
     PoolRow, RegistryChange, RegistryLoad, ServedModel, ServedModelWrite, Strategy, SyncDelta,

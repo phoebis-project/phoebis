@@ -4,6 +4,7 @@
 mod assemble;
 mod db;
 mod histogram;
+mod pricing;
 mod record;
 mod rollup;
 mod schema;
@@ -12,6 +13,10 @@ mod task;
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use db::LedgerDb;
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
+pub use pricing::{
+    diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
+    PriceTable, Pricing,
+};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
