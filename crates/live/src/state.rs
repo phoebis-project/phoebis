@@ -112,6 +112,8 @@ pub struct LiveRequest {
     pub state: String,
     pub status: Option<u16>,
     pub transport: String,
+    /// The caller's `User-Agent` as it was sent, `None` when it sent none.
+    pub user_agent: Option<String>,
     pub usage: LiveUsage,
 }
 
@@ -194,6 +196,11 @@ impl LiveState {
             state: "in_flight".into(),
             status: None,
             transport: if o.stream { "sse" } else { "json" }.into(),
+            user_agent: o
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+                .map(|(_, value)| value.clone()),
             usage: LiveUsage::default(),
         };
         let captures = o.body_capture_hours > 0;

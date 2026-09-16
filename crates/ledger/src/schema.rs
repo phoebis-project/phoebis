@@ -168,12 +168,18 @@ CREATE INDEX IF NOT EXISTS quota_samples_account ON quota_samples (account_id, w
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
 "#;
 
-/// The split a request was folded with has to be readable from its own rows, or a replace cannot take back
-/// what was actually added; version 1 only ever stored `estimated_usd`, the row-level total.
-pub const MIGRATIONS: &[(u32, &str)] = &[(
-    2,
-    "ALTER TABLE attempts ADD COLUMN input_usd REAL;
+/// Version 2: the split a request was folded with has to be readable from its own rows, or a replace cannot
+/// take back what was actually added; version 1 only ever stored `estimated_usd`, the row-level total.
+///
+/// Version 3: every client version is relayed on its own headers, so which client made a request is a fact
+/// about the request rather than something the profile implies.
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        2,
+        "ALTER TABLE attempts ADD COLUMN input_usd REAL;
 ALTER TABLE attempts ADD COLUMN cache_read_usd REAL;
 ALTER TABLE attempts ADD COLUMN cache_write_usd REAL;
 ALTER TABLE attempts ADD COLUMN output_usd REAL;",
-)];
+    ),
+    (3, "ALTER TABLE requests ADD COLUMN user_agent TEXT;"),
+];

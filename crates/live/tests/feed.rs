@@ -114,6 +114,7 @@ async fn a_client_gets_the_relays_in_flight_set_then_the_deltas_of_a_streamed_re
             entry["state"].as_str(),
             entry["transport"].as_str(),
             entry["key_id"].as_str(),
+            entry["user_agent"].as_str(),
             entry["attempts"][0]["account_id"].as_str(),
             entry["attempts"][0]["outcome"].as_str()
         ),
@@ -121,6 +122,7 @@ async fn a_client_gets_the_relays_in_flight_set_then_the_deltas_of_a_streamed_re
             Some("in_flight"),
             Some("sse"),
             Some("desktop"),
+            Some("claude-cli/2.1.269 (external, sdk-cli)"),
             Some("a"),
             Some("in_flight")
         )

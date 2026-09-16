@@ -337,6 +337,11 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         error_code: complete.error_code.clone(),
         kept_warm: false,
         bodies_captured: bodies.is_some(),
+        user_agent: observed
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, value)| value.clone()),
     };
     records.push(Record::Request {
         request,

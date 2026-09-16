@@ -221,6 +221,44 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
     up.shutdown().await;
 }
 
+/// Every client version is relayed, so which client made a request is a fact the row has to carry.
+#[tokio::test]
+async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    req.headers_mut().insert(
+        "user-agent",
+        "claude-cli/2.1.300 (external, cli)".parse().unwrap(),
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        ledgered(&h, &id).await.0.user_agent.as_deref(),
+        Some("claude-cli/2.1.300 (external, cli)"),
+        "the agent reaches the row as it was sent"
+    );
+    let matched = |agent: &str| {
+        let filter = phoebis_ledger::RequestFilter {
+            user_agent: Some(agent.into()),
+            ..Default::default()
+        };
+        h.db.read(|c| phoebis_ledger::list_requests(c, &filter, None, 10))
+            .unwrap()
+            .0
+            .len()
+    };
+    assert_eq!(matched("2.1.300"), 1, "a substring of the agent matches");
+    assert_eq!(matched("2.1.269"), 0, "another build does not");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
     let up = FakeUpstream::start(vec![]).await;

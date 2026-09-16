@@ -94,6 +94,9 @@ pub struct RequestFilter {
     pub kinds: Vec<String>,
     pub statuses: Vec<u16>,
     pub outcomes: Vec<String>,
+    /// Matched as a substring, because a client's agent carries a build and a platform around the version an
+    /// operator is usually looking for.
+    pub user_agent: Option<String>,
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub include_probes: bool,
@@ -187,6 +190,10 @@ pub fn list_requests(
         } else {
             clauses.push(served);
         }
+    }
+    if let Some(agent) = filter.user_agent.as_deref().filter(|a| !a.is_empty()) {
+        args.push(Box::new(format!("%{agent}%")));
+        clauses.push(format!("user_agent LIKE ?{}", args.len()));
     }
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
         clauses.push("kind != 'probe'".into());

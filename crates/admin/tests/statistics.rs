@@ -406,6 +406,14 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
             "inference",
         );
         row.attempts = attempts.len() as u32;
+        row.user_agent = Some(
+            if i % 4 == 0 {
+                "claude-cli/2.1.300 (external, cli)"
+            } else {
+                "claude-cli/2.1.269 (external, sdk-cli)"
+            }
+            .into(),
+        );
         if i == 7 {
             row.error_code = Some("weird_code".into());
         }
@@ -535,6 +543,25 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     )
     .await;
     assert_eq!(text["requests"][0]["id"], "r007");
+    assert_eq!(
+        rows[0]["user_agent"].as_str(),
+        Some("claude-cli/2.1.300 (external, cli)"),
+        "the row names the client that made the request"
+    );
+    let agent = json(
+        get(
+            &parts.app,
+            "/admin/requests?user_agent=2.1.300&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        agent["requests"].as_array().unwrap().len(),
+        30,
+        "a substring of the agent filters the log"
+    );
     let window = json(
         get(
             &parts.app,

@@ -26,6 +26,8 @@ pub struct RequestRecord {
     pub error_code: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
+    /// The caller's `User-Agent` as it was sent, `None` when it sent none.
+    pub user_agent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

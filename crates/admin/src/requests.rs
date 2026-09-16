@@ -29,6 +29,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "model": r.model, "canonical_model": r.canonical_model, "kind": r.kind, "origin": r.origin, "transport": if r.stream { "sse" } else { "json" },
         "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
+        "user_agent": r.user_agent,
         "usage": { "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens), "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens), "output": tokens(|a| a.output_tokens) },
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).sum::<f64>(),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
@@ -107,6 +108,7 @@ pub(crate) async fn list(
         kinds: list_param(&q, "kinds"),
         statuses,
         outcomes: list_param(&q, "outcomes"),
+        user_agent: q.get("user_agent").cloned(),
         from,
         to,
         include_probes: q
