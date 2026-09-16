@@ -666,3 +666,60 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
         epoch: row.epoch,
     }
 }
+
+#[tokio::test]
+async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: 1_000 + 48 * HOUR,
+            reason: "rate_limit".into(),
+            window: "seven_day".into(),
+            source_request_id: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
+    wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
+    let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Exhausted(_)),
+        "the cooldown is in force"
+    );
+
+    store.delete_account("a", "test").unwrap();
+    handle.reload().await.unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], None, 1, "test")
+        .unwrap();
+    store
+        .set_pool_members("p", &[("a".to_string(), 0)], "test")
+        .unwrap();
+    handle.reload().await.unwrap();
+
+    let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "a"),
+        "the id was reused, and the days of cooldown its last holder earned did not come with it"
+    );
+    assert!(handle.cooldowns().await.unwrap().is_empty());
+}

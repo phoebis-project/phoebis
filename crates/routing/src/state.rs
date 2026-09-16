@@ -286,12 +286,16 @@ impl RoutingState {
         v
     }
 
-    /// Expired cooldowns, pins past their pool's idle TTL, and pins whose key or pool is gone.
+    /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, and everything
+    /// held against an account the registry no longer has. An id is reusable, so state the deleted account
+    /// left behind would otherwise be inherited by whatever is created under that id next: a two-day cooldown
+    /// would keep a brand new account out of every pool it joins.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
+        let gone = |account_id: &str| snapshot.account(account_id).is_none();
         let cooldowns: Vec<_> = self
             .cooldowns
             .iter()
-            .filter(|(_, c)| c.until <= now)
+            .filter(|((account_id, _), c)| c.until <= now || gone(account_id))
             .map(|(k, _)| k.clone())
             .collect();
         for key in &cooldowns {
@@ -301,6 +305,9 @@ impl RoutingState {
             .pins
             .iter()
             .filter(|(_, p)| {
+                if gone(&p.account_id) {
+                    return true;
+                }
                 let ttl = snapshot
                     .key(&p.key_id)
                     .and_then(|k| snapshot.pool(&k.pool_id))
@@ -321,6 +328,10 @@ impl RoutingState {
         for key in &pins {
             self.pins.remove(key);
         }
+        // Neither needs a deletion written: the overage row cascades with the account, and samples are held
+        // in memory only.
+        self.overage.retain(|account_id, _| !gone(account_id));
+        self.samples.retain(|account_id, _| !gone(account_id));
         Purged { cooldowns, pins }
     }
 }
