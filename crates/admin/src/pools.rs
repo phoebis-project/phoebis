@@ -211,7 +211,14 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         ) {
             Ok(()) => {}
             Err(StoreError::AccountNotFound(id)) => {
-                let _ = state.store.delete_pool(&row.id, ACTOR);
+                // The pool was never published, so nothing needs a reload here; but a rollback that fails
+                // leaves an orphan row that only a later, unrelated reload would surface.
+                match state.store.delete_pool(&row.id, ACTOR) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        tracing::warn!(pool = %row.id, %error, "a pool created for a missing member could not be rolled back")
+                    }
+                }
                 return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"));
             }
             Err(error) => return store_failure(error),

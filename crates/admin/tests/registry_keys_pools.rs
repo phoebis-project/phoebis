@@ -127,6 +127,12 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         204
     );
     assert_eq!(get(&app, "/admin/pools", Some(&cookie)).await.status(), 200);
+    let viewer = login(&app, "viewer-secret").await;
+    assert_eq!(get(&app, "/admin/pools", Some(&viewer)).await.status(), 200);
+    assert_eq!(
+        get(&app, "/admin/sessions", Some(&viewer)).await.status(),
+        200
+    );
 }
 
 #[tokio::test]
