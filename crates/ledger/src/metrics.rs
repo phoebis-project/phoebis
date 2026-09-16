@@ -12,7 +12,7 @@ use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::RouterHandle;
 
-use crate::histogram::{bucket_edges, bucket_index, BUCKET_COUNT};
+use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
 use crate::record::{AttemptRecord, QuotaSampleRecord, RequestRecord};
 use crate::rollup::UNATTRIBUTED;
@@ -21,11 +21,31 @@ const LOCK_POISONED: &str = "metrics registry poisoned by a prior panic";
 
 type Labels = Vec<(&'static str, String)>;
 
+/// One model's TTFB series: the 64 finite buckets, the observations past the last edge, the sum in seconds,
+/// and the count. The overflow is kept apart so `+Inf` can carry what no finite bound answers for.
+struct Series {
+    buckets: [u64; BUCKET_COUNT],
+    count: u64,
+    overflow: u64,
+    sum: f64,
+}
+
+impl Default for Series {
+    fn default() -> Series {
+        Series {
+            buckets: [0; BUCKET_COUNT],
+            count: 0,
+            overflow: 0,
+            sum: 0.0,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Registry {
     counters: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
     gauges: BTreeMap<&'static str, BTreeMap<Labels, f64>>,
-    ttfb: BTreeMap<String, ([u64; BUCKET_COUNT], f64, u64)>,
+    ttfb: BTreeMap<String, Series>,
 }
 
 pub struct Metrics {
@@ -111,13 +131,15 @@ impl Metrics {
             }
             if let Some(ttfb) = a.ttfb_ms {
                 let mut inner = self.inner.lock().expect(LOCK_POISONED);
-                let entry = inner
-                    .ttfb
-                    .entry(model.clone())
-                    .or_insert(([0; BUCKET_COUNT], 0.0, 0));
-                entry.0[bucket_index(ttfb as f64)] += 1;
-                entry.1 += ttfb as f64 / 1_000.0;
-                entry.2 += 1;
+                let entry = inner.ttfb.entry(model.clone()).or_default();
+                let value = ttfb as f64;
+                if value > top_edge() {
+                    entry.overflow += 1;
+                } else {
+                    entry.buckets[bucket_index(value)] += 1;
+                }
+                entry.sum += value / 1_000.0;
+                entry.count += 1;
             }
         }
     }
@@ -226,9 +248,9 @@ impl Metrics {
         }
         out.push_str("# TYPE phoebis_upstream_ttfb_seconds histogram\n");
         let edges = bucket_edges();
-        for (model, (buckets, sum, count)) in &inner.ttfb {
+        for (model, series) in &inner.ttfb {
             let mut cumulative = 0u64;
-            for (i, n) in buckets.iter().enumerate() {
+            for (i, n) in series.buckets.iter().enumerate() {
                 cumulative += n;
                 out.push_str(&format!(
                     "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"{}\"}} {cumulative}\n",
@@ -236,18 +258,21 @@ impl Metrics {
                     render_value(edges[i + 1] / 1_000.0)
                 ));
             }
+            // The only bound an observation past the last edge is under.
             out.push_str(&format!(
-                "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"+Inf\"}} {count}\n",
-                escape(model)
+                "phoebis_upstream_ttfb_seconds_bucket{{model=\"{}\",le=\"+Inf\"}} {}\n",
+                escape(model),
+                cumulative + series.overflow
             ));
             out.push_str(&format!(
                 "phoebis_upstream_ttfb_seconds_sum{{model=\"{}\"}} {}\n",
                 escape(model),
-                render_value(*sum)
+                render_value(series.sum)
             ));
             out.push_str(&format!(
-                "phoebis_upstream_ttfb_seconds_count{{model=\"{}\"}} {count}\n",
-                escape(model)
+                "phoebis_upstream_ttfb_seconds_count{{model=\"{}\"}} {}\n",
+                escape(model),
+                series.count
             ));
         }
         out

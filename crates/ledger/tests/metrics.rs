@@ -111,6 +111,66 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
     assert!(text.contains(r#"phoebis_bus_dropped_total{subscriber="ledger"} 0"#));
 }
 
+/// A response slower than the last finite bucket's bound has no bucket that tells the truth about it, and
+/// counting it in the last one reads a three-minute response as a hundred-second one in every quantile.
+#[test]
+fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
+    let metrics = Metrics::new();
+    let table = PriceTable::shipped();
+    let observe = |ttfb_ms: i64| {
+        let request = RequestRecord {
+            id: "r".into(),
+            received_at: 0,
+            key_id: Some("k".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ttfb_ms: Some(ttfb_ms),
+            ..Default::default()
+        };
+        metrics.observe_request(
+            &table,
+            &request,
+            &[AttemptRecord {
+                request_id: "r".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                ttfb_ms: Some(ttfb_ms),
+                ..Default::default()
+            }],
+        );
+    };
+    // The bucket lines in the order they are exported: the 64 finite ones, then +Inf.
+    let buckets = || -> Vec<u64> {
+        metrics
+            .render(&RoutingGauges::default(), &[], 0)
+            .lines()
+            .filter(|l| {
+                l.starts_with(r#"phoebis_upstream_ttfb_seconds_bucket{model="claude-sonnet-5""#)
+            })
+            .map(|l| l.rsplit_once(' ').unwrap().1.parse().unwrap())
+            .collect()
+    };
+    observe(50);
+    let before = buckets();
+    assert_eq!(before.len(), 65, "64 finite buckets and +Inf");
+    assert_eq!((before[63], before[64]), (1, 1));
+    // 200 seconds, well past the last finite edge of about 100.
+    observe(200_000);
+    let after = buckets();
+    assert_eq!(
+        after[63], before[63],
+        "the last finite bucket does not claim an observation past its bound"
+    );
+    assert_eq!(after[64], before[64] + 1, "+Inf carries it");
+}
+
 #[test]
 fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     let metrics = Metrics::new();

@@ -9,6 +9,11 @@ fn ratio() -> f64 {
     (MAX / MIN).powf(1.0 / BUCKET_COUNT as f64)
 }
 
+/// The last edge, which is the bound of the last finite bucket.
+pub fn top_edge() -> f64 {
+    MAX
+}
+
 pub fn bucket_edges() -> [f64; BUCKET_COUNT + 1] {
     let mut edges = [0.0; BUCKET_COUNT + 1];
     for (i, edge) in edges.iter_mut().enumerate() {
@@ -18,7 +23,9 @@ pub fn bucket_edges() -> [f64; BUCKET_COUNT + 1] {
 }
 
 /// The mock's rule exactly: anything at or below the first edge lands in bucket 0, and nothing lands past the
-/// last bucket, so a percentile read here and one read in the browser agree.
+/// last bucket, so a percentile read here and one read in the browser agree. The clamp stays for the stored
+/// histograms, whose buckets have to keep merging with the UI's edge set; the Prometheus series counts an
+/// observation past the last edge separately, where `+Inf` can carry it honestly.
 pub fn bucket_index(value: f64) -> usize {
     if value.partial_cmp(&MIN) != Some(std::cmp::Ordering::Greater) {
         return 0;
