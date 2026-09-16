@@ -3,6 +3,7 @@ members = [
     "crates/admin",
     "crates/bus",
     "crates/cch",
+    "crates/ledger",
     "crates/oauth",
     "crates/profile",
     "crates/relay",

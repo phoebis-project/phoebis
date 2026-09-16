@@ -354,6 +354,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoebis-ledger"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "phoebis-bus",
+ "phoebis-oauth",
+ "phoebis-routing",
+ "phoebis-store",
+ "jiff",
+ "rand",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "phoebis-oauth"
 version = "0.1.0"
 dependencies = [
