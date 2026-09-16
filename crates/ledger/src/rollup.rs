@@ -276,7 +276,12 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         _ => {}
     }
     d.attempts = attempts.len() as u64;
-    d.failovers = (attempts.len() as u64).saturating_sub(1);
+    // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
+    // move between accounts counts.
+    d.failovers = attempts
+        .windows(2)
+        .filter(|pair| pair[0].account_id != pair[1].account_id)
+        .count() as u64;
     let read = last.and_then(|a| a.cache_read_tokens).unwrap_or(0);
     let wrote = last.and_then(|a| a.cache_write_5m_tokens).unwrap_or(0)
         + last.and_then(|a| a.cache_write_1h_tokens).unwrap_or(0);
@@ -886,6 +891,26 @@ mod tests {
             &[attempt(1, "a", None, None, None, None)],
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
+    }
+
+    #[test]
+    fn a_failover_is_a_move_between_accounts_not_every_extra_attempt() {
+        let two = |first: &str, second: &str| {
+            delta_of(
+                &request("succeeded", Some(200), Some("k")),
+                &[
+                    attempt(1, first, None, None, None, None),
+                    attempt(2, second, None, None, None, None),
+                ],
+            )
+        };
+        let replayed = two("a", "a");
+        assert_eq!(
+            (replayed.attempts, replayed.failovers),
+            (2, 0),
+            "a 401 replay or an unsent retry runs again on the account it was already on"
+        );
+        assert_eq!(two("a", "b").failovers, 1);
     }
 
     #[test]
