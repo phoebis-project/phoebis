@@ -1,8 +1,11 @@
 //! Admin API: cookie sessions, account views, OAuth pairing, and usage.
 
 mod accounts;
+mod analytics;
+mod dashboard;
 mod keys;
 mod pools;
+mod requests;
 mod routes;
 mod session;
 mod sessions;
@@ -11,6 +14,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use phoebis_bus::Bus;
+use phoebis_ledger::{Ledger, Metrics, Pricing};
+use phoebis_live::LiveFeed;
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
 use phoebis_profile::Profile;
 use phoebis_relay::CatalogService;
@@ -49,6 +55,37 @@ pub struct AdminState {
     pub body_capture_max_hours: u32,
     /// How long ago a pin's `last_used_at` may be and still count as live for `GET /admin/sessions`.
     pub session_expiry: Duration,
+    pub bus: Bus,
+    pub ledger: Ledger,
+    pub live: LiveFeed,
+    pub metrics: Arc<Metrics>,
+    pub pricing: Arc<Pricing>,
+    pub settings: Arc<SettingsView>,
+}
+
+/// The running configuration an operator reads back from the admin API. Every secret is left out, and so is
+/// the name of the variable each one is read from: a console that shows this view must not be able to point
+/// at where a credential lives.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SettingsView {
+    pub admin_listen: String,
+    pub admin_origin: Option<String>,
+    pub body_capture_max_hours: u32,
+    pub catalog_sync_interval_seconds: u64,
+    pub cooldown_fallback_seconds: u64,
+    pub ledger_path: String,
+    pub max_attempts: u8,
+    pub metrics_listen: String,
+    pub pricing_path: Option<String>,
+    pub profile: String,
+    pub proxy_listen: String,
+    pub quota_poll_interval_seconds: u64,
+    pub quota_sample_retention_days: u32,
+    pub retention_days: u32,
+    pub session_expire_after_seconds: u64,
+    pub storage_path: String,
+    pub usage_cache_ttl_seconds: u64,
+    pub usage_refresh_concurrency: usize,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

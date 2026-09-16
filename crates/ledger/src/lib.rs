@@ -8,6 +8,7 @@ mod events;
 mod histogram;
 mod metrics;
 mod pricing;
+mod query;
 mod quota;
 mod record;
 mod rollup;
@@ -23,6 +24,11 @@ pub use metrics::{gather, metrics_router, Metrics, RoutingGauges};
 pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
     PriceTable, Pricing,
+};
+pub use query::{
+    apply_filter, breakdown, bucket_seconds, dashboard, group_of, hour_ceil, latest_quota,
+    list_requests, parse_range, request_by_id, request_events, series, Dashboard, GroupRow,
+    RequestFilter, RollupFilter, SeriesPoint, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};
 pub use record::{

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Request, State};
-use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE, UPGRADE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -25,7 +25,9 @@ use phoebis_store::{
 use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
-use crate::{accounts, keys, pools, sessions, AdminState, LoginError, Role};
+use crate::{
+    accounts, analytics, dashboard, keys, pools, requests, sessions, AdminState, LoginError, Role,
+};
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
 /// for minutes.
@@ -63,6 +65,10 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage))
         .route("/admin/accounts/{id}/usage/refresh", post(usage))
         .route("/admin/accounts/{id}/verify", post(verify))
+        .route("/admin/analytics/accounts", get(analytics::accounts))
+        .route("/admin/analytics/breakdown", get(analytics::breakdown))
+        .route("/admin/analytics/series", get(analytics::series))
+        .route("/admin/dashboard", get(dashboard::show))
         .route("/admin/keys", get(keys::list).post(keys::create))
         .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
@@ -83,6 +89,9 @@ pub fn router(state: Arc<AdminState>) -> Router {
             patch(pools::patch).delete(pools::remove),
         )
         .route("/admin/pools/{id}/members", put(pools::set_members))
+        .route("/admin/requests", get(requests::list))
+        .route("/admin/requests/{id}", get(requests::show))
+        .route("/admin/requests/{id}/bodies", get(requests::bodies))
         .route("/admin/session", post(login).delete(logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
@@ -97,8 +106,9 @@ pub fn router(state: Arc<AdminState>) -> Router {
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
 /// ownership. The cookie that produced it never leaves the session store.
 #[derive(Clone)]
-struct Caller {
-    session_id: String,
+pub(crate) struct Caller {
+    pub session_id: String,
+    pub role: Role,
 }
 
 /// Authentication, the role gate, the origin check, and `Cache-Control` for every route at once, so no
@@ -125,10 +135,15 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         Method::DELETE | Method::PATCH | Method::POST | Method::PUT
     );
 
-    // A browser attaches `Origin` to every cross-site write, so a value that is not the configured admin
-    // origin is a forged request rather than a mistake. The login is checked too: a forced login is a
-    // real attack, and it is the one mutation an unauthenticated caller can reach.
-    if mutation {
+    let websocket = request
+        .headers()
+        .get(UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake; a value that is
+    // not the configured admin origin is a forged request rather than a mistake. The login is checked too: a
+    // forced login is a real attack, and it is the one mutation an unauthenticated caller can reach.
+    if mutation || websocket {
         if let Some(expected) = &state.origin {
             let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
             if presented != Some(expected.as_str()) {
@@ -153,7 +168,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
             "the viewer role cannot change anything",
         ));
     }
-    request.extensions_mut().insert(Caller { session_id });
+    request.extensions_mut().insert(Caller { session_id, role });
     None
 }
 

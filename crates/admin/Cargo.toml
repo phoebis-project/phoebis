@@ -9,6 +9,9 @@ version.workspace = true
 axum = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+phoebis-bus = { path = "../bus" }
+phoebis-ledger = { path = "../ledger" }
+phoebis-live = { path = "../live" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
 phoebis-relay = { path = "../relay" }
@@ -29,4 +32,5 @@ url = { workspace = true }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tower = { workspace = true }

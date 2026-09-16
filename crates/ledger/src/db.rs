@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
+use crate::query::request_by_id;
 use crate::record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
@@ -118,25 +119,7 @@ impl LedgerDb {
         &self,
         id: &str,
     ) -> Result<Option<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
-        self.read(|conn| {
-            let request = conn
-                .query_row(
-                    &format!("{REQUEST_SELECT} WHERE id = ?1"),
-                    params![id],
-                    row_to_request,
-                )
-                .optional()?;
-            let Some(request) = request else {
-                return Ok(None);
-            };
-            let mut stmt = conn.prepare(&format!(
-                "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
-            ))?;
-            let attempts = stmt
-                .query_map(params![id], row_to_attempt)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(Some((request, attempts)))
-        })
+        self.read(|conn| request_by_id(conn, id))
     }
 
     pub fn bodies(&self, id: &str) -> Result<Option<BodyRecord>, LedgerError> {

@@ -7,7 +7,12 @@
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
-use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions};
+use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_bus::Bus;
+use phoebis_ledger::{
+    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
+};
+use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -49,11 +54,45 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// every helper growing another tuple slot.
 struct Parts {
     app: Router,
+    bus: Bus,
+    db: Arc<LedgerDb>,
+    ledger: Ledger,
+    live: LiveFeed,
     manager: Arc<CredentialManager>,
+    pricing: Arc<Pricing>,
     router: RouterHandle,
     store: Arc<Store>,
     up: FakeUpstream,
     vault: Arc<PairingVault>,
+}
+
+/// The app with the observation stack behind it, for the tests that write rows into the ledger and then read
+/// them back through the analytics, request-log, and dashboard routes.
+pub struct Full {
+    pub app: Router,
+    pub bus: Bus,
+    pub db: Arc<LedgerDb>,
+    pub ledger: Ledger,
+    pub live: LiveFeed,
+    pub pricing: Arc<Pricing>,
+    pub router: RouterHandle,
+    pub store: Arc<Store>,
+    pub up: FakeUpstream,
+}
+
+pub async fn admin_parts_full() -> Full {
+    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    Full {
+        app: parts.app,
+        bus: parts.bus,
+        db: parts.db,
+        ledger: parts.ledger,
+        live: parts.live,
+        pricing: parts.pricing,
+        router: parts.router,
+        store: parts.store,
+        up: parts.up,
+    }
 }
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
@@ -340,6 +379,42 @@ async fn app_with(
         clock.clone(),
         DISCOVERY_TIMEOUT,
     ));
+    let bus = Bus::new();
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let metrics = Arc::new(Metrics::new());
+    let ledger = spawn_ledger(
+        db.clone(),
+        pricing.clone(),
+        store.clone(),
+        None,
+        &bus,
+        router_handle.clone(),
+        clock.clone(),
+        metrics.clone(),
+        LedgerConfig::default(),
+    );
+    let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
+    let settings = Arc::new(SettingsView {
+        admin_listen: "test".into(),
+        admin_origin: origin.clone(),
+        body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        catalog_sync_interval_seconds: 86_400,
+        cooldown_fallback_seconds: 60,
+        ledger_path: "test".into(),
+        max_attempts: 3,
+        metrics_listen: "127.0.0.1:9464".into(),
+        pricing_path: None,
+        profile: p.name.into(),
+        proxy_listen: "test".into(),
+        quota_poll_interval_seconds: 3_600,
+        quota_sample_retention_days: 30,
+        retention_days: 90,
+        session_expire_after_seconds: 86_400,
+        storage_path: "test".into(),
+        usage_cache_ttl_seconds: 60,
+        usage_refresh_concurrency: 4,
+    });
     let vault = Arc::new(PairingVault::new());
     let state = Arc::new(AdminState {
         store: store.clone(),
@@ -366,10 +441,21 @@ async fn app_with(
         catalog,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         session_expiry: Duration::from_secs(86_400),
+        bus: bus.clone(),
+        ledger: ledger.clone(),
+        live: live.clone(),
+        metrics,
+        pricing: pricing.clone(),
+        settings,
     });
     Parts {
         app: router(state),
+        bus,
+        db,
+        ledger,
+        live,
         manager,
+        pricing,
         router: router_handle,
         store,
         up,
