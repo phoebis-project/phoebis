@@ -11,6 +11,7 @@ use crate::{AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strategy {
+    EarliestRefresh,
     LeastUtilized,
     PriorityRandom,
 }
@@ -18,6 +19,7 @@ pub enum Strategy {
 impl Strategy {
     pub fn as_str(self) -> &'static str {
         match self {
+            Strategy::EarliestRefresh => "earliest_refresh",
             Strategy::LeastUtilized => "least_utilized",
             Strategy::PriorityRandom => "priority_random",
         }
@@ -27,6 +29,7 @@ impl Strategy {
 impl FromSql for Strategy {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value.as_str()? {
+            "earliest_refresh" => Ok(Strategy::EarliestRefresh),
             "least_utilized" => Ok(Strategy::LeastUtilized),
             "priority_random" => Ok(Strategy::PriorityRandom),
             _ => Err(FromSqlError::InvalidType),
@@ -114,6 +117,7 @@ pub struct PoolRow {
     pub affinity_ttl_seconds: u64,
     pub overage_policy: OveragePolicy,
     pub migrate_above_utilization: Option<f64>,
+    pub select_below_utilization: Option<f64>,
     pub default_allowed_models: Option<Vec<String>>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
@@ -323,8 +327,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
             params![
                 row.id,
                 row.label,
@@ -333,6 +337,7 @@ impl Store {
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
                 row.migrate_above_utilization,
+                row.select_below_utilization,
                 list_json(&row.default_allowed_models)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
@@ -349,7 +354,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, default_allowed_models_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, updated_at = ?11 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, updated_at = ?12 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -358,6 +363,7 @@ impl Store {
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
                 row.migrate_above_utilization,
+                row.select_below_utilization,
                 list_json(&row.default_allowed_models)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
@@ -957,7 +963,7 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at FROM pools";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at FROM pools";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
@@ -975,7 +981,7 @@ fn all_keys(conn: &rusqlite::Connection) -> Result<Vec<ApiKeyRow>, StoreError> {
 }
 
 fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
-    let list: Option<String> = r.get(7)?;
+    let list: Option<String> = r.get(8)?;
     Ok(PoolRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -984,13 +990,14 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         affinity_ttl_seconds: r.get::<_, i64>(4)? as u64,
         overage_policy: r.get(5)?,
         migrate_above_utilization: r.get(6)?,
+        select_below_utilization: r.get(7)?,
         default_allowed_models: json_list(list).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        keepalive_json: r.get(8)?,
-        body_capture_hours: r.get::<_, i64>(9)? as u32,
-        created_at: r.get(10)?,
-        updated_at: r.get(11)?,
+        keepalive_json: r.get(9)?,
+        body_capture_hours: r.get::<_, i64>(10)? as u32,
+        created_at: r.get(11)?,
+        updated_at: r.get(12)?,
     })
 }
 
@@ -1038,6 +1045,7 @@ fn pool_diff(row: &PoolRow) -> String {
         "affinity_ttl_seconds": row.affinity_ttl_seconds,
         "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization,
+        "select_below_utilization": row.select_below_utilization,
         "default_allowed_models": row.default_allowed_models,
         "body_capture_hours": row.body_capture_hours,
     })

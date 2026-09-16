@@ -30,7 +30,15 @@ CREATE INDEX IF NOT EXISTS refresh_attempts_pending ON refresh_attempts (account
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. Every statement is
 /// additive so a downgrade can still read the older tables.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6), (7, V7)];
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (2, V2),
+    (3, V3),
+    (4, V4),
+    (5, V5),
+    (6, V6),
+    (7, V7),
+    (8, V8),
+];
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -115,4 +123,10 @@ CREATE TABLE IF NOT EXISTS pricing_versions (
 // the rows that query excludes.
 const V7: &str = r#"
 CREATE INDEX IF NOT EXISTS refresh_attempts_resolved ON refresh_attempts (resolved_at, id) WHERE outcome IS NOT NULL;
+"#;
+
+// Null is off: a pool written before the depletion threshold existed keeps selecting from every eligible
+// account, which is what it did.
+const V8: &str = r#"
+ALTER TABLE pools ADD COLUMN select_below_utilization REAL;
 "#;

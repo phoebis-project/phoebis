@@ -163,6 +163,7 @@ pub async fn harness_on(
                     affinity_ttl_seconds: 3600,
                     overage_policy: OveragePolicy::PreferPlan,
                     migrate_above_utilization: None,
+                    select_below_utilization: None,
                     default_allowed_models: None,
                     keepalive_json: "{}".into(),
                     body_capture_hours: capture.0,

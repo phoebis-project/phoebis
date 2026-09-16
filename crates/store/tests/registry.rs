@@ -26,6 +26,7 @@ fn pool(id: &str) -> PoolRow {
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
+        select_below_utilization: None,
         default_allowed_models: None,
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
@@ -61,16 +62,17 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let path = dir.path().join("router.sqlite");
     // Every migration above the stored version runs again on the next open, and an `ALTER TABLE ADD COLUMN`
     // cannot run twice, so each older database below is rolled back past every column it would re-add.
+    const UNDO_V8: &str = "ALTER TABLE pools DROP COLUMN select_below_utilization;";
     const UNDO_V5: &str =
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        7,
+        8,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -78,17 +80,43 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
     drop(again);
-    // What a database written before account incarnations existed looks like on disk.
+    // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        7,
+        8,
+        "a store left at version 7 is carried up"
+    );
+    drop(migrated);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('pools') WHERE name = 'select_below_utilization'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "and the column it was missing is there"
+    );
+    drop(conn);
+    // What a database written before account incarnations existed looks like on disk.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        8,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -100,14 +128,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        7,
+        8,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -119,7 +147,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "DROP INDEX registry_changes_target; {UNDO_V5} {UNDO_V4} \
+        "DROP INDEX registry_changes_target; {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -127,7 +155,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        7,
+        8,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -234,6 +262,8 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         .update_pool(
             &PoolRow {
                 body_capture_hours: 24,
+                strategy: Strategy::EarliestRefresh,
+                select_below_utilization: Some(0.8),
                 ..pool("main")
             },
             "test",
@@ -248,16 +278,30 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             "test",
         )
         .unwrap();
+    let updated = store.pool("main").unwrap().unwrap();
     assert_eq!(
         (
-            store.pool("main").unwrap().unwrap().body_capture_hours,
+            updated.body_capture_hours,
+            updated.strategy,
+            updated.select_below_utilization,
             store
                 .api_key("desktop")
                 .unwrap()
                 .unwrap()
                 .body_capture_hours
         ),
-        (24, Some(6))
+        (24, Strategy::EarliestRefresh, Some(0.8), Some(6))
+    );
+    assert_eq!(
+        store
+            .load_registry()
+            .unwrap()
+            .pools
+            .iter()
+            .find(|p| p.id == "main")
+            .map(|p| (p.strategy, p.select_below_utilization)),
+        Some((Strategy::EarliestRefresh, Some(0.8))),
+        "and the load every reader starts from reads both back"
     );
     assert!(matches!(
         store.delete_pool("main", "test"),

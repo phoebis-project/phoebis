@@ -302,6 +302,7 @@ async fn build(
                     affinity_ttl_seconds: pool.affinity_ttl_seconds,
                     overage_policy: pool.overage_policy,
                     migrate_above_utilization: pool.migrate_above_utilization,
+                    select_below_utilization: None,
                     default_allowed_models: pool
                         .allowed_models
                         .map(|l| l.into_iter().map(String::from).collect()),
