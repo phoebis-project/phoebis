@@ -209,6 +209,51 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
     up.shutdown().await;
 }
 
+/// An operator can lower the global cap below a window a key or pool already holds. The stored value is not
+/// rewritten, so what a request is allowed to keep is decided where the request is published.
+#[tokio::test]
+async fn a_capture_window_past_the_running_cap_is_published_at_the_cap() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        Limits {
+            body_capture_max_hours: 1,
+            ..default_limits()
+        },
+    )
+    .await;
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.body_capture_hours = 72;
+    h.store.update_pool(&pool, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("first event: {:?}", events[0])
+    };
+    assert_eq!(
+        observed.body_capture_hours, 1,
+        "the window a request may keep is the running cap, not the one the pool was left holding"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_serving_account() {
     let up = FakeUpstream::start(vec![Rule {

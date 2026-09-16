@@ -424,6 +424,50 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
     up.shutdown().await;
 }
 
+/// A caller may split a list-valued header across several lines. Both lines name betas the caller asked for,
+/// so both have to reach the upstream, on the one line the relay is allowed to write.
+#[tokio::test]
+async fn two_beta_lines_reach_the_upstream_as_one_list() {
+    let up = upstream().await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (addr, stop) = listening(h.relay.clone()).await;
+    let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
+    let mut raw = format!(
+        "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
+         anthropic-beta: claude-code-20250219\r\nanthropic-beta: interleaved-thinking-2025-05-14\r\n\
+         anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\n\r\n",
+        length = native.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(native);
+    let mut socket = TcpStream::connect(addr).await.unwrap();
+    socket.write_all(&raw).await.unwrap();
+    assert!(read_response(&mut socket)
+        .await
+        .starts_with("HTTP/1.1 200 "));
+    let got = &up.requests()[0];
+    assert_eq!(
+        got.headers
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+            .count(),
+        1,
+        "the beta list is written once"
+    );
+    assert_eq!(
+        value(got, "anthropic-beta"),
+        Some("oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14"),
+        "every line's tokens are entries in one list, behind the credential's own claim"
+    );
+    let _ = stop.send(true);
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_second_request_on_a_keep_alive_connection_keeps_its_own_spelling_too() {
     let up = upstream().await;

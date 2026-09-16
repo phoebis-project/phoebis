@@ -190,6 +190,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         },
     );
     let limits = Limits {
+        body_capture_max_hours: 72,
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

@@ -442,6 +442,8 @@ fn trust_fake_ca(builder: &mut boring::ssl::SslConnectorBuilder, up: &FakeUpstre
 /// Bounds no test is meant to reach unless it asks for them.
 pub fn default_limits() -> Limits {
     Limits {
+        // The configuration's own default, so a test that wants the cap to bite asks for it.
+        body_capture_max_hours: 72,
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

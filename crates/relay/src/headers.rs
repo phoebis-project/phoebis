@@ -66,6 +66,26 @@ pub fn outbound_headers(
             .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
             .collect(),
     };
+    // A caller may split a list-valued beta across several lines. Every line's tokens are entries in one
+    // list, so they are joined in order and kept once each, and the credential's own claim is applied to the
+    // whole list once. A caller that wrote one line has it travel exactly as it was written.
+    let beta_lines: Vec<&str> = sent
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+        .map(|(_, value)| *value)
+        .collect();
+    let beta_list = match beta_lines.as_slice() {
+        [only] => (*only).to_string(),
+        lines => {
+            let mut tokens: Vec<&str> = Vec::new();
+            for token in lines.iter().flat_map(|line| line.split(',')).map(str::trim) {
+                if !token.is_empty() && !tokens.contains(&token) {
+                    tokens.push(token);
+                }
+            }
+            tokens.join(",")
+        }
+    };
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 3);
     // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
     // both lines, and a slot whose value the relay owns would then be written twice upstream.
@@ -85,7 +105,7 @@ pub fn outbound_headers(
             "anthropic-beta" => {
                 if !saw_beta {
                     saw_beta = true;
-                    out.push((name.into(), betas(value, kind)));
+                    out.push((name.into(), betas(&beta_list, kind)));
                 }
             }
             // The relay's upstream connection is pooled and independent of the caller's, so it declares its

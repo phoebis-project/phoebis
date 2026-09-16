@@ -281,6 +281,7 @@ pub async fn harness_on(
         config,
     );
     let limits = Limits {
+        body_capture_max_hours: 72,
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

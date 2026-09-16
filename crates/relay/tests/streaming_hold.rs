@@ -220,6 +220,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         },
     );
     let limits = phoebis_relay::Limits {
+        body_capture_max_hours: 72,
         hold_timeout: Duration::from_millis(200),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),

@@ -187,6 +187,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             resolver.clone(),
             clock.clone(),
             Limits {
+                body_capture_max_hours: config.stats.body_capture_max_hours,
                 cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
                 head_timeout: HEAD_TIMEOUT,
                 hold_timeout: HOLD_TIMEOUT,

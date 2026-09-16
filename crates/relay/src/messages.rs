@@ -67,6 +67,9 @@ const NOT_FORWARDED: &[&str] = &[
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// The longest a request's bodies may be kept, whatever a key or pool was left holding: an operator who
+    /// lowers the global maximum means it from the next request, not from the next write of every stored row.
+    pub body_capture_max_hours: u32,
     /// How long an account is cooled when the upstream rejected it without saying for how long.
     pub cooldown_fallback: Duration,
     pub head_timeout: Duration,
@@ -440,7 +443,9 @@ impl Relay {
             }
         };
         self.router.touch_key(&key.id);
-        let capture_hours = snapshot.body_capture_hours(&key);
+        let capture_hours = snapshot
+            .body_capture_hours(&key)
+            .min(self.limits.body_capture_max_hours);
         let client_version = self.drift.check(&parts.headers);
         let Ok(raw) = axum::body::to_bytes(body, self.limits.max_request_bytes).await else {
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
