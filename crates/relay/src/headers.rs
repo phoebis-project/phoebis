@@ -149,6 +149,7 @@ mod tests {
                 .iter()
                 .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
                 .collect(),
+            ..OriginalHead::default()
         }
     }
 

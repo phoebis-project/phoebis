@@ -95,8 +95,10 @@ Remote Control is unavailable behind the router with or without that override. T
 `ANTHROPIC_BASE_URL` does not point at `api.anthropic.com`, and it states that the override does not apply to Remote
 Control.
 
-The proxy listener speaks plain HTTP, as the admin listener does: your reverse proxy terminates TLS in front of it,
-and `ANTHROPIC_BASE_URL` points at that reverse proxy.
+The proxy listener speaks plain HTTP/1.1, as the admin listener does: your reverse proxy terminates TLS in front
+of it, and `ANTHROPIC_BASE_URL` points at that reverse proxy. It does not accept HTTP/2, because a header's
+order and spelling do not survive an h2 frame and the request would reach the upstream in a shape the client
+never sent.
 
 Put the key secret in `CLAUDE_CODE_OAUTH_TOKEN`, not in `ANTHROPIC_API_KEY`. The client gates three behaviors on a
 subscriber check that an API key never passes: the one-hour cache TTL for the main conversation, the parsing of the

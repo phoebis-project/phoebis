@@ -29,7 +29,10 @@ pub async fn serve(
     mut stop: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let app = router(relay);
-    let builder = auto::Builder::new(TokioExecutor::new());
+    // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
+    // which is the silently different outbound shape the pass-through exists to prevent; refusing the
+    // connection is the honest answer.
+    let builder = auto::Builder::new(TokioExecutor::new()).http1_only();
     let graceful = GracefulShutdown::new();
     loop {
         let stream = tokio::select! {
@@ -72,9 +75,9 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 
-/// Hands each request the head the recorder took from the same bytes. hyper parses one request at a time per
-/// connection and the measured client does not pipeline, so the queue holds at most one head when a request
-/// arrives; an empty queue inserts nothing and the outbound builder falls back to the `HeaderMap`.
+/// Hands each request the head the recorder took from the same bytes, and only that head: the request line is
+/// compared before the head is used, so a queue that ever drifts out of step with hyper costs the caller's
+/// casing rather than putting one request's headers on another's wire.
 struct WithOriginalHead<S> {
     inner: S,
     queue: HeadQueue,
@@ -89,9 +92,19 @@ where
     type Future = S::Future;
 
     fn call(&self, mut request: Request<B>) -> Self::Future {
-        if let Some(head) = self.queue.lock().expect("head queue poisoned").pop_front() {
+        let mut queue = self.queue.lock().expect("head queue poisoned");
+        if queue.front().is_some_and(|head| head.matches(&request)) {
+            let head = queue
+                .pop_front()
+                .expect("the front head matched this request");
             request.extensions_mut().insert(head);
+        } else {
+            // Either the recorder gave this connection up, or it and hyper disagree about where the
+            // connection is. Neither is worth the risk of relaying one request under another's headers, so
+            // the queue is emptied and the request goes out on the header map.
+            queue.clear();
         }
+        drop(queue);
         self.inner.call(request)
     }
 }

@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
+use axum::http::Request;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Header slots one head may carry. A head with more is not recorded rather than recorded in part.
@@ -25,8 +26,12 @@ const TERMINATOR: &[u8] = b"\r\n\r\n";
 /// One caller's head as it was spelled on the wire: each name as the caller wrote it, each value as it was
 /// sent, in the order they arrived. `http::HeaderMap` documents its iteration order as arbitrary, so this list
 /// is the only authoritative record of either.
+///
+/// The request line rides along so a head is only ever used for the request it was read from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OriginalHead {
+    pub method: String,
+    pub target: String,
     pub headers: Vec<(String, String)>,
 }
 
@@ -40,6 +45,8 @@ impl OriginalHead {
             return None;
         }
         Some(OriginalHead {
+            method: request.method?.to_string(),
+            target: request.path?.to_string(),
             headers: request
                 .headers
                 .iter()
@@ -53,6 +60,17 @@ impl OriginalHead {
                 })
                 .collect(),
         })
+    }
+
+    /// Whether hyper parsed this head out of the same bytes. A head that does not match means the recorder
+    /// and hyper disagree about where the connection is, and relaying on it would put one request's headers
+    /// on another request's wire.
+    pub fn matches<B>(&self, request: &Request<B>) -> bool {
+        self.method == request.method().as_str()
+            && request
+                .uri()
+                .path_and_query()
+                .is_some_and(|target| self.target == target.as_str())
     }
 
     /// The first value under `name`, matched without regard to case.
@@ -304,6 +322,24 @@ mod tests {
         recorder.observe(head);
         recorder.observe(body);
         assert_eq!(queue.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_head_matches_only_the_request_it_was_read_from() {
+        let head = OriginalHead::parse(HEAD).expect("the head parses");
+        let request = |method: &str, target: &str| {
+            Request::builder()
+                .method(method)
+                .uri(target)
+                .body(())
+                .unwrap()
+        };
+        assert!(head.matches(&request("POST", "/v1/messages")));
+        assert!(
+            !head.matches(&request("POST", "/v1/messages/count_tokens")),
+            "another target on the same connection is not this head"
+        );
+        assert!(!head.matches(&request("GET", "/v1/messages")));
     }
 
     #[test]
