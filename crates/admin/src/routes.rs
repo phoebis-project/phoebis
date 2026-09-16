@@ -26,7 +26,8 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, analytics, dashboard, keys, pools, requests, sessions, AdminState, LoginError, Role,
+    accounts, analytics, dashboard, keys, live, pools, pricing, requests, sessions, settings,
+    AdminState, LoginError, Role,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -61,6 +62,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         )
         .route("/admin/accounts/{id}/models/sync", post(accounts::sync))
         .route("/admin/accounts/{id}/pause", post(pause))
+        .route("/admin/accounts/{id}/quota", get(accounts::quota))
         .route("/admin/accounts/{id}/resume", post(resume))
         .route("/admin/accounts/{id}/usage", get(usage))
         .route("/admin/accounts/{id}/usage/refresh", post(usage))
@@ -73,6 +75,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
         .route("/admin/keys/{id}/rotate", post(keys::rotate))
+        .route("/admin/live", get(live::upgrade))
+        .route("/admin/live/snapshot", get(live::past))
         .route("/admin/oauth/sessions", post(pairing_start))
         .route(
             "/admin/oauth/sessions/{id}",
@@ -89,6 +93,10 @@ pub fn router(state: Arc<AdminState>) -> Router {
             patch(pools::patch).delete(pools::remove),
         )
         .route("/admin/pools/{id}/members", put(pools::set_members))
+        .route("/admin/pools/{id}/traffic", get(pools::traffic))
+        .route("/admin/pricing", get(pricing::show))
+        .route("/admin/pricing/import", post(pricing::import))
+        .route("/admin/pricing/import/confirm", post(pricing::confirm))
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))
@@ -98,6 +106,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
             "/admin/sessions/{key}/{session}/release",
             post(sessions::release),
         )
+        .route("/admin/sessions/costs", get(sessions::costs))
+        .route("/admin/settings", get(settings::show))
         .route("/admin/system", get(system))
         .layer(from_fn_with_state(state.clone(), gate))
         .with_state(state)
@@ -651,12 +661,28 @@ async fn pairing_confirm(
 }
 
 async fn system(State(state): State<Arc<AdminState>>) -> Response {
-    let uptime = ((state.clock)() - state.started_at).max(0) / 1_000;
+    let now = (state.clock)();
+    let uptime = (now - state.started_at).max(0) / 1_000;
+    let stats = state.ledger.stats();
+    let load = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
+    let gaps = state.ledger.db().read(|c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
+        .query_map(rusqlite::params![now - 86_400_000], |r| Ok(phoebis_ledger::EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? }))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)).unwrap_or_default();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
         "uptime_seconds": uptime,
         "storage_ok": state.store.accounts().is_ok(),
+        "ledger": {
+            "schema_version": state.ledger.db().schema_version().ok(),
+            "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
+            "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
+            "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
+        },
+        "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
+        "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
+        "pricing_unknown_models": state.pricing.unknown_models(),
+        "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -939,7 +965,7 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
 
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay
 /// puts its own codes.
-fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {
+pub(crate) fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {
     let mut response = failure(status, message);
     response.headers_mut().insert(
         HeaderName::from_static("x-phoebis-error-code"),

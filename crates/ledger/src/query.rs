@@ -656,3 +656,98 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionActivity {
+    pub key_id: String,
+    pub session_id: String,
+    pub first_request_at: i64,
+    pub last_request_at: i64,
+    pub requests: u64,
+    pub model: String,
+    pub account_id: Option<String>,
+}
+
+/// Every (key, session) with a client request since `since`, with the canonical model and the serving account
+/// of its newest request.
+pub fn session_activity(
+    conn: &Connection,
+    since: i64,
+) -> Result<Vec<SessionActivity>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT r.key_id, r.session_id, MIN(r.received_at), MAX(r.received_at), COUNT(*), \
+         (SELECT canonical_model FROM requests r2 WHERE r2.key_id = r.key_id AND r2.session_id = r.session_id AND r2.kind != 'probe' ORDER BY r2.received_at DESC, r2.id DESC LIMIT 1), \
+         (SELECT a.account_id FROM attempts a WHERE a.request_id = (SELECT r3.id FROM requests r3 WHERE r3.key_id = r.key_id AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) ORDER BY a.attempt DESC LIMIT 1) \
+         FROM requests r WHERE r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.kind != 'probe' AND r.received_at >= ?1 \
+         GROUP BY r.key_id, r.session_id ORDER BY MAX(r.received_at) DESC",
+    )?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(SessionActivity {
+            key_id: r.get(0)?,
+            session_id: r.get(1)?,
+            first_request_at: r.get(2)?,
+            last_request_at: r.get(3)?,
+            requests: r.get::<_, i64>(4)? as u64,
+            model: r.get(5)?,
+            account_id: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrafficBucket {
+    pub at: i64,
+    pub requests: u64,
+    pub failed: u64,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// Every bucket in the range from the rollups of one pool, probes left out.
+pub fn pool_traffic(
+    conn: &Connection,
+    pool_id: &str,
+    from_hour: i64,
+    to_hour: i64,
+    bucket_seconds: i64,
+) -> Result<Vec<TrafficBucket>, LedgerError> {
+    let first = from_hour.div_euclid(bucket_seconds) * bucket_seconds;
+    let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
+    if !(0..=MAX_POINTS).contains(&count) {
+        return Err(LedgerError::Yaml(format!(
+            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+        )));
+    }
+    let rows: Vec<RollupRow> = read_rollups(conn, from_hour, to_hour)?
+        .into_iter()
+        .filter(|r| r.pool_id == pool_id && r.kind != "probe")
+        .collect();
+    let mut out = Vec::new();
+    let mut at = first;
+    while at < to_hour {
+        let mut bucket = TrafficBucket {
+            at: at * 1_000,
+            requests: 0,
+            failed: 0,
+            tokens: 0,
+            cost_usd: 0.0,
+        };
+        for r in rows
+            .iter()
+            .filter(|r| r.hour >= at && r.hour < at + bucket_seconds)
+        {
+            bucket.requests += r.requests;
+            bucket.failed += r.requests - r.succeeded;
+            bucket.tokens += r.input_tokens
+                + r.cache_read_tokens
+                + r.cache_write_5m_tokens
+                + r.cache_write_1h_tokens
+                + r.output_tokens;
+            bucket.cost_usd += r.estimated_usd;
+        }
+        out.push(bucket);
+        at += bucket_seconds;
+    }
+    Ok(out)
+}

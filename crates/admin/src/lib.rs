@@ -4,18 +4,21 @@ mod accounts;
 mod analytics;
 mod dashboard;
 mod keys;
+mod live;
 mod pools;
+mod pricing;
 mod requests;
 mod routes;
 mod session;
 mod sessions;
+mod settings;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::Bus;
-use phoebis_ledger::{Ledger, Metrics, Pricing};
+use phoebis_ledger::{Ledger, Metrics, ModelPrice, Pricing};
 use phoebis_live::LiveFeed;
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
 use phoebis_profile::Profile;
@@ -61,6 +64,18 @@ pub struct AdminState {
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     pub settings: Arc<SettingsView>,
+    pub pending_imports: Mutex<HashMap<String, PendingImport>>,
+    /// Held across a whole confirmation, from reading the current table to publishing the overlay, so two
+    /// confirmations cannot each overlay the table the other is about to replace and lose its models.
+    pub confirming: tokio::sync::Mutex<()>,
+}
+
+/// A price import the operator has previewed and not yet confirmed. Held in memory: an import nobody confirms
+/// changes nothing and dies with the process.
+pub struct PendingImport {
+    pub models: BTreeMap<String, ModelPrice>,
+    pub source: String,
+    pub expires_at: i64,
 }
 
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is

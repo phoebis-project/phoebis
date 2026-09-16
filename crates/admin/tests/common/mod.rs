@@ -31,8 +31,11 @@ use phoebis_transport::{
     trust_extra_ca, Plane,
 };
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use futures::StreamExt;
 use http_body_util::BodyExt;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -50,6 +53,9 @@ const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 /// The bound the relay harness gives discovery too, so a fake that never answers cannot hang the suite.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a socket read may wait before the test fails rather than hangs.
+const WS_DEADLINE: Duration = Duration::from_secs(10);
+
 /// Everything `app_with` builds. A test reaching past the HTTP surface takes what it needs rather than
 /// every helper growing another tuple slot.
 struct Parts {
@@ -60,6 +66,7 @@ struct Parts {
     live: LiveFeed,
     manager: Arc<CredentialManager>,
     pricing: Arc<Pricing>,
+    resolver: Resolver,
     router: RouterHandle,
     store: Arc<Store>,
     up: FakeUpstream,
@@ -75,13 +82,23 @@ pub struct Full {
     pub ledger: Ledger,
     pub live: LiveFeed,
     pub pricing: Arc<Pricing>,
+    pub resolver: Resolver,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
 }
 
 pub async fn admin_parts_full() -> Full {
-    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    full_from(app_with(None, ACCOUNT_UUID, None, None).await)
+}
+
+/// The full harness with the admin origin pinned, which is what every configuration outside the loopback
+/// development mode runs, and the only shape in which the origin check on a handshake is exercised.
+pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
+    full_from(app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await)
+}
+
+fn full_from(parts: Parts) -> Full {
     Full {
         app: parts.app,
         bus: parts.bus,
@@ -89,6 +106,7 @@ pub async fn admin_parts_full() -> Full {
         ledger: parts.ledger,
         live: parts.live,
         pricing: parts.pricing,
+        resolver: parts.resolver,
         router: parts.router,
         store: parts.store,
         up: parts.up,
@@ -226,6 +244,91 @@ pub async fn login(app: &Router, secret: &str) -> String {
     .await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     cookie_of(&response)
+}
+
+/// A login carrying the `Origin` a browser would attach, which an app with a pinned origin requires on the
+/// one mutation an unauthenticated caller reaches.
+pub async fn login_from(app: &Router, secret: &str, origin: &str) -> String {
+    let response = post_from(
+        app,
+        "/admin/session",
+        &format!(r#"{{"secret":"{secret}"}}"#),
+        None,
+        origin,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    cookie_of(&response)
+}
+
+pub type Client =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The whole app behind a loopback listener, for the tests that need a real handshake rather than a
+/// `oneshot` call.
+pub async fn serve(app: Router) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    addr
+}
+
+/// The next text message on the socket, as JSON.
+pub async fn next_text(ws: &mut Client) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + WS_DEADLINE;
+    loop {
+        let message = tokio::time::timeout_at(deadline, ws.next())
+            .await
+            .expect("a message arrives before the deadline")
+            .expect("the socket is still open")
+            .expect("the message is not an error");
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            return serde_json::from_str(&text).unwrap();
+        }
+    }
+}
+
+/// Reads until a delta of `kind` arrives, returning every delta read on the way, all under one deadline.
+pub async fn deltas_until(ws: &mut Client, kind: &str) -> Vec<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + WS_DEADLINE;
+    let mut seen = Vec::new();
+    loop {
+        let message = tokio::time::timeout_at(deadline, ws.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {kind} delta arrived; saw {seen:?}"))
+            .expect("the socket is still open")
+            .expect("the message is not an error");
+        let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+            continue;
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let Some(delta) = value.get("delta") else {
+            continue;
+        };
+        let done = delta["type"] == kind;
+        seen.push(delta.clone());
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// Every delta that arrives within `window`. A test asserting something is never sent has to wait out a
+/// window rather than read until it sees it.
+pub async fn deltas_for(ws: &mut Client, window: Duration) -> Vec<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + window;
+    let mut seen = Vec::new();
+    while let Ok(Some(Ok(message))) = tokio::time::timeout_at(deadline, ws.next()).await {
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if let Some(delta) = value.get("delta") {
+                seen.push(delta.clone());
+            }
+        }
+    }
+    seen
 }
 
 async fn send(
@@ -374,7 +477,7 @@ async fn app_with(
         store.clone(),
         manager.clone(),
         pool,
-        resolver,
+        resolver.clone(),
         router_handle.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
@@ -447,6 +550,8 @@ async fn app_with(
         metrics,
         pricing: pricing.clone(),
         settings,
+        pending_imports: Mutex::new(HashMap::new()),
+        confirming: tokio::sync::Mutex::new(()),
     });
     Parts {
         app: router(state),
@@ -456,6 +561,7 @@ async fn app_with(
         live,
         manager,
         pricing,
+        resolver,
         router: router_handle,
         store,
         up,

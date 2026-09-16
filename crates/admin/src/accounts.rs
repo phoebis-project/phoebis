@@ -1,10 +1,11 @@
 //! Account registry routes: creation with verification, edits, deletion, served models, and the two operator
 //! actions that clear a cooldown or a funding hold.
 
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -16,7 +17,7 @@ use phoebis_store::{
 use serde_json::{json, Value};
 
 use crate::routes::{
-    account, account_json, failure, registry_unavailable, reload_or_refuse, store_failure,
+    account, account_json, failure, failure_with_code, reload_or_refuse, store_failure,
 };
 use crate::AdminState;
 
@@ -388,7 +389,23 @@ pub(crate) async fn sync(State(state): State<Arc<AdminState>>, Path(id): Path<St
             // the same answer means everywhere else an admin write cannot reach the router.
             if let Some(error) = &outcome.reload_failed {
                 tracing::error!(account = %id, %error, "a catalog sync could not be published");
-                return registry_unavailable();
+                let written = outcome.delta.is_some() || outcome.seeded;
+                let message = if written {
+                    "the catalog was written but could not be published; the next successful reload publishes it"
+                } else if outcome.stale {
+                    "the account changed during discovery, so nothing was written; the reload that followed also failed"
+                } else {
+                    "discovery failed and its error was recorded; the reload that followed also failed"
+                };
+                let mut response = failure_with_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "registry_unavailable",
+                    message,
+                );
+                *response.body_mut() = axum::body::Body::from(
+                    json!({ "error": message, "written": written }).to_string(),
+                );
+                return response;
             }
             Json(json!({
                 "added": outcome.delta.as_ref().map(|d| d.added.clone()).unwrap_or_default(),
@@ -471,4 +488,43 @@ fn models_json(state: &AdminState, id: &str) -> Result<Value, StoreError> {
         "catalog_error": error,
         "built_in": built_in,
     }))
+}
+
+pub(crate) async fn quota(
+    State(state): State<Arc<AdminState>>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if let Err(refusal) = account(&state, &id) {
+        return refusal;
+    }
+    let now = (state.clock)();
+    let (from, to) = match phoebis_ledger::parse_range(
+        Some(q.get("range").map(String::as_str).unwrap_or("7d")),
+        now,
+    ) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let (from_bucket, to_bucket) = (from / 1_000, to / 1_000 + 300);
+    let (quota, extra) = match (
+        state.ledger.db().quota_samples(&id, from_bucket, to_bucket),
+        state
+            .ledger
+            .db()
+            .extra_usage_samples(&id, from_bucket, to_bucket),
+    ) {
+        (Ok(q), Ok(e)) => (q, e),
+        (Err(e), _) | (_, Err(e)) => return crate::analytics::ledger_failure(e),
+    };
+    let mut windows: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for s in quota {
+        windows.entry(s.window.clone()).or_default().push(json!({ "at": s.bucket * 1_000, "utilization": s.utilization, "resets_at": s.reset_at, "source": s.source }));
+    }
+    Json(json!({
+        "account_id": id, "from": from, "to": to,
+        "windows": windows.into_iter().map(|(id, samples)| json!({ "id": id, "samples": samples })).collect::<Vec<_>>(),
+        "extra_usage": extra.iter().map(|e| json!({ "at": e.bucket * 1_000, "is_enabled": e.is_enabled, "in_use": e.in_use, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "currency": e.currency, "disabled_reason": e.disabled_reason, "overage_reset": e.overage_reset, "source": e.source })).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }

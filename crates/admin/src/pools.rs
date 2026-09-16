@@ -1,9 +1,10 @@
 //! Pool routes: the record every field of which the spec's pool table names, and its membership.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -335,4 +336,34 @@ pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, Stor
         "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority })).collect::<Vec<_>>(),
         "keys": keys,
     }))
+}
+
+pub(crate) async fn traffic(
+    State(state): State<Arc<AdminState>>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    match state.store.pool(&id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
+        Err(e) => return store_failure(e),
+    }
+    let now = (state.clock)();
+    let (from, to) = match phoebis_ledger::parse_range(q.get("range").map(String::as_str), now) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let bucket = phoebis_ledger::bucket_seconds(from, to);
+    match state.ledger.db().read(|c| {
+        phoebis_ledger::pool_traffic(
+            c,
+            &id,
+            phoebis_ledger::hour_of(from),
+            phoebis_ledger::hour_ceil(to),
+            bucket,
+        )
+    }) {
+        Ok(buckets) => Json(json!({ "pool_id": id, "from": from, "to": to, "bucket_seconds": bucket, "buckets": buckets })).into_response(),
+        Err(e) => crate::analytics::ledger_failure(e),
+    }
 }

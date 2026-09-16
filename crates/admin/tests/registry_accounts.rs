@@ -654,3 +654,87 @@ async fn a_discovered_id_clashing_with_a_stored_spelling_is_recorded_as_a_catalo
         "and the verified secret still committed"
     );
 }
+
+#[tokio::test]
+async fn a_sync_that_cannot_publish_says_whether_the_registry_was_written() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
+        })),
+    );
+    let syncing = {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        tokio::spawn(async move {
+            post(
+                &app,
+                "/admin/accounts/direct/models/sync",
+                "",
+                Some(&cookie),
+            )
+            .await
+        })
+    };
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        up.requests()
+            .iter()
+            .any(|r| r.line.starts_with("GET /v1/models"))
+            .then_some(())
+    })
+    .await;
+    // The row moves under the discovery, so the result is stale and nothing is written.
+    store
+        .update_account("direct", "Direct (renamed)", None, "test")
+        .unwrap();
+    store.debug_fail_next_load();
+    up.release();
+    let refused = syncing.await.unwrap();
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        refused.headers().get("x-phoebis-error-code").unwrap(),
+        "registry_unavailable"
+    );
+    let body = json(refused).await;
+    assert_eq!(body["written"], false);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was written"),
+        "{body}"
+    );
+    assert!(
+        store.served_models("direct").unwrap().is_empty(),
+        "the stale discovery wrote no rows"
+    );
+    // A discovery error: the error is recorded, no catalog row lands, and the body says so.
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    store.debug_fail_next_load();
+    let refused = post(
+        &app,
+        "/admin/accounts/direct/models/sync",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    let body = json(refused).await;
+    assert_eq!(body["written"], false);
+    assert!(
+        body["error"].as_str().unwrap().contains("discovery failed"),
+        "{body}"
+    );
+}

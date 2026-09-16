@@ -1,9 +1,10 @@
 //! The running process: the store and the credential manager the two listeners share, and the drain that
 //! ends them.
 
+use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::net::ToSocketAddrs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -153,7 +154,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             manager.clone(),
             pool.clone(),
             router_task.clone(),
-            resolver,
+            resolver.clone(),
             clock.clone(),
             Limits {
                 cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
@@ -211,6 +212,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         metrics,
         pricing,
         settings,
+        pending_imports: Mutex::new(HashMap::new()),
+        confirming: tokio::sync::Mutex::new(()),
     });
 
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)

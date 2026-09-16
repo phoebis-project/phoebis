@@ -1,0 +1,600 @@
+//! Pricing with its import, settings, system, quota, traffic, sessions, and the live routes.
+mod common;
+use std::time::Duration;
+
+use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, ResponseChunk};
+use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+use common::{get, json, login, post};
+use fake_upstream::{FakeUpstream, Respond, Rule};
+
+const HOUR: i64 = 3_600_000;
+
+fn record(id: &str, at: i64, model: &str, session: &str) -> Record {
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            model: model.into(),
+            canonical_model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: at,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        bodies: None,
+    }
+}
+
+#[tokio::test]
+async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version_that_only_new_attempts_carry(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let current = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            current["version"].as_str(),
+            current["source"].as_str(),
+            current["models"].as_array().unwrap().len()
+        ),
+        (Some("2026-09-08"), Some("shipped"), 4)
+    );
+    assert_eq!(current["models"][3]["model"], "claude-sonnet-5");
+    assert_eq!(current["models"][3]["input_per_m"].as_f64(), Some(2.0));
+    // The registry serves claude-sonnet-4-5 (the harness's catalog); the file prices it and two others.
+    let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-4-5":{"input_cost_per_token":3e-06,"cache_creation_input_token_cost":3.75e-06,"cache_read_input_token_cost":3e-07,"output_cost_per_token":1.5e-05},"claude-opus-5":{"input_cost_per_token":9e-06,"output_cost_per_token":4.5e-05},"gpt-5":{"input_cost_per_token":1e-06,"output_cost_per_token":8e-06}}"#.to_vec() } }, Rule { path_prefix: "/huge".into(), respond: Respond::Json { status: 200, headers: vec![], body: vec![b'x'; 17 << 20] } }]).await;
+    parts
+        .store
+        .apply_catalog_sync(
+            "business",
+            &[("claude-sonnet-4-5".into(), false)],
+            None,
+            now,
+            "test",
+        )
+        .unwrap();
+    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let preview = json(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"{url}"}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            preview["format"].as_str(),
+            preview["in_file"].as_u64(),
+            preview["served"].as_u64()
+        ),
+        (Some("litellm"), Some(3), Some(1))
+    );
+    assert_eq!(preview["models"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["models"][0]["model"], "claude-sonnet-4-5");
+    assert!(
+        (preview["models"][0]["cache_write_1h_per_m"]
+            .as_f64()
+            .unwrap()
+            - 6.0)
+            .abs()
+            < 1e-9
+    );
+    assert_eq!(
+        preview["changes"].as_array().unwrap().len(),
+        5,
+        "a model the table lacks changes on every field"
+    );
+    assert!(preview["changes"][0]["from"].is_null());
+    let token = preview["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            r#"{"url":"ftp://x/y"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(
+                r#"{{"url":"http://127.0.0.1:{}/huge"}}"#,
+                prices.addr().port()
+            ),
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        502,
+        "past the 16 MiB bound"
+    );
+    let viewer = login(&parts.app, "viewer-secret").await;
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"{url}"}}"#),
+            Some(&viewer)
+        )
+        .await
+        .status(),
+        403
+    );
+    // An attempt written before the confirmation keeps the shipped version.
+    parts
+        .ledger
+        .record(record("before", now - HOUR, "claude-sonnet-5", "s1"));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        parts.db.request("before").unwrap()
+    })
+    .await;
+    let confirmed = post(
+        &parts.app,
+        "/admin/pricing/import/confirm",
+        &format!(r#"{{"token":"{token}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 201);
+    let table = json(confirmed).await;
+    assert!(table["version"].as_str().unwrap().starts_with("imported-"));
+    assert_eq!(
+        (table["effective"].as_str(), table["source"].as_str()),
+        (Some("1970-01-01"), Some(url.as_str())),
+        "the import time (the frozen clock) is the effective date"
+    );
+    assert_eq!(
+        table["models"].as_array().unwrap().len(),
+        5,
+        "the shipped four plus the imported one"
+    );
+    assert_eq!(table["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/pricing/import/confirm",
+            &format!(r#"{{"token":"{token}"}}"#),
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        404,
+        "a token is spent by its confirmation"
+    );
+    parts
+        .ledger
+        .record(record("after", now, "claude-sonnet-4-5", "s1"));
+    let (_, attempts) = fake_upstream::wait_for(Duration::from_secs(5), || {
+        parts.db.request("after").unwrap()
+    })
+    .await;
+    assert!(attempts[0]
+        .pricing_version
+        .as_deref()
+        .unwrap()
+        .starts_with("imported-"));
+    assert!(
+        (attempts[0].estimated_usd.unwrap() - (1_000.0 * 3.0 + 100.0 * 15.0) / 1e6).abs() < 1e-12
+    );
+    let (_, before) = parts.db.request("before").unwrap().unwrap();
+    assert_eq!(
+        before[0].pricing_version.as_deref(),
+        Some("2026-09-08"),
+        "old attempts keep their version"
+    );
+    let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&viewer)).await).await;
+    assert!(costs["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["model"] == "claude-sonnet-4-5"
+            && (m["reads_per_write_5m"].as_f64().unwrap() - 12.5).abs() < 1e-9));
+    prices.shutdown().await;
+}
+
+#[tokio::test]
+async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            settings["retention"]["ledger_days"].as_u64(),
+            settings["retention"]["quota_samples_days"].as_u64(),
+            settings["retention"]["body_capture_max_hours"].as_u64()
+        ),
+        (Some(90), Some(30), Some(72))
+    );
+    assert_eq!(
+        (
+            settings["quota"]["poll_interval_seconds"].as_u64(),
+            settings["sessions"]["expire_after_seconds"].as_u64(),
+            settings["listeners"]["metrics"].as_str()
+        ),
+        (Some(3_600), Some(86_400), Some("127.0.0.1:9464"))
+    );
+    assert_eq!(settings["pricing"]["version"], "2026-09-08");
+    let text = settings.to_string();
+    assert!(
+        !text.contains("admin-secret")
+            && !text.contains("viewer-secret")
+            && !text.contains("secret_env"),
+        "no secret and no secret's variable name"
+    );
+    parts
+        .db
+        .insert_event(&phoebis_ledger::EventRecord {
+            at: common::NOW - HOUR,
+            kind: "ledger_gap".into(),
+            detail: Some(r#"{"dropped":7}"#.into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            system["ledger"]["schema_version"].as_u64(),
+            system["ledger"]["dropped"].as_u64(),
+            system["ledger"]["channel_depth"].as_u64()
+        ),
+        (Some(2), Some(0), Some(4_096)),
+        "the ledger schema is at the split-columns migration"
+    );
+    assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
+    assert!(
+        system["bus"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["subscriber"] == "ledger" && b["dropped"].as_u64() == Some(0))
+            && system["bus"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["subscriber"] == "live")
+    );
+    assert_eq!(system["live"]["clients"].as_u64(), Some(0));
+    assert_eq!(system["storage_ok"], true);
+}
+
+#[tokio::test]
+async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let bucket = phoebis_ledger::bucket_of(now - HOUR);
+    parts
+        .db
+        .insert_samples(
+            &[
+                phoebis_ledger::QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket,
+                    window: "5h".into(),
+                    utilization: Some(0.4),
+                    reset_at: Some(now + HOUR),
+                    source: "header".into(),
+                },
+                phoebis_ledger::QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket: bucket + 300,
+                    window: "5h".into(),
+                    utilization: Some(0.5),
+                    reset_at: Some(now + HOUR),
+                    source: "poll".into(),
+                },
+                phoebis_ledger::QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket,
+                    window: "fable".into(),
+                    utilization: Some(0.1),
+                    reset_at: None,
+                    source: "poll".into(),
+                },
+            ],
+            Some(&phoebis_ledger::ExtraUsageSampleRecord {
+                account_id: "business".into(),
+                bucket,
+                is_enabled: true,
+                in_use: None,
+                monthly_limit: Some(5_000),
+                used_credits: Some(10),
+                utilization: Some(0.002),
+                currency: Some("USD".into()),
+                disabled_reason: None,
+                overage_reset: None,
+                source: "poll".into(),
+            }),
+        )
+        .unwrap();
+    let quota = json(
+        get(
+            &parts.app,
+            "/admin/accounts/business/quota?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let windows = quota["windows"].as_array().unwrap();
+    assert_eq!(
+        windows
+            .iter()
+            .map(|w| w["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["5h", "fable"]
+    );
+    assert_eq!(windows[0]["samples"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        (
+            windows[0]["samples"][0]["at"].as_i64(),
+            windows[0]["samples"][0]["utilization"].as_f64(),
+            windows[0]["samples"][0]["source"].as_str()
+        ),
+        (Some(bucket * 1_000), Some(0.4), Some("header"))
+    );
+    assert_eq!(quota["extra_usage"][0]["used_credits"].as_u64(), Some(10));
+    assert_eq!(
+        get(&parts.app, "/admin/accounts/nope/quota", Some(&cookie))
+            .await
+            .status(),
+        404
+    );
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    for i in 0..5 {
+        parts.ledger.record(record(
+            &format!("t{i}"),
+            now - i * HOUR,
+            "claude-sonnet-5",
+            &format!("s{}", i % 2),
+        ));
+    }
+    fake_upstream::wait_for(Duration::from_secs(5), || parts.db.request("t4").unwrap()).await;
+    let traffic = json(
+        get(
+            &parts.app,
+            "/admin/pools/main/traffic?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            traffic["pool_id"].as_str(),
+            traffic["bucket_seconds"].as_i64(),
+            traffic["buckets"].as_array().unwrap().len()
+        ),
+        (Some("main"), Some(3_600), 25),
+        "a 24-hour range off the hour boundary touches 25 hour buckets"
+    );
+    let total: u64 = traffic["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["requests"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 5);
+    assert!(
+        traffic["buckets"].as_array().unwrap().last().unwrap()["tokens"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        get(&parts.app, "/admin/pools/nope/traffic", Some(&cookie))
+            .await
+            .status(),
+        404
+    );
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let rows = sessions["sessions"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "one row per (key, session) seen in the ledger, no pin needed"
+    );
+    assert_eq!(
+        (
+            rows[0]["session_id"].as_str(),
+            rows[0]["requests"].as_u64(),
+            rows[0]["last_request_at"].as_i64(),
+            rows[0]["pinned"].as_bool(),
+            rows[0]["account_id"].as_str()
+        ),
+        (
+            Some("s0"),
+            Some(3),
+            Some(now),
+            Some(false),
+            Some("business")
+        )
+    );
+    assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
+}
+
+#[tokio::test]
+async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
+    let parts = common::admin_parts_full().await;
+    let addr = common::serve(parts.app.clone()).await;
+    let admin = login(&parts.app, "admin-secret").await;
+    let viewer = login(&parts.app, "viewer-secret").await;
+    let connect = |cookie: Option<String>| {
+        let mut request =
+            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+                format!("ws://{addr}/admin/live"),
+            )
+            .unwrap();
+        if let Some(cookie) = cookie {
+            request
+                .headers_mut()
+                .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
+        }
+        tokio_tungstenite::connect_async(request)
+    };
+    assert!(connect(None).await.is_err(), "no session, no upgrade");
+    // A pinned origin: an authenticated handshake from another origin is refused by the gate.
+    let pinned = common::admin_parts_full_with_origin("https://phoebis.example").await;
+    let pinned_addr = common::serve(pinned.app.clone()).await;
+    let pinned_cookie =
+        common::login_from(&pinned.app, "admin-secret", "https://phoebis.example").await;
+    let mut foreign =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
+            "ws://{pinned_addr}/admin/live"
+        ))
+        .unwrap();
+    foreign.headers_mut().insert(
+        "cookie",
+        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+    );
+    foreign
+        .headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    let refused = tokio_tungstenite::connect_async(foreign).await;
+    assert!(
+        matches!(refused, Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status() == 403),
+        "a foreign origin is refused before the upgrade: {refused:?}"
+    );
+    let mut same = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+        format!("ws://{pinned_addr}/admin/live"),
+    )
+    .unwrap();
+    same.headers_mut().insert(
+        "cookie",
+        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+    );
+    same.headers_mut()
+        .insert("origin", "https://phoebis.example".parse().unwrap());
+    let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
+    assert_eq!(
+        common::next_text(&mut same_ws).await["kind"],
+        "snapshot",
+        "the configured origin is admitted"
+    );
+    let _ = same_ws.close(None).await;
+    let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();
+    let (mut viewer_ws, _) = connect(Some(viewer)).await.unwrap();
+    assert_eq!(common::next_text(&mut admin_ws).await["kind"], "snapshot");
+    assert_eq!(common::next_text(&mut viewer_ws).await["kind"], "snapshot");
+    // Straight onto the bus: a capturing request and one text chunk.
+    parts.bus.publish(Event::RequestObserved(RequestObserved {
+        request_id: "live-1".into(),
+        origin: Origin::Client,
+        kind: Kind::Inference,
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        session_id: Some("s1".into()),
+        agent_id: Some("main".into()),
+        parent_agent_id: None,
+        owner_id: None,
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        stream: true,
+        headers: vec![],
+        body: bytes::Bytes::from_static(b"{}"),
+        body_capture_hours: 24,
+        received_at: common::NOW,
+    }));
+    parts.bus.publish(Event::ResponseChunk(ResponseChunk { request_id: "live-1".into(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"secret prompt text\"}}\n\n"), phase: Some(Phase::FirstContentDelta) }));
+    let admin_seen = common::deltas_until(&mut admin_ws, "preview").await;
+    assert!(admin_seen
+        .iter()
+        .any(|d| d["type"] == "preview" && d["chunk"] == "secret prompt text"));
+    let viewer_seen = common::deltas_for(&mut viewer_ws, Duration::from_millis(500)).await;
+    assert!(
+        viewer_seen.iter().any(|d| d["type"] == "started"),
+        "the viewer sees the request"
+    );
+    assert!(
+        viewer_seen.iter().all(|d| d["type"] != "preview"),
+        "and never its text"
+    );
+    let past = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/live/snapshot?from={}&to={}",
+                common::NOW - 1,
+                common::NOW + 1
+            ),
+            Some(&admin),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(past["entries"][0]["id"], "live-1");
+    assert!(
+        past["entries"][0]["preview"].is_null(),
+        "a past read carries no preview for anyone"
+    );
+    let viewer_cookie = login(&parts.app, "viewer-secret").await;
+    let past = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/live/snapshot?from={}&to={}",
+                common::NOW - 1,
+                common::NOW + 1
+            ),
+            Some(&viewer_cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(past["entries"][0]["preview"].is_null());
+    let by_instant = json(
+        get(
+            &parts.app,
+            &format!("/admin/live/snapshot?at={}", common::NOW + 1),
+            Some(&admin),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        by_instant["entries"], past["entries"],
+        "at= is the 30-minute strip ending at that instant"
+    );
+    assert_eq!(
+        get(
+            &parts.app,
+            &format!("/admin/live/snapshot?at={}&to={}", common::NOW, common::NOW),
+            Some(&admin)
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(
+        get(&parts.app, "/admin/live", Some(&admin)).await.status(),
+        400,
+        "a plain GET is not an upgrade"
+    );
+    let _ = admin_ws.close(None).await;
+    let _ = viewer_ws.close(None).await;
+}
