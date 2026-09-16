@@ -30,6 +30,8 @@ pub enum RouterEvent {
     CooldownCleared {
         account_id: String,
         scope: String,
+        /// What released the row: `admin`, `expired`, or `recovered`.
+        cause: &'static str,
         at: i64,
     },
     CooldownSet {
@@ -651,15 +653,7 @@ impl Task {
                 scope,
                 reply,
             } => {
-                let cleared = self.state.clear_cooldown(&account_id, &scope);
-                if cleared {
-                    self.emit(RouterEvent::CooldownCleared {
-                        account_id: account_id.clone(),
-                        scope: scope.clone(),
-                        at: (self.clock)(),
-                    });
-                    self.write(vec![StateWrite::DeleteCooldown(account_id, scope)]);
-                }
+                let cleared = self.release_cooldown(account_id, scope, "admin");
                 let _ = reply.send(cleared);
             }
             Command::Pins { reply } => {
@@ -695,7 +689,7 @@ impl Task {
         match report {
             Report::Cooldown {
                 account_id,
-                row,
+                mut row,
                 pin,
                 lifecycle_generation,
                 credential_generation,
@@ -703,6 +697,9 @@ impl Task {
                 if self.superseded(&account_id, lifecycle_generation, credential_generation) {
                     return;
                 }
+                // The router's own clock dates the row, so a sample is compared against the loop's timeline
+                // rather than the relay's.
+                row.set_at = (self.clock)();
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -809,7 +806,12 @@ impl Task {
                 }
             }
             Report::Sample { account_id, sample } => {
-                self.state.record_sample(&account_id, sample);
+                self.state.record_sample(&account_id, sample.clone());
+                // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
+                // announced reaches the router here and nowhere else.
+                for row in self.state.recovered_cooldowns(&account_id, &sample) {
+                    self.release_cooldown(row.account_id, row.scope, "recovered");
+                }
             }
             Report::AccountState {
                 account_id,
@@ -926,6 +928,22 @@ impl Task {
         self.cancel.entry(account_id.to_string()).or_default()
     }
 
+    /// The three steps a release takes wherever it starts: drop the row, say what released it, and delete it.
+    /// The purge tick has its own, because it clears a batch the state already dropped.
+    fn release_cooldown(&mut self, account_id: String, scope: String, cause: &'static str) -> bool {
+        let cleared = self.state.clear_cooldown(&account_id, &scope);
+        if cleared {
+            self.emit(RouterEvent::CooldownCleared {
+                account_id: account_id.clone(),
+                scope: scope.clone(),
+                cause,
+                at: (self.clock)(),
+            });
+            self.write(vec![StateWrite::DeleteCooldown(account_id, scope)]);
+        }
+        cleared
+    }
+
     fn purge(&mut self) {
         let snapshot = self
             .snapshot
@@ -952,6 +970,7 @@ impl Task {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
                 scope: scope.clone(),
+                cause: "expired",
                 at: now,
             });
         }
@@ -997,14 +1016,6 @@ impl Task {
         else {
             return;
         };
-        let needs = pool.strategy == phoebis_store::Strategy::EarliestRefresh
-            || pool.strategy == phoebis_store::Strategy::LeastUtilized
-            || pool.migrate_above_utilization.is_some()
-            || pool.select_below_utilization.is_some()
-            || pool.overage_policy != phoebis_store::OveragePolicy::Allow;
-        if !needs {
-            return;
-        }
         let now = (self.clock)();
         let ttl = self.config.sample_ttl.as_millis() as i64;
         for candidate in &request.candidates {
@@ -1015,7 +1026,14 @@ impl Task {
                 .sampled_at
                 .get(&candidate.account_id)
                 .is_none_or(|at| now - at >= ttl);
-            if !oauth || !stale {
+            let needs = needs_sample(
+                pool,
+                &self.state,
+                &candidate.account_id,
+                &request.canonical_model,
+                now,
+            );
+            if !oauth || !stale || !needs {
                 continue;
             }
             self.sampled_at.insert(candidate.account_id.clone(), now);
@@ -1049,6 +1067,26 @@ impl Task {
             let _ = self.writer.send(writes);
         }
     }
+}
+
+/// Whether a selection has to read a candidate's usage. The pool's own reasons stand, and a candidate under a
+/// live rate-limit cooldown is read whatever the strategy: while the account is cooled no response head of its
+/// own can show the window the upstream reset ahead of the deadline it announced.
+fn needs_sample(
+    pool: &phoebis_store::PoolRow,
+    state: &RoutingState,
+    account_id: &str,
+    canonical_model: &str,
+    now: i64,
+) -> bool {
+    pool.strategy == phoebis_store::Strategy::EarliestRefresh
+        || pool.strategy == phoebis_store::Strategy::LeastUtilized
+        || pool.migrate_above_utilization.is_some()
+        || pool.select_below_utilization.is_some()
+        || pool.overage_policy != phoebis_store::OveragePolicy::Allow
+        || state
+            .cooldown(account_id, canonical_model, now)
+            .is_some_and(|row| row.reason == "rate_limit")
 }
 
 pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option<OverageEvidence>) {
@@ -1087,4 +1125,75 @@ pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option
         }
     };
     (sample, overage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use phoebis_store::{OveragePolicy, PoolRow, RoutingLoad, Strategy};
+
+    /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, and an
+    /// overage policy that never keeps an account out.
+    fn plain_pool() -> PoolRow {
+        PoolRow {
+            id: "p".into(),
+            label: "p".into(),
+            enabled: true,
+            strategy: Strategy::PriorityRandom,
+            affinity_ttl_seconds: 3_600,
+            overage_policy: OveragePolicy::Allow,
+            migrate_above_utilization: None,
+            select_below_utilization: None,
+            default_allowed_models: None,
+            keepalive_json: "{}".into(),
+            body_capture_hours: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn cooled(until: i64, reason: &str) -> RoutingState {
+        RoutingState::from_load(RoutingLoad {
+            cooldowns: vec![CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until,
+                set_at: 0,
+                reason: reason.into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+            }],
+            ..RoutingLoad::default()
+        })
+    }
+
+    #[test]
+    fn a_candidate_under_a_live_rate_limit_cooldown_is_sampled_whatever_the_strategy() {
+        let pool = plain_pool();
+        let quiet = RoutingState::from_load(RoutingLoad::default());
+        let needs = |pool: &PoolRow, state: &RoutingState| {
+            needs_sample(pool, state, "a", "claude-sonnet-5", 1_000)
+        };
+        assert!(!needs(&pool, &quiet), "nothing in this pool reads usage");
+        assert!(
+            needs(&pool, &cooled(2_000, "rate_limit")),
+            "a cooled candidate is re-checked under priority_random with no threshold set"
+        );
+        assert!(
+            !needs(&pool, &cooled(500, "rate_limit")),
+            "a row already past its deadline has nothing left to release"
+        );
+        assert!(
+            !needs(&pool, &cooled(2_000, "permission")),
+            "and no amount of allowance restores an entitlement"
+        );
+        let migrating = PoolRow {
+            migrate_above_utilization: Some(0.8),
+            ..plain_pool()
+        };
+        assert!(
+            needs(&migrating, &quiet),
+            "the pool's own reasons to sample still stand"
+        );
+    }
 }

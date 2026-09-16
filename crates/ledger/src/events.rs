@@ -25,13 +25,14 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
         RouterEvent::CooldownCleared {
             account_id,
             scope,
+            cause,
             at,
         } => EventRecord {
             at: *at,
             kind: "cooldown_cleared".into(),
             account_id: Some(account_id.clone()),
             model: model_of(scope),
-            detail: Some(json!({ "scope": scope }).to_string()),
+            detail: Some(json!({ "cause": cause, "scope": scope }).to_string()),
             ..Default::default()
         },
         RouterEvent::CooldownSet {
@@ -292,11 +293,28 @@ mod tests {
             (e.kind.as_str(), e.account_id.as_deref(), e.model.as_deref()),
             ("cooldown_set", Some("a"), Some("m"))
         );
+        let e = event_of(&RouterEvent::CooldownCleared {
+            account_id: "a".into(),
+            scope: "model:m".into(),
+            cause: "recovered",
+            at: 1,
+        });
+        assert_eq!(
+            (e.kind.as_str(), e.account_id.as_deref(), e.model.as_deref()),
+            ("cooldown_cleared", Some("a"), Some("m"))
+        );
+        let detail: serde_json::Value = serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (detail["cause"].as_str(), detail["scope"].as_str()),
+            (Some("recovered"), Some("model:m")),
+            "what released the row travels beside the scope it was held under"
+        );
         for (event, kind) in [
             (
                 RouterEvent::CooldownCleared {
                     account_id: "a".into(),
                     scope: "account".into(),
+                    cause: "expired",
                     at: 1,
                 },
                 "cooldown_cleared",

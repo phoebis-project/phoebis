@@ -5,7 +5,7 @@ use std::time::Duration;
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     resolve, sample_from_usage, spawn, Exhaustion, ReloadError, Report, ResolveError, RouterConfig,
-    SelectRequest, SelectResult,
+    SelectRequest, SelectResult, UtilizationSample,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolRow,
@@ -16,12 +16,21 @@ use fake_upstream::{stays_for, wait_for};
 const HOUR: i64 = 3_600_000;
 
 fn seeded(ids: &[&str]) -> Arc<Store> {
+    seeded_kind(AccountKind::ApiKey, ids)
+}
+
+/// The same pool over OAuth accounts, which are the only ones a usage sample is ever pulled for.
+fn seeded_oauth(ids: &[&str]) -> Arc<Store> {
+    seeded_kind(AccountKind::Oauth, ids)
+}
+
+fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     for id in ids {
         store
             .insert_account(&AccountRow {
                 id: (*id).into(),
-                kind: AccountKind::ApiKey,
+                kind,
                 label: (*id).into(),
                 enabled: true,
                 identity: None,
@@ -862,10 +871,11 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         vec![(b.as_str(), false)],
         "one ask lists every account with evidence, by id"
     );
-    // Clearing the cooldown, releasing the session, and the purge each say so.
+    // Clearing the cooldown, releasing the session, and the purge each say so, and each says what released
+    // the row it took.
     assert!(handle.clear_cooldown(&a, "account").await.unwrap());
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, .. } if account_id == a)
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, cause, .. } if account_id == a && cause == "admin")
     );
     assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
     assert!(
@@ -878,9 +888,338 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
     );
+    handle.report(cooled(
+        &a,
+        "account",
+        2_000 + HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { .. }
+    ));
     now.store(2_000 + HOUR + 1, Ordering::SeqCst);
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, .. } if session_id == "s2"),
-        "the purge tick expired the idle pin"
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, cause, .. } if account_id == a && cause == "expired"),
+        "the purge tick reached the deadline the rejection announced"
     );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, .. } if session_id == "s2"),
+        "and the idle pin went with it"
+    );
+}
+
+/// A rejection as the relay reports it, with the clock deciding the row's set time.
+fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) -> Report {
+    Report::Cooldown {
+        account_id: account.into(),
+        row: CooldownRow {
+            account_id: account.into(),
+            scope: scope.into(),
+            until,
+            set_at: 0,
+            reason: reason.into(),
+            window: window.into(),
+            source_request_id: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    }
+}
+
+/// A sample that read no window; each test fills in the ones its rule turns on.
+fn sample(observed_at: i64) -> UtilizationSample {
+    UtilizationSample {
+        fable: None,
+        fable_reset: None,
+        five_hour: None,
+        five_hour_reset: None,
+        seven_day: None,
+        seven_day_reset: None,
+        observed_at,
+    }
+}
+
+fn observed(account: &str, sample: UtilizationSample) -> Report {
+    Report::Sample {
+        account_id: account.into(),
+        sample,
+    }
+}
+
+#[tokio::test]
+async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_account() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + 5 * HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, .. } if account_id == "a")
+    );
+    assert!(
+        matches!(
+            handle
+                .select(request(&handle, None, 1_100))
+                .await
+                .unwrap()
+                .result,
+            SelectResult::Exhausted(Exhaustion::Timed { .. })
+        ),
+        "the rejection is in force"
+    );
+    // Anthropic moved the reset in: hours before the deadline the 429 announced, the window reads below 1.
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(2_000)
+        },
+    ));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 2_000)
+    );
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .cooldowns
+            .is_empty()
+            .then_some(())
+    })
+    .await;
+    assert!(
+        matches!(handle.select(request(&handle, None, 2_100)).await.unwrap().result, SelectResult::Selected(ref s) if s.account.id == "a"),
+        "and the account is back in the selection set"
+    );
+}
+
+#[tokio::test]
+async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_nothing() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "account",
+        2_000 + 5 * HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    // The usage endpoint serves a cached view for a minute, so the snapshot that arrives first can be older
+    // than the rejection.
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(1_999)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "a reading from before the row was set is not evidence about it"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(2_001)
+        },
+    ));
+    assert!(
+        handle.cooldowns().await.unwrap().is_empty(),
+        "the same reading taken after it is"
+    );
+}
+
+#[tokio::test]
+async fn a_window_at_its_limit_keeps_the_cooldown() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + 48 * HOUR,
+        "rate_limit",
+        "seven_day",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            seven_day: Some(1.0),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "a window that is exactly full has nothing left to serve with"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.1),
+            ..sample(2_001)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "and the row names the window that is read, not whichever one recovered"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            seven_day: Some(0.99),
+            ..sample(2_002)
+        },
+    ));
+    assert!(handle.cooldowns().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_claim_that_names_neither_shared_window_waits_for_both() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    // The upstream's representative claim travels into the row as it came, so the window is not always one of
+    // the two names the sample reads.
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + 5 * HOUR,
+        "rate_limit",
+        "seven_day_oauth_apps",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            seven_day: Some(1.0),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "one shared window still full is enough to hold the account out"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(2_001)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "and a window the sample never read is no evidence either"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            seven_day: Some(0.9),
+            ..sample(2_002)
+        },
+    ));
+    assert!(handle.cooldowns().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_row_no_usage_window_answers_for_is_left_alone() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + 5 * HOUR,
+        "rate_limit",
+        "retry_after",
+    ));
+    // A permission rejection over a window a sample can read: the reason is what keeps the row, because no
+    // amount of allowance restores an entitlement.
+    handle.report(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        1_000 + HOUR,
+        "permission",
+        "five_hour",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 2);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            fable: Some(0.0),
+            five_hour: Some(0.0),
+            seven_day: Some(0.0),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        2,
+        "an empty account releases neither"
+    );
+}
+
+#[tokio::test]
+async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        1_000 + 48 * HOUR,
+        "rate_limit",
+        "seven_day_fable",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.1),
+            seven_day: Some(0.1),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "the shared windows say nothing about a model-scoped allowance"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            fable: Some(1.0),
+            ..sample(2_001)
+        },
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            fable: Some(0.5),
+            ..sample(2_002)
+        },
+    ));
+    assert!(handle.cooldowns().await.unwrap().is_empty());
 }

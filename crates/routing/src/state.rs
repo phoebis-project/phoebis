@@ -178,6 +178,45 @@ impl RoutingState {
             .is_some()
     }
 
+    /// The rate-limit rows on the account that `sample` shows recovered: the window the row names has
+    /// allowance again, read from a sample taken after the rejection that set the row. A window the sample
+    /// never read is not evidence, and neither is a row no usage window answers for. Only an OAuth account is
+    /// ever sampled, which is what keeps an api-key account's rows out of here without a registry lookup.
+    pub fn recovered_cooldowns(
+        &self,
+        account_id: &str,
+        sample: &UtilizationSample,
+    ) -> Vec<CooldownRow> {
+        let below = |window: Option<f64>| window.is_some_and(|u| u < 1.0);
+        let recovered = |row: &CooldownRow| {
+            if row.scope.starts_with("model:") {
+                return below(sample.fable);
+            }
+            match row.window.as_str() {
+                // A deadline the upstream handed out names no window to compare a sample against.
+                "retry_after" => false,
+                "five_hour" => below(sample.five_hour),
+                "seven_day" => below(sample.seven_day),
+                // Any other representative claim: it does not say which shared window was exhausted, so the
+                // account is only back once both have allowance.
+                _ => below(sample.five_hour) && below(sample.seven_day),
+            }
+        };
+        let mut rows: Vec<_> = self
+            .cooldowns
+            .values()
+            .filter(|row| {
+                row.account_id == account_id
+                    && row.reason == "rate_limit"
+                    && sample.observed_at > row.set_at
+                    && recovered(row)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| a.scope.cmp(&b.scope));
+        rows
+    }
+
     /// The live row that blocks `canonical_model` on the account, the later of the account-wide and the model row.
     pub fn cooldown(
         &self,
