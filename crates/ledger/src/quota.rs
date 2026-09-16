@@ -25,9 +25,20 @@ pub fn samples_from_head(
         status: 200,
         headers: headers.to_vec(),
     };
-    let Some(unified) = UnifiedHeaders::parse(&head) else {
-        return (Vec::new(), None);
-    };
+    match UnifiedHeaders::parse(&head) {
+        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at),
+        None => (Vec::new(), None),
+    }
+}
+
+/// The assembler's entry: it parsed the head once for the attempt row and hands that parse here rather than
+/// paying for a second clone and parse on every response head.
+pub(crate) fn samples_from_unified(
+    account_id: &str,
+    unified: &UnifiedHeaders,
+    head: &ResponseHead,
+    observed_at: i64,
+) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(observed_at);
     let float = |name: &str| {
         head.get(name)

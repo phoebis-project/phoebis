@@ -12,7 +12,7 @@ use phoebis_relay::UnifiedHeaders;
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
-use crate::quota::samples_from_head;
+use crate::quota::samples_from_unified;
 use crate::record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
@@ -42,9 +42,6 @@ pub enum Record {
 pub(crate) struct InFlight {
     pub observed: RequestObserved,
     pub attempts: Vec<AttemptRecord>,
-    /// The account kind selected for each attempt, so a response head can tell whether the account it
-    /// answered for is one the quota sampler cares about without re-walking `attempts`.
-    pub account_kinds: HashMap<u8, String>,
     /// The response text assembled from chunks while the request's key captures bodies.
     pub response_body: Option<Vec<u8>>,
     /// The chunk index expected next; a chunk past it means one was dropped at the bus.
@@ -81,7 +78,6 @@ impl Assembler {
                     InFlight {
                         observed,
                         attempts: Vec::new(),
-                        account_kinds: HashMap::new(),
                         response_body: None,
                         next_index: 0,
                         gapped: false,
@@ -98,9 +94,6 @@ impl Assembler {
                 if let Some(previous) = entry.attempts.last_mut() {
                     previous.finished_at = Some(selected.started_at);
                 }
-                entry
-                    .account_kinds
-                    .insert(selected.attempt, selected.account_kind.clone());
                 entry.attempts.push(attempt_row(&selected));
                 Vec::new()
             }
@@ -116,22 +109,18 @@ impl Assembler {
                 else {
                     return Vec::new();
                 };
-                fill_head(attempt, &head);
-                if entry
-                    .account_kinds
-                    .get(&head.attempt)
-                    .is_some_and(|k| k == "oauth")
-                {
-                    let account_id = entry
-                        .attempts
-                        .iter()
-                        .find(|a| a.attempt as u8 == head.attempt)
-                        .map(|a| a.account_id.clone())
-                        .unwrap_or_default();
-                    let (quota, extra) =
-                        samples_from_head(&account_id, &head.headers, head.observed_at);
-                    if !quota.is_empty() || extra.is_some() {
-                        return vec![Record::Samples { quota, extra }];
+                let parsed = fill_head(attempt, &head);
+                if attempt.account_kind == "oauth" {
+                    if let Some((unified, wire)) = parsed {
+                        let (quota, extra) = samples_from_unified(
+                            &attempt.account_id,
+                            &unified,
+                            &wire,
+                            head.observed_at,
+                        );
+                        if !quota.is_empty() || extra.is_some() {
+                            return vec![Record::Samples { quota, extra }];
+                        }
                     }
                 }
                 Vec::new()
@@ -204,7 +193,13 @@ fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
     }
 }
 
-fn fill_head(attempt: &mut AttemptRecord, head: &ResponseHead) {
+/// Fills the attempt row's rate-limit fields and hands back the parse it just ran, so the quota sampler
+/// downstream reads the same `UnifiedHeaders` and `WireHead` instead of cloning the header vector and parsing
+/// it again.
+fn fill_head(
+    attempt: &mut AttemptRecord,
+    head: &ResponseHead,
+) -> Option<(UnifiedHeaders, WireHead)> {
     attempt.upstream_status = Some(head.status);
     attempt.ttfb_ms = Some(head.observed_at - attempt.started_at);
     attempt.outcome = head.outcome.as_str().to_string();
@@ -221,20 +216,20 @@ fn fill_head(attempt: &mut AttemptRecord, head: &ResponseHead) {
         status: head.status,
         headers: head.headers.clone(),
     };
-    if let Some(unified) = UnifiedHeaders::parse(&wire) {
-        attempt.ratelimit_5h_utilization = unified.five_hour_utilization;
-        attempt.ratelimit_5h_reset = unified.five_hour_reset;
-        attempt.ratelimit_7d_utilization = unified.seven_day_utilization;
-        attempt.ratelimit_7d_reset = unified.seven_day_reset;
-        attempt.ratelimit_7d_oi_reset = unified.seven_day_oi_reset;
-        attempt.ratelimit_7d_oi_utilization = wire
-            .get("anthropic-ratelimit-unified-7d_oi-utilization")
-            .and_then(|v| v.trim().parse().ok());
-        attempt.overage_in_use = unified.overage_in_use;
-        attempt.overage_utilization = wire
-            .get("anthropic-ratelimit-unified-overage-utilization")
-            .and_then(|v| v.trim().parse().ok());
-    }
+    let unified = UnifiedHeaders::parse(&wire)?;
+    attempt.ratelimit_5h_utilization = unified.five_hour_utilization;
+    attempt.ratelimit_5h_reset = unified.five_hour_reset;
+    attempt.ratelimit_7d_utilization = unified.seven_day_utilization;
+    attempt.ratelimit_7d_reset = unified.seven_day_reset;
+    attempt.ratelimit_7d_oi_reset = unified.seven_day_oi_reset;
+    attempt.ratelimit_7d_oi_utilization = wire
+        .get("anthropic-ratelimit-unified-7d_oi-utilization")
+        .and_then(|v| v.trim().parse().ok());
+    attempt.overage_in_use = unified.overage_in_use;
+    attempt.overage_utilization = wire
+        .get("anthropic-ratelimit-unified-overage-utilization")
+        .and_then(|v| v.trim().parse().ok());
+    Some((unified, wire))
 }
 
 /// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's own
