@@ -400,7 +400,17 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
         },
         pin: None,
     });
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    // The task records the cooldown in its own state before it queues the write, so a row on disk means the
+    // snapshot the admin route reads already has it.
+    fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
+        store
+            .load_routing()
+            .unwrap()
+            .cooldowns
+            .into_iter()
+            .find(|c| c.scope == "model:claude-opus-5")
+    })
+    .await;
     let shown = json(get(&app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert_eq!(shown["cooldowns"][0]["scope"], "model:claude-opus-5");
     assert_eq!(

@@ -18,3 +18,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
+fake-upstream = { path = "../../tests/fake_upstream" }

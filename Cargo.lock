@@ -437,6 +437,7 @@ version = "0.1.0"
 dependencies = [
  "phoebis-oauth",
  "phoebis-store",
+ "fake-upstream",
  "rand",
  "serde_json",
  "subtle",

@@ -169,9 +169,15 @@ async fn a_sync_adds_new_ids_unselected_flags_vanished_ids_and_keeps_manual_rows
     assert!(synced_at.is_some() && error.is_none());
     drop(h);
     drop(store);
-    // The router task and its writer let go of the store once their last handle is gone, on their next turn.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let store = Arc::new(Store::open(&dir.path().join("router.sqlite"), &key).unwrap());
+    // The router task and its writer let go of the process lock once their last handle is gone, on their
+    // next turn, so the open is retried rather than timed.
+    let path = dir.path().join("router.sqlite");
+    let store = Arc::new(
+        wait_for(std::time::Duration::from_secs(2), || {
+            Store::open(&path, &key).ok()
+        })
+        .await,
+    );
     let h = harness_on(
         store.clone(),
         &up,

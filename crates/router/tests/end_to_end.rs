@@ -10,6 +10,31 @@ use std::sync::Mutex;
 /// variables with different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
+/// The listeners bind on the server task's first turns, so a boot is waited out by retrying the admin login
+/// until it answers rather than by a fixed sleep. The login that succeeds leaves the session cookie in the
+/// client's jar, which is what every admin call after it needs.
+async fn logged_in(client: &reqwest::Client, session_url: &str) {
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let answered = client
+            .post(session_url)
+            .header("content-type", "application/json")
+            .body(r#"{"secret":"admin-secret"}"#)
+            .send()
+            .await;
+        match answered {
+            Ok(response) if response.status() == 204 => return,
+            Ok(response) => panic!("the admin login answered {}", response.status()),
+            Err(_) => {}
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the admin listener never accepted a connection"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -88,22 +113,13 @@ usage:
     let server = tokio::spawn(phoebis_router::app::run(config, async {
         let _ = stop_rx.await;
     }));
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(dir.path().join("phoebis.sqlite").exists());
-
     let client = reqwest::Client::builder()
         .cookie_store(true)
         .build()
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
-    let login = client
-        .post(admin("/session"))
-        .header("content-type", "application/json")
-        .body(r#"{"secret":"admin-secret"}"#)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(login.status(), 204);
+    logged_in(&client, &admin("/session")).await;
+    assert!(dir.path().join("phoebis.sqlite").exists());
 
     // An empty registry refuses every key, and nothing reaches the upstream.
     let refused = client

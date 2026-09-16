@@ -23,6 +23,9 @@ use phoebis_store::{
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::{FakeUpstream, Respond};
+// The polls live with the fake so every integration suite has them; the call sites here name them as before.
+#[allow(unused_imports)]
+pub use fake_upstream::{stays_for, wait_for};
 
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 pub const KEY: &str = "phoebis-testkey";
@@ -492,33 +495,6 @@ pub fn outcome(resp: &axum::http::Response<Body>) -> RelayOutcome {
         .get::<RelayOutcome>()
         .expect("a relayed response carries its outcome")
         .clone()
-}
-
-/// Waits for something a background task of the router or the fake produces. The deadline is generous because
-/// it is only ever reached when the thing never happens, and the poll is short so a passing test does not pay
-/// for it.
-pub async fn wait_for<T>(deadline: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
-    let give_up = std::time::Instant::now() + deadline;
-    loop {
-        if let Some(value) = probe() {
-            return value;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within {deadline:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-/// The dual of `wait_for`, for a state that must not move. The window bounds how long a background write has
-/// to land; it is never proof that none is still coming.
-pub async fn stays_for(window: Duration, mut probe: impl FnMut() -> bool) {
-    let until = std::time::Instant::now() + window;
-    while std::time::Instant::now() < until {
-        assert!(probe(), "the state moved within {window:?}");
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
 }
 
 pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {

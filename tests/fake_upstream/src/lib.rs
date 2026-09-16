@@ -16,6 +16,33 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 
+/// Waits for something a background task of the router or the fake produces. The deadline is generous because
+/// it is only ever reached when the thing never happens, and the poll is short so a passing test does not pay
+/// for it.
+pub async fn wait_for<T>(deadline: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
+    let give_up = Instant::now() + deadline;
+    loop {
+        if let Some(value) = probe() {
+            return value;
+        }
+        assert!(
+            Instant::now() < give_up,
+            "the expected state never arrived within {deadline:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The dual of `wait_for`, for a state that must not move. The window bounds how long a background write has
+/// to land; it is never proof that none is still coming.
+pub async fn stays_for(window: Duration, mut probe: impl FnMut() -> bool) {
+    let until = Instant::now() + window;
+    while Instant::now() < until {
+        assert!(probe(), "the state moved within {window:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 pub struct Rule {
     pub path_prefix: String,
     pub respond: Respond,

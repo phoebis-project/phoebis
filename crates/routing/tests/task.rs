@@ -11,6 +11,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolRow,
     ServedModelWrite, StorageKey, Store, Strategy,
 };
+use fake_upstream::{stays_for, wait_for};
 
 const HOUR: i64 = 3_600_000;
 
@@ -103,10 +104,12 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
     }
 }
 
-/// Store writes run on a writer task; a test that reads the store right after a selection waits for them.
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(50)).await;
-}
+/// How long a store write may take to reach disk before the test calls it lost. Only ever waited out in
+/// full when the write never lands.
+const WRITTEN: Duration = Duration::from_secs(2);
+
+/// The window a write that must never land is given to prove it. A bounded negative check has to wait.
+const NOT_WRITTEN: Duration = Duration::from_millis(50);
 
 /// The same request, admitted under a snapshot the registry has since moved past.
 fn stale(mut req: SelectRequest) -> SelectRequest {
@@ -124,8 +127,11 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
         .await
         .unwrap();
     assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "a"));
-    settle().await;
-    assert_eq!(store.load_routing().unwrap().pins[0].account_id, "a");
+    let pinned = wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.first().cloned()
+    })
+    .await;
+    assert_eq!(pinned.account_id, "a");
     store
         .insert_account(&AccountRow {
             id: "b".into(),
@@ -297,23 +303,21 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
         lifecycle_generation: 1,
         credential_generation: generation,
     });
-    settle().await;
-    assert_eq!(
-        store.account("a").unwrap().unwrap().state,
-        AccountState::Ready,
-        "the verdict named the replaced key"
-    );
+    // The verdict named the key the store has since replaced, so the writer fences it out.
+    stays_for(NOT_WRITTEN, || {
+        store.account("a").unwrap().unwrap().state == AccountState::Ready
+    })
+    .await;
     handle.report(Report::AccountState {
         account_id: "a".into(),
         state: AccountState::ReauthRequired,
         lifecycle_generation: 1,
         credential_generation: generation + 1,
     });
-    settle().await;
-    assert_eq!(
-        store.account("a").unwrap().unwrap().state,
-        AccountState::ReauthRequired
-    );
+    wait_for(WRITTEN, || {
+        (store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -357,7 +361,15 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
             },
             pin: None,
         });
-        settle().await;
+        wait_for(WRITTEN, || {
+            store
+                .load_routing()
+                .unwrap()
+                .cooldowns
+                .into_iter()
+                .find(|c| c.scope == "account")
+        })
+        .await;
     }
     store
         .upsert_cooldown(&CooldownRow {
@@ -468,26 +480,23 @@ async fn a_key_is_touched_at_most_once_a_minute() {
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
     handle.touch_key("k");
-    settle().await;
-    assert_eq!(
-        store.api_key("k").unwrap().unwrap().last_used_at,
-        Some(1_000)
-    );
+    wait_for(WRITTEN, || {
+        (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
+    })
+    .await;
     now.store(11_000, Ordering::SeqCst);
     handle.touch_key("k");
-    settle().await;
-    assert_eq!(
-        store.api_key("k").unwrap().unwrap().last_used_at,
-        Some(1_000),
-        "ten seconds later nothing is written"
-    );
+    // Ten seconds on from the last touch, which is inside the minute, so nothing is written.
+    stays_for(NOT_WRITTEN, || {
+        store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)
+    })
+    .await;
     now.store(62_000, Ordering::SeqCst);
     handle.touch_key("k");
-    settle().await;
-    assert_eq!(
-        store.api_key("k").unwrap().unwrap().last_used_at,
-        Some(62_000)
-    );
+    wait_for(WRITTEN, || {
+        (store.api_key("k").unwrap().unwrap().last_used_at == Some(62_000)).then_some(())
+    })
+    .await;
 }
 
 #[test]
