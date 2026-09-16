@@ -61,6 +61,10 @@ pub struct AttemptRecord {
     pub overage_in_use: Option<bool>,
     pub overage_utilization: Option<f64>,
     pub estimated_usd: Option<f64>,
+    pub input_usd: Option<f64>,
+    pub cache_read_usd: Option<f64>,
+    pub cache_write_usd: Option<f64>,
+    pub output_usd: Option<f64>,
     pub pricing_version: Option<String>,
 }
 

@@ -36,13 +36,15 @@ impl CostSplit {
         self.input_usd + self.cache_read_usd + self.cache_write_usd + self.output_usd
     }
 
-    /// The split a stored request was folded with cannot be read back from its rows (only the total is kept
-    /// per attempt), so a replacement takes the total out under `input_usd` and the priced fold puts the real
-    /// split back; the per-column USD of a replaced request is exact again after its second write.
+    /// The split a request was folded with is read back from its own rows, so a replace subtracts exactly what
+    /// its first write added rather than a reconstruction.
     pub fn from_attempts(attempts: &[AttemptRecord]) -> CostSplit {
+        let sum = |f: fn(&AttemptRecord) -> Option<f64>| attempts.iter().filter_map(f).sum::<f64>();
         CostSplit {
-            input_usd: attempts.iter().filter_map(|a| a.estimated_usd).sum(),
-            ..CostSplit::default()
+            input_usd: sum(|a| a.input_usd),
+            cache_read_usd: sum(|a| a.cache_read_usd),
+            cache_write_usd: sum(|a| a.cache_write_usd),
+            output_usd: sum(|a| a.output_usd),
         }
     }
 }
@@ -248,11 +250,8 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
     }
 }
 
-pub fn delta_of(
-    request: &RequestRecord,
-    attempts: &[AttemptRecord],
-    costs: &CostSplit,
-) -> RollupRow {
+pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRow {
+    let costs = CostSplit::from_attempts(attempts);
     let last = attempts.last();
     let mut d = RollupRow::key(
         hour_of(request.received_at),
@@ -364,14 +363,12 @@ pub fn fold_request(
     tx: &Transaction<'_>,
     request: &RequestRecord,
     attempts: &[AttemptRecord],
-    costs: &CostSplit,
     previous: Option<(&RequestRecord, &[AttemptRecord])>,
 ) -> Result<(), LedgerError> {
     // A replaced request first leaves the row it was folded into, under the key it had then: the same id can
     // land under another account or hour once its attempts are known.
     if let Some((old_request, old_attempts)) = previous {
-        let old_costs = CostSplit::from_attempts(old_attempts);
-        let old = delta_of(old_request, old_attempts, &old_costs);
+        let old = delta_of(old_request, old_attempts);
         if let Some(mut row) = read_rollup(tx, &old)? {
             row.subtract(&old);
             // Every delta sets `requests` to 1, so zero here means the key holds no request any more: a
@@ -384,7 +381,7 @@ pub fn fold_request(
             }
         }
     }
-    let delta = delta_of(request, attempts, costs);
+    let delta = delta_of(request, attempts);
     let mut row = read_rollup(tx, &delta)?.unwrap_or_else(|| {
         RollupRow::key(
             delta.hour,
@@ -624,14 +621,14 @@ mod tests {
             &request("succeeded", Some(200), Some("k")),
             &[
                 attempt(1, "a", None, None, None, Some(0.1)),
-                attempt(2, "b", Some(5), None, Some(20), Some(0.2)),
+                AttemptRecord {
+                    input_usd: Some(0.1),
+                    cache_read_usd: Some(0.05),
+                    cache_write_usd: Some(0.0),
+                    output_usd: Some(0.15),
+                    ..attempt(2, "b", Some(5), None, Some(20), Some(0.2))
+                },
             ],
-            &CostSplit {
-                input_usd: 0.1,
-                cache_read_usd: 0.05,
-                cache_write_usd: 0.0,
-                output_usd: 0.15,
-            },
         );
         assert_eq!(
             (
@@ -681,11 +678,7 @@ mod tests {
             "a none with a cache read is a hit"
         );
         assert!(d.errors.is_empty());
-        let d = delta_of(
-            &request("rejected", Some(401), None),
-            &[],
-            &CostSplit::default(),
-        );
+        let d = delta_of(&request("rejected", Some(401), None), &[]);
         assert_eq!(
             (
                 d.key_id.as_str(),
@@ -701,7 +694,6 @@ mod tests {
         let d = delta_of(
             &request("failed", Some(429), Some("k")),
             &[attempt(1, "a", None, Some(3), None, None)],
-            &CostSplit::default(),
         );
         assert_eq!((d.rate_limited, d.failed, d.cache_misses), (1, 0, 1));
         assert_eq!(
@@ -715,7 +707,6 @@ mod tests {
         let d = delta_of(
             &request("canceled", Some(503), Some("k")),
             &[attempt(1, "a", None, None, None, None)],
-            &CostSplit::default(),
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
     }
@@ -725,7 +716,13 @@ mod tests {
         let db = crate::LedgerDb::open_in_memory().unwrap();
         let (req, attempts) = (
             request("succeeded", Some(200), Some("k")),
-            vec![attempt(1, "a", Some(5), None, Some(20), Some(0.2))],
+            vec![AttemptRecord {
+                input_usd: Some(0.05),
+                cache_read_usd: Some(0.02),
+                cache_write_usd: Some(0.0),
+                output_usd: Some(0.13),
+                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
+            }],
         );
         let (req2, attempts2) = (
             RequestRecord {
@@ -736,36 +733,36 @@ mod tests {
         );
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &req, &attempts, &CostSplit::default(), None)?;
-            fold_request(&tx, &req2, &attempts2, &CostSplit::default(), None)?;
+            fold_request(&tx, &req, &attempts, None)?;
+            fold_request(&tx, &req2, &attempts2, None)?;
             tx.commit()?;
             Ok(())
         })
         .unwrap();
         let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
-        let mut expected = delta_of(&req, &attempts, &CostSplit::default());
-        let once = expected.clone();
-        expected.add(&once);
+        let mut expected = delta_of(&req, &attempts);
+        expected.add(&delta_of(&req2, &attempts2));
         assert_eq!(rows[0], expected, "two requests, two contributions");
-        // The first request is written again with more output: its earlier contribution goes, the new one lands.
-        let more = vec![attempt(1, "a", Some(5), None, Some(50), Some(0.9))];
+        // The first request is written again with more output and a different split: its earlier split goes,
+        // the new one lands whole, never mixed with what it replaced.
+        let more = vec![AttemptRecord {
+            input_usd: Some(0.3),
+            cache_read_usd: Some(0.1),
+            cache_write_usd: Some(0.05),
+            output_usd: Some(0.45),
+            ..attempt(1, "a", Some(5), None, Some(50), Some(0.9))
+        }];
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(
-                &tx,
-                &req,
-                &more,
-                &CostSplit::from_attempts(&more),
-                Some((&req, &attempts)),
-            )?;
+            fold_request(&tx, &req, &more, Some((&req, &attempts)))?;
             tx.commit()?;
             Ok(())
         })
         .unwrap();
         let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
-        let mut expected = delta_of(&req2, &attempts2, &CostSplit::default());
-        expected.add(&delta_of(&req, &more, &CostSplit::from_attempts(&more)));
+        let mut expected = delta_of(&req2, &attempts2);
+        expected.add(&delta_of(&req, &more));
         assert_eq!(
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
@@ -775,6 +772,20 @@ mod tests {
         assert_eq!(
             rows[0].output_tps_hist, expected.output_tps_hist,
             "the old sample left the histogram"
+        );
+        assert!(
+            (rows[0].input_usd - 0.3).abs() < 1e-9
+                && (rows[0].cache_read_usd - 0.1).abs() < 1e-9
+                && (rows[0].cache_write_usd - 0.05).abs() < 1e-9
+                && (rows[0].output_usd - 0.45).abs() < 1e-9,
+            "the replaced request's split lands whole, unblended with what it replaced"
+        );
+        assert!(
+            rows[0].input_usd >= 0.0
+                && rows[0].cache_read_usd >= 0.0
+                && rows[0].cache_write_usd >= 0.0
+                && rows[0].output_usd >= 0.0,
+            "a replace never drives a stored split column negative"
         );
         let accounts = db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(

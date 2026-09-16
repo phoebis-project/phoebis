@@ -250,7 +250,6 @@ async fn land(db: &Arc<LedgerDb>, stats: &Arc<LedgerStats>, batch: Vec<Record>) 
                             &tx,
                             request,
                             attempts,
-                            &crate::rollup::CostSplit::default(),
                             previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                         )?;
                     }

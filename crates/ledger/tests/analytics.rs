@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{
-    bucket_index, delta_of, read_rollups, AttemptRecord, CostSplit, Histogram, LedgerDb,
-    RequestRecord, RollupRow, UNATTRIBUTED,
+    bucket_index, delta_of, read_rollups, AttemptRecord, Histogram, LedgerDb, RequestRecord,
+    RollupRow, UNATTRIBUTED,
 };
 use rand::{RngExt, SeedableRng};
 
@@ -107,7 +107,7 @@ fn aggregate(
 ) -> BTreeMap<String, RollupRow> {
     let mut out: BTreeMap<String, RollupRow> = BTreeMap::new();
     for (request, attempts) in rows {
-        let delta = delta_of(request, attempts, &CostSplit::default());
+        let delta = delta_of(request, attempts);
         let key = group(&delta);
         out.entry(key.clone())
             .and_modify(|row| row.add(&delta))
@@ -243,6 +243,13 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
             assert!(
                 (got.estimated_usd - want.estimated_usd).abs() < 1e-6,
                 "group-by {name} = {key}: usd"
+            );
+            assert!(
+                (got.input_usd - want.input_usd).abs() < 1e-6
+                    && (got.cache_read_usd - want.cache_read_usd).abs() < 1e-6
+                    && (got.cache_write_usd - want.cache_write_usd).abs() < 1e-6
+                    && (got.output_usd - want.output_usd).abs() < 1e-6,
+                "group-by {name} = {key}: split usd"
             );
             assert_eq!(
                 (
