@@ -32,8 +32,17 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     let mut rows: std::collections::BTreeMap<(String, String), serde_json::Value> =
         std::collections::BTreeMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
+        let key = (p.key_id.clone(), p.session_id.clone());
+        // A session holds a pin per model and the row shows one of them, so it shows the one the caller used
+        // last rather than whichever model the sorted list ends on.
+        if rows
+            .get(&key)
+            .is_some_and(|held| held["last_used_at"].as_i64().unwrap_or(0) >= p.last_used_at)
+        {
+            continue;
+        }
         rows.insert(
-            (p.key_id.clone(), p.session_id.clone()),
+            key,
             json!({
                 "key_id": p.key_id, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,

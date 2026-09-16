@@ -385,6 +385,43 @@ async fn a_revoke_whose_reload_fails_answers_503_and_the_old_secret_is_refused_o
     );
 }
 
+/// A session holds a pin per model. The row shows one of them, so it shows the pin the caller used last
+/// rather than whichever model happens to sort last.
+#[tokio::test]
+async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
+    let (_first, _up, store, _router) = common::admin_parts().await;
+    for (model, account, epoch, last_used_at) in [
+        ("claude-opus-5", "direct", 4, common::NOW - 5),
+        ("claude-sonnet-4-5", "business", 3, common::NOW - 5_000),
+    ] {
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                model: model.into(),
+                account_id: account.into(),
+                epoch,
+                created_at: common::NOW - 10_000,
+                last_used_at,
+            })
+            .unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    let listed = json(get(&app, "/admin/sessions", Some(&cookie)).await).await;
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "one row for the session");
+    assert_eq!(
+        (
+            sessions[0]["model"].as_str(),
+            sessions[0]["account_id"].as_str(),
+            sessions[0]["epoch"].as_u64()
+        ),
+        (Some("claude-opus-5"), Some("direct"), Some(4)),
+        "the row is the most recently used pin, not the alphabetically last model"
+    );
+}
+
 #[tokio::test]
 async fn sessions_list_live_pins_and_a_release_expires_them() {
     let (_first, _up, store, _router) = common::admin_parts().await;
