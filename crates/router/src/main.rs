@@ -55,7 +55,13 @@ fn main() -> anyhow::Result<()> {
                         Ok(signal) => signal,
                         Err(error) => {
                             tracing::error!(%error, "no SIGTERM handler; a service manager's stop will not drain");
-                            return ctrl_c.await.unwrap_or(());
+                            match ctrl_c.await {
+                                Ok(()) => return,
+                                Err(error) => {
+                                    tracing::error!(%error, "no interrupt handler; stop this process by other means");
+                                    return std::future::pending::<()>().await;
+                                }
+                            }
                         }
                     };
                 tokio::select! {

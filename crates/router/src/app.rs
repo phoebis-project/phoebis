@@ -241,15 +241,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     shutdown.await;
     tracing::info!("shutting down");
     let _ = stop.send(true);
-    match tokio::time::timeout(DRAIN_TIMEOUT, async {
+    // Held rather than returned: a listener that failed still leaves the routing writer to drain and two
+    // tasks to abort, so the teardown below runs either way and the error is the last thing that happens.
+    let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         tokio::join!(&mut proxy, &mut admin_server)
     })
     .await
     {
-        Ok((proxy_result, admin_result)) => {
-            proxy_result??;
-            admin_result??;
-        }
+        Ok((proxy_result, admin_result)) => drained(proxy_result).and(drained(admin_result)),
         Err(_) => {
             tracing::warn!(
                 seconds = DRAIN_TIMEOUT.as_secs(),
@@ -257,8 +256,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             );
             proxy.abort();
             admin_server.abort();
+            Ok(())
         }
-    }
+    };
     scheduler.abort();
     sweeper.abort();
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
@@ -270,7 +270,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         tracing::warn!(%error, "the router task had already stopped");
     }
     drop(pool);
-    Ok(())
+    served
+}
+
+/// One listener's outcome: the task either panicked or the serve future itself failed.
+fn drained(result: Result<std::io::Result<()>, tokio::task::JoinError>) -> anyhow::Result<()> {
+    Ok(result??)
 }
 
 fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
@@ -284,7 +289,11 @@ fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
     Arc::new(|authority: &str| {
         let (host, port) = match split_authority(authority) {
             Some(split) => split,
-            None => (authority, HTTPS_PORT),
+            // A bracketed v6 literal carries its brackets here too, and no resolver takes them.
+            None => (
+                authority.trim_start_matches('[').trim_end_matches(']'),
+                HTTPS_PORT,
+            ),
         };
         (host, port).to_socket_addrs().ok()?.next()
     })
@@ -338,6 +347,7 @@ mod tests {
         assert_eq!(resolve("127.0.0.1:8317").map(|a| a.port()), Some(8317));
         assert_eq!(resolve("127.0.0.1").map(|a| a.port()), Some(443));
         assert_eq!(resolve("[::1]:8443").map(|a| a.port()), Some(8443));
+        assert_eq!(resolve("[::1]").map(|a| a.port()), Some(443));
         assert!(resolve("no-such-host.invalid").is_none());
     }
 }

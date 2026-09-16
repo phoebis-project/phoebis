@@ -207,20 +207,17 @@ impl PairingVault {
         cancelled
     }
 
-    /// Drops every exchange whose pairing session has run out: the bundle it holds can never be confirmed,
-    /// and nothing else would free it before the process ends.
+    /// Drops every pairing whose session has run out: the bundle it may hold can never be confirmed, and
+    /// nothing else would free it before the process ends. The record goes with the bundle, so the vault does
+    /// not keep an entry per pairing ever started, and an exchange that lands afterwards cannot revive it:
+    /// `record_exchange` fails for a record that is gone, and its caller drops what it fetched.
     pub fn sweep(&self, now: i64) -> usize {
         let mut records = self.records.lock().expect(LOCK_POISONED);
-        let mut swept = 0;
-        for record in records.values_mut() {
-            if matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged)
-                && now > record.deadline
-            {
-                record.exchange = None;
-                record.status = VaultStatus::Discarded;
-                swept += 1;
-            }
-        }
-        swept
+        let before = records.len();
+        records.retain(|_, record| {
+            !matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged)
+                || now <= record.deadline
+        });
+        before - records.len()
     }
 }
