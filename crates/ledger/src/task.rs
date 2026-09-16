@@ -15,9 +15,10 @@ use crate::assemble::{Assembler, Record};
 use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
-use crate::pricing::{price_attempts, Pricing};
+use crate::metrics::Metrics;
+use crate::pricing::{price_attempts, PriceTable, Pricing};
 use crate::quota::QuotaPoll;
-use crate::record::EventRecord;
+use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
 
 pub const CHANNEL_DEPTH: usize = 4_096;
@@ -68,6 +69,7 @@ pub struct LedgerGone;
 pub struct Ledger {
     db: Arc<LedgerDb>,
     stats: Arc<LedgerStats>,
+    metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
     /// Flipped by `shutdown`; the writer closes its receiver on it, so no clone of the handle can keep the
     /// channel open past the drain.
@@ -94,8 +96,13 @@ impl Ledger {
 
     /// Never waits: the relay's body task and the assembler both call this, and neither may stall on disk.
     pub fn record(&self, record: Record) {
-        if self.tx.try_send(record).is_err() {
-            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+        match self.tx.try_send(record) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(record))
+            | Err(mpsc::error::TrySendError::Closed(record)) => {
+                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                self.metrics.observe_drop(table_of(&record));
+            }
         }
     }
 
@@ -121,6 +128,7 @@ pub fn spawn(
     bus: &Bus,
     router: RouterHandle,
     clock: Clock,
+    metrics: Arc<Metrics>,
     config: LedgerConfig,
 ) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
@@ -130,6 +138,7 @@ pub fn spawn(
     let ledger = Ledger {
         db: db.clone(),
         stats: stats.clone(),
+        metrics: metrics.clone(),
         tx,
         stop: Arc::new(stop),
         done: Arc::new(Mutex::new(Some(done_rx))),
@@ -169,6 +178,7 @@ pub fn spawn(
         stopped,
         assembler,
         stats,
+        metrics,
         clock,
         config,
         done_tx,
@@ -225,6 +235,7 @@ async fn writer(
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
     stats: Arc<LedgerStats>,
+    metrics: Arc<Metrics>,
     clock: Clock,
     config: LedgerConfig,
     done: oneshot::Sender<()>,
@@ -258,7 +269,7 @@ async fn writer(
                 Err(_) => break,
             }
         }
-        land(&db, &pricing, &stats, batch).await;
+        land(&db, &pricing, &stats, &metrics, batch).await;
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
             let dropped = stats.dropped.load(Ordering::Relaxed);
@@ -269,7 +280,7 @@ async fn writer(
                     detail: Some(format!(r#"{{"dropped":{}}}"#, dropped - reported)),
                     ..Default::default()
                 };
-                if land(&db, &pricing, &stats, vec![Record::Event(gap)]).await {
+                if land(&db, &pricing, &stats, &metrics, vec![Record::Event(gap)]).await {
                     reported = dropped;
                     stats.gaps.fetch_add(1, Ordering::Relaxed);
                     stats.last_gap_at.store(clock(), Ordering::Relaxed);
@@ -280,19 +291,46 @@ async fn writer(
     let _ = done.send(());
 }
 
+fn table_of(record: &Record) -> &'static str {
+    match record {
+        Record::Event(_) => "events",
+        Record::Request { .. } => "requests",
+        Record::Samples { .. } => "samples",
+    }
+}
+
+/// What a landed batch reports to the metrics registry, once the transaction that produced it has committed.
+// Boxing the request would put an allocation on a path every landed request takes, to shrink a value built
+// once per batch and consumed immediately after.
+#[allow(clippy::large_enum_variant)]
+enum Observation {
+    Request {
+        table: Arc<PriceTable>,
+        request: RequestRecord,
+        attempts: Vec<AttemptRecord>,
+    },
+    Samples {
+        quota: Vec<QuotaSampleRecord>,
+    },
+}
+
 /// One transaction per batch on a blocking thread. A batch that fails is lost as a whole and counted, so the
-/// gap that follows names it.
+/// gap that follows names it. Metrics are observed only after the commit succeeds, so a failed batch is
+/// reflected in `phoebis_ledger_dropped_total`, never in the request or sample series.
 async fn land(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     stats: &Arc<LedgerStats>,
+    metrics: &Arc<Metrics>,
     batch: Vec<Record>,
 ) -> bool {
     let db = db.clone();
     let pricing = pricing.clone();
     let size = batch.len() as u64;
+    let tables: Vec<&'static str> = batch.iter().map(table_of).collect();
     let written = tokio::task::spawn_blocking(move || {
-        db.write(|conn| {
+        let mut observations = Vec::new();
+        let result = db.write(|conn| {
             let tx = conn.transaction()?;
             for record in &batch {
                 match record {
@@ -320,32 +358,57 @@ async fn land(
                             &attempts,
                             previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                         )?;
+                        observations.push(Observation::Request {
+                            table,
+                            request: request.clone(),
+                            attempts,
+                        });
                     }
                     Record::Samples { quota, extra } => {
-                        insert_samples_in(&tx, quota, extra.as_ref())?
+                        insert_samples_in(&tx, quota, extra.as_ref())?;
+                        observations.push(Observation::Samples {
+                            quota: quota.clone(),
+                        });
                     }
                 }
             }
             tx.commit()?;
             Ok::<(), LedgerError>(())
-        })
+        });
+        (result, observations)
     })
     .await;
     match written {
-        Ok(Ok(())) => {
+        Ok((Ok(()), observations)) => {
             stats.written.fetch_add(size, Ordering::Relaxed);
+            for observation in observations {
+                match observation {
+                    Observation::Request {
+                        table,
+                        request,
+                        attempts,
+                    } => metrics.observe_request(&table, &request, &attempts),
+                    Observation::Samples { quota } => metrics.observe_samples(&quota),
+                }
+            }
             true
         }
-        Ok(Err(error)) => {
+        Ok((Err(error), _)) => {
             tracing::error!(%error, records = size, "a ledger batch could not be written");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
+            for table in &tables {
+                metrics.observe_drop(table);
+            }
             false
         }
         Err(error) => {
             tracing::error!(%error, records = size, "the ledger writer panicked; the batch is lost");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
+            for table in &tables {
+                metrics.observe_drop(table);
+            }
             false
         }
     }

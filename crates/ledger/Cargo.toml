@@ -6,6 +6,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum = { workspace = true }
 bytes = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-oauth = { path = "../oauth" }
@@ -24,7 +25,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-axum = { workspace = true }
 phoebis-profile = { path = "../profile" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
