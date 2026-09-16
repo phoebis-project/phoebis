@@ -639,3 +639,42 @@ async fn a_pre_write_retry_counts_against_the_attempt_budget() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_cancelled_stream_releases_the_upstream_while_the_client_holds_the_body() {
+    // Past the relay's 64-deep channel, and far past what the relay's buffers and the socket's can hold
+    // between them, so the fake is still writing when the account goes away.
+    let filler = "x".repeat(8192);
+    let mut events = vec![message_start()];
+    events.extend((0..4096).map(|_| ev("content_block_delta", &filler)));
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events,
+            delay_between: Duration::ZERO,
+        },
+    );
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // The body is never polled, so the relay's channel fills and the upstream reader stops draining.
+    stays_for(Duration::from_millis(200), || up.open_connections() == 1).await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (up.open_connections() == 0).then_some(())
+    })
+    .await;
+    // Held to here on purpose: the upstream had to go while the caller was still not reading.
+    drop(resp);
+    up.shutdown().await;
+}

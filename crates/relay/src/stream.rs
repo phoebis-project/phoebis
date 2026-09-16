@@ -85,46 +85,43 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
         // The hold already fed the held bytes to the inspection copy, so the prefix is scanned for what it left
         // behind rather than fed again.
         observe(&mut observer);
-        if !prefix.is_empty() {
-            match decode_piece(decoder.as_mut(), prefix) {
-                Ok(piece) => {
-                    if tx.send(Ok(piece)).await.is_err() {
-                        return;
+        let end = 'body: {
+            if !prefix.is_empty() {
+                match decode_piece(decoder.as_mut(), prefix) {
+                    Ok(piece) => match send(&tx, &cancel, Ok(piece)).await {
+                        Delivery::Delivered => {}
+                        Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                        Delivery::Gone => break 'body BodyEnd::Gone,
+                    },
+                    Err(error) => {
+                        let _ = send(&tx, &cancel, Err(error)).await;
+                        break 'body BodyEnd::Gone;
                     }
                 }
-                Err(error) => {
-                    let _ = tx.send(Err(error)).await;
-                    return;
-                }
             }
-        }
-        let complete = {
             loop {
                 // A caller that hangs up mid-stream has to release the upstream connection right away; waiting
                 // for the next chunk would hold it until the idle timeout on a stream that has gone quiet.
                 let read = tokio::select! {
-                    _ = tx.closed() => break false,
+                    _ = tx.closed() => break 'body BodyEnd::Gone,
                     // The credential this stream was opened with is gone, so the body ends in an error and
                     // axum closes the caller's connection rather than letting a dead account keep streaming.
-                    _ = cancel.cancelled() => {
-                        let _ = tx.send(Err(cancelled())).await;
-                        break false;
-                    }
+                    _ = cancel.cancelled() => break 'body BodyEnd::Cancelled,
                     read = tokio::time::timeout(idle_timeout, reader.next_chunk()) => read,
                 };
                 let next = match read {
                     Err(_) => {
-                        let _ = tx.send(Err(stalled())).await;
-                        break false;
+                        let _ = send(&tx, &cancel, Err(stalled())).await;
+                        break 'body BodyEnd::Gone;
                     }
                     Ok(Err(error)) => {
-                        let _ = tx.send(Err(error)).await;
-                        break false;
+                        let _ = send(&tx, &cancel, Err(error)).await;
+                        break 'body BodyEnd::Gone;
                     }
                     Ok(Ok(next)) => next,
                 };
                 let Some(chunk) = next else {
-                    break true;
+                    break;
                 };
                 // The raw chunk, because the inspection copy runs the upstream's own content coding; it is read
                 // before the chunk goes out so a late rate-limit error is acted on no later than the client
@@ -134,47 +131,90 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
-                        let _ = tx.send(Err(error)).await;
-                        break false;
+                        let _ = send(&tx, &cancel, Err(error)).await;
+                        break 'body BodyEnd::Gone;
                     }
                 };
                 if piece.is_empty() {
                     continue;
                 }
-                // The caller dropped the response, so there is nobody left to relay to and the upstream
-                // connection goes with it.
-                if tx.send(Ok(piece)).await.is_err() {
-                    return;
+                match send(&tx, &cancel, Ok(piece)).await {
+                    Delivery::Delivered => {}
+                    Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                    Delivery::Gone => break 'body BodyEnd::Gone,
                 }
             }
-        };
-        if !complete {
-            return;
-        }
-        observe_end(&mut observer);
-        if let Some(mut decoder) = decoder {
-            match decoder.finish() {
-                Ok(tail) if !tail.is_empty() => {
-                    if tx.send(Ok(Bytes::from(tail))).await.is_err() {
-                        return;
+            observe_end(&mut observer);
+            if let Some(mut decoder) = decoder {
+                match decoder.finish() {
+                    Ok(tail) if !tail.is_empty() => {
+                        match send(&tx, &cancel, Ok(Bytes::from(tail))).await {
+                            Delivery::Delivered => {}
+                            Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                            Delivery::Gone => break 'body BodyEnd::Gone,
+                        }
                     }
+                    Err(error) => {
+                        let _ = send(&tx, &cancel, Err(error)).await;
+                        break 'body BodyEnd::Gone;
+                    }
+                    Ok(_) => {}
                 }
-                Err(error) => {
-                    let _ = tx.send(Err(error)).await;
-                    return;
-                }
-                Ok(_) => {}
             }
-        }
-        // Checking in before the sender drops is what makes the connection available again by the time the
-        // caller sees the end of the body, which is the only ordering a sequential caller can observe.
-        if keep_alive {
-            reader.into_inner().return_to(checkin);
+            BodyEnd::Complete
+        };
+        match end {
+            BodyEnd::Cancelled => {
+                // The upstream socket goes first. A caller that stopped reading leaves the channel full, so
+                // waiting for capacity to report the end would keep a dead account's connection open for as
+                // long as that caller cares to hold it.
+                drop(reader);
+                let _ = tx.try_send(Err(cancelled()));
+            }
+            BodyEnd::Gone => {}
+            // Checking in before the sender drops is what makes the connection available again by the time the
+            // caller sees the end of the body, which is the only ordering a sequential caller can observe.
+            BodyEnd::Complete => {
+                if keep_alive {
+                    reader.into_inner().return_to(checkin);
+                }
+            }
         }
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
     }))
+}
+
+/// How the relayed body stopped, which decides what happens to the upstream connection.
+enum BodyEnd {
+    Cancelled,
+    Complete,
+    /// The caller is no longer listening, or the stream ended in an error already sent.
+    Gone,
+}
+
+enum Delivery {
+    Cancelled,
+    Delivered,
+    Gone,
+}
+
+/// One piece downstream, raced against cancellation. Without the race a caller that stops reading with the
+/// channel full would pin this task inside `send` and, with it, the upstream connection: cancellation could
+/// not be observed until the caller resumed or hung up. A receiver that is gone resolves the send on its own.
+async fn send(
+    tx: &mpsc::Sender<Result<Bytes, TransportError>>,
+    cancel: &CancellationToken,
+    item: Result<Bytes, TransportError>,
+) -> Delivery {
+    tokio::select! {
+        _ = cancel.cancelled() => Delivery::Cancelled,
+        sent = tx.send(item) => match sent {
+            Ok(()) => Delivery::Delivered,
+            Err(_) => Delivery::Gone,
+        },
+    }
 }
 
 /// Hands a forwarded chunk to the inspection copy. A copy that no longer decodes or no longer fits its bound
