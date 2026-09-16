@@ -54,11 +54,10 @@ struct Reading {
 
 pub(crate) struct Tile {
     completions: VecDeque<Completion>,
-    /// (at, output tokens observed) over the last minute.
+    /// (at, output tokens added) over the last minute.
     output: VecDeque<(i64, u64)>,
     /// One reading per second for the last minute, keyed by the second; a second no tick ran in has no entry.
     history: VecDeque<(i64, Reading)>,
-    last_output_total: u64,
 }
 
 impl Tile {
@@ -67,7 +66,6 @@ impl Tile {
             completions: VecDeque::new(),
             output: VecDeque::new(),
             history: VecDeque::new(),
-            last_output_total: 0,
         }
     }
 
@@ -80,12 +78,10 @@ impl Tile {
         });
     }
 
-    /// `running` is a request's running output count; the tile keeps the increments so a rate over the last
-    /// window is a sum, not a difference between two requests' counters.
-    pub(crate) fn output_tokens(&mut self, at: i64, running: u64) {
-        let delta = running.saturating_sub(self.last_output_total.min(running));
-        self.last_output_total = running;
-        self.output.push_back((at, delta));
+    /// `added` is what one chunk raised its request's output count by; the tile sums these, so concurrent
+    /// streams add up instead of overwriting one another's running counter.
+    pub(crate) fn output_tokens(&mut self, at: i64, added: u64) {
+        self.output.push_back((at, added));
     }
 
     fn prune(&mut self, now: i64) {

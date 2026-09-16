@@ -328,6 +328,7 @@ impl LiveState {
         let mut usage_moved = false;
         match &chunk.phase {
             Some(Phase::MessageStart { usage }) | Some(Phase::MessageDelta { usage }) => {
+                let previous = t.usage.output_tokens.unwrap_or(0);
                 t.usage.merge(usage);
                 usage_moved = true;
                 if let Some(out) = usage.output_tokens {
@@ -339,7 +340,8 @@ impl LiveState {
                     {
                         t.output_samples.pop_front();
                     }
-                    tile.output_tokens(now, out);
+                    // The tile sums increments, so this request's running count becomes what the chunk added.
+                    tile.output_tokens(now, out.saturating_sub(previous));
                 }
             }
             Some(Phase::FirstContentDelta) => t.entry.phases.first_content_at = Some(now),
@@ -676,4 +678,70 @@ fn text_of(body: &[u8]) -> Option<String> {
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use phoebis_bus::{Kind, Origin};
+    use phoebis_ledger::PriceTable;
+
+    fn observed(id: &str) -> Event {
+        Event::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: None,
+            pool_id: None,
+            session_id: None,
+            agent_id: None,
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            stream: true,
+            headers: Vec::new(),
+            body: Bytes::new(),
+            body_capture_hours: 0,
+            received_at: 1_000,
+        })
+    }
+
+    fn output(id: &str, index: u32, running: u64) -> Event {
+        Event::ResponseChunk(ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::new(),
+            phase: Some(Phase::MessageDelta {
+                usage: Usage {
+                    output_tokens: Some(running),
+                    ..Usage::default()
+                },
+            }),
+        })
+    }
+
+    #[test]
+    fn the_tile_sums_output_across_concurrent_streams() {
+        let mut state = LiveState::new(
+            Arc::new(Pricing::new(PriceTable::shipped())),
+            Arc::new(|| 1_000),
+        );
+        state.apply(observed("a"));
+        state.apply(observed("b"));
+        for (index, running) in [(0, 1), (1, 50), (2, 100)] {
+            state.apply(output("a", index, running));
+            state.apply(output("b", index, running));
+        }
+        let Some(Delta::Tick { tick, .. }) = state.tick().pop() else {
+            panic!("the tick is the last delta")
+        };
+        assert_eq!(
+            tick.metrics.output_tps.value,
+            Some(200.0 / 5.0),
+            "two streams of 100 tokens inside the five-second window"
+        );
+    }
 }
