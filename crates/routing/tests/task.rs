@@ -45,6 +45,7 @@ fn seeded(ids: &[&str]) -> Arc<Store> {
                 affinity_ttl_seconds: 3600,
                 overage_policy: OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
+                select_below_utilization: None,
                 default_allowed_models: None,
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
@@ -572,6 +573,31 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
         sample_from_usage(&both).1.unwrap().reset,
         Some(90_000),
         "the reset is the latest among the exhausted windows, not the earliest of all"
+    );
+    let (distinct, _) = sample_from_usage(&both);
+    assert_eq!(
+        (distinct.five_hour_reset, distinct.seven_day_reset),
+        (Some(9_000), Some(90_000)),
+        "each window's reset travels with its own utilization"
+    );
+    assert_eq!(
+        (sample.fable, sample.fable_reset),
+        (None, None),
+        "an account without a fable window has no fable allowance to read"
+    );
+    let fable = UsageSnapshot {
+        fable_window: Some(UsageWindow {
+            key: "fable".into(),
+            utilization: Some(75.0),
+            resets_at: Some(80_000),
+        }),
+        ..snapshot(10.0, 20.0, true)
+    };
+    let (fable, _) = sample_from_usage(&fable);
+    assert_eq!(
+        (fable.fable, fable.fable_reset),
+        (Some(0.75), Some(80_000)),
+        "and the fable window is a fraction like the shared ones, with its own reset"
     );
     assert!(
         sample_from_usage(&snapshot(100.0, 40.0, false))

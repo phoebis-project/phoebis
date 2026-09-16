@@ -34,6 +34,7 @@ fn pool(
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
+        select_below_utilization: None,
         default_allowed_models: default_allowed.map(|l| l.into_iter().map(String::from).collect()),
         keepalive_json: "{}".into(),
         body_capture_hours,

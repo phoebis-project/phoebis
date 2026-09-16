@@ -997,8 +997,10 @@ impl Task {
         else {
             return;
         };
-        let needs = pool.strategy == phoebis_store::Strategy::LeastUtilized
+        let needs = pool.strategy == phoebis_store::Strategy::EarliestRefresh
+            || pool.strategy == phoebis_store::Strategy::LeastUtilized
             || pool.migrate_above_utilization.is_some()
+            || pool.select_below_utilization.is_some()
             || pool.overage_policy != phoebis_store::OveragePolicy::Allow;
         if !needs {
             return;
@@ -1052,9 +1054,15 @@ impl Task {
 pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option<OverageEvidence>) {
     let window = |key: &str| snapshot.windows.iter().find(|w| w.key == key);
     let fraction = |key: &str| window(key).and_then(|w| w.utilization).map(|u| u / 100.0);
+    let reset = |key: &str| window(key).and_then(|w| w.resets_at);
+    let fable = snapshot.fable_window.as_ref();
     let sample = UtilizationSample {
+        fable: fable.and_then(|w| w.utilization).map(|u| u / 100.0),
+        fable_reset: fable.and_then(|w| w.resets_at),
         five_hour: fraction("five_hour"),
+        five_hour_reset: reset("five_hour"),
         seven_day: fraction("seven_day"),
+        seven_day_reset: reset("seven_day"),
         observed_at: snapshot.fetched_at,
     };
     let overage = match (sample.five_hour, sample.seven_day) {

@@ -16,6 +16,7 @@ struct Pool {
     strategy: Strategy,
     affinity: u64,
     migrate: Option<f64>,
+    select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
 }
 
@@ -26,6 +27,7 @@ impl Default for Pool {
             strategy: Strategy::PriorityRandom,
             affinity: 3600,
             migrate: None,
+            select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
         }
     }
@@ -96,7 +98,13 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             .collect(),
         models: ["a", "b", "c"]
             .iter()
-            .flat_map(|a| [served(a, "claude-sonnet-5"), served(a, "claude-opus-5")])
+            .flat_map(|a| {
+                [
+                    served(a, "claude-fable-5-1"),
+                    served(a, "claude-opus-5"),
+                    served(a, "claude-sonnet-5"),
+                ]
+            })
             .collect(),
         pools: vec![PoolRow {
             id: "p".into(),
@@ -106,6 +114,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
             migrate_above_utilization: pool.migrate,
+            select_below_utilization: pool.select_below,
             default_allowed_models: None,
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
@@ -160,9 +169,36 @@ fn overage(in_use: bool, observed_at: i64, reset: Option<i64>) -> OverageEvidenc
 
 fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample {
     UtilizationSample {
+        fable: None,
+        fable_reset: None,
         five_hour: Some(five_hour),
+        five_hour_reset: None,
         seven_day: Some(seven_day),
+        seven_day_reset: None,
         observed_at,
+    }
+}
+
+/// The window resets the refresh order reads, over the utilization `sample` already carries.
+fn refreshing(
+    five_hour: f64,
+    five_hour_reset: i64,
+    seven_day_reset: i64,
+    observed_at: i64,
+) -> UtilizationSample {
+    UtilizationSample {
+        five_hour_reset: Some(five_hour_reset),
+        seven_day_reset: Some(seven_day_reset),
+        ..sample(five_hour, 0.1, observed_at)
+    }
+}
+
+/// The fable allowance and its reset over a sample that already carries the shared windows.
+fn with_fable(base: UtilizationSample, fable: f64, fable_reset: Option<i64>) -> UtilizationSample {
+    UtilizationSample {
+        fable: Some(fable),
+        fable_reset,
+        ..base
     }
 }
 
@@ -279,6 +315,278 @@ fn least_utilized_picks_the_lowest_five_hour_sample_and_random_without_samples()
         seen.len(),
         3,
         "without samples every account is a 0 and the tie is random"
+    );
+}
+
+#[test]
+fn earliest_refresh_orders_by_the_seven_day_reset_and_sorts_an_account_without_one_last() {
+    let s = snapshot(Pool {
+        strategy: Strategy::EarliestRefresh,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // `a` clears its 5h window first and refreshes its plan last; only the second of those orders.
+    st.record_sample("a", refreshing(0.1, HOUR, 5 * HOUR, 1));
+    st.record_sample("b", refreshing(0.9, 9 * HOUR, 2 * HOUR, 1));
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            "b",
+            "the 7d window that refunds soonest wins, whatever the 5h resets say"
+        );
+    }
+    st.record_sample("b", refreshing(0.9, 9 * HOUR, 6 * HOUR, 2));
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            "a",
+            "and `c`, never sampled, is behind both: an unknown reset is infinitely far"
+        );
+    }
+    let mut none = RoutingState::from_load(RoutingLoad::default());
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..40 {
+        let (result, _) = select(
+            &mut none,
+            &s,
+            &request(&s, None, "claude-sonnet-5", true, &[], i),
+            &mut StdRng::seed_from_u64(i as u64),
+        );
+        seen.insert(picked(&result).to_string());
+    }
+    assert_eq!(
+        seen.len(),
+        3,
+        "with no reset anywhere every account is equally far off and the tie is random"
+    );
+}
+
+#[test]
+fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by_its_reset() {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // `a` would win under all three rules on the shared windows alone: the lowest 5h and the earliest 7d.
+    st.record_sample(
+        "a",
+        with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, Some(4 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(refreshing(0.5, HOUR, 2 * HOUR, 1), 0.5, Some(9 * HOUR)),
+    );
+    st.record_sample(
+        "c",
+        with_fable(refreshing(0.6, HOUR, 8 * HOUR, 1), 0.2, Some(3 * HOUR)),
+    );
+    for strategy in [
+        Strategy::EarliestRefresh,
+        Strategy::LeastUtilized,
+        Strategy::PriorityRandom,
+    ] {
+        let s = snapshot(Pool {
+            strategy,
+            ..Pool::default()
+        });
+        let req = request(&s, None, "claude-fable-5-1", true, &[], 1_000);
+        for seed in 0..8u64 {
+            assert_ne!(
+                picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+                "a",
+                "a spent fable window is out of the selection set under {strategy:?}"
+            );
+        }
+    }
+    let earliest = snapshot(Pool {
+        strategy: Strategy::EarliestRefresh,
+        ..Pool::default()
+    });
+    let fable = request(&earliest, None, "claude-fable-5-1", true, &[], 1_000);
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(&select(&mut st, &earliest, &fable, &mut StdRng::seed_from_u64(seed)).0),
+            "c",
+            "and the rest are ordered by the fable reset, not the 7d one"
+        );
+    }
+    let shared = request(&earliest, None, "claude-sonnet-5", true, &[], 1_000);
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &earliest,
+                    &shared,
+                    &mut StdRng::seed_from_u64(seed)
+                )
+                .0
+            ),
+            "a",
+            "a request for another model neither reads the fable window nor is excluded by it"
+        );
+    }
+}
+
+#[test]
+fn a_fable_request_with_every_window_spent_is_exhausted_at_the_earliest_fable_reset() {
+    let s = snapshot(Pool {
+        strategy: Strategy::EarliestRefresh,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample(
+        "a",
+        with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, Some(4 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(refreshing(0.1, HOUR, 2 * HOUR, 1), 1.0, Some(9 * HOUR)),
+    );
+    st.record_sample(
+        "c",
+        with_fable(refreshing(0.1, HOUR, 8 * HOUR, 1), 2.0, Some(3 * HOUR)),
+    );
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-fable-5-1", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 3 * HOUR,
+            window: "seven_day_fable".into()
+        }),
+        "the earliest fable reset is the wait the caller is given"
+    );
+    assert!(writes.is_empty(), "and nothing was pinned");
+    let mut blind = RoutingState::from_load(RoutingLoad::default());
+    for account in ["a", "b", "c"] {
+        blind.record_sample(
+            account,
+            with_fable(refreshing(0.1, HOUR, HOUR, 1), 1.0, None),
+        );
+    }
+    assert_eq!(
+        select(
+            &mut blind,
+            &s,
+            &request(&s, Some("s1"), "claude-fable-5-1", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Untimed),
+        "with no reset sampled there is no deadline to hand out"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-opus-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "and every account still serves the models the fable window does not govern"
+    );
+}
+
+#[test]
+fn the_depletion_threshold_drops_a_depleted_account_and_falls_back_when_every_account_is_depleted()
+{
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // `a` refreshes first, so it is what the refresh order would reach for, and it is the depleted one.
+    st.record_sample("a", refreshing(0.95, HOUR, HOUR, 1));
+    st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
+    st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
+    for strategy in [
+        Strategy::EarliestRefresh,
+        Strategy::LeastUtilized,
+        Strategy::PriorityRandom,
+    ] {
+        let s = snapshot(Pool {
+            strategy,
+            select_below: Some(0.92),
+            ..Pool::default()
+        });
+        let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+        for seed in 0..8u64 {
+            assert_ne!(
+                picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+                "a",
+                "the depleted account is out of the selection set under {strategy:?}"
+            );
+        }
+        let all = snapshot(Pool {
+            strategy,
+            select_below: Some(0.5),
+            ..Pool::default()
+        });
+        let req = request(&all, None, "claude-sonnet-5", true, &[], 1_000);
+        let expected = match strategy {
+            Strategy::EarliestRefresh => Some("a"),
+            Strategy::LeastUtilized => Some("b"),
+            Strategy::PriorityRandom => None,
+        };
+        for seed in 0..8u64 {
+            let result = select(&mut st, &all, &req, &mut StdRng::seed_from_u64(seed)).0;
+            match expected {
+                Some(id) => assert_eq!(
+                    picked(&result),
+                    id,
+                    "with every account depleted the full set stands under {strategy:?}"
+                ),
+                None => assert!(
+                    ["a", "b", "c"].contains(&picked(&result)),
+                    "with every account depleted the full set stands under {strategy:?}"
+                ),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
+    let s = snapshot(Pool {
+        strategy: Strategy::LeastUtilized,
+        select_below: Some(0.8),
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", refreshing(0.1, HOUR, HOUR, 1));
+    st.record_sample("b", refreshing(0.5, HOUR, HOUR, 1));
+    let (opening, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(picked(&opening), "a");
+    let epoch = match &opening {
+        SelectResult::Selected(sel) => sel.pin.as_ref().unwrap().epoch,
+        other => panic!("expected a selection, got {other:?}"),
+    };
+    st.record_sample("a", refreshing(0.95, HOUR, HOUR, 2));
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &mut rng(),
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!("expected a selection")
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.migrated,
+            sel.pin.unwrap().epoch
+        ),
+        ("a", None, epoch),
+        "the threshold narrows a fresh selection; only the migrate rule moves a live pin"
     );
 }
 

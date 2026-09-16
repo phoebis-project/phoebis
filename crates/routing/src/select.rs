@@ -58,6 +58,26 @@ enum Obstacle {
     Operator,
 }
 
+/// The window whose reset refunds an account's allowance for a model. The 5h window is not among them: its
+/// expiry does not refund the plan, so an earlier 5h reset does not mean capacity comes back sooner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Window {
+    Fable,
+    SevenDay,
+}
+
+/// The classifier's name for the model-scoped weekly window, so an account excluded here dates an exhaustion
+/// the way the 7d_oi rejection it anticipates would.
+const FABLE_WINDOW: &str = "seven_day_fable";
+
+fn window_of(canonical_model: &str) -> Window {
+    if canonical_model.contains("fable") {
+        Window::Fable
+    } else {
+        Window::SevenDay
+    }
+}
+
 pub fn select(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -235,11 +255,48 @@ pub fn select(
         }
     }
 
-    // Step 6: tiers, then the strategy inside the first non-empty one.
+    // Step 6: a model with its own window needs allowance left in it, the depletion threshold prefers the
+    // accounts under it, then tiers and the strategy inside the first non-empty one.
+    let window = window_of(&request.canonical_model);
+    if window == Window::Fable {
+        let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) =
+            selection_set.iter().copied().partition(|c| {
+                state
+                    .sample(&c.account_id)
+                    .is_none_or(|s| s.fable.unwrap_or(0.0) < 1.0)
+            });
+        obstacles.extend(spent.iter().filter_map(|c| {
+            state
+                .sample(&c.account_id)
+                .and_then(|s| s.fable_reset)
+                .map(|until| Obstacle::Cooldown {
+                    until,
+                    window: FABLE_WINDOW.to_string(),
+                })
+        }));
+        selection_set = left;
+    }
+    // The threshold is a preference, not a refusal: with every account above it the request goes to the least
+    // bad one rather than answering exhausted while capacity remains.
+    if let Some(threshold) = pool.select_below_utilization {
+        let below: Vec<&Candidate> = selection_set
+            .iter()
+            .copied()
+            .filter(|c| {
+                state
+                    .sample(&c.account_id)
+                    .is_none_or(|s| s.five_hour.unwrap_or(0.0) < threshold)
+            })
+            .collect();
+        if !below.is_empty() {
+            selection_set = below;
+        }
+    }
     let Some(chosen) = choose(
         state,
         pool.strategy,
         pool.overage_policy,
+        window,
         &selection_set,
         rng,
     ) else {
@@ -374,6 +431,7 @@ fn choose<'a>(
     state: &RoutingState,
     strategy: Strategy,
     policy: OveragePolicy,
+    window: Window,
     set: &[&'a Candidate],
     rng: &mut impl Rng,
 ) -> Option<&'a Candidate> {
@@ -390,7 +448,23 @@ fn choose<'a>(
         .filter(|c| tier_of(c) == first)
         .collect();
     match strategy {
-        Strategy::PriorityRandom => Some(tier[rng.random_range(0..tier.len())]),
+        Strategy::EarliestRefresh => {
+            let reset = |c: &Candidate| {
+                state.sample(&c.account_id).and_then(|s| match window {
+                    Window::Fable => s.fable_reset,
+                    Window::SevenDay => s.seven_day_reset,
+                })
+            };
+            // A reset nobody has sampled is a reset infinitely far off, which puts the account holding it
+            // behind every account whose refund is dated.
+            let earliest = tier.iter().filter_map(|c| reset(c)).min();
+            let ties: Vec<&Candidate> = tier
+                .iter()
+                .copied()
+                .filter(|c| reset(c) == earliest)
+                .collect();
+            Some(ties[rng.random_range(0..ties.len())])
+        }
         Strategy::LeastUtilized => {
             let utilization = |c: &Candidate| {
                 state
@@ -412,6 +486,7 @@ fn choose<'a>(
             }
             Some(ties[rng.random_range(0..ties.len())])
         }
+        Strategy::PriorityRandom => Some(tier[rng.random_range(0..tier.len())]),
     }
 }
 

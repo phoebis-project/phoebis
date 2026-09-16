@@ -42,8 +42,13 @@ pub struct OverageEvidence {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UtilizationSample {
+    /// The model-scoped weekly window, present only for an account whose plan carries one.
+    pub fable: Option<f64>,
+    pub fable_reset: Option<i64>,
     pub five_hour: Option<f64>,
+    pub five_hour_reset: Option<i64>,
     pub seven_day: Option<f64>,
+    pub seven_day_reset: Option<i64>,
     pub observed_at: i64,
 }
 
