@@ -73,6 +73,7 @@ async fn the_binary_is_populated_through_the_admin_api_and_routes_without_a_rest
     .unwrap();
     let proxy_port = free_port();
     let admin_port = free_port();
+    let metrics_port = free_port();
     let yaml = format!(
         r#"
 admin:
@@ -87,6 +88,9 @@ proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
   max_attempts: 2
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
 storage:
   encryption_key_file: {key}
   path: {db}
@@ -99,6 +103,7 @@ usage:
 "#,
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
         addr = up.addr(),
         ca = dir.path().join("ca.pem").display()
     );
@@ -372,4 +377,73 @@ fn shared_secrets_and_cleartext_administration_off_loopback_are_rejected() {
         load(&rootless),
         Err(ConfigError::StoragePath { .. })
     ));
+}
+
+#[test]
+fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
+    use phoebis_router::config::{load, ConfigError};
+    let dir = tempfile::tempdir().unwrap();
+    let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+    let base =
+        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
+    let with = |name: &str, extra: &str| {
+        let path = dir.path().join(format!("{name}.yaml"));
+        std::fs::write(&path, format!("{text}{extra}")).unwrap();
+        path
+    };
+    let config = load(&with("defaults", "")).unwrap();
+    assert_eq!(
+        (
+            config.stats.retention_days,
+            config.stats.metrics_listen.to_string().as_str(),
+            config.stats.ledger_path.to_str().unwrap()
+        ),
+        (90, "127.0.0.1:9464", "./data/ledger.sqlite")
+    );
+    assert_eq!(
+        (
+            config.quota.poll_interval_seconds,
+            config.quota.sample_retention_days
+        ),
+        (3_600, 30)
+    );
+    assert_eq!(
+        config
+            .stats
+            .pricing_path
+            .as_deref()
+            .and_then(|p| p.to_str()),
+        Some("./pricing.yaml")
+    );
+    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\nquota:\n  poll_interval_seconds: 900\n  sample_retention_days: 3\n")).unwrap();
+    assert_eq!(
+        (
+            full.stats.retention_days,
+            full.quota.poll_interval_seconds,
+            full.quota.sample_retention_days
+        ),
+        (7, 900, 3)
+    );
+    assert!(matches!(
+        load(&with("poll", "quota:\n  poll_interval_seconds: 899\n")),
+        Err(ConfigError::PollIntervalTooShort)
+    ));
+    assert!(matches!(
+        load(&with("retention", "stats:\n  retention_days: 0\n")),
+        Err(ConfigError::RetentionTooShort { .. })
+    ));
+    assert!(matches!(
+        load(&with("samples", "quota:\n  sample_retention_days: 0\n")),
+        Err(ConfigError::RetentionTooShort { .. })
+    ));
+    assert!(matches!(
+        load(&with("ledger", "stats:\n  ledger_path: /\n")),
+        Err(ConfigError::LedgerPath { .. })
+    ));
+    assert!(
+        load(&with("unknown", "stats:\n  nope: 1\n")).is_err(),
+        "unknown fields reject the configuration"
+    );
 }

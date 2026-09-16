@@ -36,12 +36,20 @@ fn main() -> anyhow::Result<()> {
             println!("{} is valid", cli.config.display());
             println!("proxy listens on {}", config.proxy.listen);
             println!("admin listens on {}", config.admin.listen);
+            println!("metrics listens on {}", config.stats.metrics_listen);
             println!("profile {}", config.compatibility.profile);
             println!(
                 "routing: max_attempts {}, cooldown_fallback {}s, catalog sync every {}s",
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
                 config.routing.catalog_sync_interval_seconds
+            );
+            println!("ledger at {}", config.stats.ledger_path.display());
+            println!(
+                "retention {} days, samples {} days, quota poll every {}s",
+                config.stats.retention_days,
+                config.quota.sample_retention_days,
+                config.quota.poll_interval_seconds
             );
             Ok(())
         }

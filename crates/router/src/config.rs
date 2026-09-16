@@ -18,6 +18,8 @@ pub struct Config {
     pub compatibility: CompatConfig,
     pub proxy: ProxyConfig,
     #[serde(default)]
+    pub quota: QuotaConfig,
+    #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
     pub sessions: SessionsConfig,
@@ -84,6 +86,17 @@ pub struct UsageConfig {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct QuotaConfig {
+    /// How often every OAuth account's usage endpoint is polled for a quota sample. At least 900 s: the
+    /// endpoint rate-limits per account, and header samples already cover active accounts.
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_seconds: u64,
+    #[serde(default = "default_sample_retention")]
+    pub sample_retention_days: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
     #[serde(default = "default_catalog_interval")]
     pub catalog_sync_interval_seconds: u64,
@@ -100,12 +113,21 @@ pub struct SessionsConfig {
     pub expire_after_seconds: u64,
 }
 
-/// The one `stats` field this build reads; the ledger settings arrive with the statistics sub-project.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StatsConfig {
     #[serde(default = "default_body_capture_max")]
     pub body_capture_max_hours: u32,
+    #[serde(default = "default_ledger_path")]
+    pub ledger_path: PathBuf,
+    #[serde(default = "default_metrics_listen")]
+    pub metrics_listen: SocketAddr,
+    /// A price table that overrides the shipped one until an import is confirmed; a missing file is not an
+    /// error, so the example path can stay in a fresh configuration.
+    #[serde(default = "default_pricing_path")]
+    pub pricing_path: Option<PathBuf>,
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -133,17 +155,23 @@ pub enum ConfigError {
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
     GzipUnsupported,
+    #[error("stats.ledger_path {path} must name a database file inside a directory")]
+    LedgerPath { path: PathBuf },
     #[error("routing.max_attempts must be between 1 and 8, not {value}")]
     MaxAttemptsOutOfRange { value: u8 },
     #[error("admin.origin is required unless admin.dev_loopback_http is set")]
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
+    #[error("quota.poll_interval_seconds must be at least 900")]
+    PollIntervalTooShort,
     #[error("cannot read {path}")]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("{field} must be at least 1")]
+    RetentionTooShort { field: &'static str },
     #[error("sessions.expire_after_seconds must be at least 60")]
     SessionExpiryTooShort,
     #[error("storage.path {path} must name a database file inside a directory")]
@@ -185,6 +213,15 @@ impl fmt::Debug for AdminConfig {
     }
 }
 
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        QuotaConfig {
+            poll_interval_seconds: default_poll_interval(),
+            sample_retention_days: default_sample_retention(),
+        }
+    }
+}
+
 impl Default for RoutingConfig {
     fn default() -> Self {
         RoutingConfig {
@@ -207,6 +244,10 @@ impl Default for StatsConfig {
     fn default() -> Self {
         StatsConfig {
             body_capture_max_hours: default_body_capture_max(),
+            ledger_path: default_ledger_path(),
+            metrics_listen: default_metrics_listen(),
+            pricing_path: default_pricing_path(),
+            retention_days: default_retention_days(),
         }
     }
 }
@@ -268,6 +309,25 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: config.stats.body_capture_max_hours,
         });
     }
+    if config.quota.poll_interval_seconds < 900 {
+        return Err(ConfigError::PollIntervalTooShort);
+    }
+    if config.stats.retention_days == 0 {
+        return Err(ConfigError::RetentionTooShort {
+            field: "stats.retention_days",
+        });
+    }
+    if config.quota.sample_retention_days == 0 {
+        return Err(ConfigError::RetentionTooShort {
+            field: "quota.sample_retention_days",
+        });
+    }
+    if config.stats.ledger_path.parent().is_none() || config.stats.ledger_path.file_name().is_none()
+    {
+        return Err(ConfigError::LedgerPath {
+            path: config.stats.ledger_path.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -323,8 +383,32 @@ fn default_cooldown_fallback() -> u64 {
     60
 }
 
+fn default_ledger_path() -> PathBuf {
+    "./data/ledger.sqlite".into()
+}
+
 fn default_max_attempts() -> u8 {
     3
+}
+
+fn default_metrics_listen() -> SocketAddr {
+    ([127, 0, 0, 1], 9464).into()
+}
+
+fn default_poll_interval() -> u64 {
+    3_600
+}
+
+fn default_pricing_path() -> Option<PathBuf> {
+    Some("./pricing.yaml".into())
+}
+
+fn default_retention_days() -> u32 {
+    90
+}
+
+fn default_sample_retention() -> u32 {
+    30
 }
 
 fn default_session_expiry() -> u64 {

@@ -1,4 +1,4 @@
-//! The running process: the store and the credential manager the two listeners share, and the drain that
+//! The running process: the store and the credential manager the three listeners share, and the drain that
 //! ends them.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_ledger::{Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
+use phoebis_ledger::{metrics_router, LedgerConfig, LedgerDb, Metrics, Pricing};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{CatalogService, Limits, Relay};
@@ -60,8 +60,8 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const SESSION_ABSOLUTE: Duration = Duration::from_secs(43_200);
 const SESSION_IDLE: Duration = Duration::from_secs(900);
 
-/// Builds every component from the configuration, serves the proxy and the admin listener until `shutdown`
-/// resolves, then drains.
+/// Builds every component from the configuration, serves the proxy, the admin, and the metrics listeners
+/// until `shutdown` resolves, then drains.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
     init_tracing();
     let profile = phoebis_profile::by_name(&config.compatibility.profile).ok_or_else(|| {
@@ -135,6 +135,37 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock.clone(),
         phoebis_routing::RouterConfig::default(),
     )?;
+    let bus = Bus::new();
+    let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
+        format!(
+            "opening the ledger at {}",
+            config.stats.ledger_path.display()
+        )
+    })?);
+    let pricing = Arc::new(
+        Pricing::load(&store, config.stats.pricing_path.as_deref())
+            .context("loading the price table")?,
+    );
+    tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %pricing.current().version, "ledger opened");
+    let metrics = Arc::new(Metrics::new());
+    let ledger = phoebis_ledger::spawn(
+        ledger_db.clone(),
+        pricing.clone(),
+        store.clone(),
+        Some(usage.clone()),
+        &bus,
+        router_task.clone(),
+        clock.clone(),
+        metrics.clone(),
+        LedgerConfig {
+            retention_days: config.stats.retention_days,
+            sample_retention_days: config.quota.sample_retention_days,
+            purge_interval: Duration::from_secs(3_600),
+            quota_poll_interval: Duration::from_secs(config.quota.poll_interval_seconds),
+            event_poll: Duration::from_secs(5),
+        },
+    );
+    let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
@@ -165,21 +196,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 max_request_bytes: MAX_REQUEST_BYTES,
             },
         )
+        .with_bus(bus.clone()),
     );
-    let Observation {
-        bus,
-        ledger,
-        live,
-        metrics,
-        pricing,
-        settings,
-    } = observation(
-        &config,
-        profile,
-        store.clone(),
-        router_task.clone(),
-        clock.clone(),
-    )?;
     let vault = Arc::new(PairingVault::new());
     let admin = Arc::new(AdminState {
         store,
@@ -206,12 +224,35 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         catalog: catalog.clone(),
         body_capture_max_hours: config.stats.body_capture_max_hours,
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
-        bus,
+        bus: bus.clone(),
         ledger: ledger.clone(),
-        live,
-        metrics,
-        pricing,
-        settings,
+        live: live.clone(),
+        metrics: metrics.clone(),
+        pricing: pricing.clone(),
+        settings: Arc::new(SettingsView {
+            admin_listen: config.admin.listen.to_string(),
+            admin_origin: config.admin.origin.clone(),
+            body_capture_max_hours: config.stats.body_capture_max_hours,
+            catalog_sync_interval_seconds: config.routing.catalog_sync_interval_seconds,
+            cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
+            ledger_path: config.stats.ledger_path.display().to_string(),
+            max_attempts: config.routing.max_attempts,
+            metrics_listen: config.stats.metrics_listen.to_string(),
+            pricing_path: config
+                .stats
+                .pricing_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            profile: config.compatibility.profile.clone(),
+            proxy_listen: config.proxy.listen.to_string(),
+            quota_poll_interval_seconds: config.quota.poll_interval_seconds,
+            quota_sample_retention_days: config.quota.sample_retention_days,
+            retention_days: config.stats.retention_days,
+            session_expire_after_seconds: config.sessions.expire_after_seconds,
+            storage_path: config.storage.path.display().to_string(),
+            usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
+            usage_refresh_concurrency: config.usage.refresh_concurrency,
+        }),
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });
@@ -222,9 +263,18 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let admin_listener = tokio::net::TcpListener::bind(config.admin.listen)
         .await
         .with_context(|| format!("binding admin.listen {}", config.admin.listen))?;
+    let metrics_listener = tokio::net::TcpListener::bind(config.stats.metrics_listen)
+        .await
+        .with_context(|| {
+            format!(
+                "binding stats.metrics_listen {}",
+                config.stats.metrics_listen
+            )
+        })?;
     tracing::info!(
         proxy = %config.proxy.listen,
         admin = %config.admin.listen,
+        metrics = %config.stats.metrics_listen,
         profile = profile.name,
         "listening"
     );
@@ -259,8 +309,22 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     );
     let mut admin_server = tokio::spawn(
         axum::serve(admin_listener, admin_app)
-            .with_graceful_shutdown(stopped(stop_rx))
+            .with_graceful_shutdown(stopped(stop_rx.clone()))
             .into_future(),
+    );
+    let mut metrics_server = tokio::spawn(
+        axum::serve(
+            metrics_listener,
+            metrics_router(
+                metrics.clone(),
+                router_task.clone(),
+                pricing.clone(),
+                bus.clone(),
+                clock.clone(),
+            ),
+        )
+        .with_graceful_shutdown(stopped(stop_rx))
+        .into_future(),
     );
 
     shutdown.await;
@@ -269,11 +333,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // Held rather than returned: a listener that failed still leaves the routing writer to drain and two
     // tasks to abort, so the teardown below runs either way and the error is the last thing that happens.
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
-        tokio::join!(&mut proxy, &mut admin_server)
+        tokio::join!(&mut proxy, &mut admin_server, &mut metrics_server)
     })
     .await
     {
-        Ok((proxy_result, admin_result)) => drained(proxy_result).and(drained(admin_result)),
+        Ok((proxy_result, admin_result, metrics_result)) => drained(proxy_result)
+            .and(drained(admin_result))
+            .and(drained(metrics_result)),
         Err(_) => {
             tracing::warn!(
                 seconds = DRAIN_TIMEOUT.as_secs(),
@@ -281,6 +347,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             );
             proxy.abort();
             admin_server.abort();
+            metrics_server.abort();
             Ok(())
         }
     };
@@ -289,10 +356,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
     drop(catalog);
+    // The relay was the bus's publisher: with it gone the ledger's subscriber sees the end of its queues and
+    // the drain below lands every record the channel held before the router task, the last writer of the
+    // registry, shuts down.
+    drop(bus);
+    drop(live);
     // The ledger's event mirror reads routing state, so it stops before the task that answers it.
     if let Err(error) = ledger.shutdown().await {
         tracing::warn!(%error, "the ledger task had already stopped");
     }
+    drop(ledger_db);
     // The router task is the last writer: a pin or a cooldown the relay acknowledged reaches the store while
     // this waits, rather than dying with the process.
     if let Err(error) = router_task.shutdown().await {
@@ -300,83 +373,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     }
     drop(pool);
     served
-}
-
-/// What the admin reads observation from: the bus, the ledger, the live feed, the metrics registry, the
-/// price table, and the settings an operator reads back.
-struct Observation {
-    bus: Bus,
-    ledger: Ledger,
-    live: LiveFeed,
-    metrics: Arc<Metrics>,
-    pricing: Arc<Pricing>,
-    settings: Arc<SettingsView>,
-}
-
-/// The ledger lives in `ledger.sqlite` beside the store. The relay is not handed this bus, so what the
-/// ledger holds is what its event mirror copies out of the store's change log.
-fn observation(
-    config: &Config,
-    profile: &'static phoebis_profile::Profile,
-    store: Arc<Store>,
-    router: phoebis_routing::RouterHandle,
-    clock: Clock,
-) -> anyhow::Result<Observation> {
-    let bus = Bus::new();
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
-    let metrics = Arc::new(Metrics::new());
-    let path = config.storage.path.with_file_name("ledger.sqlite");
-    let db = Arc::new(
-        LedgerDb::open(&path)
-            .with_context(|| format!("opening the ledger at {}", path.display()))?,
-    );
-    let ledger_config = LedgerConfig::default();
-    let (retention_days, sample_retention_days, quota_poll_interval) = (
-        ledger_config.retention_days,
-        ledger_config.sample_retention_days,
-        ledger_config.quota_poll_interval,
-    );
-    let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
-    let ledger = phoebis_ledger::spawn(
-        db,
-        pricing.clone(),
-        store,
-        None,
-        &bus,
-        router,
-        clock,
-        metrics.clone(),
-        ledger_config,
-    );
-    let settings = Arc::new(SettingsView {
-        admin_listen: config.admin.listen.to_string(),
-        admin_origin: config.admin.origin.clone(),
-        body_capture_max_hours: config.stats.body_capture_max_hours,
-        catalog_sync_interval_seconds: config.routing.catalog_sync_interval_seconds,
-        cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
-        ledger_path: path.display().to_string(),
-        max_attempts: config.routing.max_attempts,
-        // This build serves no metrics listener, so the view names no address for one.
-        metrics_listen: String::new(),
-        pricing_path: None,
-        profile: profile.name.to_string(),
-        proxy_listen: config.proxy.listen.to_string(),
-        quota_poll_interval_seconds: quota_poll_interval.as_secs(),
-        quota_sample_retention_days: sample_retention_days,
-        retention_days,
-        session_expire_after_seconds: config.sessions.expire_after_seconds,
-        storage_path: config.storage.path.display().to_string(),
-        usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
-        usage_refresh_concurrency: config.usage.refresh_concurrency,
-    });
-    Ok(Observation {
-        bus,
-        ledger,
-        live,
-        metrics,
-        pricing,
-        settings,
-    })
 }
 
 /// One listener's outcome: the task either panicked or the serve future itself failed.

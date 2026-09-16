@@ -14,6 +14,12 @@ compatibility:
   usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:8317
+quota:
+  # How often every OAuth account's usage endpoint is polled for a quota sample, at least 900 s. Response
+  # headers sample active accounts for free; the poll fills idle gaps and is the only source of extra-usage
+  # credit totals.
+  poll_interval_seconds: 3600
+  sample_retention_days: 30
 routing:
   # How often the router re-discovers each account's served models, jittered so accounts do not sync
   # together.
@@ -24,8 +30,16 @@ routing:
 sessions:
   expire_after_seconds: 86400
 stats:
-  # The longest a key or pool may keep captured bodies; the capture itself arrives with the statistics build.
+  # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
+  ledger_path: ./data/ledger.sqlite
+  # Prometheus text format at /metrics; bind it where your scraper can reach it.
+  metrics_listen: 127.0.0.1:9464
+  # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
+  # fine.
+  pricing_path: ./pricing.yaml
+  # Raw requests, attempts, and events are purged past this; hourly rollups are kept for 400 days.
+  retention_days: 90
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite

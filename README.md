@@ -2,7 +2,8 @@
 
 A local relay for Claude Code. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the request
 on the wire to Anthropic, under credentials it holds itself. The `phoebis` process serves
-two listeners: the proxy that relays `/v1/messages`, and the admin API that pairs accounts and reports usage.
+three listeners: the proxy that relays `/v1/messages`, the admin API that pairs accounts and reports usage and
+statistics, and a metrics endpoint in Prometheus text format.
 
 ## Build
 
@@ -16,7 +17,7 @@ The binary is `target/release/phoebis`.
 
 | Command | Effect |
 | --- | --- |
-| `phoebis --config ./config.yaml` | Serves both listeners until Ctrl-C or SIGTERM, then drains for up to 30 seconds. |
+| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains for up to 30 seconds. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
 | `phoebis --version` | Prints the version. |
 
@@ -51,14 +52,23 @@ startup, and the resolved path is logged when the store opens.
 `storage.encryption_key_file` points at a separate file holding 32 raw bytes or 64 hex characters. It seals every
 credential in the database, so keep it outside any backup that carries the database, which is useless without it.
 
+`stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used as
+given, the parent directory is created at mode 0700 and the file at 0600, and a path that names no file, or no
+directory to put it in, is rejected at startup. It runs in WAL mode with `synchronous = NORMAL`, so a crash loses at
+most the last transactions before a checkpoint. The ledger is best effort by design: records reach it over a bounded
+channel, a full channel drops them, and a `ledger_gap` event records how many were lost. Captured bodies live in this
+file, which makes it as sensitive as the registry even though it holds no credential, so give it the same care.
+
 ### Not yet configurable
 
-Five groups of limits are compiled into the binary, and the file has no key for any of them:
+Seven groups of limits are compiled into the binary, and the file has no key for any of them:
 
 | Limit | Value |
 | --- | --- |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
 | Drain window on shutdown | 30 seconds for requests still in flight. |
+| Ledger channel | 4,096 records; a full channel drops. |
+| Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, 32 MiB request cap. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | Upstream pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
@@ -199,6 +209,61 @@ When nothing in the pool can serve the request, the answer says whether waiting 
 limited, `phoebis` answers 429 with `retry-after` and the unified rate-limit headers, shaped as a single rate-limited
 account would answer, so the client's automatic continue arms on it. For anything only an operator can clear, such as
 a pool whose accounts are all paused, it answers 503.
+
+## Statistics
+
+Every relayed request lands in the ledger at `stats.ledger_path`: one row for the request the client sent, with the
+key, the model, the outcome, and the timings, and one row per upstream attempt it took, with the account, the outcome,
+the token counts, and the time to first byte. Finished requests are folded into hourly rollups, and those rollups are
+what the analytics routes report, so a long range costs one row per hour instead of one per request.
+
+Quota samples arrive from two sources. Every response head of an OAuth account carries the unified rate-limit headers,
+which cost nothing to read and cover whichever accounts are in use; the poll of the usage endpoint, every
+`quota.poll_interval_seconds`, fills the gaps left by idle accounts and is the only source of extra-usage credit
+totals.
+
+Every attempt is stamped with a cost estimate at list prices per million tokens. It is an estimate rather than a bill:
+tier and batch modifiers are not known here, and subscription quota is the rate-limit windows, never this number. The
+shipped price table is used unless `stats.pricing_path` names a file, and a price import confirmed through the admin
+API wins over both. An attempt on a model the table does not price carries no estimate.
+
+Body capture is off until a key or a pool asks for it. A capture holds the request and response bodies of that key or
+pool in the ledger for the hours it names, and each captured body is dropped when those hours run out.
+`stats.body_capture_max_hours` is the ceiling on what a key or pool may ask for, because the bodies are prompts and
+how long they are kept is the operator's call rather than the caller's.
+
+Requests, attempts, and events are purged once they are older than `stats.retention_days`, quota samples once they are
+older than `quota.sample_retention_days`, and the hourly rollups are kept for 400 days.
+
+### Metrics
+
+`stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else. It speaks plain HTTP and asks for
+no credential, so bind it where only your scraper can reach it.
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `phoebis_account_cooldown_seconds` | gauge | `account`, `scope` |
+| `phoebis_account_overage_in_use` | gauge | `account` |
+| `phoebis_account_ratelimit_utilization` | gauge | `account`, `window` |
+| `phoebis_attempts_total` | counter | `account`, `model`, `outcome` |
+| `phoebis_bus_dropped_total` | counter | `subscriber` |
+| `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
+| `phoebis_ledger_dropped_total` | counter | `table` |
+| `phoebis_pins_active` | gauge | `pool` |
+| `phoebis_pricing_unknown_model_total` | counter | none |
+| `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
+| `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
+| `phoebis_upstream_ttfb_seconds` | histogram | `model` |
+
+The `model` label is bounded by the price table: a model the table prices keeps its id and every other model is
+reported as `other`, so a downstream caller cannot grow the label set by naming models.
+
+### Live feed
+
+`GET /admin/live` upgrades to a WebSocket that reports requests while they run, and `GET /admin/live/snapshot` returns
+the same entries for a past window. Both need an admin session like every other admin route. A session logged in with
+the viewer secret sees no request or response preview on the WebSocket, and the snapshot carries no preview whatever
+the role.
 
 ## Status
 
