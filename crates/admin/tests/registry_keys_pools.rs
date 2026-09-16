@@ -59,6 +59,68 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
+            r#"{"id":"p2","label":"x","strategy":"least_utilized","select_below_utilization":1.5}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(post(&app, "/admin/pools", r#"{"id":"p2","label":"x","strategy":"least_utilized","select_below_utilization":-0.1}"#, Some(&cookie)).await.status(), 400);
+    let refreshing = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"p3","label":"x","strategy":"earliest_refresh","select_below_utilization":1}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refreshing.status(),
+        201,
+        "the bounds are closed as they are for the migrate threshold"
+    );
+    let body = json(refreshing).await;
+    assert_eq!(
+        (
+            body["strategy"].as_str(),
+            body["select_below_utilization"].as_f64()
+        ),
+        (Some("earliest_refresh"), Some(1.0))
+    );
+    let lowered = patch(
+        &app,
+        "/admin/pools/p3",
+        r#"{"select_below_utilization":0}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(lowered.status(), 200);
+    assert_eq!(
+        json(lowered).await["select_below_utilization"].as_f64(),
+        Some(0.0)
+    );
+    let cleared = patch(
+        &app,
+        "/admin/pools/p3",
+        r#"{"select_below_utilization":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(cleared.status(), 200);
+    assert!(
+        json(cleared).await["select_below_utilization"].is_null(),
+        "and null turns the filter off again"
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/p3", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
             r#"{"id":"p2","label":"x","strategy":"least_utilized","body_capture_hours":100}"#,
             Some(&cookie)
         )

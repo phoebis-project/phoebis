@@ -41,6 +41,8 @@ struct PoolInput {
     #[serde(default, deserialize_with = "double_option")]
     migrate_above_utilization: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
+    select_below_utilization: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "double_option")]
     default_allowed_models: Option<Option<Vec<String>>>,
     #[serde(default)]
     keepalive: Option<Value>,
@@ -78,12 +80,13 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(strategy) = &input.strategy {
         row.strategy = match strategy.as_str() {
-            "priority_random" => Strategy::PriorityRandom,
+            "earliest_refresh" => Strategy::EarliestRefresh,
             "least_utilized" => Strategy::LeastUtilized,
+            "priority_random" => Strategy::PriorityRandom,
             _ => {
                 return Err(failure(
                     StatusCode::BAD_REQUEST,
-                    "strategy must be priority_random or least_utilized",
+                    "strategy must be earliest_refresh, least_utilized, or priority_random",
                 ))
             }
         };
@@ -118,6 +121,15 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             ));
         }
         row.migrate_above_utilization = threshold;
+    }
+    if let Some(threshold) = input.select_below_utilization {
+        if threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "select_below_utilization is between 0 and 1",
+            ));
+        }
+        row.select_below_utilization = threshold;
     }
     if let Some(list) = &input.default_allowed_models {
         row.default_allowed_models = list
@@ -189,6 +201,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
+        select_below_utilization: None,
         default_allowed_models: None,
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
@@ -330,7 +343,8 @@ pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, Stor
     Ok(json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
         "strategy": row.strategy.as_str(), "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
-        "migrate_above_utilization": row.migrate_above_utilization, "default_allowed_models": row.default_allowed_models,
+        "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
+        "default_allowed_models": row.default_allowed_models,
         "keepalive": serde_json::from_str::<Value>(&row.keepalive_json).unwrap_or(Value::Object(Default::default())),
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority })).collect::<Vec<_>>(),
