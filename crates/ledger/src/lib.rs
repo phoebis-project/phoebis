@@ -5,6 +5,7 @@ mod assemble;
 mod db;
 mod histogram;
 mod pricing;
+mod quota;
 mod record;
 mod rollup;
 mod schema;
@@ -17,6 +18,7 @@ pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
     PriceTable, Pricing,
 };
+pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,

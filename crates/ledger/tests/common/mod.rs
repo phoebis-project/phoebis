@@ -66,7 +66,20 @@ pub async fn harness(
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    harness_on(store, db, up, accounts, capture, config).await
+    harness_on(store, db, up, accounts, capture, config, false).await
+}
+
+/// `harness` with a `UsageService` built over the same manager and control connector, so `spawn` starts the
+/// quota poll instead of skipping it.
+pub async fn harness_with_poll(
+    up: &FakeUpstream,
+    accounts: &[Account],
+    capture: (u32, Option<u32>),
+    config: LedgerConfig,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    harness_on(store, db, up, accounts, capture, config, true).await
 }
 
 pub async fn harness_on(
@@ -76,6 +89,7 @@ pub async fn harness_on(
     accounts: &[Account],
     capture: (u32, Option<u32>),
     config: LedgerConfig,
+    with_poll: bool,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -218,10 +232,22 @@ pub async fn harness_on(
     ));
     let manager = Arc::new(phoebis_oauth::CredentialManager::new(
         store.clone(),
-        control,
+        control.clone(),
         p,
         clock.clone(),
     ));
+    // The quota poll's own `UsageService`, over the same manager and control connector, so a fetch it makes
+    // reaches the same fake upstream every other control call in this harness does.
+    let usage = with_poll.then(|| {
+        Arc::new(phoebis_oauth::UsageService::new(
+            manager.clone(),
+            control,
+            p,
+            Duration::from_secs(60),
+            4,
+            clock.clone(),
+        ))
+    });
     let pool = Arc::new(phoebis_transport::pool::Pool::new(
         b.build(),
         4,
@@ -240,7 +266,15 @@ pub async fn harness_on(
     ));
     let bus = Bus::new();
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
-    let ledger = spawn(db.clone(), pricing, &bus, clock.clone(), config);
+    let ledger = spawn(
+        db.clone(),
+        pricing,
+        store.clone(),
+        usage,
+        &bus,
+        clock.clone(),
+        config,
+    );
     let limits = Limits {
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),

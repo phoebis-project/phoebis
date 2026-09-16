@@ -12,7 +12,11 @@ use phoebis_relay::UnifiedHeaders;
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
-use crate::record::{AttemptRecord, BodyRecord, EventRecord, RequestRecord};
+use crate::quota::samples_from_head;
+use crate::record::{
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
+    RequestRecord,
+};
 
 /// Well past the relay's own ten-minute idle wait: an entry nothing has touched for this long belongs to a
 /// request whose completion the bus dropped. Measured from the last event or chunk, not from observation, so
@@ -29,11 +33,18 @@ pub enum Record {
         attempts: Vec<AttemptRecord>,
         bodies: Option<BodyRecord>,
     },
+    Samples {
+        quota: Vec<QuotaSampleRecord>,
+        extra: Option<ExtraUsageSampleRecord>,
+    },
 }
 
 pub(crate) struct InFlight {
     pub observed: RequestObserved,
     pub attempts: Vec<AttemptRecord>,
+    /// The account kind selected for each attempt, so a response head can tell whether the account it
+    /// answered for is one the quota sampler cares about without re-walking `attempts`.
+    pub account_kinds: HashMap<u8, String>,
     /// The response text assembled from chunks while the request's key captures bodies.
     pub response_body: Option<Vec<u8>>,
     /// The chunk index expected next; a chunk past it means one was dropped at the bus.
@@ -70,6 +81,7 @@ impl Assembler {
                     InFlight {
                         observed,
                         attempts: Vec::new(),
+                        account_kinds: HashMap::new(),
                         response_body: None,
                         next_index: 0,
                         gapped: false,
@@ -86,6 +98,9 @@ impl Assembler {
                 if let Some(previous) = entry.attempts.last_mut() {
                     previous.finished_at = Some(selected.started_at);
                 }
+                entry
+                    .account_kinds
+                    .insert(selected.attempt, selected.account_kind.clone());
                 entry.attempts.push(attempt_row(&selected));
                 Vec::new()
             }
@@ -102,6 +117,23 @@ impl Assembler {
                     return Vec::new();
                 };
                 fill_head(attempt, &head);
+                if entry
+                    .account_kinds
+                    .get(&head.attempt)
+                    .is_some_and(|k| k == "oauth")
+                {
+                    let account_id = entry
+                        .attempts
+                        .iter()
+                        .find(|a| a.attempt as u8 == head.attempt)
+                        .map(|a| a.account_id.clone())
+                        .unwrap_or_default();
+                    let (quota, extra) =
+                        samples_from_head(&account_id, &head.headers, head.observed_at);
+                    if !quota.is_empty() || extra.is_some() {
+                        return vec![Record::Samples { quota, extra }];
+                    }
+                }
                 Vec::new()
             }
             Event::ResponseChunk(chunk) => self.chunk(&chunk),
@@ -431,13 +463,18 @@ mod tests {
         let mut a = Assembler::new(clock());
         assert!(a.observe(observed("r1", Some("k"))).is_empty());
         assert!(a.observe(selected("r1", 1, "a", 1_010)).is_empty());
-        assert!(a
-            .observe(head("r1", 1, 429, AttemptOutcome::RateLimited, 1_060))
-            .is_empty());
+        // The fixture head carries unified quota headers, so an oauth attempt's head now also yields a sample.
+        assert!(matches!(
+            a.observe(head("r1", 1, 429, AttemptOutcome::RateLimited, 1_060))
+                .as_slice(),
+            [Record::Samples { .. }]
+        ));
         assert!(a.observe(selected("r1", 2, "b", 1_100)).is_empty());
-        assert!(a
-            .observe(head("r1", 2, 200, AttemptOutcome::Succeeded, 1_250))
-            .is_empty());
+        assert!(matches!(
+            a.observe(head("r1", 2, 200, AttemptOutcome::Succeeded, 1_250))
+                .as_slice(),
+            [Record::Samples { .. }]
+        ));
         assert_eq!(a.in_flight(), 1);
         let Some(Record::Request {
             request,

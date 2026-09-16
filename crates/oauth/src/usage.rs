@@ -11,7 +11,7 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use crate::exchange::{control_request, ControlKind, OauthError};
+use crate::exchange::{control_request, parse_profile, ControlKind, OauthError, ProfileResponse};
 use crate::manager::{retry_after_ms, Clock, CredentialManager};
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
@@ -314,6 +314,64 @@ impl UsageService {
         };
         shared.await.map_err(UsageError::Unavailable)
     }
+
+    /// The profile document, fetched now: the usage cache's `not_before` gates it and a 429 here arms that
+    /// gate, so the two endpoints share one Retry-After per account.
+    pub async fn profile(&self, account_id: &str) -> Result<ProfileResponse, UsageError> {
+        let now = (self.inner.clock)();
+        if let Some(entry) = self
+            .inner
+            .cache
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(account_id)
+        {
+            if now < entry.not_before {
+                return Err(UsageError::Unavailable(
+                    "the account is waiting out a Retry-After".into(),
+                ));
+            }
+        }
+        let token = self
+            .inner
+            .manager
+            .acquire(account_id)
+            .await
+            .map_err(|error| UsageError::Unavailable(format!("acquire: {error}")))?;
+        let permit = self
+            .inner
+            .semaphore
+            .acquire()
+            .await
+            .expect("usage semaphore is never closed");
+        let req = control_request(
+            self.inner.profile,
+            ControlKind::Profile,
+            Some(token.secret.expose()),
+            None,
+        );
+        let host = ControlKind::Profile.host(self.inner.profile);
+        let sent = self.inner.control.send(req, &host, FETCH_TIMEOUT).await;
+        drop(permit);
+        let (head, body) =
+            sent.map_err(|error| UsageError::Unavailable(format!("transport: {error}")))?;
+        if head.status == 429 {
+            let until = retry_after_ms(&head, now, MAX_RETRY_AFTER_MS)
+                .map(|ms| now + ms)
+                .unwrap_or(now);
+            self.inner.hold_until(account_id, until);
+            return Err(UsageError::Unavailable(
+                "profile request rate limited".into(),
+            ));
+        }
+        if head.status != 200 {
+            return Err(UsageError::Unavailable(format!(
+                "profile request rejected with status {}",
+                head.status
+            )));
+        }
+        parse_profile(&body).map_err(|error| UsageError::Unavailable(format!("parse: {error}")))
+    }
 }
 
 impl Inner {
@@ -481,6 +539,32 @@ impl Inner {
                     },
                 );
                 Ok(snapshot)
+            }
+        }
+    }
+
+    /// Arms the per-account hold without touching the snapshot, so a usage fetch after this waits as a usage
+    /// 429 would have made it wait.
+    fn hold_until(&self, account_id: &str, until: i64) {
+        let mut cache = self.cache.lock().expect(LOCK_POISONED);
+        match cache.get_mut(account_id) {
+            Some(entry) => entry.not_before = entry.not_before.max(until),
+            None => {
+                let generation = self.lifecycle_generation(account_id).unwrap_or_default();
+                cache.insert(
+                    account_id.to_string(),
+                    CachedEntry {
+                        fetched_at: 0,
+                        identity_generation: generation,
+                        not_before: until,
+                        snapshot: empty_snapshot(
+                            account_id,
+                            Some(generation),
+                            0,
+                            "no usage fetched yet".into(),
+                        ),
+                    },
+                );
             }
         }
     }

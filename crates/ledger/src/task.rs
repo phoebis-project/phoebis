@@ -6,12 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
-use phoebis_oauth::Clock;
+use phoebis_oauth::{Clock, UsageService};
+use phoebis_store::Store;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
-use crate::db::{insert_event_in, insert_request_in};
+use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::pricing::{price_attempts, Pricing};
+use crate::quota::QuotaPoll;
 use crate::record::EventRecord;
 use crate::{LedgerDb, LedgerError};
 
@@ -23,11 +25,14 @@ const BATCH: usize = 64;
 /// How often the assembler ages out entries without a completion.
 const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
 
+const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior panic";
+
 #[derive(Clone, Debug)]
 pub struct LedgerConfig {
     pub retention_days: u32,
     pub sample_retention_days: u32,
     pub purge_interval: Duration,
+    pub quota_poll_interval: Duration,
 }
 
 impl Default for LedgerConfig {
@@ -36,6 +41,7 @@ impl Default for LedgerConfig {
             retention_days: 90,
             sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
+            quota_poll_interval: Duration::from_secs(3_600),
         }
     }
 }
@@ -63,6 +69,9 @@ pub struct Ledger {
     stop: Arc<watch::Sender<bool>>,
     /// Taken by the first `shutdown`; the writer resolves it once the channel is drained.
     done: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+    /// Background tasks the ledger owns beyond the writer, such as the quota poll. Aborted by `shutdown`
+    /// before the stop signal goes out, so none of them can enqueue into a channel that is closing.
+    tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Ledger {
@@ -89,15 +98,21 @@ impl Ledger {
     /// land what it holds. A record offered after the close counts as a drop, which is what the spec's "at
     /// most the channel's contents" allows for.
     pub async fn shutdown(self) -> Result<(), LedgerGone> {
+        for task in self.tasks.lock().expect(TASKS_POISONED).drain(..) {
+            task.abort();
+        }
         let done = self.done.lock().await.take().ok_or(LedgerGone)?;
         let _ = self.stop.send(true);
         done.await.map_err(|_| LedgerGone)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
+    store: Arc<Store>,
+    usage: Option<Arc<UsageService>>,
     bus: &Bus,
     clock: Clock,
     config: LedgerConfig,
@@ -112,7 +127,19 @@ pub fn spawn(
         tx,
         stop: Arc::new(stop),
         done: Arc::new(Mutex::new(Some(done_rx))),
+        tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
+    if let Some(usage) = usage {
+        let poll = QuotaPoll::spawn(
+            db.clone(),
+            store,
+            usage,
+            ledger.clone(),
+            clock.clone(),
+            config.quota_poll_interval,
+        );
+        ledger.tasks.lock().expect(TASKS_POISONED).push(poll);
+    }
     let subscriber = bus.subscribe("ledger");
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
@@ -275,6 +302,9 @@ async fn land(
                             &attempts,
                             previous.as_ref().map(|(r, a)| (r, a.as_slice())),
                         )?;
+                    }
+                    Record::Samples { quota, extra } => {
+                        insert_samples_in(&tx, quota, extra.as_ref())?
                     }
                 }
             }

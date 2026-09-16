@@ -135,6 +135,59 @@ mod service {
         UsageService::new(manager, control, p, cache_ttl, 4, clock)
     }
 
+    /// A service over a fake control plane that answers `/api/oauth/profile` with the profile fixture, for the
+    /// account `business`. No `/api/oauth/usage` rule is configured: the profile test never needs a successful
+    /// usage fetch, only that a fetch attempted while the account is held fails.
+    async fn service_with_fake() -> (UsageService, FakeUpstream, Arc<Store>) {
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Profile).to_vec(),
+            },
+        }])
+        .await;
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        store
+            .insert_account(&AccountRow {
+                id: "business".into(),
+                kind: AccountKind::Oauth,
+                label: "business".into(),
+                enabled: true,
+                identity: Some(phoebis_store::Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "test@example.invalid".into(),
+                    organization_uuid: None,
+                }),
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        store
+            .commit_credentials(
+                "business",
+                1,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("rt")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let service = service_for(&up, store.clone(), Duration::from_secs(60), &now);
+        (service, up, store)
+    }
+
     fn rate_limited(retry_after_seconds: &str) -> Rule {
         Rule {
             path_prefix: "/api/oauth/usage".into(),
@@ -397,5 +450,47 @@ mod service {
             "the last good windows are what is still on offer"
         );
         up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_profile_is_fetched_on_request_under_the_usage_endpoints_limits() {
+        let (service, up, store) = service_with_fake().await;
+        let profile = service.profile("business").await.unwrap();
+        assert_eq!(profile.email, "test@example.invalid");
+        assert_eq!(
+            profile.raw["organization"]["rate_limit_tier"], "default_claude_max_5x",
+            "the whole document travels"
+        );
+        assert_eq!(
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
+                .count(),
+            1
+        );
+        store
+            .set_profile_json("business", &profile.raw.to_string())
+            .unwrap();
+        assert_eq!(
+            store.profile_json("business").unwrap().as_deref(),
+            Some(profile.raw.to_string().as_str())
+        );
+        // A 429 on the profile endpoint arms the same hold the usage fetch honours.
+        up.set_rule_after(
+            0,
+            "/api/oauth/profile",
+            Respond::Json {
+                status: 429,
+                headers: vec![("retry-after".into(), "3600".into())],
+                body: b"{}".to_vec(),
+            },
+        );
+        assert!(service.profile("business").await.is_err());
+        service.invalidate("business");
+        let usage = service.snapshot("business").await.unwrap();
+        assert!(
+            usage.error.is_some(),
+            "the usage fetch waits out the profile endpoint's Retry-After"
+        );
     }
 }

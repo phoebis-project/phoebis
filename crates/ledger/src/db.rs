@@ -6,7 +6,10 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
-use crate::record::{AttemptRecord, BodyRecord, EventRecord, RequestRecord};
+use crate::record::{
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
+    RequestRecord,
+};
 use crate::{schema, LedgerError};
 
 const LOCK_POISONED: &str = "ledger connection mutex poisoned by a prior panic";
@@ -162,6 +165,101 @@ impl LedgerDb {
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
+
+    pub fn insert_samples(
+        &self,
+        quota: &[QuotaSampleRecord],
+        extra: Option<&ExtraUsageSampleRecord>,
+    ) -> Result<(), LedgerError> {
+        self.write(|conn| insert_samples_in(conn, quota, extra))
+    }
+
+    pub fn quota_samples(
+        &self,
+        account_id: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare("SELECT account_id, bucket, window, utilization, reset_at, source FROM quota_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY window, bucket")?;
+            let rows = stmt.query_map(params![account_id, from, to], |r| {
+                Ok(QuotaSampleRecord {
+                    account_id: r.get(0)?,
+                    bucket: r.get(1)?,
+                    window: r.get(2)?,
+                    utilization: r.get(3)?,
+                    reset_at: r.get(4)?,
+                    source: r.get(5)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    pub fn extra_usage_samples(
+        &self,
+        account_id: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket")?;
+            let rows = stmt.query_map(params![account_id, from, to], |r| {
+                Ok(ExtraUsageSampleRecord {
+                    account_id: r.get(0)?,
+                    bucket: r.get(1)?,
+                    is_enabled: r.get(2)?,
+                    in_use: r.get(3)?,
+                    monthly_limit: r.get(4)?,
+                    used_credits: r.get(5)?,
+                    utilization: r.get(6)?,
+                    currency: r.get(7)?,
+                    disabled_reason: r.get(8)?,
+                    overage_reset: r.get(9)?,
+                    source: r.get(10)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+}
+
+pub(crate) fn insert_samples_in(
+    conn: &Connection,
+    quota: &[QuotaSampleRecord],
+    extra: Option<&ExtraUsageSampleRecord>,
+) -> Result<(), LedgerError> {
+    for q in quota {
+        // A header sample is the newest truth for its bucket; a poll only fills a bucket nothing else wrote.
+        let verb = if q.source == "header" {
+            "INSERT OR REPLACE"
+        } else {
+            "INSERT OR IGNORE"
+        };
+        conn.execute(
+            &format!(
+                "{verb} INTO quota_samples (account_id, bucket, window, utilization, reset_at, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+            ),
+            params![q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source],
+        )?;
+    }
+    if let Some(e) = extra {
+        let verb = if e.source == "header" {
+            "INSERT OR REPLACE"
+        } else {
+            "INSERT OR IGNORE"
+        };
+        conn.execute(
+            &format!(
+                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            ),
+            params![
+                e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits,
+                e.utilization, e.currency, e.disabled_reason, e.overage_reset, e.source,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to

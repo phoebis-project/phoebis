@@ -417,6 +417,33 @@ impl Store {
         .map_err(StoreError::from)
     }
 
+    /// The profile write does not bump `revision`: it changes nothing a selection or a credential fence reads.
+    pub fn set_profile_json(&self, id: &str, json: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        if conn.execute(
+            "UPDATE accounts SET profile_json = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, json, jiff::Timestamp::now().as_millisecond()],
+        )? == 0
+        {
+            return Err(StoreError::AccountNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn profile_json(&self, id: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        // `.optional()` catches a missing row; the column itself is nullable before the first poll, so the
+        // row-level get is an `Option` too and the two collapse into one `None`.
+        conn.query_row(
+            "SELECT profile_json FROM accounts WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(StoreError::from)
+    }
+
     pub fn catalog_status(&self, id: &str) -> Result<(Option<i64>, Option<String>), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
