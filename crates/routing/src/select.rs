@@ -78,6 +78,14 @@ fn window_of(canonical_model: &str) -> Window {
     }
 }
 
+/// Whether an account can still serve a request for the model-scoped window. No sample, or a sample that never
+/// read that window, counts as allowance, the way `least_utilized` reads an unsampled account as a 0.
+fn holds_fable_allowance(state: &RoutingState, account_id: &str) -> bool {
+    state
+        .sample(account_id)
+        .is_none_or(|s| s.fable.unwrap_or(0.0) < 1.0)
+}
+
 pub fn select(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -183,6 +191,8 @@ pub fn select(
         return (SelectResult::Exhausted(exhaustion), writes);
     }
 
+    let window = window_of(&request.canonical_model);
+
     // Step 4: the migrate rule, for a portable request with a live pin.
     let mut migrated = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
@@ -225,6 +235,15 @@ pub fn select(
                 reason = reason.or(Some(MigrateReason::Utilization));
             }
         }
+        // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
+        // releasing the pin for a set of them would strand the request on nothing.
+        if window == Window::Fable {
+            destination = destination.map(|set| {
+                set.into_iter()
+                    .filter(|c| holds_fable_allowance(state, &c.account_id))
+                    .collect()
+            });
+        }
         if let Some(set) = destination.filter(|set| !set.is_empty()) {
             state.remove_pin(&current.key_id, &current.session_id, &current.model);
             writes.push(StateWrite::DeletePin(
@@ -257,14 +276,11 @@ pub fn select(
 
     // Step 6: a model with its own window needs allowance left in it, the depletion threshold prefers the
     // accounts under it, then tiers and the strategy inside the first non-empty one.
-    let window = window_of(&request.canonical_model);
     if window == Window::Fable {
-        let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) =
-            selection_set.iter().copied().partition(|c| {
-                state
-                    .sample(&c.account_id)
-                    .is_none_or(|s| s.fable.unwrap_or(0.0) < 1.0)
-            });
+        let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
+            .iter()
+            .copied()
+            .partition(|c| holds_fable_allowance(state, &c.account_id));
         obstacles.extend(spent.iter().filter_map(|c| {
             state
                 .sample(&c.account_id)

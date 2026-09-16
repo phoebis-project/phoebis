@@ -758,6 +758,83 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
 }
 
 #[test]
+fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() {
+    let s = snapshot(Pool {
+        strategy: Strategy::LeastUtilized,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.1, 0.1, 1));
+    st.record_sample("b", sample(0.5, 0.1, 1));
+    st.record_sample("c", sample(0.6, 0.1, 1));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-fable-5-1", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a"
+    );
+    st.record_overage("a", overage(true, 1_500, Some(9_000)));
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 2), 0.5, Some(9 * HOUR)));
+    st.record_sample("b", with_fable(sample(0.5, 0.1, 2), 1.0, Some(9 * HOUR)));
+    st.record_sample("c", with_fable(sample(0.6, 0.1, 2), 1.0, Some(9 * HOUR)));
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-fable-5-1", true, &[], 2_000),
+        &mut rng(),
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!("expected the pin to be renewed, got {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "a destination with no fable allowance left is no destination at all"
+    );
+    assert_eq!(
+        st.pins()
+            .iter()
+            .find(|p| p.session_id == "s1" && p.model == "claude-fable-5-1")
+            .map(|p| p.account_id.as_str()),
+        Some("a"),
+        "and the pin the migration would have moved is still there"
+    );
+    assert!(
+        !writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))),
+        "so nothing deleted it on the way"
+    );
+    st.record_sample("b", with_fable(sample(0.5, 0.1, 3), 0.2, Some(9 * HOUR)));
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-fable-5-1", true, &[], 3_000),
+        &mut rng(),
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!("expected a migration, got {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Overage)),
+        "one sibling with allowance left is enough to move the pin"
+    );
+    assert!(
+        writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))),
+        "and that migration releases the old pin"
+    );
+}
+
+#[test]
 fn a_non_portable_request_with_a_blocked_pin_gets_that_accounts_exhaustion_and_selects_normally_without_one(
 ) {
     let s = snapshot(Pool::default());
