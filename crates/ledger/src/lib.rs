@@ -1,17 +1,21 @@
 //! The statistics ledger: `ledger.sqlite`, written by one task from what the bus and the router publish, and
 //! read by the admin routes and the metrics listener.
 
+mod assemble;
 mod db;
 mod histogram;
 mod record;
 mod schema;
+mod task;
 
+pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use db::LedgerDb;
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
 };
+pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {

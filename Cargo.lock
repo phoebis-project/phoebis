@@ -357,11 +357,17 @@ dependencies = [
 name = "phoebis-ledger"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytes",
  "phoebis-bus",
  "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
  "phoebis-routing",
  "phoebis-store",
+ "phoebis-transport",
+ "fake-upstream",
+ "http-body-util",
  "jiff",
  "rand",
  "rusqlite",
@@ -371,6 +377,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
 ]
 

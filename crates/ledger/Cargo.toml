@@ -9,8 +9,10 @@ version.workspace = true
 bytes = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-oauth = { path = "../oauth" }
+phoebis-relay = { path = "../relay" }
 phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
+phoebis-transport = { path = "../transport" }
 jiff = { workspace = true }
 rand = { workspace = true }
 rusqlite = { workspace = true }
@@ -22,4 +24,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
+phoebis-profile = { path = "../profile" }
+fake-upstream = { path = "../../tests/fake_upstream" }
+http-body-util = { workspace = true }
 tempfile = { workspace = true }
+tower = { workspace = true }
