@@ -266,7 +266,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 .as_deref()
                 .is_none_or(|id| id == a.account_id)
     });
-    let trail_complete = complete.attempt == 0 || serving.is_some();
+    // Every attempt the completion counts has to be on record, not just the one that served: a selection
+    // the bus lost earlier in the trail leaves the row short an attempt and a failover with nothing to say
+    // that the trail is partial.
+    let trail_complete = complete.attempt == 0
+        || (serving.is_some()
+            && (1..=complete.attempt).all(|n| attempts.iter().any(|a| a.attempt as u8 == n)));
     if !trail_complete {
         records.push(gap(&observed.request_id, "attempt_missing", now));
     }
@@ -770,6 +775,39 @@ mod tests {
             attempts[0].outcome.as_str(),
             "canceled",
             "cancelled after the head"
+        );
+    }
+
+    /// A selection lost from the middle of a trail leaves the serving attempt present, so the trail looked
+    /// complete while the attempt count and the failovers behind it were short by one.
+    #[test]
+    fn a_dropped_earlier_selection_is_a_gap_and_keeps_the_completions_attempt_count() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r11", Some("k")));
+        // Attempt 1's selection never arrived; attempt 2's did, and it is the one that served.
+        a.observe(selected("r11", 2, "b", 1_100));
+        a.observe(head("r11", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let records = a.observe(complete("r11", 2, Some("b"), Outcome::Succeeded, 200, None));
+        assert_eq!(records.len(), 2, "the request and a gap");
+        let Record::Event(gap) = &records[0] else {
+            panic!()
+        };
+        let detail: serde_json::Value =
+            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (detail["request_id"].as_str(), detail["reason"].as_str()),
+            (Some("r11"), Some("attempt_missing"))
+        );
+        let Record::Request {
+            request, attempts, ..
+        } = &records[1]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (request.attempts, attempts.len()),
+            (2, 1),
+            "the count is the one the completion names, not the length of the trail that arrived"
         );
     }
 
