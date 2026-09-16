@@ -209,6 +209,7 @@ pub async fn harness_on(
                     enabled: true,
                     identity,
                     lifecycle_generation: 1,
+                    incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
                 })
@@ -219,6 +220,7 @@ pub async fn harness_on(
                     store
                         .commit_credentials(
                             account.id,
+                            1,
                             1,
                             None,
                             None,

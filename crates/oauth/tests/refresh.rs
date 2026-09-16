@@ -112,6 +112,7 @@ fn store_with_account() -> Arc<Store> {
                 organization_uuid: None,
             }),
             lifecycle_generation: 1,
+            incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
         })
@@ -156,6 +157,7 @@ async fn concurrent_acquires_coalesce_into_one_refresh() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,
@@ -209,6 +211,7 @@ async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -254,6 +257,7 @@ async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines()
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,
@@ -320,6 +324,7 @@ async fn a_refreshed_bundle_with_a_foreign_account_uuid_is_rejected() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -361,6 +366,7 @@ async fn a_valid_token_is_returned_without_any_request() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -386,6 +392,7 @@ async fn a_short_lived_token_is_not_permanently_inside_its_own_margin() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,
@@ -415,6 +422,7 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -430,6 +438,7 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
     store
         .commit_credentials(
             "a",
+            1,
             1,
             Some(stale),
             None,
@@ -478,6 +487,7 @@ async fn an_unreachable_upstream_does_not_quarantine() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -505,6 +515,7 @@ async fn an_unreachable_upstream_does_not_quarantine() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             Some(1),
             None,
@@ -540,6 +551,7 @@ async fn a_panicking_refresh_does_not_poison_the_account() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,
@@ -586,6 +598,7 @@ async fn a_server_error_from_the_token_endpoint_backs_off_a_minute() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,
@@ -636,6 +649,7 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -663,6 +677,7 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     store
         .commit_credentials(
             "a",
+            1,
             lifecycle,
             None,
             None,
@@ -725,6 +740,7 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -751,6 +767,7 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             Some(stale),
             None,
@@ -802,6 +819,7 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
             enabled: true,
             identity: None,
             lifecycle_generation: 1,
+            incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
         })
@@ -815,10 +833,10 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
         scopes: "user:profile user:inference".into(),
     };
     let unreadable = store
-        .commit_credentials("a", 1, None, None, &bundle())
+        .commit_credentials("a", 1, 1, None, None, &bundle())
         .unwrap();
     let readable = store
-        .commit_credentials("b", 1, None, None, &bundle())
+        .commit_credentials("b", 1, 1, None, None, &bundle())
         .unwrap();
     store.open_refresh_attempt("a", 1, unreadable).unwrap();
     store.open_refresh_attempt("b", 1, readable).unwrap();
@@ -861,6 +879,7 @@ async fn a_lost_response_after_a_re_pair_quarantines_rather_than_serving_the_rep
         .commit_credentials(
             "a",
             1,
+            1,
             None,
             None,
             &NewBundle {
@@ -884,6 +903,7 @@ async fn a_lost_response_after_a_re_pair_quarantines_rather_than_serving_the_rep
     store
         .commit_credentials(
             "a",
+            1,
             1,
             Some(stale),
             None,
@@ -926,6 +946,7 @@ async fn a_refresh_that_rotates_nothing_answers_that_no_newer_token_exists() {
     store
         .commit_credentials(
             "a",
+            1,
             1,
             None,
             None,

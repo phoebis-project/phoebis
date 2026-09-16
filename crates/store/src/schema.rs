@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS refresh_attempts_pending ON refresh_attempts (account
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. Every statement is
 /// additive so a downgrade can still read the older tables.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5)];
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -92,4 +92,12 @@ CREATE INDEX IF NOT EXISTS registry_changes_target ON registry_changes (target, 
 // verdict formed against a pre-migration row is only stale once something actually changes the account.
 const V4: &str = r#"
 ALTER TABLE accounts ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+"#;
+
+// An id is reusable, so deleting a slot has to leave behind the one thing its replacement cannot inherit:
+// how many times that id has been used. The tombstone outlives the row it names, which is why it is its own
+// table rather than a column, and the cascade that empties every other table of the account leaves it alone.
+const V5: &str = r#"
+ALTER TABLE accounts ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS account_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
 "#;

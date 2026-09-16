@@ -97,6 +97,10 @@ pub struct AccountRow {
     pub enabled: bool,
     pub identity: Option<Identity>,
     pub lifecycle_generation: u64,
+    /// How many times this account id has been used. A deletion leaves the count behind in a tombstone and
+    /// its replacement starts one above it, so work still in flight for the deleted slot cannot land on the
+    /// row that took its id.
+    pub incarnation: u64,
     /// Bumped by every write that changes what a request dispatches with, or what an operator verified an
     /// edit against. A holder that captured the row before a slow step compares it to tell whether the
     /// endpoint and the credential it is about to pair are still the ones it looked at.
@@ -123,6 +127,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
         label: row.get("label")?,
         enabled: row.get("enabled")?,
         identity,
+        incarnation: row.get::<_, i64>("incarnation")? as u64,
         lifecycle_generation: row.get::<_, i64>("lifecycle_generation")? as u64,
         revision: row.get::<_, i64>("revision")? as u64,
         state: row.get("state")?,
@@ -133,7 +138,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, revision, state \
+        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state \
          FROM accounts ORDER BY id",
     )?;
     let rows = stmt.query_map([], row_to_account)?;
@@ -150,7 +155,7 @@ impl Store {
     pub fn account(&self, id: &str) -> Result<Option<AccountRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT id, kind, label, enabled, identity_json, lifecycle_generation, revision, state \
+            "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state \
              FROM accounts WHERE id = ?1",
             params![id],
             row_to_account,
@@ -160,27 +165,30 @@ impl Store {
     }
 
     pub fn insert_account(&self, row: &AccountRow) -> Result<(), StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let identity_json = row
             .identity
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
         let now = jiff::Timestamp::now().as_millisecond();
-        conn.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, revision, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+        tx.execute(
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?9)",
             params![
                 row.id,
                 row.kind,
                 row.label,
                 row.enabled,
                 identity_json,
+                next_incarnation(&tx, &row.id)? as i64,
                 row.lifecycle_generation as i64,
                 row.state,
                 now,
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -346,13 +354,27 @@ impl Store {
         Ok(new_generation as u64)
     }
 
+    /// The row goes, the count of how often its id has been used stays: whatever is still in flight for the
+    /// deleted slot names an incarnation the tombstone has already moved past, so it cannot land on whatever
+    /// takes the id next.
     pub fn delete_account(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = jiff::Timestamp::now().as_millisecond();
-        if tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])? == 0 {
-            return Err(StoreError::AccountNotFound(id.to_string()));
-        }
+        let incarnation: Option<i64> = tx
+            .query_row(
+                "SELECT incarnation FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let incarnation = incarnation.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        tx.execute(
+            "INSERT INTO account_tombstones (id, incarnation) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET incarnation = max(account_tombstones.incarnation, excluded.incarnation)",
+            params![id, incarnation],
+        )?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -419,6 +441,19 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// The incarnation a fresh row under `id` takes: one past the tombstone of whatever held that id before,
+/// and 1 when the id is new.
+pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<u64, StoreError> {
+    let buried: Option<i64> = conn
+        .query_row(
+            "SELECT incarnation FROM account_tombstones WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(buried.unwrap_or(0) as u64 + 1)
 }
 
 /// The revision bump for a write that changes a dispatch input without touching the account row itself.

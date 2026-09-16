@@ -26,6 +26,7 @@ fn seeded(ids: &[&str]) -> Arc<Store> {
                 enabled: true,
                 identity: None,
                 lifecycle_generation: 1,
+                incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
             })
@@ -141,6 +142,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             enabled: true,
             identity: None,
             lifecycle_generation: 1,
+            incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
         })

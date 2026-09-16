@@ -604,6 +604,7 @@ async fn pairing_confirm(
     };
     if let Err(error) = state.store.commit_credentials(
         &row.id,
+        row.incarnation,
         row.lifecycle_generation,
         expected,
         None,

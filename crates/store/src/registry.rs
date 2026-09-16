@@ -653,8 +653,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()?;
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, lifecycle_generation, revision, state, catalog_error, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?9, ?9)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, catalog_error, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?10, ?6, 1, ?7, ?8, ?9, ?9)",
             params![
                 row.id,
                 row.kind,
@@ -664,7 +664,8 @@ impl Store {
                 row.lifecycle_generation as i64,
                 row.state,
                 catalog_error,
-                at
+                at,
+                crate::accounts::next_incarnation(&tx, &row.id)? as i64,
             ],
         )?;
         if let Some(secret) = secret {

@@ -75,6 +75,7 @@ mod service {
                     organization_uuid: None,
                 }),
                 lifecycle_generation: 1,
+                incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
             })
@@ -94,6 +95,7 @@ mod service {
         store
             .commit_credentials(
                 "a",
+                1,
                 1,
                 None,
                 None,
@@ -167,6 +169,7 @@ mod service {
         store
             .commit_credentials(
                 "a",
+                1,
                 1,
                 None,
                 None,

@@ -50,6 +50,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             enabled,
             identity: None,
             lifecycle_generation: 1,
+            incarnation: 1,
             revision: 1,
             state,
         }

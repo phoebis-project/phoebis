@@ -233,9 +233,17 @@ impl CredentialManager {
                     false
                 }
             };
+            // The row standing under this id now, whose incarnation settles whether the attempt is even
+            // about it. An id with no row left has orphaned attempts, which the store settles regardless.
+            let incarnation = self
+                .inner
+                .store
+                .account(&attempt.account_id)?
+                .map_or(0, |account| account.incarnation);
             if superseded {
                 self.inner.store.resolve_refresh_attempt(
                     attempt.id,
+                    incarnation,
                     AttemptOutcome::Failed("superseded".into()),
                 )?;
                 continue;
@@ -245,6 +253,7 @@ impl CredentialManager {
                 .set_state(&attempt.account_id, AccountState::ReauthRequired)?;
             self.inner.store.resolve_refresh_attempt(
                 attempt.id,
+                incarnation,
                 AttemptOutcome::Failed("quarantined at start".into()),
             )?;
             if !recovered.contains(&attempt.account_id) {
@@ -400,7 +409,11 @@ impl Inner {
         };
 
         let Some(refresh_token) = &bundle.refresh_token else {
-            self.resolve(attempt, AttemptOutcome::Failed("no refresh token".into()));
+            self.resolve(
+                attempt,
+                account.incarnation,
+                AttemptOutcome::Failed("no refresh token".into()),
+            );
             self.mark_reauth(&account, bundle.generation);
             return Err(RefreshFailure::ReauthRequired);
         };
@@ -419,6 +432,7 @@ impl Inner {
             Err(error) if transport_before_write(&error) => {
                 self.resolve(
                     attempt,
+                    account.incarnation,
                     AttemptOutcome::Failed(format!("transport: {error}")),
                 );
                 self.arm_backoff(account_id, TRANSIENT_BACKOFF_MS);
@@ -431,6 +445,7 @@ impl Inner {
             Err(error) => {
                 self.resolve(
                     attempt,
+                    account.incarnation,
                     AttemptOutcome::Uncertain(format!("refresh response lost: {error}")),
                 );
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
@@ -447,7 +462,7 @@ impl Inner {
             if head.status == 401
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
-                self.resolve(attempt, AttemptOutcome::Failed(detail));
+                self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
                 self.mark_reauth(&account, bundle.generation);
                 return Err(RefreshFailure::ReauthRequired);
             }
@@ -458,7 +473,11 @@ impl Inner {
             // out every account that reaches its margin while it lasts; the accepted cost is that a rotation
             // hidden behind a 5xx is found later through invalid_grant, which ends in re-pairing either way,
             // and the minute of backoff bounds how fast the dead token can be spent in the meantime.
-            self.resolve(attempt, AttemptOutcome::Failed(detail.clone()));
+            self.resolve(
+                attempt,
+                account.incarnation,
+                AttemptOutcome::Failed(detail.clone()),
+            );
             let asked = retry_after_ms(&head, (self.clock)(), MAX_NOT_BEFORE_MS);
             self.arm_backoff(
                 account_id,
@@ -477,6 +496,7 @@ impl Inner {
             Err(_) => {
                 self.resolve(
                     attempt,
+                    account.incarnation,
                     AttemptOutcome::Uncertain("refresh response could not be read".into()),
                 );
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
@@ -487,7 +507,11 @@ impl Inner {
         // foreign bundle is dropped rather than committed.
         if let Some(stored) = &account.identity {
             if !identity_matches(stored, &IdentityClaims::from_token(&token)) {
-                self.resolve(attempt, AttemptOutcome::Failed("identity mismatch".into()));
+                self.resolve(
+                    attempt,
+                    account.incarnation,
+                    AttemptOutcome::Failed("identity mismatch".into()),
+                );
                 self.mark_reauth(&account, bundle.generation);
                 return Err(RefreshFailure::ReauthRequired);
             }
@@ -508,6 +532,7 @@ impl Inner {
         };
         match self.store.commit_credentials(
             account_id,
+            account.incarnation,
             account.lifecycle_generation,
             Some(bundle.generation),
             Some(attempt),
@@ -521,7 +546,11 @@ impl Inner {
             // The lifecycle moved while this refresh was in flight, so the slot was disconnected and the
             // bundle belongs to an account that no longer exists in this shape.
             Err(StoreError::Stale) => {
-                self.resolve(attempt, AttemptOutcome::Failed("stale lifecycle".into()));
+                self.resolve(
+                    attempt,
+                    account.incarnation,
+                    AttemptOutcome::Failed("stale lifecycle".into()),
+                );
                 Err(RefreshFailure::Disconnected)
             }
             // The rotation happened upstream and could not be stored, so the stored refresh token is dead
@@ -530,6 +559,7 @@ impl Inner {
             Err(error) => {
                 self.resolve(
                     attempt,
+                    account.incarnation,
                     AttemptOutcome::Uncertain(format!(
                         "commit failed after a rotated response: {error}"
                     )),
@@ -590,8 +620,10 @@ impl Inner {
 
     // A failed bookkeeping write must not mask why the refresh failed: the class is what the caller acts
     // on, and the next refresh derives the same state again from the store.
-    fn resolve(&self, attempt: u64, outcome: AttemptOutcome) {
-        let _ = self.store.resolve_refresh_attempt(attempt, outcome);
+    fn resolve(&self, attempt: u64, incarnation: u64, outcome: AttemptOutcome) {
+        let _ = self
+            .store
+            .resolve_refresh_attempt(attempt, incarnation, outcome);
     }
 
     /// Asks for re-pairing, unless the slot moved on: a verdict about credentials that a disconnect threw
@@ -731,6 +763,7 @@ mod tests {
                     organization_uuid: None,
                 }),
                 lifecycle_generation: 1,
+                incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
             })
@@ -759,12 +792,13 @@ mod tests {
         let now = 1_000_000;
         let (manager, store, up) = manager_at(now).await;
         let observed = store
-            .commit_credentials("a", 1, None, None, &bundle_at("observed", 0, 1))
+            .commit_credentials("a", 1, 1, None, None, &bundle_at("observed", 0, 1))
             .unwrap();
         // What another caller's refresh does between the generation this one read and the slot it wins.
         store
             .commit_credentials(
                 "a",
+                1,
                 1,
                 Some(observed),
                 None,

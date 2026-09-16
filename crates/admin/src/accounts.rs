@@ -109,6 +109,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         enabled: true,
         identity: None,
         lifecycle_generation: 1,
+        incarnation: 1,
         revision: 1,
         state: match kind {
             AccountKind::Oauth => AccountState::Unpaired,

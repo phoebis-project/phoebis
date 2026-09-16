@@ -456,6 +456,7 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
         .commit_credentials(
             "business",
             1,
+            1,
             Some(generation),
             None,
             &phoebis_store::NewBundle {

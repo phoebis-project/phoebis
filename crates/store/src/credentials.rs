@@ -173,13 +173,19 @@ impl Store {
         }))
     }
 
-    /// Commits a new credential generation in one transaction: the lifecycle and credential generations
-    /// are checked against the account's current state (`Stale` on mismatch), a missing refresh token is
-    /// folded forward from the previous plaintext, and `attempt_id`, if given, is resolved as `Committed`
-    /// here too, so a crash between the two writes cannot leave a committed bundle behind a pending attempt.
+    /// Commits a new credential generation in one transaction: the incarnation, the lifecycle generation,
+    /// and the credential generation are checked against the account's current state (`Stale` on mismatch), a
+    /// missing refresh token is folded forward from the previous plaintext, and `attempt_id`, if given, is
+    /// resolved as `Committed` here too, so a crash between the two writes cannot leave a committed bundle
+    /// behind a pending attempt.
+    ///
+    /// The incarnation is what the lifecycle generation cannot answer for: deleting a slot and recreating it
+    /// under the same id restarts every generation at 1, so only the incarnation tells a refresh that began
+    /// before the deletion from one that belongs to the row standing there now.
     pub fn commit_credentials(
         &self,
         account_id: &str,
+        incarnation: u64,
         lifecycle_generation: u64,
         expected_generation: Option<u64>,
         attempt_id: Option<u64>,
@@ -188,15 +194,18 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        let account_lifecycle: i64 = tx
+        let account: Option<(i64, i64)> = tx
             .query_row(
-                "SELECT lifecycle_generation FROM accounts WHERE id = ?1",
+                "SELECT incarnation, lifecycle_generation FROM accounts WHERE id = ?1",
                 params![account_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .optional()?
-            .ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
-        if account_lifecycle as u64 != lifecycle_generation {
+            .optional()?;
+        let (account_incarnation, account_lifecycle) =
+            account.ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
+        if account_incarnation as u64 != incarnation
+            || account_lifecycle as u64 != lifecycle_generation
+        {
             return Err(StoreError::Stale);
         }
 
@@ -404,28 +413,53 @@ impl Store {
     /// what this crate treats as open everywhere else. A verdict that arrives after something else settled
     /// the row for good, a disconnect racing a slow token request for instance, is dropped rather than
     /// applied, and says so by returning `false`.
+    ///
+    /// `incarnation` is the one the caller's work began under. An account deleted and recreated keeps the
+    /// attempt rows of the slot that is gone, so a verdict from the old incarnation answers `Stale` rather
+    /// than settling, or reopening as uncertain, a row the new one now owns. An id with no account row left
+    /// has nothing to be stale against, so its orphaned attempts still settle.
     pub fn resolve_refresh_attempt(
         &self,
         attempt_id: u64,
+        incarnation: u64,
         outcome: AttemptOutcome,
     ) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = jiff::Timestamp::now().as_millisecond();
         let (label, detail) = match outcome {
             AttemptOutcome::Committed => ("committed", None),
             AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
             AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
         };
-        let updated = conn.execute(
+        let account_id: Option<String> = tx
+            .query_row(
+                "SELECT account_id FROM refresh_attempts WHERE id = ?1",
+                params![attempt_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(account_id) = account_id else {
+            return Err(StoreError::AttemptNotFound(attempt_id));
+        };
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT incarnation FROM accounts WHERE id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.is_some_and(|current| current as u64 != incarnation) {
+            return Err(StoreError::Stale);
+        }
+        let updated = tx.execute(
             &format!(
                 "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 \
                  WHERE id = ?1 AND ({PENDING_WHERE})"
             ),
             params![attempt_id as i64, now, label, detail],
         )?;
-        if updated == 0 && !attempt_exists(&conn, attempt_id, None)? {
-            return Err(StoreError::AttemptNotFound(attempt_id));
-        }
+        tx.commit()?;
         Ok(updated > 0)
     }
 

@@ -115,7 +115,7 @@ pub async fn quarantined_parts(
     let attempt = parts.store.open_refresh_attempt("business", 1, 1).unwrap();
     parts
         .store
-        .resolve_refresh_attempt(attempt, AttemptOutcome::Uncertain(detail.to_string()))
+        .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Uncertain(detail.to_string()))
         .unwrap();
     (parts.app, parts.up, parts.store, parts.manager)
 }
@@ -242,6 +242,7 @@ async fn app_with(
                 enabled: true,
                 identity,
                 lifecycle_generation: 1,
+                incarnation: 1,
                 revision: 1,
                 state: if paired {
                     AccountState::Ready
@@ -255,6 +256,7 @@ async fn app_with(
             store
                 .commit_credentials(
                     "business",
+                    1,
                     1,
                     None,
                     None,
@@ -280,6 +282,7 @@ async fn app_with(
                 enabled: true,
                 identity: None,
                 lifecycle_generation: 1,
+                incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
             })

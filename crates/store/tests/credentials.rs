@@ -11,6 +11,7 @@ fn account(id: &str) -> AccountRow {
         enabled: true,
         identity: None,
         lifecycle_generation: 1,
+        incarnation: 1,
         revision: 1,
         state: AccountState::Unpaired,
     }
@@ -36,10 +37,10 @@ fn credentials_round_trip_encrypted_and_generation_increments() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let g2 = store
-        .commit_credentials("a", 1, Some(g1), None, &bundle("at-2"))
+        .commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-2"))
         .unwrap();
     assert!(g2 > g1);
     let got = store.credentials("a").unwrap().unwrap();
@@ -91,7 +92,7 @@ fn disconnect_revokes_both_credential_kinds() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     store
         .set_api_key_secret("a", &Secret::new("sk-ant-api03-x"))
@@ -118,11 +119,11 @@ fn an_uncertain_attempt_blocks_new_attempts() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     assert!(matches!(
         store.open_refresh_attempt("a", 1, g),
@@ -135,11 +136,11 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, g).unwrap();
     store
-        .commit_credentials("a", 1, Some(g), Some(id), &bundle("at-2"))
+        .commit_credentials("a", 1, 1, Some(g), Some(id), &bundle("at-2"))
         .unwrap();
     assert!(
         store.pending_refresh_attempts().unwrap().is_empty(),
@@ -157,15 +158,15 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, g).unwrap();
     store
-        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     // A pairing confirmation commits a bundle of its own and has no attempt to name.
     store
-        .commit_credentials("a", 1, Some(g), None, &bundle("at-2"))
+        .commit_credentials("a", 1, 1, Some(g), None, &bundle("at-2"))
         .unwrap();
     let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
     assert_eq!(attempt.outcome.as_deref(), Some("failed"));
@@ -185,18 +186,18 @@ fn stale_generation_is_rejected() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let _g2 = store
-        .commit_credentials("a", 1, Some(g1), None, &bundle("at-2"))
+        .commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-2"))
         .unwrap();
     assert!(matches!(
-        store.commit_credentials("a", 1, Some(g1), None, &bundle("at-3")),
+        store.commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-3")),
         Err(StoreError::Stale)
     ));
     let bumped = store.bump_lifecycle("a").unwrap();
     assert!(matches!(
-        store.commit_credentials("a", 1, None, None, &bundle("at-4")),
+        store.commit_credentials("a", 1, 1, None, None, &bundle("at-4")),
         Err(StoreError::Stale)
     ));
     assert!(
@@ -214,12 +215,12 @@ fn a_missing_refresh_token_keeps_the_previous_one() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let mut b = bundle("at-2");
     b.refresh_token = None;
     store
-        .commit_credentials("a", 1, Some(g1), None, &b)
+        .commit_credentials("a", 1, 1, Some(g1), None, &b)
         .unwrap();
     assert_eq!(
         store
@@ -238,7 +239,7 @@ fn only_one_refresh_attempt_can_be_pending() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     let id = store.open_refresh_attempt("a", 1, g).unwrap();
     assert!(matches!(
@@ -246,7 +247,7 @@ fn only_one_refresh_attempt_can_be_pending() {
         Err(StoreError::AttemptPending)
     ));
     store
-        .resolve_refresh_attempt(id, AttemptOutcome::Uncertain("response lost".into()))
+        .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     assert_eq!(
         store.pending_refresh_attempts().unwrap().len(),
@@ -260,10 +261,10 @@ fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     assert!(matches!(
-        store.commit_credentials("a", 1, Some(g1), Some(999), &bundle("at-2")),
+        store.commit_credentials("a", 1, 1, Some(g1), Some(999), &bundle("at-2")),
         Err(StoreError::AttemptNotFound(999))
     ));
     let got = store.credentials("a").unwrap().unwrap();
@@ -307,7 +308,7 @@ fn an_identity_is_bound_once_and_survives_a_disconnect() {
         Err(StoreError::Stale)
     ));
     store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     store.bump_lifecycle("a").unwrap();
     let after = store.account("a").unwrap().unwrap();
@@ -341,7 +342,7 @@ fn a_kind_change_is_refused_while_a_credential_is_stored() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
-        .commit_credentials("a", 1, None, None, &bundle("at-1"))
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
     assert!(matches!(
         store.update_account_config("a", AccountKind::ApiKey, "a"),
@@ -359,4 +360,64 @@ fn a_kind_change_is_refused_while_a_credential_is_stored() {
         store.update_account_config("b", AccountKind::ApiKey, "b"),
         Err(StoreError::KindChange(_))
     ));
+}
+
+#[test]
+fn a_deleted_incarnations_refresh_cannot_commit_into_the_slot_that_took_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert_eq!(store.account("a").unwrap().unwrap().incarnation, 1);
+    store
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
+        .unwrap();
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().incarnation,
+        2,
+        "the id was used once before, so what stands there now is its second use"
+    );
+    store
+        .commit_credentials("a", 2, 1, None, None, &bundle("fresh"))
+        .unwrap();
+    // Every generation restarted at 1 with the new row, so only the incarnation can tell these apart.
+    assert!(matches!(
+        store.commit_credentials("a", 1, 1, Some(1), None, &bundle("from-the-dead")),
+        Err(StoreError::Stale)
+    ));
+    assert_eq!(
+        store
+            .credentials("a")
+            .unwrap()
+            .unwrap()
+            .access_token
+            .expose(),
+        "fresh",
+        "the replacement keeps the credentials it was paired with"
+    );
+}
+
+#[test]
+fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
+        .unwrap();
+    let stranded = store.open_refresh_attempt("a", 1, 1).unwrap();
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert!(matches!(
+        store.resolve_refresh_attempt(stranded, 1, AttemptOutcome::Uncertain("lost".into())),
+        Err(StoreError::Stale)
+    ));
+    assert!(
+        store
+            .last_refresh_attempt("a")
+            .unwrap()
+            .unwrap()
+            .outcome
+            .is_none(),
+        "the row the deleted slot left behind is untouched, so it quarantines nothing"
+    );
 }
