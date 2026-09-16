@@ -1,6 +1,6 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
-use phoebis_store::{AccountState, OveragePolicy, PinRow, Strategy};
+use phoebis_store::{AccountRow, AccountState, OveragePolicy, PinRow, Strategy};
 use rand::{Rng, RngExt};
 
 use crate::state::{PinRef, RoutingState, StateWrite};
@@ -27,6 +27,9 @@ pub enum MigrateReason {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
+    /// The row the selection was made against, so what a request dispatches with is the endpoint and the
+    /// credential one snapshot held together rather than two lookups taken moments apart.
+    pub account: AccountRow,
     pub account_id: String,
     pub upstream_model: String,
     pub pin: Option<PinRef>,
@@ -39,6 +42,9 @@ pub enum Exhaustion {
     Untimed,
 }
 
+// Boxing the selection would put an allocation on the path every request takes, to shrink a value that is
+// built once per selection and moved once into the answering channel.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum SelectResult {
     Exhausted(Exhaustion),
@@ -125,6 +131,7 @@ pub fn select(
             return (
                 SelectResult::Selected(renew(
                     state,
+                    snapshot,
                     current,
                     &request.candidates,
                     request.now,
@@ -218,6 +225,7 @@ pub fn select(
             return (
                 SelectResult::Selected(renew(
                     state,
+                    snapshot,
                     current,
                     &request.candidates,
                     request.now,
@@ -262,6 +270,7 @@ pub fn select(
     });
     (
         SelectResult::Selected(Selection {
+            account: selected_row(snapshot, &chosen.account_id),
             account_id: chosen.account_id.clone(),
             upstream_model: chosen.upstream_model.clone(),
             pin: pin_ref,
@@ -323,6 +332,7 @@ fn obstacle(
 
 fn renew(
     state: &mut RoutingState,
+    snapshot: &RegistrySnapshot,
     current: &PinRow,
     candidates: &[Candidate],
     now: i64,
@@ -335,6 +345,7 @@ fn renew(
     state.put_pin(renewed.clone());
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {
+        account: selected_row(snapshot, &current.account_id),
         account_id: current.account_id.clone(),
         upstream_model: candidates
             .iter()
@@ -351,6 +362,15 @@ fn renew(
         }),
         migrated: None,
     }
+}
+
+/// Every path that selects an account has already passed it through `obstacle`, which answers `Operator` for
+/// an id the snapshot does not hold, so the row is there.
+fn selected_row(snapshot: &RegistrySnapshot, account_id: &str) -> AccountRow {
+    snapshot
+        .account(account_id)
+        .cloned()
+        .expect("a selected account is one the snapshot the selection ran against holds")
 }
 
 fn choose<'a>(

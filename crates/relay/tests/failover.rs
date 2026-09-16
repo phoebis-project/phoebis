@@ -902,3 +902,53 @@ async fn a_revoked_key_answers_401_at_once_and_a_foreign_client_version_is_tagge
     assert_eq!(credentials_seen(&up).len(), 1);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
+    const OLD_KEY: &str = "vendor-secret-old";
+    const NEW_KEY: &str = "vendor-secret-new";
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Gated(Box::new(json_200())),
+    }])
+    .await;
+    let h = harness_with(
+        &up,
+        &[api_key("vendor", OLD_KEY, 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5"],
+        default_limits(),
+    )
+    .await;
+    let app = h.app.clone();
+    let inflight =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1")).await.unwrap() });
+    // The fake has the request, so it was admitted and selected against the registry as it stands now.
+    wait_for(Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    h.store
+        .set_api_key_secret("vendor", &phoebis_store::Secret::new(NEW_KEY))
+        .unwrap();
+    h.router.reload().await.unwrap();
+    up.release();
+    let resp = inflight.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [OLD_KEY, NEW_KEY],
+        "the in-flight leg dispatched with the secret it was verified with, and only the later request saw the rotation"
+    );
+    up.shutdown().await;
+}

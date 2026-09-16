@@ -31,9 +31,8 @@ use tokio_util::sync::CancellationToken;
 use crate::classify::{classify, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    acquire_failure, auth_failure, key_refusal, relay_failure, Failure, ACCOUNTS_UNAVAILABLE,
-    ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND,
-    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::headers::{outbound_headers, CredentialKind};
@@ -318,15 +317,14 @@ impl Relay {
                     );
                 }
             };
+            // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
+            // request goes out to and the credential it carries have to be the pair one snapshot held.
+            let account = selection.account;
+            attempted.push(account.id.clone());
+            let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
             // No wire submission, so no attempt is spent: the account is already in `attempted`, and the next
             // selection skips it. The outer loop is bounded by the pool size, because each account is selected
             // at most once per request.
-            let Some(account) = snapshot.account(&selection.account_id).cloned() else {
-                attempted.push(selection.account_id);
-                continue;
-            };
-            attempted.push(account.id.clone());
-            let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
             let mut credential = match self.credential(&account).await {
                 Ok(credential) => credential,
                 Err(_) => continue,
@@ -764,31 +762,48 @@ impl Relay {
         Next::Respond(forward_buffered(&head, buffered, ctx.caller, outcome))
     }
 
-    async fn credential(&self, account: &AccountRow) -> Result<Credential, Failure> {
-        match account.kind {
+    /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
+    /// acquiring takes time, and an edit landing inside it would pair a replacement secret with the endpoint
+    /// the request was selected for, which nothing ever verified together.
+    async fn credential(&self, account: &AccountRow) -> Result<Credential, NoCredential> {
+        let credential = match account.kind {
             AccountKind::Oauth => match self.manager.acquire(&account.id).await {
-                Ok(token) => Ok(Credential::from(token)),
+                Ok(token) => Credential::from(token),
                 Err(error) => {
                     tracing::warn!(account = %account.id, %error, "no credential for the selected account");
-                    Err(acquire_failure(&error))
+                    return Err(NoCredential::Unavailable);
                 }
             },
             // The generation comes along so an api_key verdict is fenced by the same rule an OAuth one is.
             AccountKind::ApiKey => match self.store.api_key_credential(&account.id) {
-                Ok(Some((secret, generation))) => Ok(Credential {
+                Ok(Some((secret, generation))) => Credential {
                     account_uuid: None,
                     generation,
                     kind: CredentialKind::ApiKey { secret },
-                }),
+                },
                 Ok(None) => {
                     tracing::warn!(account = %account.id, "the account has no API key stored");
-                    Err(ACCOUNTS_UNAVAILABLE)
+                    return Err(NoCredential::Unavailable);
                 }
                 Err(error) => {
                     tracing::error!(account = %account.id, %error, "the stored API key is unreadable");
-                    Err(ACCOUNTS_UNAVAILABLE)
+                    return Err(NoCredential::Unavailable);
                 }
             },
+        };
+        match self.store.account_revision(&account.id) {
+            Ok(Some(revision)) if revision == account.revision => Ok(credential),
+            Ok(_) => {
+                tracing::warn!(
+                    account = %account.id,
+                    "the account changed while its credential was being acquired",
+                );
+                Err(NoCredential::Stale)
+            }
+            Err(error) => {
+                tracing::error!(account = %account.id, %error, "the account's revision is unreadable");
+                Err(NoCredential::Stale)
+            }
         }
     }
 
@@ -952,6 +967,15 @@ struct Forward<'a, C> {
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,
+}
+
+/// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
+/// is already in `attempted`, so both send the loop back to select without spending an attempt.
+enum NoCredential {
+    /// The account row moved between the selection and the acquisition.
+    Stale,
+    /// The manager or the store has no credential to hand out.
+    Unavailable,
 }
 
 /// What one attempt's response half reads about the request it belongs to.

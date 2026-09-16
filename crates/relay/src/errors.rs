@@ -4,7 +4,6 @@
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
-use phoebis_oauth::AcquireError;
 use phoebis_routing::KeyRefusal;
 
 use crate::auth::AuthError;
@@ -127,26 +126,6 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         error_type: "authentication_error",
         code: "auth_unknown",
         message: "the presented API key is not valid",
-    }
-}
-
-pub(crate) fn acquire_failure(error: &AcquireError) -> Failure {
-    match error {
-        // Both need an operator to pair the account again, and both leave the caller's own key valid; the 401
-        // is what makes a downstream client stop hammering the route.
-        AcquireError::Quarantined | AcquireError::ReauthRequired => Failure {
-            status: StatusCode::UNAUTHORIZED,
-            error_type: "authentication_error",
-            code: "reauth_required",
-            message: "the bound account has to be paired again",
-        },
-        AcquireError::Disconnected | AcquireError::Unpaired => ACCOUNTS_UNAVAILABLE,
-        AcquireError::Store(_) | AcquireError::Unavailable(_) => Failure {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            error_type: "api_error",
-            code: "credential_unavailable",
-            message: "the bound account's credential is temporarily unavailable",
-        },
     }
 }
 

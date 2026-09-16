@@ -82,14 +82,14 @@ impl ToSql for AccountState {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
     pub account_uuid: String,
     pub email: String,
     pub organization_uuid: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRow {
     pub id: String,
     pub kind: AccountKind,
