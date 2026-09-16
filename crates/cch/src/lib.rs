@@ -52,15 +52,10 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
     None
 }
 
-/// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
-/// strings. The relay uses this for its body edits so only one JSON scanner exists in the workspace.
-pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
-    let mut s = Scanner {
-        body,
-        pos: 0,
-        depth: 0,
-        edits: Vec::new(),
-    };
+/// The array and object walk every span helper needs before reading its own terminal value; kept in one place
+/// so a fix to array indexing or member matching (an escaped key, say) lands once instead of once per helper.
+/// `Some(true)` once `s` sits at the last segment's value, `Some(false)` for an empty path, `None` on mismatch.
+fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
     s.ws();
     for (depth, key) in path.iter().enumerate() {
         let last = depth + 1 == path.len();
@@ -99,14 +94,29 @@ pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
             }
         }
         if last {
-            if s.body.get(s.pos) != Some(&b'"') {
-                return None;
-            }
-            return s.string().ok();
+            return Some(true);
         }
         s.ws();
     }
-    None
+    Some(false)
+}
+
+/// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
+/// strings. The relay uses this for its body edits so only one JSON scanner exists in the workspace.
+pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    if !walk_to_last_segment(&mut s, path)? {
+        return None;
+    }
+    if s.body.get(s.pos) != Some(&b'"') {
+        return None;
+    }
+    s.string().ok()
 }
 
 /// Raw span of the `true` or `false` literal at `path` from the top-level object, walking the body as
@@ -119,57 +129,19 @@ pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
         depth: 0,
         edits: Vec::new(),
     };
-    s.ws();
-    for (depth, key) in path.iter().enumerate() {
-        let last = depth + 1 == path.len();
-        if let Ok(index) = key.parse::<usize>() {
-            if !s.eat(b'[') {
-                return None;
-            }
-            for _ in 0..index {
-                s.value(false).ok()?;
-                s.ws();
-                if !s.eat(b',') {
-                    return None;
-                }
-            }
-            s.ws();
-        } else {
-            if !s.eat(b'{') {
-                return None;
-            }
-            loop {
-                s.ws();
-                let (ks, ke) = s.string().ok()?;
-                s.ws();
-                if !s.eat(b':') {
-                    return None;
-                }
-                s.ws();
-                if s.body[ks + 1..ke - 1] == *key.as_bytes() {
-                    break;
-                }
-                s.value(false).ok()?;
-                s.ws();
-                if !s.eat(b',') {
-                    return None;
-                }
-            }
+    if !walk_to_last_segment(&mut s, path)? {
+        return None;
+    }
+    let start = s.pos;
+    for literal in [&b"true"[..], &b"false"[..]] {
+        if s.body[start..].starts_with(literal) {
+            let end = start + literal.len();
+            let terminated = s
+                .body
+                .get(end)
+                .is_none_or(|c| matches!(c, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'));
+            return terminated.then_some((start, end));
         }
-        if last {
-            let start = s.pos;
-            for literal in [&b"true"[..], &b"false"[..]] {
-                if s.body[start..].starts_with(literal) {
-                    let end = start + literal.len();
-                    let terminated = s.body.get(end).is_none_or(|c| {
-                        matches!(c, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
-                    });
-                    return terminated.then_some((start, end));
-                }
-            }
-            return None;
-        }
-        s.ws();
     }
     None
 }
