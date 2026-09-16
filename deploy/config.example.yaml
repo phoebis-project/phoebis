@@ -29,7 +29,6 @@ stats:
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
-upstream:
 usage:
   cache_ttl_seconds: 60
   refresh_concurrency: 2
