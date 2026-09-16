@@ -413,3 +413,57 @@ async fn the_scheduler_syncs_every_account_including_a_paused_one() {
     assert!(h.store.catalog_status("b").unwrap().0.is_some());
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_catalog_discovered_under_a_superseded_revision_is_dropped() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: models(&[("claude-opus-5", None)]),
+        })),
+    }])
+    .await;
+    let h = harness_with(
+        &up,
+        &[api_key("a", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5"],
+        default_limits(),
+    )
+    .await;
+    let synced_at = h.store.catalog_status("a").unwrap().0;
+    let catalog = h.catalog.clone();
+    let syncing = tokio::spawn(async move { catalog.sync("a", "test").await.unwrap() });
+    // The fake has the request, so discovery is in flight against the endpoint the account holds now.
+    wait_for(std::time::Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    h.store
+        .update_account("a", "a", "test")
+        .unwrap();
+    up.release();
+    let outcome = syncing.await.unwrap();
+    assert!(
+        outcome.stale && outcome.delta.is_none() && outcome.error.is_none(),
+        "the list came from an endpoint the account no longer holds"
+    );
+    assert_eq!(
+        h.store
+            .served_models("a")
+            .unwrap()
+            .iter()
+            .map(|m| m.upstream_id.clone())
+            .collect::<Vec<_>>(),
+        ["claude-sonnet-4-5"],
+        "nothing was added and nothing was flagged missing"
+    );
+    assert_eq!(
+        h.store.catalog_status("a").unwrap().0,
+        synced_at,
+        "and the sync timestamp did not move"
+    );
+    up.shutdown().await;
+}

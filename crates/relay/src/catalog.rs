@@ -44,6 +44,9 @@ pub struct SyncOutcome {
     pub delta: Option<SyncDelta>,
     pub error: Option<String>,
     pub seeded: bool,
+    /// The account moved while discovery was in flight, so what came back describes an endpoint or a
+    /// credential the account no longer holds and was dropped rather than written.
+    pub stale: bool,
 }
 
 pub struct CatalogService {
@@ -179,12 +182,16 @@ impl CatalogService {
             .account(account_id)?
             .ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
         let now = (self.clock)();
+        // Read before discovery, checked inside the write: an admin edit landing in between replaces the
+        // endpoint this list came from, and writing it would mark the replacement's models missing, revive
+        // the old endpoint's, and move `catalog_synced_at` backwards.
+        let revision = account.revision;
         let outcome = match self.discover(&account).await {
             Ok(discovered) => {
                 match self.store.apply_catalog_sync(
                     account_id,
                     &discovered.models,
-                    None,
+                    Some(revision),
                     now,
                     actor,
                 ) {
@@ -192,6 +199,7 @@ impl CatalogService {
                         delta: Some(delta),
                         error: None,
                         seeded: false,
+                        stale: false,
                     },
                     Err(StoreError::CanonicalClash { canonical_id, .. }) => {
                         let error = format!("two spellings of {canonical_id} in one response");
@@ -201,6 +209,16 @@ impl CatalogService {
                             delta: None,
                             error: Some(error),
                             seeded: false,
+                            stale: false,
+                        }
+                    }
+                    Err(StoreError::Stale) => {
+                        tracing::info!(account = %account_id, "the account changed during discovery; the result is dropped");
+                        SyncOutcome {
+                            delta: None,
+                            error: None,
+                            seeded: false,
+                            stale: true,
                         }
                     }
                     Err(error) => return Err(error),
@@ -220,6 +238,7 @@ impl CatalogService {
                     delta: None,
                     error: Some(message),
                     seeded,
+                    stale: false,
                 }
             }
         };
