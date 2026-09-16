@@ -30,7 +30,7 @@ pub use drift::DriftGuard;
 pub use errors::anthropic_error;
 pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
-pub use hold::{hold, Commit, Held, Inspect};
+pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use messages::{router, Limits, Probe, Relay, RelayOutcome};
 pub use portability::is_portable;

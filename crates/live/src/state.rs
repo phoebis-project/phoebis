@@ -10,7 +10,7 @@ use phoebis_bus::{
 };
 use phoebis_ledger::Pricing;
 use phoebis_oauth::Clock;
-use phoebis_relay::UnifiedHeaders;
+use phoebis_relay::{SseEvent, SseParser, UnifiedHeaders, INSPECT_BUFFER};
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +126,9 @@ struct Tracked {
     /// (at, output tokens) samples over the last five seconds, for the rate.
     output_samples: VecDeque<(i64, u64)>,
     last_progress_at: i64,
+    /// The preview's parser, one per request: a transport read ends where the socket says, not where an
+    /// event does, so the parser has to outlive the chunk that started an event.
+    preview: SseParser,
     /// A progress delta the throttle held back, sent by the next tick.
     progress_due: bool,
     /// The last moment any event or chunk of this request arrived; the expiry reads it.
@@ -213,6 +216,7 @@ impl LiveState {
                 captures,
                 output_samples: VecDeque::new(),
                 last_progress_at: 0,
+                preview: SseParser::new(INSPECT_BUFFER),
                 progress_due: false,
                 seen_at,
             },
@@ -356,7 +360,7 @@ impl LiveState {
             Some(Phase::ToolUseDelta) | None => {}
         }
         if t.captures {
-            if let Some(text) = text_of(&chunk.body) {
+            if let Some(text) = text_of(&mut t.preview, &chunk.body) {
                 let preview = t.entry.preview.get_or_insert_with(String::new);
                 preview.push_str(&text);
                 if preview.len() > PREVIEW_BYTES {
@@ -467,11 +471,23 @@ impl LiveState {
             c.ttfb_ms,
             e.cost_usd,
         );
+        // The stream has ended, so whatever the parser still holds is a last event, complete or not.
+        let mut deltas = Vec::new();
+        if t.captures {
+            if let Some(chunk) = delta_text(t.preview.finish().into_iter().collect()) {
+                let cursor = self.next_cursor();
+                deltas.push(Delta::Preview {
+                    cursor,
+                    id: c.request_id.clone(),
+                    chunk,
+                });
+            }
+        }
         let entry = t.entry.clone();
         self.remember(t.entry);
         self.trim_ring(c.finished_at);
         let cursor = self.next_cursor();
-        vec![Delta::Finished {
+        deltas.push(Delta::Finished {
             at: c.finished_at,
             cursor,
             id: entry.id,
@@ -480,7 +496,8 @@ impl LiveState {
             phases: entry.phases,
             status: entry.status,
             usage: entry.usage,
-        }]
+        });
+        deltas
     }
 
     /// Inserts at the entry's place by `received_at`, newest first: requests finish in any order, and the
@@ -666,19 +683,21 @@ fn rate(samples: &VecDeque<(i64, u64)>) -> Option<f64> {
     Some((last.1 - first.1) as f64 * 1_000.0 / span_ms as f64)
 }
 
-/// The text of a content delta: `delta.text` of every `content_block_delta` event in the chunk. A chunk is
-/// the decoded stream, so the SSE grammar applies and the events can be walked without buffering.
-fn text_of(body: &[u8]) -> Option<String> {
-    let mut parser = phoebis_relay::SseParser::new(body.len() + 1);
-    parser.feed(body).ok()?;
-    let mut out = String::new();
+/// The text of the content deltas `body` completes: `delta.text` of every `content_block_delta` event the
+/// request's parser can finish once these bytes are in it. What is left over waits for the next chunk.
+fn text_of(parser: &mut SseParser, body: &[u8]) -> Option<String> {
+    if parser.feed(body).is_err() {
+        return None;
+    }
     let mut events = Vec::new();
     while let Some(event) = parser.next_event() {
         events.push(event);
     }
-    if let Some(last) = parser.finish() {
-        events.push(last);
-    }
+    delta_text(events)
+}
+
+fn delta_text(events: Vec<SseEvent>) -> Option<String> {
+    let mut out = String::new();
     for event in events {
         if event.name.as_deref() != Some(b"content_block_delta".as_slice()) {
             continue;
@@ -705,6 +724,10 @@ mod tests {
     use phoebis_ledger::PriceTable;
 
     fn observed(id: &str) -> Event {
+        observed_capturing(id, 0)
+    }
+
+    fn observed_capturing(id: &str, body_capture_hours: u32) -> Event {
         Event::RequestObserved(RequestObserved {
             request_id: id.into(),
             origin: Origin::Client,
@@ -720,7 +743,7 @@ mod tests {
             stream: true,
             headers: Vec::new(),
             body: Bytes::new(),
-            body_capture_hours: 0,
+            body_capture_hours,
             received_at: 1_000,
         })
     }
@@ -812,6 +835,32 @@ mod tests {
         assert_eq!(
             (outcome("a"), outcome("b")),
             (Some("failed"), Some("canceled"))
+        );
+    }
+
+    fn chunk(id: &str, index: u32, body: &[u8]) -> Event {
+        Event::ResponseChunk(ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::copy_from_slice(body),
+            phase: None,
+        })
+    }
+
+    /// A transport read is not an event boundary. Split across two of them, a delta parsed per read loses
+    /// its name in one half and the start of its JSON in the other, so its text reaches nobody.
+    #[test]
+    fn a_content_delta_split_across_two_chunks_reaches_the_preview() {
+        let mut state = state();
+        state.apply(observed_capturing("a", 1));
+        let sse = b"event: content_block_delta\ndata: {\"delta\":{\"text\":\"hello world\"}}\n\n";
+        let (first, second) = sse.split_at(30);
+        state.apply(chunk("a", 0, first));
+        state.apply(chunk("a", 1, second));
+        assert_eq!(
+            state.snapshot(true).in_flight[0].preview.as_deref(),
+            Some("hello world")
         );
     }
 
