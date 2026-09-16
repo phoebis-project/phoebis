@@ -168,7 +168,7 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
 
 fn picked(result: &SelectResult) -> &str {
     match result {
-        SelectResult::Selected(s) => &s.account_id,
+        SelectResult::Selected(s) => &s.account.id,
         other => panic!("expected a selection, got {other:?}"),
     }
 }
@@ -329,7 +329,7 @@ fn the_migrate_rule_moves_a_hot_pin_to_a_cooler_sibling_and_keeps_it_when_none_e
         panic!()
     };
     assert_eq!(
-        (sel.account_id.as_str(), sel.migrated),
+        (sel.account.id.as_str(), sel.migrated),
         ("b", Some(MigrateReason::Utilization)),
         "the cooler sibling wins even at the worse priority"
     );
@@ -379,7 +379,7 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
         panic!()
     };
     assert_eq!(
-        (sel.account_id.as_str(), sel.migrated),
+        (sel.account.id.as_str(), sel.migrated),
         ("b", Some(MigrateReason::Overage))
     );
     st.record_cooldown(cooled("b", "account", 2_000 + HOUR, "five_hour"));
@@ -586,7 +586,7 @@ fn pin_renewal_follows_the_pool_ttl_and_affinity_off_writes_no_pin() {
     let SelectResult::Selected(opening) = result else {
         panic!()
     };
-    let first = opening.account_id.clone();
+    let first = opening.account.id.clone();
     let epoch = opening.pin.as_ref().unwrap().epoch;
     for at in [3_500_000, 7_000_000] {
         let (result, _) = select(
@@ -598,7 +598,7 @@ fn pin_renewal_follows_the_pool_ttl_and_affinity_off_writes_no_pin() {
         let SelectResult::Selected(sel) = result else {
             panic!()
         };
-        assert_eq!(sel.account_id, first);
+        assert_eq!(sel.account.id, first);
         assert_eq!(
             sel.pin.as_ref().unwrap().epoch,
             epoch,
@@ -692,14 +692,14 @@ fn overage_evidence_only_moves_forward_and_a_pin_is_invalidated_only_by_its_own_
         ..pin.clone()
     };
     assert!(
-        !st.invalidate_pin(&other, &sel.account_id),
+        !st.invalidate_pin(&other, &sel.account.id),
         "a newer epoch is another pin"
     );
     assert!(
         !st.invalidate_pin(&pin, "zzz"),
         "another account's failure leaves it alone"
     );
-    assert!(st.invalidate_pin(&pin, &sel.account_id));
+    assert!(st.invalidate_pin(&pin, &sel.account.id));
     assert!(st.pins().is_empty());
 }
 

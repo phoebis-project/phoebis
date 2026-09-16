@@ -16,7 +16,7 @@ use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_profile::Profile;
 use phoebis_routing::{
     resolve, EvidenceSource, Exhaustion, OverageEvidence, PinRef, Report, ResolveError,
-    RouterHandle, SelectRequest, SelectResult,
+    RouterHandle, SelectRequest, SelectResult, Selection,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Store};
 use phoebis_transport::control::Resolver;
@@ -211,6 +211,7 @@ impl Relay {
             }
         };
         self.router.touch_key(&key.id);
+        let client_version = self.drift.check(&parts.headers);
         let Ok(raw) = axum::body::to_bytes(body, self.limits.max_request_bytes).await else {
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
             // no complete request to relay.
@@ -219,22 +220,42 @@ impl Relay {
                 &request_id,
                 &key,
                 None,
+                client_version.as_deref(),
             );
         };
         let identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
-            Err(error) => return self.refused(relay_failure(&error), &request_id, &key, None),
+            Err(error) => {
+                return self.refused(
+                    relay_failure(&error),
+                    &request_id,
+                    &key,
+                    None,
+                    client_version.as_deref(),
+                )
+            }
         };
-        let client_version = self.drift.check(&parts.headers);
         // Version drift is a tag on a relayed request; hash drift is a refusal, below.
         let client_drift = client_version.as_ref().map(|_| "version".to_string());
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
-                return self.refused(MODEL_NOT_ALLOWED, &request_id, &key, Some(&identity))
+                return self.refused(
+                    MODEL_NOT_ALLOWED,
+                    &request_id,
+                    &key,
+                    Some(&identity),
+                    client_version.as_deref(),
+                )
             }
             Err(ResolveError::ModelUnserved) => {
-                return self.refused(MODEL_UNSERVED, &request_id, &key, Some(&identity))
+                return self.refused(
+                    MODEL_UNSERVED,
+                    &request_id,
+                    &key,
+                    Some(&identity),
+                    client_version.as_deref(),
+                )
             }
         };
         let portable = is_portable(&raw);
@@ -253,6 +274,18 @@ impl Relay {
             session = ?identity.session_id,
             "relaying a Messages request",
         );
+        let admitted = Admitted {
+            caller: &parts.headers,
+            client_drift,
+            client_version,
+            fallback_ms,
+            identity: &identity,
+            key: &key,
+            portable,
+            raw: &raw,
+            request_id: &request_id,
+            target: &target,
+        };
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
 
@@ -260,7 +293,13 @@ impl Relay {
             // A backstop: every failover point already checks the budget before it comes back here, and
             // `attempted` grows each pass, so the loop is bounded by the pool even without this.
             if attempt >= self.limits.max_attempts {
-                return self.refused(UPSTREAM_UNREACHABLE, &request_id, &key, Some(&identity));
+                return self.refused(
+                    UPSTREAM_UNREACHABLE,
+                    &request_id,
+                    &key,
+                    Some(&identity),
+                    admitted.client_version.as_deref(),
+                );
             }
             let now = (self.clock)();
             let answer = match self
@@ -280,7 +319,13 @@ impl Relay {
             {
                 Ok(answer) => answer,
                 Err(_) => {
-                    return self.refused(ROUTER_UNAVAILABLE, &request_id, &key, Some(&identity))
+                    return self.refused(
+                        ROUTER_UNAVAILABLE,
+                        &request_id,
+                        &key,
+                        Some(&identity),
+                        admitted.client_version.as_deref(),
+                    )
                 }
             };
             let selection = match answer.result {
@@ -288,10 +333,22 @@ impl Relay {
                 // The registry moved after admission and no longer admits this request; the answer is the one the
                 // current registry would have given at admission.
                 SelectResult::Refused(ResolveError::ModelNotAllowed) => {
-                    return self.refused(MODEL_NOT_ALLOWED, &request_id, &key, Some(&identity))
+                    return self.refused(
+                        MODEL_NOT_ALLOWED,
+                        &request_id,
+                        &key,
+                        Some(&identity),
+                        admitted.client_version.as_deref(),
+                    )
                 }
                 SelectResult::Refused(ResolveError::ModelUnserved) => {
-                    return self.refused(MODEL_UNSERVED, &request_id, &key, Some(&identity))
+                    return self.refused(
+                        MODEL_UNSERVED,
+                        &request_id,
+                        &key,
+                        Some(&identity),
+                        admitted.client_version.as_deref(),
+                    )
                 }
                 SelectResult::Exhausted(exhaustion) => {
                     let code = match exhaustion {
@@ -306,8 +363,8 @@ impl Relay {
                         0,
                         attempt,
                         false,
-                        client_drift.clone(),
-                        client_version.clone(),
+                        admitted.client_drift.clone(),
+                        admitted.client_version.clone(),
                         Some(code),
                         None,
                     );
@@ -317,175 +374,208 @@ impl Relay {
                     );
                 }
             };
-            // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
-            // request goes out to and the credential it carries have to be the pair one snapshot held.
-            let account = selection.account;
-            attempted.push(account.id.clone());
-            let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
-            // No wire submission, so no attempt is spent: the account is already in `attempted`, and the next
-            // selection skips it. The outer loop is bounded by the pool size, because each account is selected
-            // at most once per request.
-            let mut credential = match self.credential(&account).await {
-                Ok(credential) => credential,
-                Err(_) => continue,
+            attempted.push(selection.account.id.clone());
+            match self
+                .dispatch_to(&admitted, &selection, &answer.cancel, &mut attempt)
+                .await
+            {
+                Leg::FailOver => continue,
+                Leg::Respond(response) => return response,
+            }
+        }
+    }
+
+    /// One account's leg of the request: the credential, the body edit, the dispatch with its same-account
+    /// retry and its 401 replay, and the response half. Every early exit here is a `Leg`; the account is
+    /// already in the loop's `attempted`, so a `FailOver` costs nothing but the next selection.
+    async fn dispatch_to(
+        &self,
+        admitted: &Admitted<'_>,
+        selection: &Selection,
+        cancel: &CancellationToken,
+        attempt: &mut u8,
+    ) -> Leg {
+        // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
+        // request goes out to and the credential it carries have to be the pair one snapshot held.
+        let account = &selection.account;
+        let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
+        // No wire submission, so no attempt is spent: the account is already in `attempted`, and the next
+        // selection skips it. The outer loop is bounded by the pool size, because each account is selected
+        // at most once per request.
+        let mut credential = match self.credential(account).await {
+            Ok(credential) => credential,
+            Err(_) => return Leg::FailOver,
+        };
+        let mut edited = admitted.raw.to_vec();
+        let edit = {
+            edit_body(
+                &mut edited,
+                credential.account_uuid.as_deref(),
+                &selection.upstream_model,
+            )
+        };
+        if let Err(error) = edit {
+            if let RelayError::ClientDrift { kind } = &error {
+                // Drift depends on the body alone, so it is found on the first account before any wire
+                // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
+                tracing::warn!(
+                    account = %account.id,
+                    drift = %kind,
+                    user_agent = %user_agent(admitted.caller),
+                    "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
+                );
+                let outcome = self.outcome(
+                    admitted.request_id,
+                    admitted.key,
+                    Some(admitted.identity),
+                    &account.id,
+                    0,
+                    0,
+                    false,
+                    Some(kind.to_string()),
+                    admitted.client_version.clone(),
+                    Some("client_drift"),
+                    None,
+                );
+                return Leg::Respond(with_outcome(
+                    relay_failure(&error).response(admitted.request_id),
+                    outcome,
+                ));
+            }
+            return Leg::Respond(self.refused(
+                relay_failure(&error),
+                admitted.request_id,
+                admitted.key,
+                Some(admitted.identity),
+                admitted.client_version.as_deref(),
+            ));
+        }
+        let edited = Bytes::from(edited);
+        let authority = "api.anthropic.com".to_string();
+        let Some(addr) = (self.resolver)(&authority) else {
+            tracing::warn!(host = %authority, "the upstream host does not resolve");
+            return Leg::FailOver;
+        };
+        let pool_key = PoolKey {
+            account_id: account.id.clone(),
+            host: authority.to_string(),
+        };
+        let mut fresh = false;
+        let mut retried = false;
+        let mut replayed = false;
+
+        loop {
+            *attempt += 1;
+            let responding = Responding {
+                account,
+                attempt: *attempt,
+                caller: admitted.caller,
+                cancel,
+                client_drift: admitted.client_drift.clone(),
+                client_version: admitted.client_version.clone(),
+                credential_generation: credential.generation,
+                fallback_ms: admitted.fallback_ms,
+                identity: admitted.identity,
+                key: admitted.key,
+                pin: selection.pin.as_ref(),
+                pin_epoch,
+                portable: admitted.portable,
+                replayed,
+                request_id: admitted.request_id,
             };
-            let mut edited = raw.to_vec();
-            let edit = {
-                edit_body(
-                    &mut edited,
-                    credential.account_uuid.as_deref(),
-                    &selection.upstream_model,
+            let dispatched = {
+                let request = RawRequest {
+                    method: "POST",
+                    target: admitted.target.to_string(),
+                    headers: outbound_headers(
+                        self.profile,
+                        admitted.caller,
+                        &credential.kind,
+                        &authority,
+                        edited.len(),
+                    ),
+                    body: edited.clone(),
+                };
+                match dispatch::attempt(
+                    self,
+                    &request,
+                    &pool_key,
+                    &authority,
+                    addr,
+                    fresh,
+                    cancel,
                 )
+                .await
+                {
+                    Err(failure) => Err(failure),
+                    Ok(sent) => Ok(self
+                        .respond(
+                            responding,
+                            sent,
+                            Checkin::Measured(self.pool.clone(), pool_key.clone()),
+                        )
+                        .await),
+                }
             };
-            if let Err(error) = edit {
-                if let RelayError::ClientDrift { kind } = &error {
-                    // Drift depends on the body alone, so it is found on the first account before any wire
-                    // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
-                    tracing::warn!(
-                        account = %account.id,
-                        drift = %kind,
-                        user_agent = %user_agent(&parts.headers),
-                        "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
-                    );
+            let next = match dispatched {
+                Ok(next) => next,
+                Err(AttemptFailure::Unsent(detail))
+                    if !retried && *attempt < self.limits.max_attempts =>
+                {
+                    tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
+                    fresh = true;
+                    retried = true;
+                    continue;
+                }
+                Err(AttemptFailure::Cancelled) => {
                     let outcome = self.outcome(
-                        &request_id,
-                        &key,
-                        Some(&identity),
+                        admitted.request_id,
+                        admitted.key,
+                        Some(admitted.identity),
                         &account.id,
                         0,
-                        0,
+                        *attempt,
                         false,
-                        Some(kind.to_string()),
-                        client_version.clone(),
-                        Some("client_drift"),
-                        None,
+                        admitted.client_drift.clone(),
+                        admitted.client_version.clone(),
+                        Some("account_cancelled"),
+                        pin_epoch,
                     );
-                    return with_outcome(relay_failure(&error).response(&request_id), outcome);
+                    return Leg::Respond(with_outcome(
+                        ACCOUNT_CANCELLED.response(admitted.request_id),
+                        outcome,
+                    ));
                 }
-                return self.refused(relay_failure(&error), &request_id, &key, Some(&identity));
-            }
-            let edited = Bytes::from(edited);
-            let authority = "api.anthropic.com".to_string();
-            let Some(addr) = (self.resolver)(&authority) else {
-                tracing::warn!(host = %authority, "the upstream host does not resolve");
-                continue;
-            };
-            let pool_key = PoolKey {
-                account_id: account.id.clone(),
-                host: authority.to_string(),
-            };
-            let mut fresh = false;
-            let mut retried = false;
-            let mut replayed = false;
-
-            'account: loop {
-                attempt += 1;
-                let responding = Responding {
-                    account: &account,
-                    attempt,
-                    caller: &parts.headers,
-                    cancel: &answer.cancel,
-                    client_drift: client_drift.clone(),
-                    client_version: client_version.clone(),
-                    credential_generation: credential.generation,
-                    fallback_ms,
-                    identity: &identity,
-                    key: &key,
-                    pin: selection.pin.as_ref(),
-                    pin_epoch,
-                    portable,
-                    replayed,
-                    request_id: &request_id,
-                };
-                let dispatched = {
-                    let request = RawRequest {
-                        method: "POST",
-                        target: target.clone(),
-                        headers: outbound_headers(
-                            self.profile,
-                            &parts.headers,
-                            &credential.kind,
-                            &authority,
-                            edited.len(),
-                        ),
-                        body: edited.clone(),
-                    };
-                    match dispatch::attempt(
-                        self,
-                        &request,
-                        &pool_key,
-                        &authority,
-                        addr,
-                        fresh,
-                        &answer.cancel,
-                    )
-                    .await
-                    {
-                        Err(failure) => Err(failure),
-                        Ok(sent) => Ok(self
-                            .respond(
-                                responding,
-                                sent,
-                                Checkin::Measured(self.pool.clone(), pool_key.clone()),
-                            )
-                            .await),
-                    }
-                };
-                let next = match dispatched {
-                    Ok(next) => next,
-                    Err(AttemptFailure::Unsent(detail))
-                        if !retried && attempt < self.limits.max_attempts =>
-                    {
-                        tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
-                        fresh = true;
-                        retried = true;
-                        continue 'account;
-                    }
-                    Err(AttemptFailure::Cancelled) => {
-                        let outcome = self.outcome(
-                            &request_id,
-                            &key,
-                            Some(&identity),
-                            &account.id,
-                            0,
-                            attempt,
-                            false,
-                            client_drift.clone(),
-                            client_version.clone(),
-                            Some("account_cancelled"),
-                            pin_epoch,
-                        );
-                        return with_outcome(ACCOUNT_CANCELLED.response(&request_id), outcome);
-                    }
-                    Err(failure) => {
-                        let written = matches!(failure, AttemptFailure::Lost(_));
-                        tracing::warn!(account = %account.id, %failure, "the upstream did not answer");
-                        let outcome = self.outcome(
-                            &request_id,
-                            &key,
-                            Some(&identity),
-                            &account.id,
-                            0,
-                            attempt,
-                            written,
-                            client_drift.clone(),
-                            client_version.clone(),
-                            Some("upstream_unreachable"),
-                            pin_epoch,
-                        );
-                        return with_outcome(UPSTREAM_UNREACHABLE.response(&request_id), outcome);
-                    }
-                };
-                match next {
-                    Next::Replay(refreshed) => {
-                        credential = refreshed;
-                        replayed = true;
-                        fresh = false;
-                        continue 'account;
-                    }
-                    Next::FailOver => break 'account,
-                    Next::Respond(response) => return response,
+                Err(failure) => {
+                    let written = matches!(failure, AttemptFailure::Lost(_));
+                    tracing::warn!(account = %account.id, %failure, "the upstream did not answer");
+                    let outcome = self.outcome(
+                        admitted.request_id,
+                        admitted.key,
+                        Some(admitted.identity),
+                        &account.id,
+                        0,
+                        *attempt,
+                        written,
+                        admitted.client_drift.clone(),
+                        admitted.client_version.clone(),
+                        Some("upstream_unreachable"),
+                        pin_epoch,
+                    );
+                    return Leg::Respond(with_outcome(
+                        UPSTREAM_UNREACHABLE.response(admitted.request_id),
+                        outcome,
+                    ));
                 }
+            };
+            match next {
+                Next::Replay(refreshed) => {
+                    credential = refreshed;
+                    replayed = true;
+                    fresh = false;
+                }
+                Next::FailOver => return Leg::FailOver,
+                Next::Respond(response) => return Leg::Respond(response),
             }
         }
     }
@@ -821,6 +911,7 @@ impl Relay {
         request_id: &str,
         key: &ApiKeyRow,
         identity: Option<&RequestIdentity>,
+        client_version: Option<&str>,
     ) -> Response {
         let outcome = self.outcome(
             request_id,
@@ -830,8 +921,8 @@ impl Relay {
             0,
             0,
             false,
-            None,
-            None,
+            client_version.map(|_| "version".to_string()),
+            client_version.map(str::to_string),
             Some(failure.code),
             None,
         );
@@ -1011,6 +1102,28 @@ enum Next {
     FailOver,
     /// The refreshed token goes back to the same account.
     Replay(Credential),
+    Respond(Response),
+}
+
+/// What the same-account leg reads about the request it is part of: fixed at admission and shared by every
+/// account the request tries.
+struct Admitted<'a> {
+    caller: &'a HeaderMap,
+    client_drift: Option<String>,
+    client_version: Option<String>,
+    fallback_ms: i64,
+    identity: &'a RequestIdentity,
+    key: &'a ApiKeyRow,
+    portable: bool,
+    raw: &'a Bytes,
+    request_id: &'a str,
+    target: &'a str,
+}
+
+/// What one selected account produced: an answer for the caller, or nothing, in which case the loop selects
+/// the next account. The account is already in `attempted` either way.
+enum Leg {
+    FailOver,
     Respond(Response),
 }
 

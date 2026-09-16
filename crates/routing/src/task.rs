@@ -418,7 +418,7 @@ impl Task {
                 self.write(writes);
                 let cancel = match &result {
                     SelectResult::Selected(selection) => {
-                        self.token(&selection.account_id).child_token()
+                        self.token(&selection.account.id).child_token()
                     }
                     SelectResult::Exhausted(_) | SelectResult::Refused(_) => {
                         CancellationToken::new()

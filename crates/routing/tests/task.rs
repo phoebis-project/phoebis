@@ -128,7 +128,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
         .select(request(&handle, Some("s1"), 1_000))
         .await
         .unwrap();
-    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "a"));
+    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"));
     let pinned = wait_for(WRITTEN, || {
         store.load_routing().unwrap().pins.first().cloned()
     })
@@ -167,7 +167,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
         .await
         .unwrap();
     assert!(
-        matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "b"),
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
         "the pin on a expired because a left the pool"
     );
     store.revoke_api_key("k", 2, "test").unwrap();
@@ -189,7 +189,7 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted.clone())).await.unwrap();
     assert!(
-        matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "b"),
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "b"),
         "the deleted candidate is dropped, not selected"
     );
     // The pool's policy changed under the request: the model is refused rather than routed.
@@ -353,7 +353,7 @@ async fn two_concurrent_first_requests_of_one_session_land_on_one_account() {
             handle.select(request(&handle, Some(&session), 1_000))
         );
         let id = |r: SelectResult| match r {
-            SelectResult::Selected(s) => s.account_id,
+            SelectResult::Selected(s) => s.account.id,
             _ => panic!(),
         };
         let (x, y) = (id(x.unwrap().result), id(y.unwrap().result));
@@ -438,7 +438,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         panic!()
     };
     assert!(!first.cancel.is_cancelled());
-    store.set_enabled(&sel.account_id, false).unwrap();
+    store.set_enabled(&sel.account.id, false).unwrap();
     handle.reload().await.unwrap();
     assert!(
         !first.cancel.is_cancelled(),
@@ -449,7 +449,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         .await
         .unwrap();
     assert!(
-        matches!(second.result, SelectResult::Selected(ref s) if s.account_id != sel.account_id),
+        matches!(second.result, SelectResult::Selected(ref s) if s.account.id != sel.account.id),
         "the paused account serves nothing new"
     );
     assert!(
@@ -459,7 +459,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
     let SelectResult::Selected(other) = second.result else {
         panic!()
     };
-    store.bump_lifecycle(&other.account_id).unwrap();
+    store.bump_lifecycle(&other.account.id).unwrap();
     handle.reload().await.unwrap();
     assert!(
         second.cancel.is_cancelled(),
@@ -482,15 +482,15 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         1,
         "the pin stays on the disconnected account until it is released or expires"
     );
-    store.set_enabled(&sel.account_id, true).unwrap();
-    store.delete_account(&other.account_id, "test").unwrap();
+    store.set_enabled(&sel.account.id, true).unwrap();
+    store.delete_account(&other.account.id, "test").unwrap();
     handle.reload().await.unwrap();
     let fourth = handle
         .select(request(&handle, Some("s2"), 1_003))
         .await
         .unwrap();
     assert!(
-        matches!(fourth.result, SelectResult::Selected(ref s) if s.account_id == sel.account_id)
+        matches!(fourth.result, SelectResult::Selected(ref s) if s.account.id == sel.account.id)
     );
     assert_eq!(handle.release_session("k", "s2").await.unwrap(), 1);
     assert!(handle.pins().await.unwrap().is_empty());
@@ -718,7 +718,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
 
     let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
     assert!(
-        matches!(answer.result, SelectResult::Selected(ref s) if s.account_id == "a"),
+        matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"),
         "the id was reused, and the days of cooldown its last holder earned did not come with it"
     );
     assert!(handle.cooldowns().await.unwrap().is_empty());

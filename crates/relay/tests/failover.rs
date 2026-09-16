@@ -1015,3 +1015,135 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
     assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_pre_selection_refusal_carries_the_client_version_tag() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            allowed_models: Some(vec!["claude-opus-5"]),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    req.headers_mut().insert(
+        "user-agent",
+        "claude-cli/2.1.300 (external, cli)".parse().unwrap(),
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 404);
+    let o = outcome(&resp);
+    assert_eq!(
+        (
+            o.error_code.as_deref(),
+            o.client_drift.as_deref(),
+            o.client_version.as_deref(),
+            o.attempt
+        ),
+        (
+            Some("model_not_allowed"),
+            Some("version"),
+            Some("2.1.300"),
+            0
+        ),
+        "a refusal before selection still names the client build that was refused"
+    );
+    assert!(up.requests().is_empty());
+    up.shutdown().await;
+}
+
+/// The fence in `Relay::credential`: the row the selection handed over and the credential acquired for it
+/// have to describe the same account revision. A token refresh is the one await inside the credential step,
+/// so the fake's token endpoint is gated to hold the relay there while the account is edited underneath.
+#[tokio::test]
+async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the_old_row() {
+    use phoebis_profile::fixtures::{control_response, ControlFixture};
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Gated(Box::new(Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Token).to_vec(),
+            })),
+        },
+    ])
+    .await;
+    // `a` carries the fixture's account uuid so the refreshed token's identity matches its row.
+    let h = harness(
+        &up,
+        &[
+            TestAccount {
+                id: "a",
+                kind: phoebis_store::AccountKind::Oauth,
+                secret: A,
+                priority: 0,
+                uuid: Some(ACCOUNT_UUID),
+            },
+            oauth("b", B, 1),
+        ],
+        PoolSpec::default(),
+    )
+    .await;
+    // An access token inside the refresh margin, so the next acquire refreshes through the gated endpoint.
+    h.store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            Some(1),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new(A),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-A")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 1_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    let app = h.app.clone();
+    let inflight = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        up.requests()
+            .iter()
+            .any(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .then_some(())
+    })
+    .await;
+    // The relay is inside `credential` for `a`; the row it selected is revision 1, and this makes it 2.
+    h.store
+        .update_account("a", "a (edited)", "test")
+        .unwrap();
+    up.release();
+    let resp = inflight.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let o = outcome(&resp);
+    assert_eq!(
+        (o.account_id.as_str(), o.attempt),
+        ("b", 1),
+        "the stale row is not dispatched; the request is re-selected"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [B],
+        "no request went out under a's refreshed token"
+    );
+    up.shutdown().await;
+}

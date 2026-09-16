@@ -30,7 +30,6 @@ pub struct Selection {
     /// The row the selection was made against, so what a request dispatches with is the endpoint and the
     /// credential one snapshot held together rather than two lookups taken moments apart.
     pub account: AccountRow,
-    pub account_id: String,
     pub upstream_model: String,
     pub pin: Option<PinRef>,
     pub migrated: Option<MigrateReason>,
@@ -271,7 +270,6 @@ pub fn select(
     (
         SelectResult::Selected(Selection {
             account: selected_row(snapshot, &chosen.account_id),
-            account_id: chosen.account_id.clone(),
             upstream_model: chosen.upstream_model.clone(),
             pin: pin_ref,
             migrated,
@@ -346,7 +344,6 @@ fn renew(
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {
         account: selected_row(snapshot, &current.account_id),
-        account_id: current.account_id.clone(),
         upstream_model: candidates
             .iter()
             .find(|c| c.account_id == current.account_id)
