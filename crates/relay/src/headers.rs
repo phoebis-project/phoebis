@@ -36,8 +36,11 @@ const NEVER_COPIED: &[&str] = &[
     "via",
     "x-forwarded-for",
     "x-forwarded-host",
+    "x-forwarded-port",
     "x-forwarded-proto",
+    "x-forwarded-server",
     "x-keepalive-owner-id",
+    "x-real-ip",
 ];
 
 /// The head the relay writes upstream. Every caller header travels as it was sent, in the order it was sent,
@@ -64,7 +67,10 @@ pub fn outbound_headers(
             .collect(),
     };
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 3);
-    let (mut saw_credential, mut saw_host, mut saw_length) = (false, false, false);
+    // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
+    // both lines, and a slot whose value the relay owns would then be written twice upstream.
+    let (mut saw_beta, mut saw_credential, mut saw_host, mut saw_length) =
+        (false, false, false, false);
     for (name, value) in sent {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
@@ -76,7 +82,12 @@ pub fn outbound_headers(
                     out.push(credential(kind));
                 }
             }
-            "anthropic-beta" => out.push((name.into(), betas(value, kind))),
+            "anthropic-beta" => {
+                if !saw_beta {
+                    saw_beta = true;
+                    out.push((name.into(), betas(value, kind)));
+                }
+            }
             // The relay's upstream connection is pooled and independent of the caller's, so it declares its
             // own hop rather than repeating what the caller said about a connection that ends here.
             "connection" => out.push((name.into(), "keep-alive".into())),
@@ -87,8 +98,10 @@ pub fn outbound_headers(
                 }
             }
             "host" => {
-                saw_host = true;
-                out.push((name.into(), host.into()));
+                if !saw_host {
+                    saw_host = true;
+                    out.push((name.into(), host.into()));
+                }
             }
             _ if NEVER_COPIED.contains(&lower.as_str()) => {}
             _ => out.push((name.into(), value.into())),
@@ -183,6 +196,7 @@ mod tests {
             ("X-Custom", "kept"),
             ("Cookie", "session=1"),
             ("X-Keepalive-Owner-Id", "owner-1"),
+            ("X-Real-IP", "203.0.113.9"),
             ("Connection", "close"),
             ("Host", "127.0.0.1:1"),
             ("Content-Length", "1"),
@@ -199,7 +213,8 @@ mod tests {
                 ("Connection".into(), "keep-alive".into()),
                 ("Host".into(), "api.anthropic.com".into()),
                 ("Content-Length".into(), "7".into()),
-            ]
+            ],
+            "the caller's own secrets and the address a reverse proxy stamped stay behind"
         );
     }
 

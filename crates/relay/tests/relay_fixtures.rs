@@ -367,6 +367,38 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
     up.shutdown().await;
 }
 
+/// The public `count_tokens` schema has no `metadata` member and the upstream refuses unknown top-level
+/// members, so the account identity has no slot here and its absence is not a malformed body.
+#[tokio::test]
+async fn an_oauth_count_tokens_body_without_metadata_reaches_the_upstream() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages/count_tokens".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
+        },
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/messages/count_tokens")
+        .header("Authorization", "Bearer phoebis-testkey")
+        .body(Body::from(
+            r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let sent = String::from_utf8(up.requests()[0].body.clone()).unwrap();
+    assert_eq!(
+        sent, r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#,
+        "the model the registry resolved is spliced in and no metadata member is invented"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_wrong_key_is_refused_before_the_body_is_read() {
     let up = FakeUpstream::start(vec![]).await;

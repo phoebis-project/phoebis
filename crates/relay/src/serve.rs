@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::Request;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::conn::auto;
+use hyper_util::rt::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
@@ -32,7 +31,7 @@ pub async fn serve(
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
     // which is the silently different outbound shape the pass-through exists to prevent; refusing the
     // connection is the honest answer.
-    let builder = auto::Builder::new(TokioExecutor::new()).http1_only();
+    let builder = hyper::server::conn::http1::Builder::new();
     let graceful = GracefulShutdown::new();
     loop {
         let stream = tokio::select! {
@@ -56,7 +55,7 @@ pub async fn serve(
             queue,
         };
         // No upgrades: no route on the relayed surface switches protocols.
-        let connection = graceful.watch(builder.serve_connection(io, service).into_owned());
+        let connection = graceful.watch(builder.serve_connection(io, service));
         tokio::spawn(async move {
             if let Err(error) = connection.await {
                 tracing::debug!(%error, "a relayed connection ended early");

@@ -18,7 +18,7 @@ const BODY: &[u8] = br#"{"model":"claude-sonnet-4-5","messages":[]}"#;
 
 /// A head a test writes itself, in the shape the recorder hands the relay.
 fn head(lines: &[String]) -> Vec<u8> {
-    let mut raw = String::from("POST /v1/messages HTTP/1.1\r\n");
+    let mut raw = String::from("POST /v1/messages?beta=true HTTP/1.1\r\n");
     for line in lines {
         raw.push_str(line);
         raw.push_str("\r\n");
@@ -215,7 +215,7 @@ async fn a_head_in_an_order_the_capture_never_had_travels_in_that_order() {
     up.shutdown().await;
 }
 
-/// The listener the two socket tests drive, and the stop channel that drains it.
+/// The listener the socket tests drive, and the stop channel that drains it.
 async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender<bool>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -226,7 +226,7 @@ async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender
 
 fn raw_request(addr: SocketAddr, trace: &str) -> Vec<u8> {
     let mut out = format!(
-        "POST /v1/messages HTTP/1.1\r\nHost: {addr}\r\nAccePT: application/json\r\n\
+        "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAccePT: application/json\r\n\
          X-CoRp-TrAcE: {trace}\r\nx-api-key: {KEY}\r\nanthropic-VERSION: 2023-06-01\r\n\
          Content-Length: {}\r\n\r\n",
         BODY.len()
@@ -299,6 +299,51 @@ async fn a_head_read_off_a_socket_reaches_the_upstream_with_the_callers_own_spel
         "hyper's lowercase map is not what the upstream sees"
     );
     assert_eq!(value(&up.requests()[0], "host"), Some("api.anthropic.com"));
+    let _ = stop.send(true);
+    up.shutdown().await;
+}
+
+/// A caller may write the same line twice. Hyper keeps one `Content-Length` in its map, but the recorded head
+/// holds both lines, and a relay-owned slot filled once per line would frame the upstream request twice and
+/// claim the OAuth beta twice.
+#[tokio::test]
+async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
+    let up = upstream().await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (addr, stop) = listening(h.relay.clone()).await;
+    let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
+    let mut raw = format!(
+        "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
+         anthropic-beta: claude-code-20250219\r\nanthropic-beta: claude-code-20250219\r\n\
+         anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\nContent-Length: {length}\r\n\r\n",
+        length = native.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(native);
+    let mut socket = TcpStream::connect(addr).await.unwrap();
+    socket.write_all(&raw).await.unwrap();
+    assert!(read_response(&mut socket)
+        .await
+        .starts_with("HTTP/1.1 200 "));
+    let got = &up.requests()[0];
+    let sent = |name: &str| {
+        got.headers
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+            .count()
+    };
+    assert_eq!(sent("content-length"), 1, "the framing is written once");
+    assert_eq!(sent("anthropic-beta"), 1, "the beta list is written once");
+    assert_eq!(
+        value(got, "anthropic-beta"),
+        Some("oauth-2025-04-20,claude-code-20250219"),
+        "the credential's beta leads the list the caller sent, once"
+    );
     let _ = stop.send(true);
     up.shutdown().await;
 }

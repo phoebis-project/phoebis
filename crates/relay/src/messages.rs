@@ -668,7 +668,13 @@ impl Relay {
         let edit = {
             edit_body(
                 &mut edited,
-                credential.account_uuid.as_deref(),
+                // The public `count_tokens` schema carries no `metadata` member and the upstream refuses
+                // unknown top-level ones, so there is no slot the account identity could go in. It is not
+                // billed either, so nothing is lost by leaving the body without it.
+                match admitted.trace.kind {
+                    Kind::CountTokens => None,
+                    Kind::Inference | Kind::Probe => credential.account_uuid.as_deref(),
+                },
                 &selection.upstream_model,
             )
         };
