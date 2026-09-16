@@ -7,7 +7,6 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{built_in, MODELS_TARGET, MODELS_USER_AGENT};
-use phoebis_profile::Profile;
 use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store, StoreError, SyncDelta};
 use phoebis_transport::control::Resolver;
@@ -48,9 +47,6 @@ pub struct SyncOutcome {
 }
 
 pub struct CatalogService {
-    // Kept for the constructor's stable shape across its call sites; the discovery request is built entirely
-    // from measured constants and needs no profile field of its own.
-    _profile: &'static Profile,
     clock: Clock,
     manager: Arc<CredentialManager>,
     pool: Arc<Pool>,
@@ -63,7 +59,6 @@ pub struct CatalogService {
 impl CatalogService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        profile: &'static Profile,
         store: Arc<Store>,
         manager: Arc<CredentialManager>,
         pool: Arc<Pool>,
@@ -73,7 +68,6 @@ impl CatalogService {
         timeout: Duration,
     ) -> CatalogService {
         CatalogService {
-            _profile: profile,
             clock,
             manager,
             pool,

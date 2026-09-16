@@ -21,10 +21,7 @@ mod stream;
 pub use auth::{presented_key, AuthError};
 pub use body::{edit_body, BodyEdits};
 pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};
-pub use classify::{
-    classify, classify_transport, exhaustion_window, Cooldown, HeadContext, Scope, TransportPhase,
-    Verdict,
-};
+pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};
 pub use drift::DriftGuard;
 pub use errors::anthropic_error;
 pub use exhaustion::exhaustion_response;

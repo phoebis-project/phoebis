@@ -82,20 +82,6 @@ impl Store {
         )? > 0)
     }
 
-    pub fn delete_pins(&self, keys: &[(String, String, String)]) -> Result<usize, StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction()?;
-        let mut removed = 0;
-        for (key_id, session_id, model) in keys {
-            removed += tx.execute(
-                "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND model = ?3",
-                params![key_id, session_id, model],
-            )?;
-        }
-        tx.commit()?;
-        Ok(removed)
-    }
-
     /// The later deadline always wins: a short `Retry-After` arriving after a long unified reset must not
     /// release an account the provider still refuses.
     pub fn upsert_cooldown(&self, row: &CooldownRow) -> Result<(), StoreError> {

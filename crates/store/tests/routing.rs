@@ -91,13 +91,6 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         store.load_routing().unwrap().pins.is_empty(),
         "foreign keys cascade the pin"
     );
-    store.upsert_pin(&pin).unwrap();
-    assert_eq!(
-        store
-            .delete_pins(&[("k".into(), "s".into(), "claude-sonnet-5".into())])
-            .unwrap(),
-        1
-    );
 }
 
 #[test]

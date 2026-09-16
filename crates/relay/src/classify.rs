@@ -33,7 +33,6 @@ pub enum Verdict {
         mark: Option<AccountState>,
     },
     Refresh,
-    RetrySameAccount,
 }
 
 pub struct HeadContext<'a> {
@@ -47,19 +46,6 @@ pub struct HeadContext<'a> {
     /// The start of a non-streaming body, decoded: the caller decodes its inspection copy, so this is never
     /// compressed.
     pub body_prefix: Option<&'a [u8]>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransportPhase {
-    BeforeWritten,
-    AfterWritten,
-}
-
-pub fn classify_transport(phase: TransportPhase) -> Verdict {
-    match phase {
-        TransportPhase::BeforeWritten => Verdict::RetrySameAccount,
-        TransportPhase::AfterWritten => Verdict::Commit,
-    }
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
@@ -531,14 +517,6 @@ mod tests {
         ));
         assert!(matches!(
             classify(&head(200, &[]), &context(AccountKind::Oauth)),
-            Verdict::Commit
-        ));
-        assert!(matches!(
-            classify_transport(TransportPhase::BeforeWritten),
-            Verdict::RetrySameAccount
-        ));
-        assert!(matches!(
-            classify_transport(TransportPhase::AfterWritten),
             Verdict::Commit
         ));
     }

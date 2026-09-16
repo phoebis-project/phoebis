@@ -327,7 +327,6 @@ async fn app_with(
     ));
     let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
     let catalog = Arc::new(CatalogService::new(
-        p,
         store.clone(),
         manager.clone(),
         pool,

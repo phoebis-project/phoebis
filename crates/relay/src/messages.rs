@@ -256,17 +256,12 @@ impl Relay {
         );
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
-        // The last failover row's non-streaming response, committed to the client when the budget runs out.
-        let mut last_failed: Option<(ResponseHead, Bytes, RelayOutcome)> = None;
 
         loop {
+            // A backstop: every failover point already checks the budget before it comes back here, and
+            // `attempted` grows each pass, so the loop is bounded by the pool even without this.
             if attempt >= self.limits.max_attempts {
-                return match last_failed {
-                    Some((head, buffered, outcome)) => {
-                        forward_buffered(&head, buffered, &parts.headers, outcome)
-                    }
-                    None => self.refused(UPSTREAM_UNREACHABLE, &request_id, &key, Some(&identity)),
-                };
+                return self.refused(UPSTREAM_UNREACHABLE, &request_id, &key, Some(&identity));
             }
             let now = (self.clock)();
             let answer = match self
@@ -490,12 +485,7 @@ impl Relay {
                         fresh = false;
                         continue 'account;
                     }
-                    Next::FailOver(last) => {
-                        if last.is_some() {
-                            last_failed = last;
-                        }
-                        break 'account;
-                    }
+                    Next::FailOver => break 'account,
                     Next::Respond(response) => return response,
                 }
             }
@@ -660,7 +650,7 @@ impl Relay {
                 ))
             }
             Verdict::FailOver { cooldown, mark } => (cooldown, mark),
-            Verdict::Commit | Verdict::RetrySameAccount => {
+            Verdict::Commit => {
                 if let Some(pin) = ctx.pin {
                     self.router.report(Report::PinRenewed {
                         pin: pin.clone(),
@@ -750,7 +740,7 @@ impl Relay {
         if let Some(held) = held {
             if ctx.portable && ctx.attempt < self.limits.max_attempts {
                 drop(reader);
-                return Next::FailOver(None);
+                return Next::FailOver;
             }
             return Next::Respond(self.stream(Forward {
                 caller: ctx.caller,
@@ -769,7 +759,7 @@ impl Relay {
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
         if ctx.portable && ctx.attempt < self.limits.max_attempts {
-            return Next::FailOver(Some((head, buffered, outcome)));
+            return Next::FailOver;
         }
         Next::Respond(forward_buffered(&head, buffered, ctx.caller, outcome))
     }
@@ -985,9 +975,8 @@ struct Responding<'a> {
 
 /// What the response half decided the account loop should do next.
 enum Next {
-    /// This account is finished. `Some` carries the response to commit if the attempt budget runs out before
-    /// another account answers.
-    FailOver(Option<(ResponseHead, Bytes, RelayOutcome)>),
+    /// This account is finished; another one takes the request.
+    FailOver,
     /// The refreshed token goes back to the same account.
     Replay(Credential),
     Respond(Response),

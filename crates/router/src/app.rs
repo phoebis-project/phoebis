@@ -132,7 +132,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         phoebis_routing::RouterConfig::default(),
     )?;
     let catalog = Arc::new(CatalogService::new(
-        profile,
         store.clone(),
         manager.clone(),
         pool.clone(),
