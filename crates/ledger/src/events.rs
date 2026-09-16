@@ -155,13 +155,15 @@ pub fn spawn_event_mirror(
     let mut events = router.subscribe_events();
     // Watermarks start at the newest row: history before the mirror existed is not replayed on every restart.
     let mut last_change = store
-        .registry_changes_after(0, i64::MAX as usize)
-        .map(|rows| rows.last().map(|r| r.id).unwrap_or(0))
+        .newest_registry_change_id()
+        .ok()
+        .flatten()
         .unwrap_or(0);
     // The pair is the cursor: a batch that ends inside one millisecond resumes at the next id in it.
     let mut last_resolved: (i64, u64) = store
-        .refresh_attempts_resolved_after(0, 0, i64::MAX as usize)
-        .map(|rows| rows.last().map(|r| (r.resolved_at, r.id)).unwrap_or((0, 0)))
+        .newest_resolved_refresh_attempt()
+        .ok()
+        .flatten()
         .unwrap_or((0, 0));
     let mut states: HashMap<String, AccountState> = store
         .accounts()

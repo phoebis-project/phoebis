@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS refresh_attempts_pending ON refresh_attempts (account
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. Every statement is
 /// additive so a downgrade can still read the older tables.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6), (7, V7)];
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -109,4 +109,10 @@ CREATE TABLE IF NOT EXISTS pricing_versions (
   version TEXT PRIMARY KEY, effective TEXT NOT NULL, source TEXT NOT NULL, table_json TEXT NOT NULL,
   imported_at INTEGER NOT NULL
 );
+"#;
+
+// The event mirror pages settled attempts by `(resolved_at, id)` every few seconds; the pending index covers
+// the rows that query excludes.
+const V7: &str = r#"
+CREATE INDEX IF NOT EXISTS refresh_attempts_resolved ON refresh_attempts (resolved_at, id) WHERE outcome IS NOT NULL;
 "#;

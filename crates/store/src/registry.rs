@@ -924,6 +924,17 @@ impl Store {
         .map_err(StoreError::from)
     }
 
+    /// Where a mirror starts: the newest change, read off the primary key rather than by loading a log
+    /// nothing prunes.
+    pub fn newest_registry_change_id(&self) -> Result<Option<u64>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        Ok(conn
+            .query_row("SELECT MAX(id) FROM registry_changes", [], |r| {
+                r.get::<_, Option<i64>>(0)
+            })?
+            .map(|id| id as u64))
+    }
+
     pub fn registry_changes_after(
         &self,
         id: u64,

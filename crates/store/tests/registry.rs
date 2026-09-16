@@ -65,12 +65,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 6);
+    assert_eq!(store.schema_version().unwrap(), 7);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        6,
+        7,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -88,7 +88,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        6,
+        7,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -107,7 +107,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        6,
+        7,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -127,7 +127,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        6,
+        7,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -661,5 +661,31 @@ fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
             .iter()
             .any(|m| m.upstream_id == "Vendor/Model-A"),
         "a manual row omitted from a sync is never removed"
+    );
+}
+
+#[test]
+fn the_newest_change_id_is_the_mirrors_starting_watermark() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    assert_eq!(store.newest_registry_change_id().unwrap(), None);
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    store.update_account("a", "first", "admin").unwrap();
+    store.update_account("a", "second", "admin").unwrap();
+    let newest = store.newest_registry_change_id().unwrap().unwrap();
+    let changes = store.registry_changes_after(0, 100).unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        newest,
+        changes.iter().map(|c| c.id).max().unwrap(),
+        "the watermark is the largest id the log holds"
+    );
+    assert!(
+        store
+            .registry_changes_after(newest, 100)
+            .unwrap()
+            .is_empty(),
+        "so a mirror starting there replays nothing"
     );
 }

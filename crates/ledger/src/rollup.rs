@@ -334,7 +334,11 @@ pub struct AccountRollupRow {
     pub utilization_5h_max: Option<f64>,
     pub utilization_7d_max: Option<f64>,
     pub utilization_7d_oi_max: Option<f64>,
+    /// Seconds of overage that ended in this hour: the whole span lands where it ended, so a range total is
+    /// right and one hour's value can exceed 3,600.
     pub overage_seconds: u64,
+    /// Seconds of cooldown that began in this hour: the whole span lands where it started, so a range total
+    /// is right and one hour's value can exceed 3,600.
     pub cooldown_seconds: u64,
     pub pins_created: u64,
     pub pins_migrated_in: u64,
@@ -455,7 +459,6 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
         }
         ("cooldown_set", Some(account)) => {
-            // The whole span lands in the hour it started, which the account rollup reads as time in cooldown.
             let seconds = detail["until"]
                 .as_i64()
                 .map(|until| (until - event.at).max(0) / 1_000)

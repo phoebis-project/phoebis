@@ -425,6 +425,20 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Where a mirror starts: the newest settled attempt, read through the resolved index rather than by
+    /// loading a table nothing prunes.
+    pub fn newest_resolved_refresh_attempt(&self) -> Result<Option<(i64, u64)>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT resolved_at, id FROM refresh_attempts WHERE outcome IS NOT NULL \
+             ORDER BY resolved_at DESC, id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)),
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
     /// Test seam for the paging test above, which needs several rows settled in one millisecond; compiled
     /// under `debug-hooks` like the other seams, so a release build cannot rewrite history.
     #[cfg(any(test, feature = "debug-hooks"))]

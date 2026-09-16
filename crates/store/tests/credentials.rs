@@ -499,3 +499,70 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
         "every row once, in order"
     );
 }
+
+#[test]
+fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert_eq!(store.newest_resolved_refresh_attempt().unwrap(), None);
+    let first = store.open_refresh_attempt("a", 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
+        .unwrap();
+    let open = store.open_refresh_attempt("a", 1, 1).unwrap();
+    assert_eq!(
+        store
+            .newest_resolved_refresh_attempt()
+            .unwrap()
+            .map(|w| w.1),
+        Some(first),
+        "an attempt still open is not the newest settled one"
+    );
+    store
+        .resolve_refresh_attempt(open, 1, AttemptOutcome::Committed)
+        .unwrap();
+    let rows = store.refresh_attempts_resolved_after(0, 0, 10).unwrap();
+    assert_eq!(
+        store.newest_resolved_refresh_attempt().unwrap(),
+        Some((rows[1].resolved_at, rows[1].id)),
+        "the watermark is the last row the cursor query would hand out"
+    );
+    assert_eq!(
+        store
+            .refresh_attempts_resolved_after(rows[1].resolved_at, rows[1].id, 10)
+            .unwrap()
+            .len(),
+        0,
+        "so a mirror starting there replays nothing"
+    );
+}
+
+#[test]
+fn the_resolved_cursor_query_reads_through_its_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    // Opened and dropped so the migrations run and the process lock is free for the plain reader below.
+    drop(Store::open(&path, &StorageKey::generate()).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT id, account_id, started_at, resolved_at, outcome, detail \
+             FROM refresh_attempts WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) \
+             AND outcome IS NOT NULL ORDER BY resolved_at, id LIMIT ?3",
+        )
+        .unwrap();
+    let plan: String = stmt
+        .query_map([0i64, 0i64, 500i64], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        plan.contains("refresh_attempts_resolved"),
+        "the 5 s poll must not scan the table: {plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "and the index supplies the order rather than a sort: {plan}"
+    );
+}
