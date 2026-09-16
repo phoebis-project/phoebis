@@ -54,7 +54,7 @@ mod service {
         control::{ControlClient, Resolver},
         Plane,
     };
-    use fake_upstream::{FakeUpstream, Respond, Rule};
+    use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
     use std::sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
@@ -197,6 +197,77 @@ mod service {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let service = service_for(&up, store.clone(), Duration::from_secs(60), &now);
         (service, up, store)
+    }
+
+    /// A usage fetch that is already out when a profile 429 arms the hold: its commit replaces the cache
+    /// entry the hold lives in, so the hold has to outlive the replacement or the account is free to fetch
+    /// again after the ordinary TTL.
+    #[tokio::test]
+    async fn a_hold_armed_while_a_usage_fetch_was_out_survives_its_commit() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Profile).to_vec(),
+                },
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Gated(Box::new(Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                })),
+            },
+        ])
+        .await;
+        let service = Arc::new(service_for(
+            &up,
+            store_with_valid_bundle(),
+            Duration::from_secs(60),
+            &now,
+        ));
+        let fetching = {
+            let service = service.clone();
+            tokio::spawn(async move { service.snapshot("a").await })
+        };
+        let usage_requests = || {
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .count()
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests() == 1).then_some(())
+        })
+        .await;
+        up.set_rule_after(
+            0,
+            "/api/oauth/profile",
+            Respond::Json {
+                status: 429,
+                headers: vec![("retry-after".into(), "3600".into())],
+                body: b"{}".to_vec(),
+            },
+        );
+        assert!(service.profile("a").await.is_err(), "the hold is armed");
+        up.release();
+        assert!(
+            fetching.await.unwrap().is_ok(),
+            "the fetch that was already out commits its snapshot"
+        );
+        // Past the 60 s cache TTL, well inside the hour the profile endpoint asked for.
+        now.store(1_090_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.is_ok());
+        assert_eq!(
+            usage_requests(),
+            1,
+            "the commit behind the hold did not shorten it"
+        );
+        up.shutdown().await;
     }
 
     fn rate_limited(retry_after_seconds: &str) -> Rule {

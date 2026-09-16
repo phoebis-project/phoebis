@@ -486,6 +486,12 @@ impl Inner {
                 None => Err("account identity changed while fetching usage".to_string()),
             };
         }
+        // A hold armed while this fetch was out belongs to the account rather than to the snapshot it is
+        // stored beside, so replacing the entry never shortens it.
+        let held = cache
+            .get(account_id)
+            .map(|entry| entry.not_before)
+            .unwrap_or(i64::MIN);
         match result {
             Ok(parsed) => {
                 let snapshot = UsageSnapshot {
@@ -503,7 +509,7 @@ impl Inner {
                     CachedEntry {
                         fetched_at,
                         identity_generation: snapshot.identity_generation,
-                        not_before: fetched_at,
+                        not_before: fetched_at.max(held),
                         snapshot: snapshot.clone(),
                     },
                 );
@@ -534,7 +540,7 @@ impl Inner {
                     CachedEntry {
                         fetched_at,
                         identity_generation: snapshot.identity_generation,
-                        not_before,
+                        not_before: not_before.max(held),
                         snapshot: snapshot.clone(),
                     },
                 );
