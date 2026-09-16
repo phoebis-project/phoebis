@@ -178,23 +178,28 @@ impl RoutingState {
             .is_some()
     }
 
-    /// The rate-limit rows on the account that `sample` shows recovered: the window the row names has
+    /// The live rate-limit rows on the account that `sample` shows recovered: the window the row names has
     /// allowance again, read from a sample taken after the rejection that set the row. A window the sample
-    /// never read is not evidence, and neither is a row no usage window answers for. Only an OAuth account is
-    /// ever sampled, which is what keeps an api-key account's rows out of here without a registry lookup.
+    /// never read is not evidence, and neither is a row no usage window answers for. A row already past its
+    /// deadline is left to the purge tick, which says so. Only an OAuth account is ever sampled, which is what
+    /// keeps an api-key account's rows out of here without a registry lookup.
     pub fn recovered_cooldowns(
         &self,
         account_id: &str,
         sample: &UtilizationSample,
+        now: i64,
     ) -> Vec<CooldownRow> {
         let below = |window: Option<f64>| window.is_some_and(|u| u < 1.0);
         let recovered = |row: &CooldownRow| {
+            // A deadline the upstream handed out names no window, whatever the row's scope, so a reading is a
+            // guess about which window the rejection was for.
+            if row.window == "retry_after" {
+                return false;
+            }
             if row.scope.starts_with("model:") {
                 return below(sample.fable);
             }
             match row.window.as_str() {
-                // A deadline the upstream handed out names no window to compare a sample against.
-                "retry_after" => false,
                 "five_hour" => below(sample.five_hour),
                 "seven_day" => below(sample.seven_day),
                 // Any other representative claim: it does not say which shared window was exhausted, so the
@@ -208,6 +213,7 @@ impl RoutingState {
             .filter(|row| {
                 row.account_id == account_id
                     && row.reason == "rate_limit"
+                    && row.until > now
                     && sample.observed_at > row.set_at
                     && recovered(row)
             })

@@ -806,11 +806,15 @@ impl Task {
                 }
             }
             Report::Sample { account_id, sample } => {
-                self.state.record_sample(&account_id, sample.clone());
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
-                // announced reaches the router here and nowhere else.
-                for row in self.state.recovered_cooldowns(&account_id, &sample) {
-                    self.release_cooldown(row.account_id, row.scope, "recovered");
+                // announced reaches the router here and nowhere else. Only a sample newer than the stored one
+                // answers for the account now: two pulls can be in flight, and the older one's reading is one
+                // the window has already moved past.
+                if self.state.record_sample(&account_id, sample.clone()) {
+                    let now = (self.clock)();
+                    for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
+                        self.release_cooldown(row.account_id, row.scope, "recovered");
+                    }
                 }
             }
             Report::AccountState {

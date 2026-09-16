@@ -1163,7 +1163,16 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
         "permission",
         "five_hour",
     ));
-    assert_eq!(handle.cooldowns().await.unwrap().len(), 2);
+    // A fable-only 429 whose headers carried no claim: the upstream sent a deadline and named no window, so
+    // the fable reading is a guess about which window the rejection was for.
+    handle.report(cooled(
+        "a",
+        "model:claude-fable-5-1",
+        1_000 + HOUR,
+        "rate_limit",
+        "retry_after",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 3);
     handle.report(observed(
         "a",
         UtilizationSample {
@@ -1175,8 +1184,96 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
     ));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
-        2,
-        "an empty account releases neither"
+        3,
+        "an empty account releases none of them"
+    );
+}
+
+#[tokio::test]
+async fn a_sample_older_than_the_one_already_stored_releases_nothing() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + 5 * HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    // Two pulls in flight, the newer one back first: the older one is still later than the row was set, and
+    // its reading is the one the window has already moved past.
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(1.0),
+            ..sample(3_000)
+        },
+    ));
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "the account's newest reading is what the row is answered against"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(3_001)
+        },
+    ));
+    assert!(
+        handle.cooldowns().await.unwrap().is_empty(),
+        "and the next reading past the stored one releases it"
+    );
+}
+
+#[tokio::test]
+async fn a_sample_that_arrives_after_the_deadline_leaves_the_row_to_the_purge_tick() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        None,
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { .. }
+    ));
+    now.store(1_000 + HOUR + 1, Ordering::SeqCst);
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(1_000 + HOUR + 1)
+        },
+    ));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { cause, .. } if cause == "expired"),
+        "the deadline arriving is not a window that reset early, and the ledger has to tell them apart"
     );
 }
 
