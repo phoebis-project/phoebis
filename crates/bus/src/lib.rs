@@ -33,6 +33,9 @@ pub struct Subscriber {
     pub stats: Arc<SubscriberStats>,
 }
 
+/// One subscriber's name beside the counters it shares with the bus.
+type NamedStats = (&'static str, Arc<SubscriberStats>);
+
 struct Slot {
     name: &'static str,
     events: mpsc::Sender<Event>,
@@ -41,6 +44,9 @@ struct Slot {
 
 #[derive(Clone, Default)]
 pub struct Bus {
+    /// Every subscriber that ever attached, kept apart from the slots: a consumer that died is the one an
+    /// operator most needs to see, and its slot leaves the publish path the moment its queue closes.
+    counters: Arc<Mutex<Vec<NamedStats>>>,
     slots: Arc<Mutex<Vec<Slot>>>,
 }
 
@@ -52,6 +58,10 @@ impl Bus {
     pub fn subscribe(&self, name: &'static str) -> Subscriber {
         let (events_tx, events) = mpsc::channel(QUEUE_DEPTH);
         let stats = Arc::new(SubscriberStats::default());
+        self.counters
+            .lock()
+            .expect(LOCK_POISONED)
+            .push((name, stats.clone()));
         self.slots.lock().expect(LOCK_POISONED).push(Slot {
             name,
             events: events_tx,
@@ -81,12 +91,7 @@ impl Bus {
     }
 
     pub fn stats(&self) -> Vec<(&'static str, Arc<SubscriberStats>)> {
-        self.slots
-            .lock()
-            .expect(LOCK_POISONED)
-            .iter()
-            .map(|slot| (slot.name, slot.stats.clone()))
-            .collect()
+        self.counters.lock().expect(LOCK_POISONED).clone()
     }
 }
 
@@ -192,9 +197,10 @@ mod tests {
         let stats = gone.stats.clone();
         drop(gone);
         bus.publish(observed("r1"));
-        assert!(
-            bus.stats().is_empty(),
-            "a closed queue is removed at the next publish"
+        assert_eq!(
+            bus.stats().len(),
+            1,
+            "the closed queue leaves the publish path at the next publish, its counters stay"
         );
         assert_eq!(
             stats.dropped.load(Ordering::SeqCst),
@@ -216,7 +222,32 @@ mod tests {
         assert_eq!(stats.panics.load(Ordering::SeqCst), 1);
         // The relay side is untouched: publishing after the panic neither fails nor panics.
         bus.publish(observed("r3"));
-        assert!(bus.stats().is_empty());
+        assert_eq!(bus.stats().len(), 2);
+    }
+
+    /// A consumer that died is exactly the one an operator has to be able to see: its slot is gone from the
+    /// publish path, its counters are not.
+    #[tokio::test]
+    async fn a_panicked_subscribers_counters_outlive_its_queue() {
+        let bus = Bus::new();
+        let panicking = bus.subscribe("panicking");
+        let handle = spawn_subscriber(panicking, |mut s| async move {
+            let _ = s.events.recv().await;
+            panic!("subscriber bug");
+        });
+        bus.publish(observed("r1"));
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        // The publish that finds the queue closed is the one that used to take the counter with it.
+        bus.publish(observed("r2"));
+        let stats = bus.stats();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(
+            (stats[0].0, stats[0].1.panics.load(Ordering::SeqCst)),
+            ("panicking", 1)
+        );
     }
 
     #[test]
