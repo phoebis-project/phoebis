@@ -204,9 +204,11 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/keys \
 ## Routing
 
 A pool picks the account for each request from its lowest priority band that still has an eligible account: an account
-is eligible when it is enabled, ready, off cooldown, serves the requested model, and has not already been tried by
-this request. Inside that band, `priority_random` picks at random and `least_utilized` picks the account with the most
-five-hour headroom left.
+is eligible when it is enabled, ready, off cooldown, serves the requested model, and has not already been tried by this
+request. Inside that band, `earliest_refresh` picks the account whose weekly window, the fable window for a fable model,
+resets soonest, `least_utilized` picks the account with the most five-hour headroom left, and `priority_random` picks at
+random. A pool that sets `select_below_utilization` keeps every account whose five-hour reading has reached that
+threshold out of the selection set, for as long as one account is still under it.
 
 A request that carries a session stays on the account that served it first, for as long as the pool's
 `affinity_ttl_seconds`, so a conversation does not move mid-flight. `GET /admin/sessions` lists the live pins, and a
