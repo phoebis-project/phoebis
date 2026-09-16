@@ -1004,6 +1004,44 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
     );
 }
 
+/// Two rejections often announce one reset. The second moves no deadline, but it is newer evidence that the
+/// account is still rejecting, so a sample taken before it says nothing about the state it left behind.
+#[tokio::test]
+async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let rejection = || cooled("a", "account", 1_000 + 5 * HOUR, "rate_limit", "five_hour");
+    handle.report(rejection());
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(rejection());
+    // The usage fetch behind this reading left before the second rejection and landed after it.
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(2_000)
+        },
+    ));
+    assert_eq!(
+        handle.cooldowns().await.unwrap().len(),
+        1,
+        "a reading older than the latest rejection is not evidence the account recovered"
+    );
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(0.4),
+            ..sample(3_001)
+        },
+    ));
+    assert!(
+        handle.cooldowns().await.unwrap().is_empty(),
+        "one taken after it is"
+    );
+}
+
 #[tokio::test]
 async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_nothing() {
     let store = seeded_oauth(&["a"]);

@@ -91,7 +91,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(account_id, scope) DO UPDATE SET \
-               set_at = CASE WHEN excluded.until > cooldowns.until THEN excluded.set_at ELSE cooldowns.set_at END, \
+               set_at = MAX(cooldowns.set_at, excluded.set_at), \
                reason = CASE WHEN excluded.until > cooldowns.until THEN excluded.reason ELSE cooldowns.reason END, \
                window = CASE WHEN excluded.until > cooldowns.until THEN excluded.window ELSE cooldowns.window END, \
                source_request_id = CASE WHEN excluded.until > cooldowns.until THEN excluded.source_request_id ELSE cooldowns.source_request_id END, \

@@ -169,13 +169,23 @@ impl RoutingState {
     /// The later deadline always wins, as in the store.
     pub fn record_cooldown(&mut self, row: CooldownRow) -> bool {
         let key = (row.account_id.clone(), row.scope.clone());
-        match self.cooldowns.get(&key) {
-            Some(current) if current.until >= row.until => false,
-            _ => {
-                self.cooldowns.insert(key, row);
-                true
-            }
+        let Some(current) = self.cooldowns.get_mut(&key) else {
+            self.cooldowns.insert(key, row);
+            return true;
+        };
+        // The deadline only ever grows, but every rejection dates itself whatever deadline it announces: a
+        // repeat under the standing one still moves the fence recovery has to be newer than, or a sample
+        // taken between the two rejections clears a row the upstream had just set again.
+        let later_deadline = row.until > current.until;
+        let later_rejection = row.set_at > current.set_at;
+        if later_deadline {
+            let set_at = current.set_at.max(row.set_at);
+            *current = row;
+            current.set_at = set_at;
+        } else if later_rejection {
+            current.set_at = row.set_at;
         }
+        later_deadline || later_rejection
     }
 
     pub fn clear_cooldown(&mut self, account_id: &str, scope: &str) -> bool {
