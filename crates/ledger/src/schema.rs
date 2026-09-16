@@ -1,5 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, and `events`, plus `meta` for the schema marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, and `events`, plus `meta` for the schema
+//! marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -150,6 +151,13 @@ CREATE TABLE IF NOT EXISTS account_rollups_hourly (
   pins_migrated_out INTEGER NOT NULL,
   PRIMARY KEY (hour, account_id)
 );
+CREATE TABLE IF NOT EXISTS cooldown_spans (
+  account_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  until INTEGER NOT NULL,
+  PRIMARY KEY (account_id, scope)
+);
 CREATE TABLE IF NOT EXISTS events (
   at INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -170,6 +178,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 
 /// Version 2: the split a request was folded with has to be readable from its own rows, or a replace cannot
 /// take back what was actually added; version 1 only ever stored `estimated_usd`, the row-level total.
+///
+/// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end it has
+/// already counted for a scope, and the hour it counted it in, to add only what an extension moves the end
+/// by and to take back what a clear cut short.
 ///
 /// Version 3: every client version is relayed on its own headers, so which client made a request is a fact
 /// about the request rather than something the profile implies, and the analytics group by it. The rollup key
@@ -234,5 +246,15 @@ CREATE TABLE rollups_hourly_next (
 INSERT INTO rollups_hourly_next SELECT hour, key_id, pool_id, account_id, canonical_model, kind, '-', requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json FROM rollups_hourly;
 DROP TABLE rollups_hourly;
 ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;",
+    ),
+    (
+        4,
+        "CREATE TABLE IF NOT EXISTS cooldown_spans (
+  account_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  until INTEGER NOT NULL,
+  PRIMARY KEY (account_id, scope)
+);",
     ),
 ];

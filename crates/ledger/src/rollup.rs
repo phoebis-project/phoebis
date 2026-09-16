@@ -513,10 +513,32 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             }
         }
         ("cooldown_set", Some(account)) => {
-            let seconds = detail["until"]
-                .as_i64()
-                .map(|until| (until - event.at).max(0) / 1_000)
-                .unwrap_or(0) as u64;
+            let scope = detail["scope"].as_str().unwrap_or("account");
+            let accounted = read_span(tx, account, scope)?;
+            let seconds = match detail["until"].as_i64() {
+                // An extension announces a new end for a cooldown already counted, so the time this event
+                // adds is only what it moves the end past, and past now: the elapsed part is already spent.
+                Some(until) => {
+                    let from = accounted
+                        .map(|(_, until)| until)
+                        .unwrap_or(event.at)
+                        .max(event.at);
+                    let seconds = ((until - from).max(0) / 1_000) as u64;
+                    write_span(
+                        tx,
+                        account,
+                        scope,
+                        // The hour the tail was counted in is the one a clear has to take it back from.
+                        match seconds > 0 {
+                            true => hour,
+                            false => accounted.map(|(hour, _)| hour).unwrap_or(hour),
+                        },
+                        accounted.map(|(_, held)| held.max(until)).unwrap_or(until),
+                    )?;
+                    seconds
+                }
+                None => 0,
+            };
             fold_account(
                 tx,
                 &AccountRollupRow {
@@ -524,6 +546,15 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                     ..row(account)
                 },
             )
+        }
+        ("cooldown_cleared", Some(account)) => {
+            let scope = detail["scope"].as_str().unwrap_or("account");
+            let Some((counted_in, until)) = take_span(tx, account, scope)? else {
+                return Ok(());
+            };
+            // The part of the span that never elapsed was never time in cooldown.
+            let seconds = ((until - event.at).max(0) / 1_000) as u64;
+            unfold_cooldown(tx, counted_in, account, seconds)
         }
         ("overage_ended", Some(account)) => {
             let seconds = detail["since"]
@@ -543,24 +574,93 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
 }
 
 pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<(), LedgerError> {
-    let mut row = tx
+    let mut row = account_row(tx, delta.hour, &delta.account_id)?;
+    row.add(delta);
+    write_account(tx, &row)
+}
+
+fn account_row(
+    tx: &Transaction<'_>,
+    hour: i64,
+    account_id: &str,
+) -> Result<AccountRollupRow, LedgerError> {
+    Ok(tx
         .query_row(
             &format!("{ACCOUNT_SELECT} WHERE hour = ?1 AND account_id = ?2"),
-            params![delta.hour, delta.account_id],
+            params![hour, account_id],
             row_to_account,
         )
         .optional()?
         .unwrap_or_else(|| AccountRollupRow {
-            hour: delta.hour,
-            account_id: delta.account_id.clone(),
+            hour,
+            account_id: account_id.to_string(),
             ..Default::default()
-        });
-    row.add(delta);
+        }))
+}
+
+fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
     tx.execute(
         "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max, row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64, row.pins_migrated_out as i64],
     )?;
     Ok(())
+}
+
+/// Takes back cooldown seconds an announcement counted that the account never spent.
+fn unfold_cooldown(
+    tx: &Transaction<'_>,
+    hour: i64,
+    account_id: &str,
+    seconds: u64,
+) -> Result<(), LedgerError> {
+    let mut row = account_row(tx, hour, account_id)?;
+    row.cooldown_seconds = row.cooldown_seconds.saturating_sub(seconds);
+    write_account(tx, &row)
+}
+
+/// The hour and the end one scope's cooldown is currently accounted to, for the fold to measure the next
+/// announcement against.
+fn read_span(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    scope: &str,
+) -> Result<Option<(i64, i64)>, LedgerError> {
+    Ok(tx
+        .query_row(
+            "SELECT hour, until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
+            params![account_id, scope],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+fn write_span(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    scope: &str,
+    hour: i64,
+    until: i64,
+) -> Result<(), LedgerError> {
+    tx.execute(
+        "INSERT OR REPLACE INTO cooldown_spans (account_id, scope, hour, until) VALUES (?1, ?2, ?3, ?4)",
+        params![account_id, scope, hour, until],
+    )?;
+    Ok(())
+}
+
+fn take_span(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    scope: &str,
+) -> Result<Option<(i64, i64)>, LedgerError> {
+    let span = read_span(tx, account_id, scope)?;
+    if span.is_some() {
+        tx.execute(
+            "DELETE FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
+            params![account_id, scope],
+        )?;
+    }
+    Ok(span)
 }
 
 const COLUMNS: &str = "hour, key_id, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
@@ -735,7 +835,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 3);
+        assert_eq!(db.schema_version().unwrap(), 4);
         let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -748,6 +848,44 @@ mod tests {
             ),
             (UNATTRIBUTED, 3_600, "k", 5, 6),
             "a row folded before the column existed takes the reserved id and keeps its counts"
+        );
+    }
+
+    /// A stored ledger at version 3 has no span table. The migration adds it, and the fold that needs it
+    /// runs on the file that was already there.
+    #[test]
+    fn a_version_three_ledger_gains_the_cooldown_span_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            let tx = conn.transaction().unwrap();
+            for (_, sql) in &crate::schema::MIGRATIONS[..crate::schema::MIGRATIONS.len() - 1] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute_batch("DROP TABLE cooldown_spans;").unwrap();
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '3')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 4);
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_event(&tx, &cooldown_set_event(0, 60_000))?;
+            fold_event(&tx, &cooldown_cleared_event(20_000))?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap()[0].cooldown_seconds,
+            20,
+            "the interval folds on a ledger that predates the table it is kept in"
         );
     }
 
@@ -891,6 +1029,73 @@ mod tests {
             &[attempt(1, "a", None, None, None, None)],
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
+    }
+
+    fn cooldown_set_event(at: i64, until: i64) -> EventRecord {
+        EventRecord {
+            at,
+            kind: "cooldown_set".into(),
+            account_id: Some("a".into()),
+            detail: Some(
+                serde_json::json!({ "scope": "account", "until": until, "reason": "rate_limit" })
+                    .to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn cooldown_cleared_event(at: i64) -> EventRecord {
+        EventRecord {
+            at,
+            kind: "cooldown_cleared".into(),
+            account_id: Some("a".into()),
+            detail: Some(
+                serde_json::json!({ "cause": "recovered", "scope": "account" }).to_string(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn folded(events: &[EventRecord]) -> u64 {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        db.write(|c| {
+            let tx = c.transaction()?;
+            for event in events {
+                fold_event(&tx, event)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        db.read(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap()
+            .iter()
+            .map(|r| r.cooldown_seconds)
+            .sum()
+    }
+
+    #[test]
+    fn an_extended_cooldown_folds_as_one_interval_rather_than_two_announcements() {
+        assert_eq!(
+            folded(&[
+                cooldown_set_event(0, 60_000),
+                cooldown_set_event(10_000, 70_000)
+            ]),
+            70,
+            "the extension adds only the ten seconds past the end already accounted for"
+        );
+    }
+
+    #[test]
+    fn a_cleared_cooldown_keeps_only_the_time_it_actually_held() {
+        assert_eq!(
+            folded(&[
+                cooldown_set_event(0, 60_000),
+                cooldown_cleared_event(20_000)
+            ]),
+            20,
+            "the forty seconds that never elapsed leave the hour that counted them"
+        );
     }
 
     #[test]
