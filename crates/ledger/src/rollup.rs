@@ -57,6 +57,8 @@ pub struct RollupRow {
     pub account_id: String,
     pub canonical_model: String,
     pub kind: String,
+    /// The `User-Agent` of the request the row folded, `UNATTRIBUTED` for a request that sent none.
+    pub user_agent: String,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -102,6 +104,7 @@ impl RollupRow {
         account_id: &str,
         canonical_model: &str,
         kind: &str,
+        user_agent: &str,
     ) -> RollupRow {
         RollupRow {
             hour,
@@ -110,6 +113,7 @@ impl RollupRow {
             account_id: account_id.into(),
             canonical_model: canonical_model.into(),
             kind: kind.into(),
+            user_agent: user_agent.into(),
             requests: 0,
             succeeded: 0,
             rate_limited: 0,
@@ -260,6 +264,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         last.map(|a| a.account_id.as_str()).unwrap_or(UNATTRIBUTED),
         &request.canonical_model,
         &request.kind,
+        request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
     );
     d.requests = 1;
     match request.outcome.as_str() {
@@ -394,6 +399,7 @@ pub fn fold_request(
             &delta.account_id,
             &delta.canonical_model,
             &delta.kind,
+            &delta.user_agent,
         )
     });
     row.add(&delta);
@@ -509,14 +515,14 @@ pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<()
     Ok(())
 }
 
-const COLUMNS: &str = "hour, key_id, pool_id, account_id, canonical_model, kind, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
+const COLUMNS: &str = "hour, key_id, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out FROM account_rollups_hourly";
 
 fn read_rollup(conn: &Connection, key: &RollupRow) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent],
             row_to_rollup,
         )
         .optional()?)
@@ -524,8 +530,8 @@ fn read_rollup(conn: &Connection, key: &RollupRow) -> Result<Option<RollupRow>, 
 
 fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent],
     )?;
     Ok(())
 }
@@ -534,9 +540,9 @@ fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)"),
         params![
-            r.hour, r.key_id, r.pool_id, r.account_id, r.canonical_model, r.kind, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.estimated_usd, r.input_usd, r.cache_read_usd, r.cache_write_usd, r.output_usd, r.kept_warm_requests as i64, r.kept_warm_tokens as i64,
@@ -562,41 +568,42 @@ fn row_to_rollup(r: &rusqlite::Row<'_>) -> rusqlite::Result<RollupRow> {
         account_id: r.get(3)?,
         canonical_model: r.get(4)?,
         kind: r.get(5)?,
-        requests: u(6)?,
-        succeeded: u(7)?,
-        rate_limited: u(8)?,
-        failed: u(9)?,
-        exhausted: u(10)?,
-        rejected: u(11)?,
-        attempts: u(12)?,
-        failovers: u(13)?,
-        cache_hits: u(14)?,
-        cache_misses: u(15)?,
-        uncached_requests: u(16)?,
-        input_tokens: u(17)?,
-        cache_read_tokens: u(18)?,
-        cache_write_5m_tokens: u(19)?,
-        cache_write_1h_tokens: u(20)?,
-        output_tokens: u(21)?,
-        estimated_usd: r.get(22)?,
-        input_usd: r.get(23)?,
-        cache_read_usd: r.get(24)?,
-        cache_write_usd: r.get(25)?,
-        output_usd: r.get(26)?,
-        kept_warm_requests: u(27)?,
-        kept_warm_tokens: u(28)?,
-        saved_usd_gross: r.get(29)?,
-        probe_cost_usd: r.get(30)?,
-        probe_migrated: u(31)?,
-        wasted_probes: u(32)?,
-        wasted_probe_usd: r.get(33)?,
-        wasted_probe_reasons: counts(34)?,
-        ttfb_hist: hist(35)?,
-        ttfc_hist: hist(36)?,
-        duration_hist: hist(37)?,
-        output_tps_hist: hist(38)?,
-        errors: counts(39)?,
-        cache_miss_reasons: counts(40)?,
+        user_agent: r.get(6)?,
+        requests: u(7)?,
+        succeeded: u(8)?,
+        rate_limited: u(9)?,
+        failed: u(10)?,
+        exhausted: u(11)?,
+        rejected: u(12)?,
+        attempts: u(13)?,
+        failovers: u(14)?,
+        cache_hits: u(15)?,
+        cache_misses: u(16)?,
+        uncached_requests: u(17)?,
+        input_tokens: u(18)?,
+        cache_read_tokens: u(19)?,
+        cache_write_5m_tokens: u(20)?,
+        cache_write_1h_tokens: u(21)?,
+        output_tokens: u(22)?,
+        estimated_usd: r.get(23)?,
+        input_usd: r.get(24)?,
+        cache_read_usd: r.get(25)?,
+        cache_write_usd: r.get(26)?,
+        output_usd: r.get(27)?,
+        kept_warm_requests: u(28)?,
+        kept_warm_tokens: u(29)?,
+        saved_usd_gross: r.get(30)?,
+        probe_cost_usd: r.get(31)?,
+        probe_migrated: u(32)?,
+        wasted_probes: u(33)?,
+        wasted_probe_usd: r.get(34)?,
+        wasted_probe_reasons: counts(35)?,
+        ttfb_hist: hist(36)?,
+        ttfc_hist: hist(37)?,
+        duration_hist: hist(38)?,
+        output_tps_hist: hist(39)?,
+        errors: counts(40)?,
+        cache_miss_reasons: counts(41)?,
     })
 }
 
@@ -620,7 +627,7 @@ pub fn read_rollups(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, pool_id, account_id, canonical_model, kind"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, pool_id, account_id, canonical_model, kind, user_agent"))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -641,6 +648,60 @@ pub fn read_account_rollups(
 mod tests {
     use super::*;
     use crate::record::*;
+
+    /// The rollup columns as version 2 held them, which is the shape a stored database still has when the
+    /// migration runs over it.
+    fn v2_columns() -> String {
+        COLUMNS.replace(", user_agent", "")
+    }
+
+    /// One row per version-2 column, in that order.
+    const V2_ROW: &str = "3600, 'k', 'p', 'a', 'm', 'inference', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
+         1, 2, 3, 4, 6, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{}', \
+         x'', x'', x'', x'', '{}', '{}'";
+
+    /// A stored ledger has rollup rows under the six-part key, and SQLite cannot add a seventh to a primary
+    /// key in place, so the migration rebuilds the table. What it copies has to survive that.
+    #[test]
+    fn a_version_two_ledger_keeps_its_rollup_rows_under_the_reserved_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(crate::schema::MIGRATIONS[0].1).unwrap();
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '2')",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                &format!(
+                    "INSERT INTO rollups_hourly ({}) VALUES ({V2_ROW})",
+                    v2_columns()
+                ),
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 3);
+        let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(rows.len(), 1, "the row survived the rebuild");
+        assert_eq!(
+            (
+                rows[0].user_agent.as_str(),
+                rows[0].hour,
+                rows[0].key_id.as_str(),
+                rows[0].requests,
+                rows[0].output_tokens
+            ),
+            (UNATTRIBUTED, 3_600, "k", 5, 6),
+            "a row folded before the column existed takes the reserved id and keeps its counts"
+        );
+    }
 
     fn request(outcome: &str, status: Option<u16>, key: Option<&str>) -> RequestRecord {
         RequestRecord {

@@ -16,6 +16,12 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
     let pools = ["p1", "p2"];
     let accounts = ["a", "b", "c"];
     let models = ["claude-sonnet-5", "claude-opus-5", "gpt-5"];
+    // The last one stands for a caller that sent no agent at all, which folds under the reserved id.
+    let agents = [
+        Some("claude-cli/2.1.269 (external, sdk-cli)"),
+        Some("claude-cli/2.1.300 (external, cli)"),
+        None,
+    ];
     let kinds = [
         "inference",
         "inference",
@@ -93,6 +99,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
             ttfc_ms: ttfc,
             duration_ms: duration,
             error_code: (outcome != "succeeded").then(|| "e".into()),
+            user_agent: agents[rng.random_range(0..3)].map(String::from),
             ..Default::default()
         };
         out.push((request, attempts));
@@ -166,6 +173,13 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
             .any(|r| r.key_id == UNATTRIBUTED && r.account_id == UNATTRIBUTED),
         "the unattributed bucket exists"
     );
+    assert!(
+        rollups.iter().any(|r| r.user_agent == UNATTRIBUTED)
+            && rollups
+                .iter()
+                .any(|r| r.user_agent == "claude-cli/2.1.300 (external, cli)"),
+        "a caller that sent no agent folds under the reserved id, beside the ones that did"
+    );
     let raw_total: u64 = rollups.iter().map(|r| r.requests).sum();
     assert_eq!(raw_total, rows.len() as u64);
     #[allow(clippy::type_complexity)]
@@ -175,6 +189,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         ("account", Box::new(|r| r.account_id.clone())),
         ("model", Box::new(|r| r.canonical_model.clone())),
         ("kind", Box::new(|r| r.kind.clone())),
+        ("user_agent", Box::new(|r| r.user_agent.clone())),
         ("hour", Box::new(|r| r.hour.to_string())),
     ];
     for (name, group) in &groups {

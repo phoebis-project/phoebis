@@ -28,6 +28,19 @@ fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The same list, split on newlines instead of commas: every measured client agent carries a comma
+/// (`claude-cli/2.1.269 (external, sdk-cli)`), and a header value can never carry a newline.
+fn agent_list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
+    q.get(name)
+        .map(|v| {
+            v.split('\n')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn flag(q: &HashMap<String, String>, name: &str) -> bool {
     q.get(name).is_some_and(|v| v == "true" || v == "1")
 }
@@ -39,6 +52,7 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
         accounts: list(q, "accounts"),
         models: list(q, "models"),
         kinds: list(q, "kinds"),
+        user_agents: agent_list(q, "user_agents"),
         include_probes: flag(q, "include_probes"),
     }
 }
@@ -57,7 +71,7 @@ fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, key, kind, model, or pool",
+            "group_by is account, all, key, kind, model, pool, or user_agent",
         ));
     }
     let rows = state

@@ -5,6 +5,10 @@ use common::{get, json, login};
 
 const HOUR: i64 = 3_600_000;
 
+/// Two client builds, so a group-by over them has more than one group; `nokey` sends neither.
+const SDK_CLI: &str = "claude-cli/2.1.269 (external, sdk-cli)";
+const NEWER_CLI: &str = "claude-cli/2.1.300 (external, cli)";
+
 fn request(
     id: &str,
     at: i64,
@@ -69,18 +73,20 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     let now = common::NOW;
     for i in 0..6 {
         let at = now - (5 - i) * HOUR;
+        let mut row = request(
+            &format!("r{i}"),
+            at,
+            Some("desktop"),
+            "claude-sonnet-5",
+            if i == 2 { "failed" } else { "succeeded" },
+            if i == 2 { 500 } else { 200 },
+            "inference",
+        );
+        row.user_agent = Some(if i % 2 == 0 { SDK_CLI } else { NEWER_CLI }.into());
         parts
             .db
             .insert_request(
-                &request(
-                    &format!("r{i}"),
-                    at,
-                    Some("desktop"),
-                    "claude-sonnet-5",
-                    if i == 2 { "failed" } else { "succeeded" },
-                    if i == 2 { 500 } else { 200 },
-                    "inference",
-                ),
+                &row,
                 &[attempt(
                     &format!("r{i}"),
                     if i % 2 == 0 { "business" } else { "direct" },
@@ -249,6 +255,47 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     )
     .await;
     assert_eq!(filtered["rows"][0]["requests"].as_u64(), Some(3));
+    let agents = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=user_agent",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        agents["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["key"].as_str().unwrap(), r["requests"].as_u64().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![(SDK_CLI, 3), (NEWER_CLI, 3), ("-", 1)],
+        "two client builds and the request that named none"
+    );
+    // A comma is part of every measured agent, so the filter splits on newlines rather than commas.
+    let one_agent = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=user_agent\
+             &user_agents=claude-cli%2F2.1.300%20(external,%20cli)",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let groups: Vec<&str> = one_agent["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap())
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        groups, [NEWER_CLI; 3],
+        "the series holds that build's three requests and nothing else"
+    );
     let accounts = json(
         get(
             &parts.app,

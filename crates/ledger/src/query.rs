@@ -422,10 +422,20 @@ pub struct RollupFilter {
     pub accounts: Vec<String>,
     pub models: Vec<String>,
     pub kinds: Vec<String>,
+    /// Matched in full, the way accounts are: an analytics drill-down comes from a group the breakdown named.
+    pub user_agents: Vec<String>,
     pub include_probes: bool,
 }
 
-pub const GROUP_BYS: &[&str] = &["account", "all", "key", "kind", "model", "pool"];
+pub const GROUP_BYS: &[&str] = &[
+    "account",
+    "all",
+    "key",
+    "kind",
+    "model",
+    "pool",
+    "user_agent",
+];
 
 pub fn group_of(row: &RollupRow, group_by: &str) -> String {
     match group_by {
@@ -434,6 +444,7 @@ pub fn group_of(row: &RollupRow, group_by: &str) -> String {
         "account" => row.account_id.clone(),
         "model" => row.canonical_model.clone(),
         "kind" => row.kind.clone(),
+        "user_agent" => row.user_agent.clone(),
         _ => "all".into(),
     }
 }
@@ -454,6 +465,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
         .filter(|r| f.accounts.is_empty() || f.accounts.contains(&r.account_id))
         .filter(|r| lower.is_empty() || lower.contains(&r.canonical_model))
         .filter(|r| f.kinds.is_empty() || f.kinds.contains(&r.kind))
+        .filter(|r| f.user_agents.is_empty() || f.user_agents.contains(&r.user_agent))
         .filter(|r| f.include_probes || f.kinds.iter().any(|k| k == "probe") || r.kind != "probe")
         .collect()
 }
@@ -531,7 +543,7 @@ fn sum_groups(rows: &[&RollupRow], group_by: &str) -> Vec<GroupRow> {
         sums.entry(key.clone())
             .and_modify(|s| s.add(row))
             .or_insert_with(|| {
-                let mut s = RollupRow::key(0, &key, "", "", "", "");
+                let mut s = RollupRow::key(0, &key, "", "", "", "", "");
                 s.add(row);
                 s
             });
