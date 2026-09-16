@@ -278,7 +278,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     if let Some(i) = serving {
         let last = &mut attempts[i];
         last.finished_at = Some(complete.finished_at);
-        last.ttfc_ms = complete.ttfc_ms;
+        // The completion measures its first content from admission, every attempt field from the attempt's
+        // own start: the instant is re-based here, and one that predates this attempt belonged to another.
+        last.ttfc_ms = complete
+            .ttfc_ms
+            .map(|ttfc| observed.received_at + ttfc - last.started_at)
+            .filter(|ttfc| *ttfc >= 0);
         if let Some(usage) = &complete.usage {
             last.input_tokens = usage.input_tokens;
             last.output_tokens = usage.output_tokens;
@@ -602,7 +607,7 @@ mod tests {
                 last.ttfc_ms,
                 last.outcome.as_str()
             ),
-            (2, "b", Some(1_500), Some(150), Some(200), "succeeded")
+            (2, "b", Some(1_500), Some(150), Some(100), "succeeded")
         );
         assert_eq!(
             (
@@ -616,6 +621,37 @@ mod tests {
         assert_eq!(
             (last.estimated_usd, last.pricing_version.as_deref()),
             (None, None)
+        );
+    }
+
+    /// Every other field on an attempt row is measured from that attempt's start, while the completion's
+    /// ttfc is measured from admission: copied across, a retried request reports a first content from before
+    /// the attempt that served it began.
+    #[test]
+    fn the_serving_attempts_ttfc_is_measured_from_its_own_start() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r12", Some("k")));
+        a.observe(selected("r12", 1, "a", 1_010));
+        a.observe(head("r12", 1, 429, AttemptOutcome::RateLimited, 1_060));
+        // Admission is at 1_000, so this attempt starts 500 ms into the request.
+        a.observe(selected("r12", 2, "b", 1_500));
+        a.observe(head("r12", 2, 200, AttemptOutcome::Succeeded, 1_600));
+        let Event::RequestComplete(mut done) =
+            complete("r12", 2, Some("b"), Outcome::Succeeded, 200, None)
+        else {
+            panic!()
+        };
+        done.ttfc_ms = Some(800);
+        let Some(Record::Request {
+            request, attempts, ..
+        }) = a.observe(Event::RequestComplete(done)).pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (request.ttfc_ms, attempts[1].ttfc_ms),
+            (Some(800), Some(300)),
+            "the request row keeps the request-relative value; the attempt's is re-based on its own start"
         );
     }
 
