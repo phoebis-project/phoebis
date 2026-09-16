@@ -135,18 +135,29 @@ mod service {
         UsageService::new(manager, control, p, cache_ttl, 4, clock)
     }
 
-    /// A service over a fake control plane that answers `/api/oauth/profile` with the profile fixture, for the
-    /// account `business`. No `/api/oauth/usage` rule is configured: the profile test never needs a successful
-    /// usage fetch, only that a fetch attempted while the account is held fails.
+    /// A service over a fake control plane that answers both `/api/oauth/profile` and `/api/oauth/usage` with
+    /// their fixtures, for the account `business`, at 200. Both rules exist from the start because
+    /// `set_rule_after` panics for a prefix that has no rule, and a test that switches one endpoint's response
+    /// mid-run needs the other endpoint still able to succeed.
     async fn service_with_fake() -> (UsageService, FakeUpstream, Arc<Store>) {
-        let up = FakeUpstream::start(vec![Rule {
-            path_prefix: "/api/oauth/profile".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: control_response(ControlFixture::Profile).to_vec(),
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Profile).to_vec(),
+                },
             },
-        }])
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
         .await;
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         store
@@ -475,7 +486,9 @@ mod service {
             store.profile_json("business").unwrap().as_deref(),
             Some(profile.raw.to_string().as_str())
         );
-        // A 429 on the profile endpoint arms the same hold the usage fetch honours.
+        // A 429 on the profile endpoint arms the same hold the usage fetch honours. The usage route is made to
+        // answer so the assertion can only pass through the hold: a fetch that ran would succeed, and
+        // `invalidate` is never called here because it drops the cache entry the hold lives in.
         up.set_rule_after(
             0,
             "/api/oauth/profile",
@@ -485,12 +498,28 @@ mod service {
                 body: b"{}".to_vec(),
             },
         );
+        up.set_rule_after(
+            0,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            },
+        );
         assert!(service.profile("business").await.is_err());
-        service.invalidate("business");
         let usage = service.snapshot("business").await.unwrap();
         assert!(
             usage.error.is_some(),
             "the usage fetch waits out the profile endpoint's Retry-After"
+        );
+        assert_eq!(
+            up.requests()
+                .iter()
+                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .count(),
+            0,
+            "held, not fetched"
         );
     }
 }
