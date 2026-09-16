@@ -8,6 +8,10 @@ use phoebis_store::{AccountState, CooldownRow, OverageRow, PinRow, RoutingLoad};
 
 use crate::RegistrySnapshot;
 
+/// The sample TTL a state nobody configured ages readings on. The router task replaces it with its own
+/// configured interval; this matches `RouterConfig::default().sample_ttl`.
+const DEFAULT_SAMPLE_TTL_MS: i64 = 60_000;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinRef {
     pub key_id: String,
@@ -80,6 +84,7 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
+    sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
 }
 
@@ -118,6 +123,7 @@ impl RoutingState {
                 .into_iter()
                 .map(|p| ((p.key_id.clone(), p.session_id.clone(), p.model.clone()), p))
                 .collect(),
+            sample_ttl_ms: DEFAULT_SAMPLE_TTL_MS,
             samples: HashMap::new(),
         }
     }
@@ -301,6 +307,16 @@ impl RoutingState {
 
     pub fn sample(&self, account_id: &str) -> Option<&UtilizationSample> {
         self.samples.get(account_id)
+    }
+
+    /// How long a reading stands when it dates no refund of its own: the interval the router pulls samples
+    /// on, so a window read full is re-read rather than believed for ever.
+    pub(crate) fn sample_ttl_ms(&self) -> i64 {
+        self.sample_ttl_ms
+    }
+
+    pub(crate) fn set_sample_ttl_ms(&mut self, ms: i64) {
+        self.sample_ttl_ms = ms;
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.

@@ -758,6 +758,95 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
     );
 }
 
+/// The TTL the router's default configuration pulls samples on, which is how long a reading that dates no
+/// refund of its own is worth.
+const SAMPLE_TTL: i64 = 60_000;
+
+#[test]
+fn a_spent_fable_window_stops_excluding_once_the_reset_it_named_passes() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 1.0, Some(2 * HOUR)));
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-fable-5-1", true, &[], HOUR),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 2 * HOUR,
+            window: "seven_day_fable".into()
+        }),
+        "until the reset the reading stands"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s2"), "claude-fable-5-1", true, &[], 2 * HOUR),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "a reset at or before now is the refund the sample itself announced"
+    );
+}
+
+#[test]
+fn a_spent_fable_window_that_dated_no_reset_stops_excluding_once_the_reading_ages_out() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1_000), 1.0, None));
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &request(
+                &s,
+                Some("s1"),
+                "claude-fable-5-1",
+                true,
+                &[],
+                1_000 + SAMPLE_TTL - 1
+            ),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Untimed),
+        "while the router would still be trusting the reading it is an exclusion"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(
+                    &s,
+                    Some("s2"),
+                    "claude-fable-5-1",
+                    true,
+                    &[],
+                    1_000 + SAMPLE_TTL
+                ),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "past it the account is tried again rather than excluded on a reading nothing refreshes"
+    );
+}
+
 #[test]
 fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() {
     let s = snapshot(Pool {

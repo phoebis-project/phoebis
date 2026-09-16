@@ -338,7 +338,9 @@ pub fn spawn(
         now,
         1,
     ))));
-    let state = RoutingState::from_load(store.load_routing()?);
+    let mut state = RoutingState::from_load(store.load_routing()?);
+    // Selection ages a full-window reading that dates no refund on the same interval the pulls below run on.
+    state.set_sample_ttl_ms(config.sample_ttl.as_millis() as i64);
     let (tx, mut rx) = mpsc::channel(COMMANDS);
     // Unbounded so the loop never blocks on SQLite: a stalled store grows this queue in memory rather than
     // stalling selection, and bounding the process's memory is the operator's call, not this channel's.
@@ -1075,7 +1077,9 @@ impl Task {
 
 /// Whether a selection has to read a candidate's usage. The pool's own reasons stand, and a candidate under a
 /// live rate-limit cooldown is read whatever the strategy: while the account is cooled no response head of its
-/// own can show the window the upstream reset ahead of the deadline it announced.
+/// own can show the window the upstream reset ahead of the deadline it announced. A candidate whose latest
+/// sample spent its model-scoped window is read for the same reason: selection excludes it on that reading,
+/// so no request of its own will ever bring a fresher one.
 fn needs_sample(
     pool: &phoebis_store::PoolRow,
     state: &RoutingState,
@@ -1091,6 +1095,9 @@ fn needs_sample(
         || state
             .cooldown(account_id, canonical_model, now)
             .is_some_and(|row| row.reason == "rate_limit")
+        || state
+            .sample(account_id)
+            .is_some_and(|s| s.fable.unwrap_or(0.0) >= 1.0)
 }
 
 pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option<OverageEvidence>) {
@@ -1169,6 +1176,27 @@ mod tests {
             }],
             ..RoutingLoad::default()
         })
+    }
+
+    #[test]
+    fn a_candidate_whose_latest_sample_spent_its_fable_window_is_sampled_again() {
+        let mut spent = RoutingState::from_load(RoutingLoad::default());
+        spent.record_sample(
+            "a",
+            UtilizationSample {
+                fable: Some(1.0),
+                fable_reset: None,
+                five_hour: Some(0.1),
+                five_hour_reset: None,
+                seven_day: Some(0.1),
+                seven_day_reset: None,
+                observed_at: 1_000,
+            },
+        );
+        assert!(
+            needs_sample(&plain_pool(), &spent, "a", "claude-sonnet-5", 2_000),
+            "selection excludes on this reading, so nothing but another sample can undo it"
+        );
     }
 
     #[test]

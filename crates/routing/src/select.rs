@@ -80,10 +80,21 @@ fn window_of(canonical_model: &str) -> Window {
 
 /// Whether an account can still serve a request for the model-scoped window. No sample, or a sample that never
 /// read that window, counts as allowance, the way `least_utilized` reads an unsampled account as a 0.
-fn holds_fable_allowance(state: &RoutingState, account_id: &str) -> bool {
-    state
-        .sample(account_id)
-        .is_none_or(|s| s.fable.unwrap_or(0.0) < 1.0)
+///
+/// A window read full excludes only while the reading stands for it: the reset the sample announced is the
+/// moment the window refunds, and a reading that announced none is worth no more than the interval the router
+/// re-reads on, or one full window would keep an account out until the process restarts.
+fn holds_fable_allowance(state: &RoutingState, account_id: &str, now: i64) -> bool {
+    let Some(sample) = state.sample(account_id) else {
+        return true;
+    };
+    if sample.fable.unwrap_or(0.0) < 1.0 {
+        return true;
+    }
+    match sample.fable_reset {
+        Some(reset) => reset <= now,
+        None => now - sample.observed_at >= state.sample_ttl_ms(),
+    }
 }
 
 pub fn select(
@@ -240,7 +251,7 @@ pub fn select(
         if window == Window::Fable {
             destination = destination.map(|set| {
                 set.into_iter()
-                    .filter(|c| holds_fable_allowance(state, &c.account_id))
+                    .filter(|c| holds_fable_allowance(state, &c.account_id, request.now))
                     .collect()
             });
         }
@@ -280,7 +291,7 @@ pub fn select(
         let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
             .iter()
             .copied()
-            .partition(|c| holds_fable_allowance(state, &c.account_id));
+            .partition(|c| holds_fable_allowance(state, &c.account_id, request.now));
         obstacles.extend(spent.iter().filter_map(|c| {
             state
                 .sample(&c.account_id)
