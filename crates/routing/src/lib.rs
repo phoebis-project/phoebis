@@ -15,6 +15,6 @@ pub use state::{
     EvidenceSource, OverageEvidence, PinRef, Purged, RoutingState, StateWrite, UtilizationSample,
 };
 pub use task::{
-    sample_from_usage, spawn, ReloadError, Report, RouterConfig, RouterGone, RouterHandle,
-    SelectAnswer,
+    sample_from_usage, spawn, ReloadError, Report, RouterConfig, RouterEvent, RouterGone,
+    RouterHandle, SelectAnswer,
 };

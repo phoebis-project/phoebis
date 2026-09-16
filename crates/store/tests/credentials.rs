@@ -421,3 +421,81 @@ fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its
         "the row the deleted slot left behind is untouched, so it quarantines nothing"
     );
 }
+
+#[test]
+fn resolved_refresh_attempts_are_listed_after_a_watermark() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    let first = store.open_refresh_attempt("a", 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
+        .unwrap();
+    let second = store.open_refresh_attempt("a", 1, 1).unwrap();
+    assert!(
+        store
+            .refresh_attempts_resolved_after(0, 0, 10)
+            .unwrap()
+            .iter()
+            .all(|r| r.id == first),
+        "an open attempt is not resolved"
+    );
+    store
+        .resolve_refresh_attempt(second, 1, AttemptOutcome::Committed)
+        .unwrap();
+    let rows = store.refresh_attempts_resolved_after(0, 0, 10).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.id, r.outcome.as_str(), r.detail.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (first, "failed", Some("transport")),
+            (second, "committed", None)
+        ]
+    );
+    assert_eq!(
+        store
+            .refresh_attempts_resolved_after(rows[1].resolved_at, rows[1].id, 10)
+            .unwrap()
+            .len(),
+        0
+    );
+    // Rows that share a millisecond: paging by (resolved_at, id) crosses the batch boundary without a skip.
+    let stamp = rows[1].resolved_at;
+    let conn_rows: Vec<u64> = (0..5)
+        .map(|i| {
+            let id = store.open_refresh_attempt("a", 1, 1).unwrap();
+            store
+                .resolve_refresh_attempt(id, 1, AttemptOutcome::Failed(format!("tie {i}")))
+                .unwrap();
+            id
+        })
+        .collect();
+    store.debug_set_resolved_at(&conn_rows, stamp).unwrap();
+    let page = store
+        .refresh_attempts_resolved_after(rows[0].resolved_at, rows[0].id, 3)
+        .unwrap();
+    assert_eq!(page.len(), 3);
+    let rest = store
+        .refresh_attempts_resolved_after(page[2].resolved_at, page[2].id, 10)
+        .unwrap();
+    assert_eq!(
+        page.iter()
+            .chain(rest.iter())
+            .map(|r| r.id)
+            .collect::<Vec<_>>(),
+        std::iter::once(second).chain(conn_rows).collect::<Vec<_>>(),
+        "every row once, in order"
+    );
+}

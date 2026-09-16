@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
-use crate::record::{AttemptRecord, RequestRecord};
+use crate::record::{AttemptRecord, EventRecord, RequestRecord};
 use crate::LedgerError;
 
 /// The reserved id for a key, pool, or account a request never reached, so the failures of an exhausted hour
@@ -413,6 +413,76 @@ pub fn fold_request(
         }
     }
     Ok(())
+}
+
+pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), LedgerError> {
+    let detail: serde_json::Value = event
+        .detail
+        .as_deref()
+        .and_then(|d| serde_json::from_str(d).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let hour = hour_of(event.at);
+    let row = |account_id: &str| AccountRollupRow {
+        hour,
+        account_id: account_id.into(),
+        ..Default::default()
+    };
+    match (event.kind.as_str(), event.account_id.as_deref()) {
+        ("pin_created", Some(account)) => fold_account(
+            tx,
+            &AccountRollupRow {
+                pins_created: 1,
+                ..row(account)
+            },
+        ),
+        ("pin_migrated", Some(to)) => {
+            fold_account(
+                tx,
+                &AccountRollupRow {
+                    pins_migrated_in: 1,
+                    ..row(to)
+                },
+            )?;
+            match detail["from_account"].as_str() {
+                Some(from) => fold_account(
+                    tx,
+                    &AccountRollupRow {
+                        pins_migrated_out: 1,
+                        ..row(from)
+                    },
+                ),
+                None => Ok(()),
+            }
+        }
+        ("cooldown_set", Some(account)) => {
+            // The whole span lands in the hour it started, which the account rollup reads as time in cooldown.
+            let seconds = detail["until"]
+                .as_i64()
+                .map(|until| (until - event.at).max(0) / 1_000)
+                .unwrap_or(0) as u64;
+            fold_account(
+                tx,
+                &AccountRollupRow {
+                    cooldown_seconds: seconds,
+                    ..row(account)
+                },
+            )
+        }
+        ("overage_ended", Some(account)) => {
+            let seconds = detail["since"]
+                .as_i64()
+                .map(|since| (event.at - since).max(0) / 1_000)
+                .unwrap_or(0) as u64;
+            fold_account(
+                tx,
+                &AccountRollupRow {
+                    overage_seconds: seconds,
+                    ..row(account)
+                },
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn fold_account(tx: &Transaction<'_>, delta: &AccountRollupRow) -> Result<(), LedgerError> {

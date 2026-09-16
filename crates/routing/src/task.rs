@@ -8,16 +8,81 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
 use phoebis_store::{AccountState, CooldownRow, PinRow, Store, StoreError};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::select::{select, Exhaustion, SelectRequest, SelectResult};
+use crate::select::{select, Exhaustion, MigrateReason, SelectRequest, SelectResult};
 use crate::state::{
     EvidenceSource, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
 };
 use crate::{resolve, RegistrySnapshot};
 
 const COMMANDS: usize = 4_096;
+
+const EVENTS: usize = 1_024;
+
+/// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
+/// session. A failover re-selects within one request, well inside this.
+const MIGRATION_WINDOW_MS: i64 = 60_000;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RouterEvent {
+    CooldownCleared {
+        account_id: String,
+        scope: String,
+        at: i64,
+    },
+    CooldownSet {
+        account_id: String,
+        scope: String,
+        until: i64,
+        reason: String,
+        window: String,
+        source_request_id: Option<String>,
+        at: i64,
+    },
+    OverageEnded {
+        account_id: String,
+        since: Option<i64>,
+        at: i64,
+    },
+    OverageStarted {
+        account_id: String,
+        at: i64,
+    },
+    PinCreated {
+        key_id: String,
+        session_id: String,
+        model: String,
+        account_id: String,
+        epoch: u64,
+        at: i64,
+    },
+    PinExpired {
+        key_id: String,
+        session_id: String,
+        model: String,
+        account_id: String,
+        at: i64,
+    },
+    PinMigrated {
+        key_id: String,
+        session_id: String,
+        model: String,
+        from_account: String,
+        to_account: String,
+        epoch: u64,
+        reason: String,
+        at: i64,
+    },
+    PinReleased {
+        key_id: String,
+        session_id: String,
+        model: String,
+        account_id: String,
+        at: i64,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
@@ -127,6 +192,7 @@ enum Command {
 
 #[derive(Clone)]
 pub struct RouterHandle {
+    events: broadcast::Sender<RouterEvent>,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     tx: mpsc::Sender<Command>,
 }
@@ -137,6 +203,12 @@ impl RouterHandle {
             .read()
             .expect("snapshot lock poisoned")
             .clone()
+    }
+
+    /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
+    /// events and is told so; the task never waits on a receiver.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<RouterEvent> {
+        self.events.subscribe()
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
@@ -224,6 +296,10 @@ struct Task {
     cancel: HashMap<String, CancellationToken>,
     clock: Clock,
     config: RouterConfig,
+    events: broadcast::Sender<RouterEvent>,
+    /// The account a triple's pin was invalidated from, why, and when. The next select for that triple
+    /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
+    invalidated: HashMap<(String, String, String), (String, &'static str, i64)>,
     revision: u64,
     sampled_at: HashMap<String, i64>,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
@@ -259,7 +335,9 @@ pub fn spawn(
     // stalling selection, and bounding the process's memory is the operator's call, not this channel's.
     let (writer, mut writes) = mpsc::unbounded_channel::<Vec<StateWrite>>();
     let (done_tx, done_rx) = oneshot::channel();
+    let (events, _) = broadcast::channel(EVENTS);
     let handle = RouterHandle {
+        events: events.clone(),
         snapshot: snapshot.clone(),
         tx: tx.clone(),
     };
@@ -298,6 +376,8 @@ pub fn spawn(
         cancel: HashMap::new(),
         clock,
         config,
+        events,
+        invalidated: HashMap::new(),
         revision: 1,
         sampled_at: HashMap::new(),
         snapshot,
@@ -370,6 +450,11 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
 }
 
 impl Task {
+    /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
+    fn emit(&self, event: RouterEvent) {
+        let _ = self.events.send(event);
+    }
+
     /// Dropping the sender ends the writer's loop; waiting on `writer_done` is what makes an acknowledged pin or
     /// cooldown durable before the process exits.
     async fn drain_writer(&mut self) {
@@ -413,9 +498,98 @@ impl Task {
                     request.revision = snapshot.revision;
                 }
                 self.pull_samples(&request);
+                let triple = request.session_id.as_ref().map(|s| {
+                    (
+                        request.key_id.clone(),
+                        s.clone(),
+                        request.canonical_model.clone(),
+                    )
+                });
+                let before = triple
+                    .as_ref()
+                    .and_then(|(k, s, m)| self.state.pin(k, s, m).cloned());
                 let (result, writes) =
                     select(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
+                if let Some((k, s, m)) = &triple {
+                    let after = self.state.pin(k, s, m).cloned();
+                    let now = request.now;
+                    match (before, after, &result) {
+                        (None, Some(new), SelectResult::Selected(_)) => {
+                            match self
+                                .invalidated
+                                .remove(&(k.clone(), s.clone(), m.clone()))
+                                .filter(|(_, _, at)| now - at <= MIGRATION_WINDOW_MS)
+                            {
+                                Some((from, reason, _)) => {
+                                    self.emit(RouterEvent::PinMigrated {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        model: m.clone(),
+                                        from_account: from,
+                                        to_account: new.account_id.clone(),
+                                        epoch: new.epoch,
+                                        reason: reason.into(),
+                                        at: now,
+                                    });
+                                }
+                                None => self.emit(RouterEvent::PinCreated {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    model: m.clone(),
+                                    account_id: new.account_id.clone(),
+                                    epoch: new.epoch,
+                                    at: now,
+                                }),
+                            }
+                        }
+                        (Some(old), Some(new), SelectResult::Selected(selection))
+                            if old.epoch != new.epoch =>
+                        {
+                            let reason = match selection.migrated {
+                                Some(MigrateReason::Overage) => "overage",
+                                Some(MigrateReason::Utilization) => "utilization",
+                                None => "expired",
+                            };
+                            if reason == "expired" {
+                                self.emit(RouterEvent::PinExpired {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    model: m.clone(),
+                                    account_id: old.account_id.clone(),
+                                    at: now,
+                                });
+                                self.emit(RouterEvent::PinCreated {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    model: m.clone(),
+                                    account_id: new.account_id.clone(),
+                                    epoch: new.epoch,
+                                    at: now,
+                                });
+                            } else {
+                                self.emit(RouterEvent::PinMigrated {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    model: m.clone(),
+                                    from_account: old.account_id.clone(),
+                                    to_account: new.account_id.clone(),
+                                    epoch: new.epoch,
+                                    reason: reason.into(),
+                                    at: now,
+                                });
+                            }
+                        }
+                        (Some(old), None, _) => self.emit(RouterEvent::PinExpired {
+                            key_id: k.clone(),
+                            session_id: s.clone(),
+                            model: m.clone(),
+                            account_id: old.account_id.clone(),
+                            at: now,
+                        }),
+                        _ => {}
+                    }
+                }
                 let cancel = match &result {
                     SelectResult::Selected(selection) => {
                         self.token(&selection.account.id).child_token()
@@ -436,8 +610,28 @@ impl Task {
                 session_id,
                 reply,
             } => {
+                // The account a pin names is only readable while it is still held, so the rows come first.
+                let held: HashMap<(String, String, String), String> = self
+                    .state
+                    .pins()
+                    .into_iter()
+                    .filter(|p| p.key_id == key_id && p.session_id == session_id)
+                    .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+                    .collect();
                 let gone = self.state.release_session(&key_id, &session_id);
                 let count = gone.len();
+                let now = (self.clock)();
+                for triple in &gone {
+                    if let Some(account_id) = held.get(triple) {
+                        self.emit(RouterEvent::PinReleased {
+                            key_id: triple.0.clone(),
+                            session_id: triple.1.clone(),
+                            model: triple.2.clone(),
+                            account_id: account_id.clone(),
+                            at: now,
+                        });
+                    }
+                }
                 self.write(
                     gone.into_iter()
                         .map(|(k, s, m)| StateWrite::DeletePin(k, s, m))
@@ -452,6 +646,11 @@ impl Task {
             } => {
                 let cleared = self.state.clear_cooldown(&account_id, &scope);
                 if cleared {
+                    self.emit(RouterEvent::CooldownCleared {
+                        account_id: account_id.clone(),
+                        scope: scope.clone(),
+                        at: (self.clock)(),
+                    });
                     self.write(vec![StateWrite::DeleteCooldown(account_id, scope)]);
                 }
                 let _ = reply.send(cleared);
@@ -496,10 +695,27 @@ impl Task {
                 }
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
+                    self.emit(RouterEvent::CooldownSet {
+                        account_id: account_id.clone(),
+                        scope: row.scope.clone(),
+                        until: row.until,
+                        reason: row.reason.clone(),
+                        window: row.window.clone(),
+                        source_request_id: row.source_request_id.clone(),
+                        at: (self.clock)(),
+                    });
                     writes.push(StateWrite::UpsertCooldown(row));
                 }
                 if let Some(pin) = pin {
                     if self.state.invalidate_pin(&pin, &account_id) {
+                        self.invalidated.insert(
+                            (
+                                pin.key_id.clone(),
+                                pin.session_id.clone(),
+                                pin.model.clone(),
+                            ),
+                            (account_id.clone(), "cooldown", (self.clock)()),
+                        );
                         writes.push(StateWrite::DeletePin(pin.key_id, pin.session_id, pin.model));
                     }
                 }
@@ -509,7 +725,24 @@ impl Task {
                 account_id,
                 evidence,
             } => {
+                let at = evidence.observed_at;
+                let (was, since) = match self.state.overage(&account_id) {
+                    Some(current) => (current.in_use, current.since),
+                    None => (false, None),
+                };
                 if self.state.record_overage(&account_id, evidence) {
+                    match (was, self.state.in_overage(&account_id)) {
+                        (false, true) => self.emit(RouterEvent::OverageStarted {
+                            account_id: account_id.clone(),
+                            at,
+                        }),
+                        (true, false) => self.emit(RouterEvent::OverageEnded {
+                            account_id: account_id.clone(),
+                            since,
+                            at,
+                        }),
+                        _ => {}
+                    }
                     // The row is built from the normalized state, not the incoming evidence: `since` is what the
                     // state kept across consecutive in-use heads.
                     if let Some(current) = self.state.overage(&account_id) {
@@ -534,6 +767,14 @@ impl Task {
                     return;
                 }
                 if self.state.invalidate_pin(&pin, &account_id) {
+                    self.invalidated.insert(
+                        (
+                            pin.key_id.clone(),
+                            pin.session_id.clone(),
+                            pin.model.clone(),
+                        ),
+                        (account_id.clone(), "mark", (self.clock)()),
+                    );
                     self.write(vec![StateWrite::DeletePin(
                         pin.key_id,
                         pin.session_id,
@@ -681,12 +922,40 @@ impl Task {
             .read()
             .expect("snapshot lock poisoned")
             .clone();
-        let purged = self.state.purge(&snapshot, (self.clock)());
+        let now = (self.clock)();
+        // The account a pin names is only readable while it is still held, so the rows come first.
+        let held: HashMap<(String, String, String), String> = self
+            .state
+            .pins()
+            .into_iter()
+            .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+            .collect();
+        let purged = self.state.purge(&snapshot, now);
         tracing::debug!(
             cooldowns = purged.cooldowns.len(),
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
         );
+        self.invalidated
+            .retain(|_, (_, _, at)| now - *at <= MIGRATION_WINDOW_MS);
+        for (account_id, scope) in &purged.cooldowns {
+            self.emit(RouterEvent::CooldownCleared {
+                account_id: account_id.clone(),
+                scope: scope.clone(),
+                at: now,
+            });
+        }
+        for triple in &purged.pins {
+            if let Some(account_id) = held.get(triple) {
+                self.emit(RouterEvent::PinExpired {
+                    key_id: triple.0.clone(),
+                    session_id: triple.1.clone(),
+                    model: triple.2.clone(),
+                    account_id: account_id.clone(),
+                    at: now,
+                });
+            }
+        }
         let mut writes: Vec<StateWrite> = purged
             .cooldowns
             .into_iter()

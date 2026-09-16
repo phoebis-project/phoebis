@@ -22,7 +22,8 @@ use sha2::Sha256;
 
 pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
 pub use credentials::{
-    AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, Secret,
+    AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
+    Secret,
 };
 pub use pricing::PricingVersion;
 pub use registry::{

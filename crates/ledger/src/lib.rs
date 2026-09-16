@@ -4,6 +4,7 @@
 mod assemble;
 mod bodies;
 mod db;
+mod events;
 mod histogram;
 mod pricing;
 mod quota;
@@ -15,6 +16,7 @@ mod task;
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS};
 pub use db::LedgerDb;
+pub use events::{event_of, spawn_event_mirror};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
@@ -26,8 +28,8 @@ pub use record::{
     RequestRecord,
 };
 pub use rollup::{
-    bucket_of, delta_of, fold_account, fold_request, hour_of, read_account_rollups, read_rollups,
-    AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
+    bucket_of, delta_of, fold_account, fold_event, fold_request, hour_of, read_account_rollups,
+    read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 

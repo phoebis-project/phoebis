@@ -75,6 +75,16 @@ pub struct PendingAttempt {
     pub started_at: i64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedAttempt {
+    pub id: u64,
+    pub account_id: String,
+    pub started_at: i64,
+    pub resolved_at: i64,
+    pub outcome: String,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LastAttempt {
     pub resolved_at: Option<i64>,
@@ -384,6 +394,50 @@ impl Store {
         let rows = stmt.query_map([], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<Vec<Vec<u8>>>>()
             .map_err(StoreError::from)
+    }
+
+    /// Attempts settled after a watermark, oldest first. Keyed on the resolution time rather than the id
+    /// because an attempt opened early can settle late, and a mirror that walked ids would skip it; the id is
+    /// the tie-breaker, so rows settled in the same millisecond page through without a gap.
+    pub fn refresh_attempts_resolved_after(
+        &self,
+        resolved_at: i64,
+        id: u64,
+        limit: usize,
+    ) -> Result<Vec<ResolvedAttempt>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(
+            "SELECT id, account_id, started_at, resolved_at, outcome, detail FROM refresh_attempts \
+             WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) AND outcome IS NOT NULL \
+             ORDER BY resolved_at, id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![resolved_at, id as i64, limit as i64], |r| {
+            Ok(ResolvedAttempt {
+                id: r.get::<_, i64>(0)? as u64,
+                account_id: r.get(1)?,
+                started_at: r.get(2)?,
+                resolved_at: r.get(3)?,
+                outcome: r.get(4)?,
+                detail: r.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+
+    /// Test seam for the paging test above, which needs several rows settled in one millisecond; compiled
+    /// under `debug-hooks` like the other seams, so a release build cannot rewrite history.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_set_resolved_at(&self, ids: &[u64], resolved_at: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        for id in ids {
+            conn.execute(
+                "UPDATE refresh_attempts SET resolved_at = ?2 WHERE id = ?1",
+                params![*id as i64, resolved_at],
+            )?;
+        }
+        Ok(())
     }
 
     /// Replaces a credential row's sealed blob with bytes that cannot be opened, so a test can drive the

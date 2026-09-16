@@ -7,12 +7,14 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::{Clock, UsageService};
+use phoebis_routing::RouterHandle;
 use phoebis_store::Store;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
+use crate::events::spawn_event_mirror;
 use crate::pricing::{price_attempts, Pricing};
 use crate::quota::QuotaPoll;
 use crate::record::EventRecord;
@@ -34,6 +36,7 @@ pub struct LedgerConfig {
     pub sample_retention_days: u32,
     pub purge_interval: Duration,
     pub quota_poll_interval: Duration,
+    pub event_poll: Duration,
 }
 
 impl Default for LedgerConfig {
@@ -43,6 +46,7 @@ impl Default for LedgerConfig {
             sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
             quota_poll_interval: Duration::from_secs(3_600),
+            event_poll: Duration::from_secs(5),
         }
     }
 }
@@ -115,6 +119,7 @@ pub fn spawn(
     store: Arc<Store>,
     usage: Option<Arc<UsageService>>,
     bus: &Bus,
+    router: RouterHandle,
     clock: Clock,
     config: LedgerConfig,
 ) -> Ledger {
@@ -133,7 +138,7 @@ pub fn spawn(
     if let Some(usage) = usage {
         let poll = QuotaPoll::spawn(
             db.clone(),
-            store,
+            store.clone(),
             usage,
             ledger.clone(),
             clock.clone(),
@@ -141,6 +146,15 @@ pub fn spawn(
         );
         ledger.tasks.lock().expect(TASKS_POISONED).push(poll);
     }
+    let mirror = spawn_event_mirror(
+        db.clone(),
+        ledger.clone(),
+        store,
+        router,
+        clock.clone(),
+        config.event_poll,
+    );
+    ledger.tasks.lock().expect(TASKS_POISONED).push(mirror);
     let subscriber = bus.subscribe("ledger");
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
@@ -282,7 +296,10 @@ async fn land(
             let tx = conn.transaction()?;
             for record in &batch {
                 match record {
-                    Record::Event(event) => insert_event_in(&tx, event)?,
+                    Record::Event(event) => {
+                        insert_event_in(&tx, event)?;
+                        crate::rollup::fold_event(&tx, event)?;
+                    }
                     Record::Request {
                         request,
                         attempts,

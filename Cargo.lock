@@ -491,6 +491,7 @@ name = "phoebis-store"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "phoebis-store",
  "fd-lock",
  "hmac",
  "jiff",

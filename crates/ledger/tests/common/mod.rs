@@ -272,6 +272,7 @@ pub async fn harness_on(
         store.clone(),
         usage,
         &bus,
+        router_handle.clone(),
         clock.clone(),
         config,
     );

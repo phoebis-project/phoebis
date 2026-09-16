@@ -723,3 +723,120 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
     );
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
+
+async fn next_event(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> phoebis_routing::RouterEvent {
+    tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("an event")
+        .expect("not lagged")
+}
+
+#[tokio::test]
+async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        None,
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    let picked = |answer: &phoebis_routing::SelectAnswer| match &answer.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let a = picked(&first);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, at: 1_000, .. } if session_id == "s1" && account_id == a)
+    );
+    // A 429 on the pinned account: the cooldown lands, the pin goes, and the next select migrates the session.
+    let pin = match &first.result {
+        SelectResult::Selected(s) => s.pin.clone().unwrap(),
+        _ => unreachable!(),
+    };
+    handle.report(Report::Cooldown {
+        account_id: a.clone(),
+        row: CooldownRow {
+            account_id: a.clone(),
+            scope: "account".into(),
+            until: 1_000 + HOUR,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: Some("req_1".into()),
+        },
+        pin: Some(pin),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, scope, until, source_request_id: Some(r), .. } if account_id == a && scope == "account" && until == 1_000 + HOUR && r == "req_1")
+    );
+    let second = handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let b = picked(&second);
+    assert_ne!(a, b);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "cooldown")
+    );
+    // Overage moves once per edge.
+    let evidence = |in_use: bool, at: i64| phoebis_routing::OverageEvidence {
+        in_use,
+        since: in_use.then_some(at),
+        reset: None,
+        observed_at: at,
+        source: phoebis_routing::EvidenceSource::Head,
+    };
+    handle.report(Report::Overage {
+        account_id: b.clone(),
+        evidence: evidence(true, 1_200),
+    });
+    handle.report(Report::Overage {
+        account_id: b.clone(),
+        evidence: evidence(true, 1_300),
+    });
+    handle.report(Report::Overage {
+        account_id: b.clone(),
+        evidence: evidence(false, 1_400),
+    });
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::OverageStarted { account_id, .. } if account_id == b)
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::OverageEnded { account_id, since: Some(1_200), .. } if account_id == b)
+    );
+    // Clearing the cooldown, releasing the session, and the purge each say so.
+    assert!(handle.clear_cooldown(&a, "account").await.unwrap());
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, .. } if account_id == a)
+    );
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinReleased { session_id, account_id, .. } if session_id == "s1" && account_id == b)
+    );
+    handle
+        .select(request(&handle, Some("s2"), 2_000))
+        .await
+        .unwrap();
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
+    );
+    now.store(2_000 + HOUR + 1, Ordering::SeqCst);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, .. } if session_id == "s2"),
+        "the purge tick expired the idle pin"
+    );
+}
