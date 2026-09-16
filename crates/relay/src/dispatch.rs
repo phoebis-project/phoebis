@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::BytesMut;
+use phoebis_oauth::Clock;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
 use phoebis_transport::response::{read_head, ResponseHead};
@@ -19,6 +20,8 @@ pub(crate) struct Sent<C> {
     pub conn: C,
     pub head: ResponseHead,
     pub leftover: BytesMut,
+    /// When the request was in the socket, which is where a waterfall separates the write from the wait.
+    pub written_at: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,7 +73,7 @@ pub(crate) async fn attempt(
                 .map(|(conn, _)| conn)
                 .map_err(unsent)?
         };
-        send_and_read(conn, request, &sending).await
+        send_and_read(conn, request, &sending, &relay.clock).await
     };
     bounded(relay, cancel, &sending, once).await
 }
@@ -103,6 +106,7 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
     mut conn: C,
     request: &RawRequest,
     sending: &AtomicBool,
+    clock: &Clock,
 ) -> Result<Sent<C>, AttemptFailure> {
     // From here on the request may be on the wire, which is what the timeout arms need to know; the
     // write's own failures carry their progress and are classified below.
@@ -117,12 +121,14 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
             // read the whole request.
             WriteProgress::BodyWritten => AttemptFailure::Lost(failure.error.to_string()),
         })?;
+    let written_at = clock();
     let mut leftover = BytesMut::new();
     match read_head(&mut conn, &mut leftover).await {
         Ok(head) => Ok(Sent {
             conn,
             head,
             leftover,
+            written_at,
         }),
         // The whole request is in the socket, so an upstream that read it and then closed without
         // answering is indistinguishable from one that never saw it. Sending it again would bill the

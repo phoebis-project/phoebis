@@ -18,7 +18,7 @@ pub const INSPECT_BUFFER: usize = 64 * 1024;
 pub enum Commit {
     EndOfStream,
     Error(Bytes),
-    MessageStart,
+    MessageStart(Bytes),
     Overflow,
     Timeout,
 }
@@ -68,7 +68,7 @@ pub async fn hold<R: AsyncRead + Unpin>(
             match event.name.as_deref() {
                 Some(b"message_start") => {
                     return Ok(Held {
-                        commit: Commit::MessageStart,
+                        commit: Commit::MessageStart(Bytes::from(event.data)),
                         bytes: raw.freeze(),
                         inspect,
                     })
@@ -105,7 +105,7 @@ pub async fn hold<R: AsyncRead + Unpin>(
             // committing event can still be sitting in the parser's buffer.
             let commit = match inspect.parser.finish() {
                 Some(SseEvent { name, data }) => match name.as_deref() {
-                    Some(b"message_start") => Commit::MessageStart,
+                    Some(b"message_start") => Commit::MessageStart(Bytes::from(data)),
                     Some(b"error") => Commit::Error(Bytes::from(data)),
                     _ => Commit::EndOfStream,
                 },
@@ -170,7 +170,7 @@ mod tests {
             Duration::from_secs(1),
         )
         .await;
-        assert!(matches!(held.commit, Commit::MessageStart));
+        assert!(matches!(held.commit, Commit::MessageStart(_)));
         assert!(
             std::str::from_utf8(&held.bytes)
                 .unwrap()
@@ -213,7 +213,7 @@ mod tests {
         let chunks = plain(&["event: message_start\r\ndata: {}\r\n\r\n", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n"]);
         let held = held_from(chunks, Inspect::new(None), Duration::from_secs(1)).await;
         assert!(
-            matches!(held.commit, Commit::MessageStart),
+            matches!(held.commit, Commit::MessageStart(_)),
             "the first committing event wins; the later error is post-commit"
         );
         let crlf = plain(&[
@@ -222,7 +222,7 @@ mod tests {
         ]);
         let held = held_from(crlf, Inspect::new(None), Duration::from_secs(1)).await;
         assert!(
-            matches!(held.commit, Commit::MessageStart),
+            matches!(held.commit, Commit::MessageStart(_)),
             "a CRLF-only stream commits without waiting for EOF"
         );
     }
@@ -241,7 +241,7 @@ mod tests {
             Duration::from_secs(1),
         )
         .await;
-        assert!(matches!(held.commit, Commit::MessageStart));
+        assert!(matches!(held.commit, Commit::MessageStart(_)));
         assert_eq!(
             held.bytes.as_ref(),
             gz.as_slice(),
@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(held.bytes.as_ref(), ping.as_bytes());
         let held = held_to_end_of_body(plain(&[&ping, "event: message_start\ndata: {}"])).await;
         assert!(
-            matches!(held.commit, Commit::MessageStart),
+            matches!(held.commit, Commit::MessageStart(_)),
             "a truncated stream still commits on the event it did deliver"
         );
     }

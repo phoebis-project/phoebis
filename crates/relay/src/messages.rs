@@ -12,6 +12,10 @@ use axum::response::Response;
 use axum::routing::{get, head, post};
 use axum::Router;
 use bytes::Bytes;
+use phoebis_bus::{
+    AccountSelected, AttemptOutcome, Bus, CooldownSet, Event, Kind, Origin, Outcome,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseHead as BusHead, Usage,
+};
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_profile::Profile;
 use phoebis_routing::{
@@ -36,11 +40,13 @@ use crate::errors::{
 };
 use crate::exhaustion::exhaustion_response;
 use crate::headers::{outbound_headers, CredentialKind};
-use crate::hold::{hold, Commit, Held, Inspect};
+use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
+use crate::observe::{allowlisted_headers, usage_from_json, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
+use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, Checkin, Drained, PostCommit, Relayed, ReturnToPool,
+    drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, ReturnToPool,
     MAX_BUFFERED_BODY,
 };
 use crate::{edit_body, is_portable, presented_key, DriftGuard, RelayError};
@@ -93,10 +99,19 @@ pub struct RelayOutcome {
     pub client_version: Option<String>,
     pub error_code: Option<String>,
     pub pin_epoch: Option<u64>,
+    pub received_at: i64,
+    /// When the head that answered the caller arrived, which a local answer never has.
+    pub head_at: Option<i64>,
 }
 
+/// Marks a request the keepalive companion sent on a session's behalf. Set on the request's extensions by the
+/// probe path; the relay publishes such a request as a probe and ledgers it under `kind = probe`.
+#[derive(Clone, Copy, Debug)]
+pub struct Probe;
+
 pub struct Relay {
-    clock: Clock,
+    bus: Option<Bus>,
+    pub(crate) clock: Clock,
     drift: DriftGuard,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
@@ -120,6 +135,7 @@ impl Relay {
         limits: Limits,
     ) -> Relay {
         Relay {
+            bus: None,
             clock,
             drift: DriftGuard::new(profile),
             limits,
@@ -131,6 +147,199 @@ impl Relay {
             store,
         }
     }
+
+    /// Attaches the bus every relayed request is published to. Without one the relay publishes nothing.
+    pub fn with_bus(self, bus: Bus) -> Relay {
+        Relay {
+            bus: Some(bus),
+            ..self
+        }
+    }
+}
+
+/// The bus-facing side of one request: the identity every event of the request carries, and the instant the
+/// timeline is measured from. Every method is a no-op without a bus.
+#[derive(Clone)]
+pub(crate) struct Trace {
+    bus: Option<Bus>,
+    pub request_id: String,
+    pub received_at: i64,
+    origin: Origin,
+    kind: Kind,
+}
+
+impl Trace {
+    pub(crate) fn bus_attached(&self) -> bool {
+        self.bus.is_some()
+    }
+
+    fn publish(&self, event: Event) {
+        if let Some(bus) = &self.bus {
+            bus.publish(event);
+        }
+    }
+
+    pub(crate) fn publish_chunk(&self, chunk: ResponseChunk) {
+        self.publish(Event::ResponseChunk(chunk));
+    }
+
+    /// Published exactly once per request by the handler, as soon as it knows as much of the identity as the
+    /// request will ever yield. A refusal before the key was read publishes with nothing but the id.
+    fn observed(
+        &self,
+        key: Option<&ApiKeyRow>,
+        identity: Option<&RequestIdentity>,
+        headers: &HeaderMap,
+        body: Bytes,
+        stream: bool,
+        body_capture_hours: u32,
+    ) {
+        if self.bus.is_none() {
+            return;
+        }
+        self.publish(Event::RequestObserved(RequestObserved {
+            request_id: self.request_id.clone(),
+            origin: self.origin,
+            kind: self.kind,
+            key_id: key.map(|k| k.id.clone()),
+            pool_id: key.map(|k| k.pool_id.clone()),
+            session_id: identity.and_then(|i| i.session_id.clone()),
+            agent_id: identity.map(|i| i.agent_id.clone()),
+            parent_agent_id: identity.and_then(|i| i.parent_agent_id.clone()),
+            owner_id: identity.and_then(|i| i.owner_id.clone()),
+            model: identity.map(|i| i.model.clone()).unwrap_or_default(),
+            canonical_model: identity
+                .map(|i| i.canonical_model.clone())
+                .unwrap_or_default(),
+            stream,
+            headers: allowlisted_headers(headers),
+            body,
+            body_capture_hours,
+            received_at: self.received_at,
+        }));
+    }
+
+    fn selected(
+        &self,
+        attempt: u8,
+        account: &AccountRow,
+        pin_epoch: Option<u64>,
+        started_at: i64,
+    ) {
+        self.publish(Event::AccountSelected(AccountSelected {
+            request_id: self.request_id.clone(),
+            attempt,
+            account_id: account.id.clone(),
+            account_kind: match account.kind {
+                AccountKind::ApiKey => "api_key",
+                AccountKind::Oauth => "oauth",
+            }
+            .into(),
+            pin_epoch,
+            started_at,
+        }));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn head(
+        &self,
+        attempt: u8,
+        head: &ResponseHead,
+        first_event: Option<Bytes>,
+        outcome: AttemptOutcome,
+        cooldown: Option<CooldownSet>,
+        written_at: i64,
+        observed_at: i64,
+    ) {
+        self.publish(Event::ResponseHead(BusHead {
+            request_id: self.request_id.clone(),
+            attempt,
+            status: head.status,
+            headers: head.headers.clone(),
+            first_event,
+            outcome,
+            cooldown,
+            written_at,
+            observed_at,
+        }));
+    }
+
+    /// The last event of a request. `status` is what the client was answered with, which is the upstream's
+    /// only for a forwarded answer; `end` overrides the outcome derived from the `RelayOutcome` for a body that
+    /// ended other than cleanly, and `error` names the cause when the override has one.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn complete(
+        &self,
+        outcome: &RelayOutcome,
+        status: u16,
+        usage: Option<Usage>,
+        ttfc_ms: Option<i64>,
+        response_bytes: Option<u64>,
+        end: Option<(Outcome, Option<String>)>,
+        finished_at: i64,
+    ) {
+        let (final_outcome, error_code) = match end {
+            Some((o, code)) => (o, code.or_else(|| outcome.error_code.clone())),
+            None => (outcome_of(outcome), outcome.error_code.clone()),
+        };
+        self.publish(Event::RequestComplete(RequestComplete {
+            request_id: self.request_id.clone(),
+            attempt: outcome.attempt,
+            account_id: (!outcome.account_id.is_empty()).then(|| outcome.account_id.clone()),
+            outcome: final_outcome,
+            status,
+            usage: usage.filter(|u| !u.is_empty()),
+            ttfb_ms: outcome.head_at.map(|at| at - outcome.received_at),
+            ttfc_ms,
+            error_code,
+            client_drift: outcome.client_drift.clone(),
+            client_version: outcome.client_version.clone(),
+            response_bytes,
+            finished_at,
+        }));
+    }
+}
+
+/// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
+fn outcome_of(outcome: &RelayOutcome) -> Outcome {
+    match outcome.error_code.as_deref() {
+        Some("account_cancelled") => Outcome::Canceled,
+        Some("accounts_exhausted") | Some("accounts_unavailable") => Outcome::Exhausted,
+        Some(_) if outcome.attempt == 0 => Outcome::Rejected,
+        Some(_) => Outcome::Failed,
+        None if outcome.upstream_status < 400 => Outcome::Succeeded,
+        None => Outcome::Failed,
+    }
+}
+
+/// The attempt outcome the verdict on a head implies.
+fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -> AttemptOutcome {
+    match verdict {
+        Verdict::Refresh => AttemptOutcome::AuthFailed,
+        Verdict::Commit if status < 400 => AttemptOutcome::Succeeded,
+        Verdict::Commit => AttemptOutcome::UpstreamError,
+        Verdict::FailOver { .. } if status == 429 => AttemptOutcome::RateLimited,
+        Verdict::FailOver { .. }
+            if first_event
+                .is_some_and(|e| e.windows(18).any(|w| w == br#""rate_limit_error""#)) =>
+        {
+            AttemptOutcome::RateLimited
+        }
+        Verdict::FailOver { .. } if status == 401 => AttemptOutcome::AuthFailed,
+        Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
+    }
+}
+
+fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<CooldownSet> {
+    cooldown.map(|c| CooldownSet {
+        scope: match c.scope {
+            Scope::Account => "account".into(),
+            Scope::Model => format!("model:{canonical_model}"),
+        },
+        until: c.until,
+        reason: c.reason.to_string(),
+        window: c.window.clone(),
+    })
 }
 
 /// The relayed surface. A known path asked with an unsupported method answers an Anthropic-shaped 405 rather
@@ -191,68 +400,116 @@ impl From<AccessToken> for Credential {
 
 impl Relay {
     async fn handle(&self, request: Request) -> Response {
-        let request_id = new_request_id();
-        let now = (self.clock)();
+        let received_at = (self.clock)();
+        let probe = request.extensions().get::<Probe>().is_some();
+        let count_tokens = request.uri().path().ends_with("/count_tokens");
+        let trace = Trace {
+            bus: self.bus.clone(),
+            request_id: new_request_id(),
+            received_at,
+            origin: if probe {
+                Origin::Keepalive
+            } else {
+                Origin::Client
+            },
+            kind: if probe {
+                Kind::Probe
+            } else if count_tokens {
+                Kind::CountTokens
+            } else {
+                Kind::Inference
+            },
+        };
         let (parts, body) = request.into_parts();
         // Before the body: an unauthenticated caller that could reach the read below would hold the whole
         // request limit per connection for as long as it cared to keep sending.
         let presented = match presented_key(&parts.headers) {
             Ok(presented) => presented,
-            Err(error) => return auth_failure(&error).response(&request_id),
+            Err(error) => {
+                trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                return self.refused(&trace, auth_failure(&error), None, None, None);
+            }
         };
         // The snapshot is pinned for the whole request: the key, the pool, and the candidates all come from one
         // registry, and a write that lands mid-request is seen by the next request.
         let snapshot = self.router.snapshot();
-        let key = match snapshot.authenticate(presented, now) {
+        let key = match snapshot.authenticate(presented, received_at) {
             Ok(key) => key.clone(),
             Err(refusal) => {
                 tracing::debug!(%refusal, "a presented key was refused");
-                return key_refusal(&refusal).response(&request_id);
+                trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                return self.refused(&trace, key_refusal(&refusal), None, None, None);
             }
         };
         self.router.touch_key(&key.id);
+        let capture_hours = snapshot.body_capture_hours(&key);
         let client_version = self.drift.check(&parts.headers);
         let Ok(raw) = axum::body::to_bytes(body, self.limits.max_request_bytes).await else {
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
             // no complete request to relay.
+            trace.observed(
+                Some(&key),
+                None,
+                &parts.headers,
+                Bytes::new(),
+                false,
+                capture_hours,
+            );
             return self.refused(
+                &trace,
                 relay_failure(&RelayError::BodyTooLarge),
-                &request_id,
-                &key,
+                Some(&key),
                 None,
                 client_version.as_deref(),
             );
         };
+        let stream = wants_stream(&raw);
         let identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
+                trace.observed(
+                    Some(&key),
+                    None,
+                    &parts.headers,
+                    raw.clone(),
+                    stream,
+                    capture_hours,
+                );
                 return self.refused(
+                    &trace,
                     relay_failure(&error),
-                    &request_id,
-                    &key,
+                    Some(&key),
                     None,
                     client_version.as_deref(),
-                )
+                );
             }
         };
+        trace.observed(
+            Some(&key),
+            Some(&identity),
+            &parts.headers,
+            raw.clone(),
+            stream,
+            capture_hours,
+        );
         // Version drift is a tag on a relayed request; hash drift is a refusal, below.
         let client_drift = client_version.as_ref().map(|_| "version".to_string());
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
                 return self.refused(
+                    &trace,
                     MODEL_NOT_ALLOWED,
-                    &request_id,
-                    &key,
+                    Some(&key),
                     Some(&identity),
                     client_version.as_deref(),
                 )
             }
             Err(ResolveError::ModelUnserved) => {
                 return self.refused(
+                    &trace,
                     MODEL_UNSERVED,
-                    &request_id,
-                    &key,
+                    Some(&key),
                     Some(&identity),
                     client_version.as_deref(),
                 )
@@ -270,7 +527,7 @@ impl Relay {
             agent = %identity.agent_id,
             key = %key.id,
             model = %identity.canonical_model,
-            request = %request_id,
+            request = %trace.request_id,
             session = ?identity.session_id,
             "relaying a Messages request",
         );
@@ -283,8 +540,9 @@ impl Relay {
             key: &key,
             portable,
             raw: &raw,
-            request_id: &request_id,
+            request_id: &trace.request_id,
             target: &target,
+            trace: &trace,
         };
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
@@ -294,9 +552,9 @@ impl Relay {
             // `attempted` grows each pass, so the loop is bounded by the pool even without this.
             if attempt >= self.limits.max_attempts {
                 return self.refused(
+                    &trace,
                     UPSTREAM_UNREACHABLE,
-                    &request_id,
-                    &key,
+                    Some(&key),
                     Some(&identity),
                     admitted.client_version.as_deref(),
                 );
@@ -320,9 +578,9 @@ impl Relay {
                 Ok(answer) => answer,
                 Err(_) => {
                     return self.refused(
+                        &trace,
                         ROUTER_UNAVAILABLE,
-                        &request_id,
-                        &key,
+                        Some(&key),
                         Some(&identity),
                         admitted.client_version.as_deref(),
                     )
@@ -334,18 +592,18 @@ impl Relay {
                 // current registry would have given at admission.
                 SelectResult::Refused(ResolveError::ModelNotAllowed) => {
                     return self.refused(
+                        &trace,
                         MODEL_NOT_ALLOWED,
-                        &request_id,
-                        &key,
+                        Some(&key),
                         Some(&identity),
                         admitted.client_version.as_deref(),
                     )
                 }
                 SelectResult::Refused(ResolveError::ModelUnserved) => {
                     return self.refused(
+                        &trace,
                         MODEL_UNSERVED,
-                        &request_id,
-                        &key,
+                        Some(&key),
                         Some(&identity),
                         admitted.client_version.as_deref(),
                     )
@@ -356,8 +614,8 @@ impl Relay {
                         Exhaustion::Untimed => "accounts_unavailable",
                     };
                     let outcome = self.outcome(
-                        &request_id,
-                        &key,
+                        &trace,
+                        Some(&key),
                         Some(&identity),
                         "",
                         0,
@@ -367,10 +625,14 @@ impl Relay {
                         admitted.client_version.clone(),
                         Some(code),
                         None,
+                        None,
                     );
-                    return with_outcome(
-                        exhaustion_response(&exhaustion, now, &request_id),
+                    return self.answer(
+                        &trace,
+                        exhaustion_response(&exhaustion, now, &trace.request_id),
                         outcome,
+                        None,
+                        None,
                     );
                 }
             };
@@ -425,8 +687,8 @@ impl Relay {
                     "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
                 );
                 let outcome = self.outcome(
-                    admitted.request_id,
-                    admitted.key,
+                    admitted.trace,
+                    Some(admitted.key),
                     Some(admitted.identity),
                     &account.id,
                     0,
@@ -436,16 +698,20 @@ impl Relay {
                     admitted.client_version.clone(),
                     Some("client_drift"),
                     None,
+                    None,
                 );
-                return Leg::Respond(with_outcome(
+                return Leg::Respond(self.answer(
+                    admitted.trace,
                     relay_failure(&error).response(admitted.request_id),
                     outcome,
+                    None,
+                    None,
                 ));
             }
             return Leg::Respond(self.refused(
+                admitted.trace,
                 relay_failure(&error),
-                admitted.request_id,
-                admitted.key,
+                Some(admitted.key),
                 Some(admitted.identity),
                 admitted.client_version.as_deref(),
             ));
@@ -466,6 +732,12 @@ impl Relay {
 
         loop {
             *attempt += 1;
+            admitted.trace.selected(
+                *attempt,
+                account,
+                pin_epoch,
+                (self.clock)(),
+            );
             let responding = Responding {
                 account,
                 attempt: *attempt,
@@ -482,6 +754,7 @@ impl Relay {
                 portable: admitted.portable,
                 replayed,
                 request_id: admitted.request_id,
+                trace: admitted.trace,
             };
             let dispatched = {
                 let request = RawRequest {
@@ -529,8 +802,8 @@ impl Relay {
                 }
                 Err(AttemptFailure::Cancelled) => {
                     let outcome = self.outcome(
-                        admitted.request_id,
-                        admitted.key,
+                        admitted.trace,
+                        Some(admitted.key),
                         Some(admitted.identity),
                         &account.id,
                         0,
@@ -540,18 +813,22 @@ impl Relay {
                         admitted.client_version.clone(),
                         Some("account_cancelled"),
                         pin_epoch,
+                        None,
                     );
-                    return Leg::Respond(with_outcome(
+                    return Leg::Respond(self.answer(
+                        admitted.trace,
                         ACCOUNT_CANCELLED.response(admitted.request_id),
                         outcome,
+                        None,
+                        None,
                     ));
                 }
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));
                     tracing::warn!(account = %account.id, %failure, "the upstream did not answer");
                     let outcome = self.outcome(
-                        admitted.request_id,
-                        admitted.key,
+                        admitted.trace,
+                        Some(admitted.key),
                         Some(admitted.identity),
                         &account.id,
                         0,
@@ -561,10 +838,14 @@ impl Relay {
                         admitted.client_version.clone(),
                         Some("upstream_unreachable"),
                         pin_epoch,
+                        None,
                     );
-                    return Leg::Respond(with_outcome(
+                    return Leg::Respond(self.answer(
+                        admitted.trace,
                         UPSTREAM_UNREACHABLE.response(admitted.request_id),
                         outcome,
+                        None,
+                        None,
                     ));
                 }
             };
@@ -592,16 +873,17 @@ impl Relay {
             conn,
             head,
             leftover,
+            written_at,
         } = sent;
         // When the head arrived, which is what stamps the overage evidence below for an upstream that
         // sends no `Date` of its own.
-        let arrived = (self.clock)();
+        let head_at = (self.clock)();
         let framing = framing(&head);
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
         let outcome = self.outcome(
-            ctx.request_id,
-            ctx.key,
+            ctx.trace,
+            Some(ctx.key),
             Some(ctx.identity),
             &ctx.account.id,
             head.status,
@@ -611,8 +893,9 @@ impl Relay {
             ctx.client_version.clone(),
             None,
             ctx.pin_epoch,
+            Some(head_at),
         );
-        self.report_overage(ctx.account, &head, arrived);
+        self.report_overage(ctx.account, &head, head_at);
 
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
@@ -624,7 +907,7 @@ impl Relay {
             )
             .await
             else {
-                return Next::Respond(self.cancelled(&ctx, head.status));
+                return Next::Respond(self.cancelled(&ctx, &head, written_at));
             };
             match drained {
                 Ok(Drained::Complete(buffered)) => {
@@ -645,13 +928,17 @@ impl Relay {
                         outcome,
                         prefix,
                         reader,
+                        trace: ctx.trace,
                     }));
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
-                    return Next::Respond(with_outcome(
+                    return Next::Respond(self.answer(
+                        ctx.trace,
                         UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                        outcome,
+                        unreachable_outcome(outcome),
+                        None,
+                        None,
                     ));
                 }
             }
@@ -676,7 +963,7 @@ impl Relay {
             let Some(result) =
                 until_cancelled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
             else {
-                return Next::Respond(self.cancelled(&ctx, head.status));
+                return Next::Respond(self.cancelled(&ctx, &head, written_at));
             };
             match result {
                 Ok(h) => {
@@ -687,9 +974,12 @@ impl Relay {
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
-                    return Next::Respond(with_outcome(
+                    return Next::Respond(self.answer(
+                        ctx.trace,
                         UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                        outcome,
+                        unreachable_outcome(outcome),
+                        None,
+                        None,
                     ));
                 }
             }
@@ -706,6 +996,23 @@ impl Relay {
                 first_event: first_event.as_deref(),
                 body_prefix: decoded.as_deref(),
             },
+        );
+        let committing = match held.as_ref().map(|h| &h.commit) {
+            Some(Commit::MessageStart(data) | Commit::Error(data)) => Some(data.clone()),
+            _ => None,
+        };
+        let cooldown_seen = match &verdict {
+            Verdict::FailOver { cooldown, .. } => cooldown.as_ref(),
+            _ => None,
+        };
+        ctx.trace.head(
+            ctx.attempt,
+            &head,
+            committing,
+            attempt_outcome(&verdict, head.status, first_event.as_deref()),
+            cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
+            written_at,
+            head_at,
         );
         let generations = (ctx.account.lifecycle_generation, ctx.credential_generation);
 
@@ -726,7 +1033,8 @@ impl Relay {
                     // itself when the refresh ended in invalid_grant.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        return Next::Respond(forward_buffered(
+                        return Next::Respond(self.forward_buffered(
+                            ctx.trace,
                             &head,
                             buffered.unwrap_or_default(),
                             ctx.caller,
@@ -738,7 +1046,8 @@ impl Relay {
             // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
             // is forwarded as it came and the account keeps its state and its pin.
             Verdict::Refresh => {
-                return Next::Respond(forward_buffered(
+                return Next::Respond(self.forward_buffered(
+                    ctx.trace,
                     &head,
                     buffered.unwrap_or_default(),
                     ctx.caller,
@@ -803,7 +1112,9 @@ impl Relay {
                     }
                 };
                 return Next::Respond(match buffered {
-                    Some(buffered) => forward_buffered(&head, buffered, ctx.caller, outcome),
+                    Some(buffered) => {
+                        self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)
+                    }
                     None => self.stream(Forward {
                         caller: ctx.caller,
                         cancel: ctx.cancel.clone(),
@@ -815,6 +1126,7 @@ impl Relay {
                         prefix,
                         reader: reader
                             .expect("a head the table reads no body for still holds its reader"),
+                        trace: ctx.trace,
                     }),
                 });
             }
@@ -848,6 +1160,7 @@ impl Relay {
                 outcome,
                 prefix: held.bytes,
                 reader: reader.expect("a streaming head still holds the reader the hold read from"),
+                trace: ctx.trace,
             }));
         }
         // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
@@ -857,7 +1170,7 @@ impl Relay {
         if ctx.portable && ctx.attempt < self.limits.max_attempts {
             return Next::FailOver;
         }
-        Next::Respond(forward_buffered(&head, buffered, ctx.caller, outcome))
+        Next::Respond(self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome))
     }
 
     /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
@@ -907,14 +1220,14 @@ impl Relay {
 
     fn refused(
         &self,
+        trace: &Trace,
         failure: Failure,
-        request_id: &str,
-        key: &ApiKeyRow,
+        key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
         client_version: Option<&str>,
     ) -> Response {
         let outcome = self.outcome(
-            request_id,
+            trace,
             key,
             identity,
             "",
@@ -925,33 +1238,78 @@ impl Relay {
             client_version.map(str::to_string),
             Some(failure.code),
             None,
+            None,
         );
-        with_outcome(failure.response(request_id), outcome)
+        self.answer(
+            trace,
+            failure.response(&trace.request_id),
+            outcome,
+            None,
+            None,
+        )
+    }
+
+    /// A locally built answer: the outcome rides on the response for the accounting layer, and the completion
+    /// is published with the status the response carries, which for a local refusal is the refusal's own.
+    fn answer(
+        &self,
+        trace: &Trace,
+        response: Response,
+        outcome: RelayOutcome,
+        usage: Option<Usage>,
+        response_bytes: Option<u64>,
+    ) -> Response {
+        trace.complete(
+            &outcome,
+            response.status().as_u16(),
+            usage,
+            None,
+            response_bytes,
+            None,
+            (self.clock)(),
+        );
+        with_outcome(response, outcome)
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
-    fn cancelled(&self, ctx: &Responding<'_>, upstream_status: u16) -> Response {
+    fn cancelled(&self, ctx: &Responding<'_>, head: &ResponseHead, written_at: i64) -> Response {
+        ctx.trace.head(
+            ctx.attempt,
+            head,
+            None,
+            AttemptOutcome::Canceled,
+            None,
+            written_at,
+            (self.clock)(),
+        );
         let outcome = self.outcome(
-            ctx.request_id,
-            ctx.key,
+            ctx.trace,
+            Some(ctx.key),
             Some(ctx.identity),
             &ctx.account.id,
-            upstream_status,
+            head.status,
             ctx.attempt,
             true,
             ctx.client_drift.clone(),
             ctx.client_version.clone(),
             Some("account_cancelled"),
             ctx.pin_epoch,
+            None,
         );
-        with_outcome(ACCOUNT_CANCELLED.response(ctx.request_id), outcome)
+        self.answer(
+            ctx.trace,
+            ACCOUNT_CANCELLED.response(ctx.request_id),
+            outcome,
+            None,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn outcome(
         &self,
-        request_id: &str,
-        key: &ApiKeyRow,
+        trace: &Trace,
+        key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
         account_id: &str,
         upstream_status: u16,
@@ -961,11 +1319,12 @@ impl Relay {
         client_version: Option<String>,
         error_code: Option<&str>,
         pin_epoch: Option<u64>,
+        head_at: Option<i64>,
     ) -> RelayOutcome {
         RelayOutcome {
-            request_id: request_id.to_string(),
-            key_id: Some(key.id.clone()),
-            pool_id: Some(key.pool_id.clone()),
+            request_id: trace.request_id.clone(),
+            key_id: key.map(|k| k.id.clone()),
+            pool_id: key.map(|k| k.pool_id.clone()),
             session_id: identity.and_then(|i| i.session_id.clone()),
             canonical_model: identity.map(|i| i.canonical_model.clone()),
             account_id: account_id.to_string(),
@@ -976,6 +1335,8 @@ impl Relay {
             client_version,
             error_code: error_code.map(str::to_string),
             pin_epoch,
+            received_at: trace.received_at,
+            head_at,
         }
     }
 
@@ -1032,14 +1393,48 @@ impl Relay {
             outcome,
             prefix,
             reader,
+            trace,
         } = forward;
         let (builder, decoder) = match forward_head(head, caller) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
-                return with_outcome(UPSTREAM_UNREACHABLE.response(&outcome.request_id), outcome);
+                return self.answer(
+                    trace,
+                    UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                    unreachable_outcome(outcome),
+                    None,
+                    None,
+                );
             }
         };
+        let event_stream = head
+            .get("content-type")
+            .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let publish = trace.bus_attached().then(|| Publish {
+            trace: trace.clone(),
+            clock: self.clock.clone(),
+            outcome: outcome.clone(),
+            decoder: decoder
+                .is_none()
+                .then(|| {
+                    encoding(head)
+                        .ok()
+                        .filter(|e| !matches!(e, Encoding::Identity))
+                        .map(phoebis_transport::decode::decoder)
+                })
+                .flatten(),
+            parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+            // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
+            json: (!event_stream && head.status == 200).then(Vec::new),
+            usage: Usage::default(),
+            index: 0,
+            bytes: 0,
+            first_content_at: None,
+            saw_tool_use: false,
+            stream_error: None,
+            status: head.status,
+        });
         let body = relay_body(Relayed {
             cancel,
             checkin,
@@ -1048,9 +1443,79 @@ impl Relay {
             keep_alive,
             observer,
             prefix,
+            publish,
             reader,
         });
         with_outcome(built(builder, body), outcome)
+    }
+
+    fn forward_buffered(
+        &self,
+        trace: &Trace,
+        head: &ResponseHead,
+        raw: Bytes,
+        caller: &HeaderMap,
+        outcome: RelayOutcome,
+    ) -> Response {
+        let (builder, decoder) = match forward_head(head, caller) {
+            Ok(parts) => parts,
+            Err(error) => {
+                tracing::warn!(%error, "the upstream response cannot be forwarded");
+                return self.answer(
+                    trace,
+                    UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                    unreachable_outcome(outcome),
+                    None,
+                    None,
+                );
+            }
+        };
+        let payload = match decoder {
+            None => raw.clone(),
+            Some(mut decoder) => match decode_all(decoder.as_mut(), &raw) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::warn!(%error, "the upstream response cannot be decoded");
+                    return self.answer(
+                        trace,
+                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                        unreachable_outcome(outcome),
+                        None,
+                        None,
+                    );
+                }
+            },
+        };
+        // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
+        // reaches the bus as text.
+        let text = inspectable_copy(head, &raw)
+            .map(Bytes::from)
+            .unwrap_or_else(|| payload.clone());
+        trace.publish_chunk(ResponseChunk {
+            request_id: trace.request_id.clone(),
+            attempt: outcome.attempt,
+            index: 0,
+            body: text.clone(),
+            phase: None,
+        });
+        // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the body task.
+        let usage = (head.status == 200).then(|| usage_from_json(&text, &[]));
+        self.answer(
+            trace,
+            built(builder, Body::from(payload.clone())),
+            outcome,
+            usage,
+            Some(payload.len() as u64),
+        )
+    }
+}
+
+/// The outcome of a request the relay answered with its own 502 after an upstream head it could not use: the
+/// code names the failure the caller was actually given, not the head that never reached it.
+fn unreachable_outcome(outcome: RelayOutcome) -> RelayOutcome {
+    RelayOutcome {
+        error_code: Some(UPSTREAM_UNREACHABLE.code.to_string()),
+        ..outcome
     }
 }
 
@@ -1066,6 +1531,7 @@ struct Forward<'a, C> {
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,
+    trace: &'a Trace,
 }
 
 /// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
@@ -1094,6 +1560,7 @@ struct Responding<'a> {
     portable: bool,
     replayed: bool,
     request_id: &'a str,
+    trace: &'a Trace,
 }
 
 /// What the response half decided the account loop should do next.
@@ -1118,6 +1585,7 @@ struct Admitted<'a> {
     raw: &'a Bytes,
     request_id: &'a str,
     target: &'a str,
+    trace: &'a Trace,
 }
 
 /// What one selected account produced: an answer for the caller, or nothing, in which case the loop selects
@@ -1177,32 +1645,6 @@ pub(crate) fn report_failover(
             credential_generation: generations.1,
         });
     }
-}
-
-fn forward_buffered(
-    head: &ResponseHead,
-    raw: Bytes,
-    caller: &HeaderMap,
-    outcome: RelayOutcome,
-) -> Response {
-    let (builder, decoder) = match forward_head(head, caller) {
-        Ok(parts) => parts,
-        Err(error) => {
-            tracing::warn!(%error, "the upstream response cannot be forwarded");
-            return with_outcome(UPSTREAM_UNREACHABLE.response(&outcome.request_id), outcome);
-        }
-    };
-    let payload = match decoder {
-        None => raw,
-        Some(mut decoder) => match decode_all(decoder.as_mut(), &raw) {
-            Ok(payload) => payload,
-            Err(error) => {
-                tracing::warn!(%error, "the upstream response cannot be decoded");
-                return with_outcome(UPSTREAM_UNREACHABLE.response(&outcome.request_id), outcome);
-            }
-        },
-    };
-    with_outcome(built(builder, Body::from(payload)), outcome)
 }
 
 /// Decoded in pieces under the same bound as the inspection copy, so a small compressed rejection cannot

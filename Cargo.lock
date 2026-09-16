@@ -387,6 +387,7 @@ dependencies = [
  "axum",
  "boring",
  "bytes",
+ "phoebis-bus",
  "phoebis-cch",
  "phoebis-oauth",
  "phoebis-profile",

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
+use phoebis_bus::Bus;
 use phoebis_oauth::Clock;
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -188,6 +189,50 @@ pub async fn harness_on(
     models: &[&str],
     limits: Limits,
 ) -> Harness {
+    build(store, up, accounts, pool, models, limits, None).await
+}
+
+/// The default harness with a bus attached, for the suites that read what the relay publishes.
+pub async fn harness_with_bus(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    bus: Bus,
+) -> Harness {
+    harness_with_bus_limits(up, accounts, pool, bus, default_limits()).await
+}
+
+/// The same with the relay's limits set by the caller, for the cases that have to reach one.
+pub async fn harness_with_bus_limits(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    bus: Bus,
+    limits: Limits,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        limits,
+        Some(bus),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build(
+    store: Arc<Store>,
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    models: &[&str],
+    limits: Limits,
+    bus: Option<Bus>,
+) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
         for (n, account) in accounts.iter().enumerate() {
@@ -360,18 +405,21 @@ pub async fn harness_on(
         clock.clone(),
         limits.head_timeout,
     ));
-    let relay = Arc::new(
-        Relay::new(
-            p,
-            store.clone(),
-            manager,
-            pool,
-            router_handle.clone(),
-            resolver,
-            clock,
-            limits,
-        )
+    let relay = Relay::new(
+        p,
+        store.clone(),
+        manager,
+        pool,
+        router_handle.clone(),
+        resolver,
+        clock,
+        limits,
     );
+    let relay = match bus {
+        Some(bus) => relay.with_bus(bus),
+        None => relay,
+    };
+    let relay = Arc::new(relay);
     Harness {
         app: router(relay),
         catalog,

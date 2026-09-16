@@ -9,6 +9,7 @@ version.workspace = true
 axum = { workspace = true }
 boring = { workspace = true }
 bytes = { workspace = true }
+phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
@@ -29,6 +30,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+phoebis-bus = { path = "../bus" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
 http-body-util = { workspace = true }

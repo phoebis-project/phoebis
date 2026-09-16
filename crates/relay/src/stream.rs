@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
+use phoebis_bus::{Outcome, Phase, ResponseChunk, Usage};
+use phoebis_oauth::Clock;
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
@@ -15,6 +17,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::hold::Inspect;
+use crate::messages::{RelayOutcome, Trace};
+use crate::observe::{is_tool_use_delta, usage_from_json};
+use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
 /// moment does not stall the read loop, shallow enough that a caller that stops reading still pushes back on
@@ -31,6 +36,182 @@ pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 pub(crate) struct PostCommit {
     pub inspect: Inspect,
     pub on_error: Box<dyn FnOnce(Bytes) + Send>,
+}
+
+/// What the body task tells the bus as the body goes by: every decoded piece as a chunk, the SSE phases it
+/// carries, and the completion once the body has ended one way or another.
+pub(crate) struct Publish {
+    pub trace: Trace,
+    pub clock: Clock,
+    pub outcome: RelayOutcome,
+    /// Decodes the raw chunk for the bus when the caller receives the upstream's coding as it is; `None`
+    /// when the relay already decodes for the caller and the piece is text.
+    pub decoder: Option<Box<dyn Decoder>>,
+    /// Parses the decoded copy for phases on an event stream; `None` for any other body, and dropped on
+    /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks.
+    pub parser: Option<SseParser>,
+    /// The decoded copy of a committed body that is not an event stream, kept up to `MAX_BUFFERED_BODY` so its
+    /// usage block can be read at the end; `None` for a stream or once the bound is passed.
+    pub json: Option<Vec<u8>>,
+    pub usage: Usage,
+    pub index: u32,
+    pub bytes: u64,
+    pub first_content_at: Option<i64>,
+    pub saw_tool_use: bool,
+    /// The error type of an SSE `error` event seen after the head, which turns a clean end into a failure.
+    pub stream_error: Option<String>,
+    /// The status the client was answered with, for the completion.
+    pub status: u16,
+}
+
+impl Publish {
+    /// `raw` is the wire chunk and `piece` what the caller is sent; one of the two is the text.
+    fn chunk(&mut self, raw: &[u8], piece: &Bytes) {
+        let text = match self.decoder.as_mut() {
+            None => piece.clone(),
+            Some(decoder) => match decoder.feed(raw) {
+                Ok(out) => Bytes::from(out),
+                Err(_) => {
+                    self.decoder = None;
+                    self.parser = None;
+                    return;
+                }
+            },
+        };
+        self.bytes += piece.len() as u64;
+        if let Some(json) = self.json.as_mut() {
+            if json.len() + text.len() > MAX_BUFFERED_BODY {
+                // Past the bound nothing is read; the usage stays unknown rather than half parsed.
+                self.json = None;
+            } else {
+                json.extend_from_slice(&text);
+            }
+        }
+        let mut phases = self.phases(&text);
+        let first = phases.next();
+        self.emit(text, first);
+        // A piece that carried several phase events: the rest go out as empty chunks with their phase.
+        for phase in phases {
+            self.emit(Bytes::new(), Some(phase));
+        }
+    }
+
+    fn emit(&mut self, body: Bytes, phase: Option<Phase>) {
+        self.trace.publish_chunk(ResponseChunk {
+            request_id: self.trace.request_id.clone(),
+            attempt: self.outcome.attempt,
+            index: self.index,
+            body,
+            phase,
+        });
+        self.index += 1;
+    }
+
+    fn phases(&mut self, text: &[u8]) -> std::vec::IntoIter<Phase> {
+        let mut out = Vec::new();
+        let Some(parser) = self.parser.as_mut() else {
+            return out.into_iter();
+        };
+        if parser.feed(text).is_err() {
+            self.parser = None;
+            return out.into_iter();
+        }
+        // Collected first: `phase_of` borrows the whole struct, so the parser's borrow has to end before it runs.
+        let mut events = Vec::new();
+        while let Some(event) = parser.next_event() {
+            events.push(event);
+        }
+        for event in &events {
+            if let Some(phase) = self.phase_of(event) {
+                out.push(phase);
+            }
+        }
+        out.into_iter()
+    }
+
+    fn phase_of(&mut self, event: &SseEvent) -> Option<Phase> {
+        match event.name.as_deref() {
+            Some(b"message_start") => {
+                let usage = usage_from_json(&event.data, &["message"]);
+                self.usage.merge(&usage);
+                Some(Phase::MessageStart { usage })
+            }
+            Some(b"content_block_delta") => {
+                if self.first_content_at.is_none() {
+                    self.first_content_at = Some((self.clock)());
+                    return Some(Phase::FirstContentDelta);
+                }
+                if !self.saw_tool_use && is_tool_use_delta(&event.data) {
+                    self.saw_tool_use = true;
+                    return Some(Phase::ToolUseDelta);
+                }
+                None
+            }
+            Some(b"message_delta") => {
+                let usage = usage_from_json(&event.data, &[]);
+                self.usage.merge(&usage);
+                Some(Phase::MessageDelta { usage })
+            }
+            Some(b"message_stop") => Some(Phase::MessageStop),
+            // The post-commit observer already acts on this event for routing; here it only decides how the
+            // request is accounted, so the bytes the client sees are untouched.
+            Some(b"error") => {
+                if self.stream_error.is_none() {
+                    self.stream_error = Some(error_type_of(&event.data));
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn finish(mut self, end: &BodyEnd) {
+        let last = self.parser.as_mut().and_then(|parser| parser.finish());
+        if let Some(event) = last {
+            if let Some(phase) = self.phase_of(&event) {
+                self.emit(Bytes::new(), Some(phase));
+            }
+        }
+        if let Some(json) = self.json.take() {
+            self.usage.merge(&usage_from_json(&json, &[]));
+        }
+        let outcome = match (end, self.stream_error.take()) {
+            (BodyEnd::Complete, None) => None,
+            (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
+            (BodyEnd::Cancelled, _) => Some((Outcome::Canceled, Some("account_cancelled".into()))),
+            (BodyEnd::ClientGone, _) => Some((Outcome::Canceled, Some("client_gone".into()))),
+            (BodyEnd::Failed, error) => Some((
+                Outcome::Failed,
+                error.or_else(|| Some("upstream_unreachable".into())),
+            )),
+        };
+        let ttfc_ms = self
+            .first_content_at
+            .map(|at| at - self.outcome.received_at);
+        let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
+        self.trace.complete(
+            &self.outcome,
+            self.status,
+            usage,
+            ttfc_ms,
+            Some(self.bytes),
+            outcome,
+            (self.clock)(),
+        );
+    }
+}
+
+/// `error.type` of an SSE `error` event's data, or `error` when the data does not say.
+fn error_type_of(data: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(data)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("type"))
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "error".into())
 }
 
 /// The measured pool a relayed connection came from, so the body task can hand it back.
@@ -62,6 +243,7 @@ pub(crate) struct Relayed<C> {
     pub observer: Option<PostCommit>,
     /// Body bytes already read, which go out ahead of anything the reader still produces.
     pub prefix: Bytes,
+    pub publish: Option<Publish>,
     pub reader: BodyReader<C>,
 }
 
@@ -80,6 +262,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             keep_alive,
             mut observer,
             prefix,
+            mut publish,
             mut reader,
         } = relayed;
         // The hold already fed the held bytes to the inspection copy, so the prefix is scanned for what it left
@@ -87,15 +270,18 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
         observe(&mut observer);
         let end = 'body: {
             if !prefix.is_empty() {
-                match decode_piece(decoder.as_mut(), prefix) {
-                    Ok(piece) => match send(&tx, &cancel, Ok(piece)).await {
-                        Delivery::Delivered => {}
-                        Delivery::Cancelled => break 'body BodyEnd::Cancelled,
-                        Delivery::Gone => break 'body BodyEnd::Gone,
-                    },
+                match decode_piece(decoder.as_mut(), prefix.clone()) {
+                    Ok(piece) => {
+                        publish_piece(&mut publish, &prefix, &piece);
+                        match send(&tx, &cancel, Ok(piece)).await {
+                            Delivery::Delivered => {}
+                            Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                            Delivery::Gone => break 'body BodyEnd::ClientGone,
+                        }
+                    }
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Gone;
+                        break 'body BodyEnd::Failed;
                     }
                 }
             }
@@ -103,7 +289,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 // A caller that hangs up mid-stream has to release the upstream connection right away; waiting
                 // for the next chunk would hold it until the idle timeout on a stream that has gone quiet.
                 let read = tokio::select! {
-                    _ = tx.closed() => break 'body BodyEnd::Gone,
+                    _ = tx.closed() => break 'body BodyEnd::ClientGone,
                     // The credential this stream was opened with is gone, so the body ends in an error and
                     // axum closes the caller's connection rather than letting a dead account keep streaming.
                     _ = cancel.cancelled() => break 'body BodyEnd::Cancelled,
@@ -112,11 +298,11 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let next = match read {
                     Err(_) => {
                         let _ = send(&tx, &cancel, Err(stalled())).await;
-                        break 'body BodyEnd::Gone;
+                        break 'body BodyEnd::Failed;
                     }
                     Ok(Err(error)) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Gone;
+                        break 'body BodyEnd::Failed;
                     }
                     Ok(Ok(next)) => next,
                 };
@@ -128,35 +314,40 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 // sees it.
                 feed(&mut observer, &chunk);
                 observe(&mut observer);
-                let piece = match decode_piece(decoder.as_mut(), chunk) {
+                let piece = match decode_piece(decoder.as_mut(), chunk.clone()) {
                     Ok(piece) => piece,
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Gone;
+                        break 'body BodyEnd::Failed;
                     }
                 };
+                publish_piece(&mut publish, &chunk, &piece);
                 if piece.is_empty() {
                     continue;
                 }
                 match send(&tx, &cancel, Ok(piece)).await {
                     Delivery::Delivered => {}
                     Delivery::Cancelled => break 'body BodyEnd::Cancelled,
-                    Delivery::Gone => break 'body BodyEnd::Gone,
+                    Delivery::Gone => break 'body BodyEnd::ClientGone,
                 }
             }
             observe_end(&mut observer);
             if let Some(mut decoder) = decoder {
                 match decoder.finish() {
                     Ok(tail) if !tail.is_empty() => {
-                        match send(&tx, &cancel, Ok(Bytes::from(tail))).await {
+                        let tail = Bytes::from(tail);
+                        // The tail is the rest of the decoded body, so the chunks a consumer joins are the
+                        // whole of what the caller received.
+                        publish_piece(&mut publish, &[], &tail);
+                        match send(&tx, &cancel, Ok(tail)).await {
                             Delivery::Delivered => {}
                             Delivery::Cancelled => break 'body BodyEnd::Cancelled,
-                            Delivery::Gone => break 'body BodyEnd::Gone,
+                            Delivery::Gone => break 'body BodyEnd::ClientGone,
                         }
                     }
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Gone;
+                        break 'body BodyEnd::Failed;
                     }
                     Ok(_) => {}
                 }
@@ -171,7 +362,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 drop(reader);
                 let _ = tx.try_send(Err(cancelled()));
             }
-            BodyEnd::Gone => {}
+            BodyEnd::ClientGone | BodyEnd::Failed => {}
             // Checking in before the sender drops is what makes the connection available again by the time the
             // caller sees the end of the body, which is the only ordering a sequential caller can observe.
             BodyEnd::Complete => {
@@ -179,6 +370,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     reader.into_inner().return_to(checkin);
                 }
             }
+        }
+        if let Some(publish) = publish {
+            publish.finish(&end);
         }
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
@@ -189,9 +383,11 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
 /// How the relayed body stopped, which decides what happens to the upstream connection.
 enum BodyEnd {
     Cancelled,
+    /// The caller is no longer listening.
+    ClientGone,
     Complete,
-    /// The caller is no longer listening, or the stream ended in an error already sent.
-    Gone,
+    /// The body ended in an error the caller has already been sent.
+    Failed,
 }
 
 enum Delivery {
@@ -214,6 +410,13 @@ async fn send(
             Ok(()) => Delivery::Delivered,
             Err(_) => Delivery::Gone,
         },
+    }
+}
+
+/// Hands a forwarded piece to the bus: the wire chunk and what the caller is sent, one of which is the text.
+fn publish_piece(publish: &mut Option<Publish>, raw: &[u8], piece: &Bytes) {
+    if let Some(publish) = publish.as_mut() {
+        publish.chunk(raw, piece);
     }
 }
 
