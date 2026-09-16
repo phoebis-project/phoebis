@@ -6,7 +6,8 @@
 
 use std::fmt;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
 
 use phoebis_store::Secret;
 use serde::Deserialize;
@@ -332,19 +333,48 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     }
     // Two schemas in one file open quietly and then lose everything: `LedgerDb::open` creates its tables
     // inside the registry file, reads the store's `meta.schema_version`, skips every ledger migration, and
-    // leaves `requests` without the columns the writer inserts. The comparison folds the spellings of one
-    // path without asking the filesystem, which has no answer before either file exists.
-    if config
-        .stats
-        .ledger_path
-        .components()
-        .eq(config.storage.path.components())
-    {
+    // leaves `requests` without the columns the writer inserts.
+    if same_file(&config.stats.ledger_path, &config.storage.path) {
         return Err(ConfigError::SharedDatabasePath {
             path: config.stats.ledger_path.clone(),
         });
     }
     Ok(())
+}
+
+/// One path folded to the name the filesystem would open it under, without asking the filesystem anything: a
+/// `.` component drops out, a `..` resolves against the component before it, and a relative path is taken
+/// against the working directory, which is what the process itself will do with it.
+fn normalized(path: &Path) -> PathBuf {
+    let absolute = match path.is_absolute() {
+        true => path.to_path_buf(),
+        false => std::env::current_dir().unwrap_or_default().join(path),
+    };
+    let mut folded = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::CurDir => {}
+            // A `..` at the root stays at the root, as it does on the filesystem.
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    folded
+}
+
+/// Whether two configured paths name one file. The fold above catches the spellings; the device and inode
+/// catch a symlink or a hard link between two of them, and are only consulted for files that already exist,
+/// so validating a configuration never creates the database it is about to refuse.
+fn same_file(left: &Path, right: &Path) -> bool {
+    if normalized(left) == normalized(right) {
+        return true;
+    }
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
 }
 
 fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {

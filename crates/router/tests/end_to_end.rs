@@ -461,6 +461,76 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
         )),
         Err(ConfigError::SharedDatabasePath { .. })
     ));
+    // One file under four spellings. The registry opened as the ledger skips every ledger migration and
+    // leaves the writer without its columns, so a name that only looks different has to be refused too.
+    let aliased = |name: &str, storage: &str, ledger: &str| {
+        let path = dir.path().join(format!("{name}.yaml"));
+        std::fs::write(
+            &path,
+            format!(
+                "{}stats:\n  ledger_path: {ledger}\n",
+                text.replace(
+                    &format!("path: {}", dir.path().join("router.sqlite").display()),
+                    &format!("path: {storage}")
+                )
+            ),
+        )
+        .unwrap();
+        load(&path)
+    };
+    let here = std::env::current_dir().unwrap();
+    let cases = [
+        (
+            "dot",
+            "./data/x.sqlite".to_string(),
+            "data/x.sqlite".to_string(),
+        ),
+        (
+            "absolute",
+            "data/x.sqlite".to_string(),
+            here.join("data/x.sqlite").display().to_string(),
+        ),
+        (
+            "parent",
+            "data/x.sqlite".to_string(),
+            "a/../data/x.sqlite".to_string(),
+        ),
+    ];
+    for (name, storage, ledger) in cases {
+        assert!(
+            matches!(
+                aliased(name, &storage, &ledger),
+                Err(ConfigError::SharedDatabasePath { .. })
+            ),
+            "{ledger} is {storage} spelled differently"
+        );
+    }
+    std::fs::write(dir.path().join("router.sqlite"), b"").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("router.sqlite"),
+        dir.path().join("link.sqlite"),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            aliased(
+                "symlink",
+                &dir.path().join("router.sqlite").display().to_string(),
+                &dir.path().join("link.sqlite").display().to_string()
+            ),
+            Err(ConfigError::SharedDatabasePath { .. })
+        ),
+        "a link to the registry is the registry"
+    );
+    assert!(
+        aliased(
+            "distinct",
+            &dir.path().join("router.sqlite").display().to_string(),
+            &dir.path().join("ledger.sqlite").display().to_string()
+        )
+        .is_ok(),
+        "two names for two files are still two files"
+    );
     assert!(
         load(&with("unknown", "stats:\n  nope: 1\n")).is_err(),
         "unknown fields reject the configuration"
