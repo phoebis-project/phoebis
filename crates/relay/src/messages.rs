@@ -1100,6 +1100,7 @@ impl Relay {
                                     pin,
                                     &request_id,
                                     generations,
+                                    now,
                                 );
                             }
                         }) as Box<dyn FnOnce(Bytes) + Send>;
@@ -1137,6 +1138,7 @@ impl Relay {
             ctx.portable.then(|| ctx.pin.cloned()).flatten(),
             ctx.request_id,
             generations,
+            arrived,
         );
         // A held stream cannot be rewound onto another connection, so the only way not to commit it is
         // to drop it unread; once the budget is spent it goes to the caller as it came.
@@ -1608,6 +1610,7 @@ pub(crate) fn report_failover(
     pin: Option<PinRef>,
     request_id: &str,
     generations: (u64, u64),
+    set_at: i64,
 ) {
     if let Some(cooldown) = cooldown {
         let scope = match cooldown.scope {
@@ -1618,6 +1621,7 @@ pub(crate) fn report_failover(
             account_id: account_id.to_string(),
             scope,
             until: cooldown.until,
+            set_at,
             reason: cooldown.reason.to_string(),
             window: cooldown.window,
             source_request_id: Some(request_id.to_string()),

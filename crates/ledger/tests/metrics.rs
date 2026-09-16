@@ -175,6 +175,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
                 account_id: "a".into(),
                 scope: format!("model:{model}"),
                 until,
+                set_at: 0,
                 reason: "rate_limit".into(),
                 window: "w".into(),
                 source_request_id: None,

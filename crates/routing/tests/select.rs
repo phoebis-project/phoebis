@@ -151,6 +151,7 @@ fn cooled(account: &str, scope: &str, until: i64, window: &str) -> CooldownRow {
         account_id: account.into(),
         scope: scope.into(),
         until,
+        set_at: 0,
         reason: "rate_limit".into(),
         window: window.into(),
         source_request_id: None,

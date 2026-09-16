@@ -272,6 +272,7 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
             account_id: "d".into(),
             scope: "account".into(),
             until: NOW + 90_000,
+            set_at: 0,
             reason: "rate_limit".into(),
             window: "seven_day".into(),
             source_request_id: None,

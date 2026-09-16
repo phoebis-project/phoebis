@@ -27,6 +27,7 @@ fn cooldown(account: &str, scope: &str, until: i64) -> CooldownRow {
         account_id: account.into(),
         scope: scope.into(),
         until,
+        set_at: 0,
         reason: "rate_limit".into(),
         window: "five_hour".into(),
         source_request_id: None,
@@ -55,6 +56,34 @@ fn a_cooldown_deadline_is_never_shortened_and_expired_rows_are_purged() {
     assert_eq!(store.load_routing().unwrap().cooldowns.len(), 1);
     assert!(store.delete_cooldown("a", "account").unwrap());
     assert!(!store.delete_cooldown("a", "account").unwrap());
+}
+
+#[test]
+fn a_cooldown_records_when_it_was_set_and_the_winning_deadline_brings_its_own() {
+    let store = store_with(&["a"]);
+    let mut first = cooldown("a", "account", 10_000);
+    first.set_at = 1_000;
+    store.upsert_cooldown(&first).unwrap();
+    let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
+    assert_eq!((row.until, row.set_at), (10_000, 1_000));
+    let mut shorter = cooldown("a", "account", 5_000);
+    shorter.set_at = 2_000;
+    store.upsert_cooldown(&shorter).unwrap();
+    let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
+    assert_eq!(
+        (row.until, row.set_at),
+        (10_000, 1_000),
+        "the deadline that lost leaves the set time it lost with"
+    );
+    let mut longer = cooldown("a", "account", 20_000);
+    longer.set_at = 3_000;
+    store.upsert_cooldown(&longer).unwrap();
+    let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
+    assert_eq!(
+        (row.until, row.set_at),
+        (20_000, 3_000),
+        "and the one that wins brings its own, so a sample is compared against the rejection it belongs to"
+    );
 }
 
 #[test]

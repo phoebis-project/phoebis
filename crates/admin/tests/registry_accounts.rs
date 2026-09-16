@@ -394,6 +394,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
             account_id: "direct".into(),
             scope: "model:claude-opus-5".into(),
             until: common::NOW + 60_000,
+            set_at: 0,
             reason: "rate_limit".into(),
             window: "retry_after".into(),
             source_request_id: None,

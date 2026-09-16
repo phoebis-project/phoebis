@@ -20,6 +20,9 @@ pub struct CooldownRow {
     pub account_id: String,
     pub scope: String,
     pub until: i64,
+    /// When the rejection that set this row arrived, so a usage sample can be told apart from the cached view
+    /// the account had before it.
+    pub set_at: i64,
     pub reason: String,
     pub window: String,
     pub source_request_id: Option<String>,
@@ -47,8 +50,8 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction()?;
         let load = RoutingLoad {
-            cooldowns: tx.prepare("SELECT account_id, scope, until, reason, window, source_request_id FROM cooldowns ORDER BY account_id, scope")?
-                .query_map([], |r| Ok(CooldownRow { account_id: r.get(0)?, scope: r.get(1)?, until: r.get(2)?, reason: r.get(3)?, window: r.get(4)?, source_request_id: r.get(5)? }))?
+            cooldowns: tx.prepare("SELECT account_id, scope, until, set_at, reason, window, source_request_id FROM cooldowns ORDER BY account_id, scope")?
+                .query_map([], |r| Ok(CooldownRow { account_id: r.get(0)?, scope: r.get(1)?, until: r.get(2)?, set_at: r.get(3)?, reason: r.get(4)?, window: r.get(5)?, source_request_id: r.get(6)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)? }))?
@@ -86,13 +89,14 @@ impl Store {
     /// release an account the provider still refuses.
     pub fn upsert_cooldown(&self, row: &CooldownRow) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.execute("INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+        conn.execute("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(account_id, scope) DO UPDATE SET \
+               set_at = CASE WHEN excluded.until > cooldowns.until THEN excluded.set_at ELSE cooldowns.set_at END, \
                reason = CASE WHEN excluded.until > cooldowns.until THEN excluded.reason ELSE cooldowns.reason END, \
                window = CASE WHEN excluded.until > cooldowns.until THEN excluded.window ELSE cooldowns.window END, \
                source_request_id = CASE WHEN excluded.until > cooldowns.until THEN excluded.source_request_id ELSE cooldowns.source_request_id END, \
                until = MAX(cooldowns.until, excluded.until)",
-            params![row.account_id, row.scope, row.until, row.reason, row.window, row.source_request_id])?;
+            params![row.account_id, row.scope, row.until, row.set_at, row.reason, row.window, row.source_request_id])?;
         Ok(())
     }
 

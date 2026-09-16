@@ -38,6 +38,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (6, V6),
     (7, V7),
     (8, V8),
+    (9, V9),
 ];
 
 const V2: &str = r#"
@@ -129,4 +130,8 @@ CREATE INDEX IF NOT EXISTS refresh_attempts_resolved ON refresh_attempts (resolv
 // account, which is what it did.
 const V8: &str = r#"
 ALTER TABLE pools ADD COLUMN select_below_utilization REAL;
+"#;
+
+const V9: &str = r#"
+ALTER TABLE cooldowns ADD COLUMN set_at INTEGER NOT NULL DEFAULT 0;
 "#;
