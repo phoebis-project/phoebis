@@ -23,6 +23,7 @@ subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
