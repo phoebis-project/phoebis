@@ -42,7 +42,7 @@ use crate::exhaustion::exhaustion_response;
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
-use crate::observe::{allowlisted_headers, usage_from_json, wants_stream};
+use crate::observe::{published_headers, usage_from_json, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
@@ -226,7 +226,7 @@ impl Trace {
                 .map(|i| i.canonical_model.clone())
                 .unwrap_or_default(),
             stream,
-            headers: allowlisted_headers(headers),
+            headers: published_headers(headers),
             body,
             body_capture_hours,
             received_at: self.received_at,

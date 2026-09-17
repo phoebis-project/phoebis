@@ -26,8 +26,7 @@ pub use events::{
 };
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
-    make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES,
-    MAX_HEADER_VALUE, RECIPE_HEADERS,
+    make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
 pub use routes::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};

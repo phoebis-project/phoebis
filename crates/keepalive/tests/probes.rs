@@ -32,6 +32,68 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
     })
 }
 
+/// The bus publishes every caller header outside its denylist and the recipe replays all of it, so a header
+/// the client starts sending after this code was written reaches the upstream on a probe exactly as it does
+/// on the request. The caller's credential and `accept-encoding` are not among them: the relay attaches the
+/// account's own credential, and a probe that asked for a compressed answer could not read its usage back.
+#[tokio::test]
+async fn a_probe_replays_every_published_header_and_none_of_the_denied_ones() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let mut req = r.request("main");
+    relay_common::set_header(&mut req, "x-claude-code-future", "1");
+    relay_common::set_header(&mut req, "x-foo", "bar");
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    for (label, req) in [("request", &sent[0]), ("probe", &sent[1])] {
+        let header = |name: &str| {
+            req.headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            (header("x-claude-code-future"), header("x-foo")),
+            (Some("1"), Some("bar")),
+            "{label}"
+        );
+    }
+    let probe = sent.last().unwrap();
+    let header = |name: &str| {
+        probe
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(
+        (header("x-api-key"), header("authorization")),
+        (Some(A), None),
+        "the account's credential, and nothing the caller sent"
+    );
+    assert!(
+        !probe.headers.iter().any(|(_, v)| v.contains(KEY)),
+        "the router's own key reaches no probe: {:?}",
+        probe.headers
+    );
+    assert_eq!(
+        header("accept-encoding"),
+        None,
+        "a compressed answer would hand ProbeUsage::parse gzip: {:?}",
+        probe.headers
+    );
+}
+
 #[tokio::test]
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;

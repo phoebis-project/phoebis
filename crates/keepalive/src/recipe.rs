@@ -1,5 +1,5 @@
-//! What a probe replays: the request body with its output controls zeroed, the headers a replay needs, and the
-//! TTL the body asks for. The exclusions and the allowlist are the Go engine's.
+//! What a probe replays: the request body with its output controls zeroed, the headers the bus published, and
+//! the TTL the body asks for. The body exclusions are the Go engine's.
 
 use serde_json::Value;
 
@@ -7,28 +7,6 @@ use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 
 pub const MAX_HEADER_VALUE: usize = 8_192;
 pub const MAX_HEADER_BYTES: usize = 16_384;
-
-/// Lowercase, the order the Go engine walked them in. The relay's outbound builder places the account
-/// credential after `anthropic-version`, so the order here is also the order on the wire.
-pub const RECIPE_HEADERS: &[&str] = &[
-    "anthropic-beta",
-    "anthropic-version",
-    "content-type",
-    "session-id",
-    "user-agent",
-    "x-app",
-    "x-claude-code-agent-id",
-    "x-claude-code-parent-agent-id",
-    "x-claude-code-session-id",
-    "x-session-id",
-    "x-stainless-arch",
-    "x-stainless-helper-method",
-    "x-stainless-lang",
-    "x-stainless-os",
-    "x-stainless-package-version",
-    "x-stainless-runtime",
-    "x-stainless-runtime-version",
-];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recipe {
@@ -58,7 +36,7 @@ fn header_size(headers: &[(String, String)]) -> usize {
 /// of a repeated key and cannot show the repeat, so this walks the raw bytes once; the upstream reads one of
 /// the two values and the replay might edit the other, which is why an ambiguous body is refused whole.
 fn unique_keys_deep(raw: &[u8]) -> bool {
-    use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+    use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
     struct Unique;
     impl<'de> Visitor<'de> for Unique {
         type Value = ();
@@ -108,7 +86,6 @@ fn unique_keys_deep(raw: &[u8]) -> bool {
             d.deserialize_any(Unique)
         }
     }
-    let _ = IgnoredAny;
     let mut de = serde_json::Deserializer::from_slice(raw);
     UniqueSeed.deserialize(&mut de).is_ok() && de.end().is_ok()
 }
@@ -192,19 +169,18 @@ pub fn make_recipe(
     // `stream` is inside the billing hash view and `max_tokens` outside it: the client's stamp no longer
     // matches the edited body, and the relay would refuse it as drift. A body without a stamp is left alone.
     phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
+    // Everything the bus published, in the order it published it: the denylist there is the one gate, so a
+    // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
+    // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.
     let mut kept: Vec<(String, String)> = Vec::new();
-    for name in RECIPE_HEADERS {
-        for (sent, value) in headers {
-            if sent.eq_ignore_ascii_case(name) {
-                if value.len() > MAX_HEADER_VALUE {
-                    return Err("headers_too_large");
-                }
-                kept.push(((*name).to_string(), value.clone()));
-                // The budget is the retained bytes beyond the body, and the model name is among them.
-                if model.len() + header_size(&kept) > MAX_HEADER_BYTES {
-                    return Err("headers_too_large");
-                }
-            }
+    for (name, value) in headers {
+        if value.len() > MAX_HEADER_VALUE {
+            return Err("headers_too_large");
+        }
+        kept.push((name.clone(), value.clone()));
+        // The budget is the retained bytes beyond the body, and the model name is among them.
+        if model.len() + header_size(&kept) > MAX_HEADER_BYTES {
+            return Err("headers_too_large");
         }
     }
     let size = edited.len() + model.len() + header_size(&kept);

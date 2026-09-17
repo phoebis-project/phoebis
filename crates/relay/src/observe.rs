@@ -1,14 +1,16 @@
-//! What the relay reads out of a request or a response for the bus: the allowlisted headers, the stream flag,
+//! What the relay reads out of a request or a response for the bus: the published headers, the stream flag,
 //! the usage block, and the shape of a content delta. Nothing here changes what is relayed.
 
 use axum::http::HeaderMap;
-use phoebis_bus::{header_allowed, Usage};
+use phoebis_bus::{header_published, Usage};
 use serde_json::Value;
 
-pub(crate) fn allowlisted_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+/// The caller's headers as the bus carries them: everything the denylist does not name, which is what a
+/// keepalive recipe replays.
+pub(crate) fn published_headers(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
-        .filter(|(name, _)| header_allowed(name.as_str()))
+        .filter(|(name, _)| header_published(name.as_str()))
         .filter_map(|(name, value)| {
             Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
         })

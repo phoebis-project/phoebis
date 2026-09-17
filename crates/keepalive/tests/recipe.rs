@@ -54,7 +54,7 @@ fn a_replay_changes_only_the_output_controls() {
     assert_eq!(
         recipe.headers,
         headers(),
-        "every allowlisted header the request carried, in its order"
+        "every header the bus published, in its order"
     );
     assert_eq!(
         recipe.size,
@@ -199,16 +199,29 @@ fn unsupported_shapes_are_named() {
         make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20).unwrap_err(),
         "headers_too_large"
     );
-    let ignored = vec![
-        ("authorization".to_string(), "secret".to_string()),
-        ("x-forwarded-for".to_string(), "1.2.3.4".to_string()),
-    ];
-    assert!(
-        make_recipe(&ignored, BODY.as_bytes(), "routing-alias", 1 << 20)
+    // The bus denylist is the one gate: a recipe replays what the bus published, so the credential, the
+    // forwarding headers, and the relay's own framing never reach one in the first place.
+    for name in [
+        "accept-encoding",
+        "authorization",
+        "connection",
+        "content-length",
+        "cookie",
+        "host",
+        "transfer-encoding",
+        "x-api-key",
+        "x-forwarded-for",
+        "x-keepalive-owner-id",
+    ] {
+        assert!(!phoebis_bus::header_published(name), "{name}");
+    }
+    let unknown = vec![("x-claude-code-future".to_string(), "1".to_string())];
+    assert_eq!(
+        make_recipe(&unknown, BODY.as_bytes(), "routing-alias", 1 << 20)
             .unwrap()
-            .headers
-            .is_empty(),
-        "nothing outside the allowlist is retained"
+            .headers,
+        unknown,
+        "a header this code has never seen is replayed as the caller sent it"
     );
 }
 

@@ -11,8 +11,8 @@ use futures::FutureExt;
 use tokio::sync::mpsc;
 
 pub use event::{
-    header_allowed, AccountSelected, AttemptOutcome, CooldownSet, Event, Kind, Origin, Outcome,
-    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, Usage, HEADER_ALLOWLIST,
+    header_published, AccountSelected, AttemptOutcome, CooldownSet, Event, Kind, Origin, Outcome,
+    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, Usage, HEADER_DENYLIST,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
@@ -264,26 +264,32 @@ mod tests {
     }
 
     #[test]
-    fn the_header_allowlist_keeps_client_identity_and_never_a_credential() {
+    fn the_header_denylist_refuses_credentials_and_the_relays_own_hop() {
         for name in [
             "anthropic-beta",
             "anthropic-version",
             "content-type",
             "user-agent",
             "x-app",
+            "x-claude-code-future",
             "x-claude-code-session-id",
+            "X-Foo",
             "X-Stainless-Lang",
         ] {
-            assert!(header_allowed(name), "{name}");
+            assert!(header_published(name), "{name}");
         }
         for name in [
+            "Accept-Encoding",
             "authorization",
-            "x-api-key",
+            "connection",
+            "content-length",
             "cookie",
             "host",
-            "content-length",
+            "transfer-encoding",
+            "x-api-key",
+            "x-keepalive-owner-id",
         ] {
-            assert!(!header_allowed(name), "{name}");
+            assert!(!header_published(name), "{name}");
         }
     }
 

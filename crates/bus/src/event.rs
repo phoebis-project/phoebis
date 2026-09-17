@@ -238,19 +238,44 @@ impl Event {
     }
 }
 
-/// Request headers a consumer may see: what identifies the client build and the session, never what
-/// authenticates it. Keepalive replays a request from these, so the list is exactly what a replay needs.
-pub const HEADER_ALLOWLIST: &[&str] = &[
-    "anthropic-beta",
-    "anthropic-version",
-    "content-type",
-    "user-agent",
-    "x-app",
+/// Request headers no consumer may see, mirroring the relay's outbound rule so that what keepalive replays is
+/// what the caller sent. It holds the relay's `NEVER_COPIED` set (a unit test in crates/relay/src/headers.rs
+/// asserts the two agree, since the bus may not depend on the relay), the credentials, and the framing headers
+/// the relay regenerates for its own hop.
+///
+/// `accept-encoding` is the one entry that is neither: the relay decodes a compressed upstream answer only for
+/// a caller that sent none, so a replayed one would hand compressed bytes to the probe's usage parser and pause
+/// every recipe it ran for.
+pub const HEADER_DENYLIST: &[&str] = &[
+    "accept-encoding",
+    "authorization",
+    "connection",
+    "content-length",
+    "cookie",
+    "forwarded",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "via",
+    "x-api-key",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-port",
+    "x-forwarded-proto",
+    "x-forwarded-server",
+    "x-keepalive-owner-id",
+    "x-real-ip",
 ];
 
-pub fn header_allowed(name: &str) -> bool {
+/// Everything the denylist does not name travels, so a header the client starts sending after this code was
+/// written still reaches a replay as the caller spelled it.
+pub fn header_published(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    HEADER_ALLOWLIST.contains(&lower.as_str())
-        || lower.starts_with("x-claude-code-")
-        || lower.starts_with("x-stainless-")
+    !HEADER_DENYLIST.contains(&lower.as_str())
 }

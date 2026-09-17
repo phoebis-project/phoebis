@@ -208,6 +208,15 @@ mod tests {
         )
     }
 
+    /// The bus may not depend on this crate, so it carries its own copy of this set and the two are kept in
+    /// step here: a header this relay refuses to repeat upstream must not reach a consumer either.
+    #[test]
+    fn the_bus_denylist_covers_every_never_copied_header() {
+        for name in NEVER_COPIED {
+            assert!(!phoebis_bus::header_published(name), "{name}");
+        }
+    }
+
     #[test]
     fn the_callers_order_spelling_and_values_travel_as_sent() {
         let caller = head(&[

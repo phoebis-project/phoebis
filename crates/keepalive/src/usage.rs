@@ -68,7 +68,7 @@ impl ProbeUsage {
                 continue;
             }
             let number = at.as_f64()?;
-            if !at.is_number() || !(0.0..=MAX_TOKENS).contains(&number) || number.fract() != 0.0 {
+            if !(0.0..=MAX_TOKENS).contains(&number) || number.fract() != 0.0 {
                 return None;
             }
             *slot = number as u64;
