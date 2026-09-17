@@ -71,6 +71,11 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
         (r.status("main").reason, r.status("main").next_probe_at),
         (Reason::KeepaliveOff, None)
     );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::KeepaliveOff).copied(),
+        Some(1),
+        "the same refusal counted once, not once at selection and again at completion"
+    );
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&RigSpec::default().policy).unwrap();
     r.h.store.update_pool(&pool, "test").unwrap();
@@ -140,7 +145,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         .unwrap();
     assert_eq!(
         (r.engine.stats().retained_bytes, r.status("main").reason),
-        (0, Reason::InstanceReplaced)
+        (0, Reason::AwaitingRequest)
     );
     // Traffic with the old owner's header is ledgered and not retained; traffic without the header is admitted
     // under the registration alone; traffic with the new owner's header is retained.
@@ -181,6 +186,30 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
             .iter()
             .any(|(n, _)| n.eq_ignore_ascii_case("x-keepalive-owner-id"))),
         "the owner header never goes upstream"
+    );
+    // A later owner-mismatched request against an armed recipe changes nothing about it either: not its
+    // reason, not its schedule, not what it retains.
+    let armed = r.status("main");
+    assert!(armed.next_probe_at.is_some());
+    let retained = r.engine.stats().retained_bytes;
+    let mut req = r.request("main");
+    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-1");
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    assert_eq!(
+        (
+            r.status("main").reason,
+            r.status("main").next_probe_at,
+            r.engine.stats().retained_bytes
+        ),
+        (armed.reason, armed.next_probe_at, retained)
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(2),
+        "once more than the earlier mismatch"
     );
 }
 

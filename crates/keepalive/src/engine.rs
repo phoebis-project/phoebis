@@ -478,6 +478,18 @@ impl Inner {
         reason: Reason,
         wasted: Option<Wasted>,
     ) {
+        self.end_observation(key, agent_id, wasted);
+        self.set_reason(key, agent_id, reason);
+    }
+
+    /// `discard`'s bookkeeping without writing a reason: for a terminal state that is already the agent's
+    /// current reason, so ending the observation does not count that reason a second time.
+    pub(crate) fn end_observation(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        wasted: Option<Wasted>,
+    ) {
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -507,7 +519,6 @@ impl Inner {
             };
             self.settlements.push(settlement);
         }
-        self.set_reason(key, agent_id, reason);
     }
 
     pub(crate) fn incarnation(&mut self) -> u64 {
@@ -720,12 +731,10 @@ impl Engine {
             return;
         }
         // The header is an optional hardening on top of the registration rule: when both sides name an owner,
-        // they must agree. Foreign traffic proves nothing about this agent, so its own status stays the
-        // baseline "nothing observed yet" rather than naming the foreign owner; the mismatch itself is still
-        // counted, separately from the field a view reads.
+        // they must agree. Foreign traffic proves nothing about this agent, so its status, its recipe, and
+        // its schedule are left as they were; only the mismatch itself is counted.
         if let (Some(registered), Some(sent)) = (&session.owner_id, &observed.owner_id) {
             if registered != sent {
-                inner.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                 *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
                 return;
             }
@@ -970,16 +979,21 @@ impl Engine {
             .is_some_and(|o| o.ready && o.expected > 0);
         if !proved {
             let current = inner.sessions[&key].agents.get(&agent_id).map(|a| a.reason);
-            let reason = match current {
+            // A foreign host is a property of one attempt's network path and can differ on a retry, so the
+            // request's terminal verdict is the evidence one; the other four gates are pool, key, or
+            // credential-kind properties that do not vary between attempts of one request, so ending the
+            // observation must not recount a reason the request already carries.
+            match current {
                 Some(
-                    r @ (Reason::KeepaliveOff
+                    Reason::KeepaliveOff
                     | Reason::OptedOut
                     | Reason::OauthUnverified
-                    | Reason::IneligibleCredential),
-                ) if !ready => r,
-                _ => Reason::NoCacheEvidence,
-            };
-            inner.discard(&key, &agent_id, reason, None);
+                    | Reason::IneligibleCredential,
+                ) if !ready => {
+                    inner.end_observation(&key, &agent_id, None);
+                }
+                _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
+            }
         }
     }
 }
