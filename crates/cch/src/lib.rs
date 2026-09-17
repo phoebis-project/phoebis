@@ -146,6 +146,28 @@ pub fn bool_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
     None
 }
 
+/// Raw span of the number literal at `path`, walked as `bool_member_span` walks. The keepalive replay edits
+/// `max_tokens` in place, and the hash view excludes that member, so the edit must not touch anything else.
+pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    if !walk_to_last_segment(&mut s, path)? {
+        return None;
+    }
+    let start = s.pos;
+    let mut end = start;
+    while end < body.len() && matches!(body[end], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
+        end += 1;
+    }
+    (end > start && body[start].is_ascii_digit()
+        || body.get(start) == Some(&b'-') && end > start + 1)
+        .then_some((start, end))
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
