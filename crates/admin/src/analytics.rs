@@ -57,8 +57,9 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     }
 }
 
-/// The range in Unix milliseconds, the group-by, and the rows under the filter.
-type Selection = ((i64, i64), String, Vec<RollupRow>);
+/// The range in Unix milliseconds, the group-by, whether probe rows count as requests, and the rows under
+/// the filter.
+type Selection = ((i64, i64), String, bool, Vec<RollupRow>);
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
@@ -79,7 +80,13 @@ fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection
         .db()
         .read(|c| read_rollups(c, hour_of(from), hour_ceil(to)))
         .map_err(ledger_failure)?;
-    Ok(((from, to), group_by, apply_filter(rows, &filter_of(q))))
+    let filter = filter_of(q);
+    Ok((
+        (from, to),
+        group_by,
+        filter.probes_counted(),
+        apply_filter(rows, &filter),
+    ))
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -91,12 +98,12 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, rows) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows) = match rows_for(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
-    let points = match phoebis_ledger::series(&rows, from, to, bucket, &group_by) {
+    let points = match phoebis_ledger::series(&rows, from, to, bucket, &group_by, probes_counted) {
         Ok(p) => p,
         Err(e) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
     };
@@ -107,11 +114,11 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, rows) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows) = match rows_for(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
-    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by) })).into_response()
+    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted) })).into_response()
 }
 
 pub(crate) async fn accounts(

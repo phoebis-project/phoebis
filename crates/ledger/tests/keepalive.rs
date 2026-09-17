@@ -227,15 +227,14 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     let rows = db
         .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
         .unwrap();
+    let with_probes = phoebis_ledger::RollupFilter {
+        include_probes: true,
+        ..Default::default()
+    };
     let groups = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(
-            rows.clone(),
-            &phoebis_ledger::RollupFilter {
-                include_probes: true,
-                ..Default::default()
-            },
-        ),
+        &phoebis_ledger::apply_filter(rows.clone(), &with_probes),
         "key",
+        with_probes.probes_counted(),
     );
     let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -251,14 +250,35 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         desktop.requests, 3,
         "the request counters stay the raw rows' (r1, p1, p2)"
     );
+    let default = phoebis_ledger::RollupFilter::default();
     let without = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(rows, &phoebis_ledger::RollupFilter::default()),
+        &phoebis_ledger::apply_filter(rows, &default),
         "key",
+        default.probes_counted(),
+    );
+    let desktop = without.iter().find(|g| g.key == "desktop").unwrap();
+    assert_eq!(
+        desktop.requests, 1,
+        "excluded probe rows contribute no request, the credit row stays"
+    );
+    // What the cache cost to keep warm is not a request, so the probe side of the panel survives a filter
+    // that only says a probe request is not one.
+    assert_eq!(
+        (
+            desktop.probes.ok,
+            desktop.probes.failed,
+            desktop.probes.migrated,
+            desktop.probes.skipped
+        ),
+        (1, 1, 1, 2)
     );
     assert_eq!(
-        (without[0].requests, without[0].probes.ok),
-        (1, 0),
-        "excluded probe rows contribute nothing, the credit row stays"
+        (
+            desktop.savings.probe_cost_usd,
+            desktop.savings.wasted_probes,
+            desktop.savings.wasted_probe_usd
+        ),
+        (0.0004, 3, 0.0012)
     );
     // A request without a user agent shares the reserved row with the credits of its key. Replacing it under
     // another account moves its own counters and leaves the credit where it was.

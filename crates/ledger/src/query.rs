@@ -427,6 +427,14 @@ pub struct RollupFilter {
     pub include_probes: bool,
 }
 
+impl RollupFilter {
+    /// Whether a probe row counts as a request: the flag, or a kind filter that asked for probes outright.
+    /// The probe side of a group is summed either way, so the savings panel reads the same under both.
+    pub fn probes_counted(&self) -> bool {
+        self.include_probes || self.kinds.iter().any(|k| k == "probe")
+    }
+}
+
 pub const GROUP_BYS: &[&str] = &[
     "account",
     "all",
@@ -457,6 +465,8 @@ fn label_of(key: &str) -> String {
     }
 }
 
+/// The rows a query selects, probe rows among them: whether those count as requests is `probes_counted`,
+/// which the sums take, so a probe's cost reaches the savings panel under every filter.
 pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     let lower: Vec<String> = f.models.iter().map(|m| m.to_ascii_lowercase()).collect();
     rows.into_iter()
@@ -466,7 +476,6 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
         .filter(|r| lower.is_empty() || lower.contains(&r.canonical_model))
         .filter(|r| f.kinds.is_empty() || f.kinds.contains(&r.kind))
         .filter(|r| f.user_agents.is_empty() || f.user_agents.contains(&r.user_agent))
-        .filter(|r| f.include_probes || f.kinds.iter().any(|k| k == "probe") || r.kind != "probe")
         .collect()
 }
 
@@ -533,18 +542,21 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow) -> GroupRow {
             ok: probes.succeeded,
             skipped: probes.probes_skipped,
         },
+        // The gross saving rides on the inference rows and the rest on the probe rows, so the probe side
+        // comes from the probe sum: what the cache cost to keep warm is not a request the filter can drop.
         savings: Savings {
             gross_usd: sum.saved_usd_gross,
-            probe_cost_usd: sum.probe_cost_usd,
-            wasted_probes: sum.wasted_probes,
-            wasted_probe_usd: sum.wasted_probe_usd,
-            wasted_probe_reasons: sum.wasted_probe_reasons.clone(),
+            probe_cost_usd: probes.probe_cost_usd,
+            wasted_probes: probes.wasted_probes,
+            wasted_probe_usd: probes.wasted_probe_usd,
+            wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
         },
     }
 }
 
-fn sum_groups(rows: &[&RollupRow], group_by: &str) -> Vec<GroupRow> {
-    // Two sums per group: the whole, and the probe rows on their own, which the derived probe counts read.
+fn sum_groups(rows: &[&RollupRow], group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
+    // Two sums per group: the request side, which a probe row joins only when probes count as requests, and
+    // the probe rows on their own, which the derived probe counts and the probe side of the savings read.
     let mut sums: BTreeMap<String, (RollupRow, RollupRow)> = BTreeMap::new();
     for row in rows {
         let key = group_of(row, group_by);
@@ -554,9 +566,11 @@ fn sum_groups(rows: &[&RollupRow], group_by: &str) -> Vec<GroupRow> {
                 RollupRow::key(0, &key, "", "", "", "", ""),
             )
         });
-        entry.0.add(row);
         if row.kind == "probe" {
             entry.1.add(row);
+        }
+        if probes_counted || row.kind != "probe" {
+            entry.0.add(row);
         }
     }
     let mut out: Vec<GroupRow> = sums
@@ -573,6 +587,7 @@ pub fn series(
     to: i64,
     bucket_seconds: i64,
     group_by: &str,
+    probes_counted: bool,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
@@ -591,15 +606,15 @@ pub fn series(
             .collect();
         points.push(SeriesPoint {
             at: at * 1_000,
-            groups: sum_groups(&in_bucket, group_by),
+            groups: sum_groups(&in_bucket, group_by, probes_counted),
         });
         at += bucket_seconds;
     }
     Ok(points)
 }
 
-pub fn breakdown(rows: &[RollupRow], group_by: &str) -> Vec<GroupRow> {
-    sum_groups(&rows.iter().collect::<Vec<_>>(), group_by)
+pub fn breakdown(rows: &[RollupRow], group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
+    sum_groups(&rows.iter().collect::<Vec<_>>(), group_by, probes_counted)
 }
 
 #[derive(Clone, Debug, Serialize)]
