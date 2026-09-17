@@ -61,12 +61,13 @@ file, which makes it as sensitive as the registry even though it holds no creden
 
 ### Not yet configurable
 
-Seven groups of limits are compiled into the binary, and the file has no key for any of them:
+Eight groups of limits are compiled into the binary, and the file has no key for any of them:
 
 | Limit | Value |
 | --- | --- |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
 | Drain window on shutdown | 30 seconds for requests still in flight. |
+| Keepalive ticker | One scheduling pass per second; probe answers read up to 256 KiB. |
 | Ledger channel | 4,096 records; a full channel drops. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, 32 MiB request cap. |
@@ -219,6 +220,35 @@ limited, `phoebis` answers 429 with `retry-after` and the unified rate-limit hea
 account would answer, so the client's automatic continue arms on it. For anything only an operator can clear, such as
 a pool whose accounts are all paused, it answers 503.
 
+## Keepalive
+
+A prompt cache entry expires five minutes, or one hour, after its last use. With `keepalive.enabled` on a pool, `phoebis`
+keeps a replayable copy of every eligible request a session sends (adaptive or disabled thinking, no forced tool
+choice, no structured output, no strict tools) and, shortly before the entry expires, sends a probe with `max_tokens`
+0 and `stream` false through the same failover loop a real request takes: it follows the session's pin, renews it,
+and migrates on a 429. A session that comes back after the gap then reads the cache it would otherwise have paid to
+rebuild. Probes cost cache reads at list prices, and the ledger records what each kept-warm request saved against
+that, per pool and per hour; `GET /admin/keepalive/overview` shows the net, which can go negative.
+
+Enabling keepalive needs `affinity_ttl_seconds` of at least 300 on the pool, because a probe can only keep a session
+warm on the account it is pinned to. Probes on `oauth` accounts stay off until `keepalive.oauth_prewarm_verified` is
+set in the bootstrap file, which is the operator's statement that the expiry-crossing experiment passed for the
+combinations in use. A key with `keepalive_opt_out` is never retained. The probe tuning (lead and jitter per TTL,
+retry backoff, the idle limits, the cold-probe limit, the daily cost cap, the net-negative rule) is per pool under
+`keepalive`; `GET /admin/pools` shows the full policy with defaults filled.
+
+The engine learns which sessions are alive from the `cc-cache-keepalive` companion, a Claude Code hook plugin that
+reports the session lifecycle to two routes on the proxy listener,
+`GET /v0/resource/plugins/cache-keepalive/events` and `GET /v0/resource/plugins/cache-keepalive/snapshot`, under the
+same key the client sends for model traffic. A session is scoped to the key that reports it. With the companion's
+lease lapsed the session is probed under the pool's idle limits until they run out; a `session_end`, a replacement
+registration, the session expiry, or a release through `POST /admin/sessions/{key}/{session}/release` discards its
+recipes at once. `GET /admin/sessions` shows the companion state and the next probe per session, and
+`GET /admin/keepalive/recipes` one row per retained recipe with why it is held.
+
+The `keepalive` block of the bootstrap file holds the process-wide limits alone (the lease, the record and byte
+bounds, the worker cap) and is read at start; a change to it takes a restart.
+
 ## Statistics
 
 Every relayed request lands in the ledger at `stats.ledger_path`: one row for the request the client sent, with the
@@ -257,6 +287,9 @@ no credential, so bind it where only your scraper can reach it.
 | `phoebis_attempts_total` | counter | `account`, `model`, `outcome` |
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
+| `phoebis_keepalive_agents` | gauge | `state` |
+| `phoebis_keepalive_probes_total` | counter | `account`, `outcome` |
+| `phoebis_keepalive_saved_usd_total` | counter | `pool` |
 | `phoebis_ledger_dropped_total` | counter | `table` |
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |

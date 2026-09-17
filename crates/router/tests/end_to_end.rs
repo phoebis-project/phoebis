@@ -807,3 +807,212 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     assert!(rows.iter().all(|(r, _)| r.bodies_captured));
     up.shutdown().await;
 }
+
+/// A session through the binary is retained, probed on the ticker once its cache entry nears expiry, and shown
+/// on every view: the recipes, the overview, the sessions row, the request log under `kind = probe`, and the
+/// metrics. The pool's lead is set so the first probe is due one second after the request.
+#[tokio::test]
+async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views() {
+    let up = FakeUpstream::start(vec![
+        Rule { path_prefix: "/v1/messages".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"cache_read_input_tokens":2000,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() } },
+        Rule { path_prefix: "/v1/models".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec() } },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
+    // A lead of 299 s on a five-minute entry puts the first probe one second after the request.
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0 } })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    // The fixture body asks for fixed-budget thinking, which no probe may replay; an adaptive block is the
+    // probe-capable shape.
+    let adaptive = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
+        .unwrap()
+        .replacen(
+            r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
+            r#""thinking":{"type":"adaptive"}"#,
+            1,
+        );
+    let mut req = fixture_request(&client, proxy_port, &secret, "e2e-warm");
+    req = req.body(adaptive.clone());
+    let resp = req.send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    // Registered through the companion route under the key, so the recipe is retained.
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/events?event=session_start&session_id=e2e-warm&instance_id=e2e-instance&sequence=1");
+    let ack = client
+        .get(&events)
+        .header("authorization", format!("Bearer {secret}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ack.status(), 200);
+    assert_eq!(
+        client.get(&events).send().await.unwrap().status(),
+        401,
+        "no key, no event"
+    );
+    let resp = fixture_request(&client, proxy_port, &secret, "e2e-warm")
+        .body(adaptive.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    let recipes = wait_json(&client, &admin("/keepalive/recipes"), |v| {
+        !v["recipes"].as_array().unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(
+        (
+            recipes["recipes"][0]["session_id"].as_str(),
+            recipes["recipes"][0]["state"].as_str()
+        ),
+        (Some("e2e-warm"), Some("armed"))
+    );
+    let log = wait_json(
+        &client,
+        &admin("/requests?include_probes=true&kinds=probe"),
+        |v| !v["requests"].as_array().unwrap().is_empty(),
+    )
+    .await;
+    assert_eq!(
+        (
+            log["requests"][0]["kind"].as_str(),
+            log["requests"][0]["session_id"].as_str(),
+            log["requests"][0]["status"].as_u64()
+        ),
+        (Some("probe"), Some("e2e-warm"), Some(200))
+    );
+    let probes: Vec<_> = up
+        .requests()
+        .into_iter()
+        .filter(|r| r.body.windows(14).any(|w| w == b"\"max_tokens\":0"))
+        .collect();
+    assert!(
+        !probes.is_empty(),
+        "the probe reached the upstream with max_tokens 0"
+    );
+    assert!(probes[0]
+        .headers
+        .iter()
+        .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-PLACEHOLDER"));
+    let sessions: serde_json::Value = client
+        .get(admin("/sessions"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "e2e-warm")
+        .unwrap();
+    assert_eq!(
+        (
+            row["companion"].as_str(),
+            row["keepalive"]["state"].as_str(),
+            row["pinned"].as_bool()
+        ),
+        (Some("reporting"), Some("busy"), Some(true))
+    );
+    let overview: serde_json::Value = client
+        .get(admin("/keepalive/overview"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        overview["probes_24h"]["ok"].as_u64().unwrap() >= 1
+            || overview["agents"]["busy"].as_u64() == Some(1)
+    );
+    let settings: serde_json::Value = client
+        .get(admin("/settings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(settings["keepalive"]["max_workers"].as_u64(), Some(2));
+    let text = client
+        .get(format!("http://127.0.0.1:{metrics_port}/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        text.contains(r#"phoebis_keepalive_agents{state="busy"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"phoebis_keepalive_probes_total{account="console",outcome="ok"}"#),
+        "{text}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// Polls an admin route until `ready` accepts its JSON, within five seconds.
+async fn wait_json(
+    client: &reqwest::Client,
+    url: &str,
+    ready: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let value: serde_json::Value = client.get(url).send().await.unwrap().json().await.unwrap();
+        if ready(&value) {
+            return value;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "{url} never settled: {value}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}

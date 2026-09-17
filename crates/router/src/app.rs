@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{Engine, EngineParts};
+use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{metrics_router, LedgerConfig, LedgerDb, Metrics, Pricing};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
@@ -199,8 +199,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )
         .with_bus(bus.clone()),
     );
-    // The scheduler and the observer land in a later task; this only wires the engine so the admin views have
-    // somewhere to read from.
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
@@ -212,8 +210,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
     });
-    // Captured here, before `keepalive` moves into `admin`: the metrics listener reads the engine's agent
-    // counts on every scrape without depending on the keepalive crate.
+    // The day's spend comes from the rollups so a restart does not reset a pool's cap.
+    keepalive.load_spent_today().await;
+    let observer = spawn_observer(keepalive.clone());
+    let scheduler_tick = keepalive.spawn_scheduler();
+    // Captured here so the metrics listener reads the engine's agent counts on every scrape without depending
+    // on the keepalive crate.
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
     let admin = Arc::new(AdminState {
@@ -271,7 +273,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
             usage_refresh_concurrency: config.usage.refresh_concurrency,
         }),
-        keepalive,
+        // Cloned rather than moved: the local binding still serves the companion router and the shutdown
+        // sequence below.
+        keepalive: keepalive.clone(),
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });
@@ -326,7 +330,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let mut proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
-        Router::new(),
+        companion_router(keepalive.clone()),
         proxy_stop,
     ));
     let mut admin_server = tokio::spawn(
@@ -356,6 +360,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // Held rather than returned: a listener that failed still leaves the routing writer to drain and two
     // tasks to abort, so the teardown below runs either way and the error is the last thing that happens.
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
+        // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
+        // which the drain is about to drop.
+        keepalive.shutdown().await;
         tokio::join!(&mut proxy, &mut admin_server, &mut metrics_server)
     })
     .await
@@ -374,8 +381,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Ok(())
         }
     };
+    // The observer ends on its own when the bus closes; the abort here only matters on the timeout path.
+    observer.abort();
     scheduler.abort();
+    scheduler_tick.abort();
     sweeper.abort();
+    // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
+    drop(keepalive);
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
     drop(catalog);

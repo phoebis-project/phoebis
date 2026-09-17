@@ -51,6 +51,19 @@ fn main() -> anyhow::Result<()> {
                 config.quota.sample_retention_days,
                 config.quota.poll_interval_seconds
             );
+            println!(
+                "keepalive: lease {}s, {} sessions, {} agents, {} workers, {} MiB retained, oauth prewarm {}",
+                config.keepalive.lease_seconds,
+                config.keepalive.max_sessions,
+                config.keepalive.max_agents,
+                config.keepalive.max_workers,
+                config.keepalive.max_retained_bytes >> 20,
+                if config.keepalive.oauth_prewarm_verified {
+                    "verified"
+                } else {
+                    "unverified"
+                }
+            );
             Ok(())
         }
         None => tokio::runtime::Builder::new_multi_thread()
