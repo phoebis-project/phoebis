@@ -316,6 +316,7 @@ dependencies = [
  "base64",
  "bytes",
  "phoebis-bus",
+ "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-live",
  "phoebis-oauth",

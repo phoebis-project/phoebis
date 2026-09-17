@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_keepalive::KeepalivePolicy;
 use phoebis_store::{OveragePolicy, PoolRow, StoreError, Strategy};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -57,6 +58,24 @@ fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<Option<T>>, D::Error> {
     Option::<T>::deserialize(d).map(Some)
+}
+
+/// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
+/// defaults on parse; overlaying it on the row's stored policy first keeps every untouched field at its
+/// current value instead of resetting it. A non-object `incoming` is passed through unchanged so `parse`'s own
+/// shape check rejects it.
+fn merged_keepalive(row: &PoolRow, incoming: &Value) -> Value {
+    let Value::Object(patch) = incoming else {
+        return incoming.clone();
+    };
+    let mut merged = serde_json::to_value(KeepalivePolicy::from_json(&row.keepalive_json))
+        .unwrap_or_else(|_| json!({}));
+    if let Value::Object(base) = &mut merged {
+        for (key, value) in patch {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    merged
 }
 
 pub(crate) fn valid_slug(id: &str) -> bool {
@@ -137,13 +156,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             .map(|l| l.iter().map(|m| phoebis_store::canonical_id(m)).collect());
     }
     if let Some(keepalive) = &input.keepalive {
-        if !keepalive.is_object() {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "keepalive must be an object",
-            ));
-        }
-        row.keepalive_json = keepalive.to_string();
+        let merged = merged_keepalive(row, keepalive);
+        let policy = match KeepalivePolicy::parse(&merged) {
+            Ok(policy) => policy,
+            Err(error) => return Err(failure(StatusCode::BAD_REQUEST, &error.to_string())),
+        };
+        row.keepalive_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
     }
     if let Some(hours) = input.body_capture_hours {
         if hours > state.body_capture_max_hours {
@@ -153,6 +171,13 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             ));
         }
         row.body_capture_hours = hours;
+    }
+    // Checked over the whole row rather than over the edited field alone, so lowering affinity under an
+    // enabled policy is refused exactly as enabling under a short affinity is.
+    if let Err(error) =
+        KeepalivePolicy::from_json(&row.keepalive_json).validate(row.affinity_ttl_seconds)
+    {
+        return Err(failure(StatusCode::BAD_REQUEST, &error.to_string()));
     }
     Ok(())
 }
@@ -345,7 +370,7 @@ pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, Stor
         "strategy": row.strategy.as_str(), "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "default_allowed_models": row.default_allowed_models,
-        "keepalive": serde_json::from_str::<Value>(&row.keepalive_json).unwrap_or(Value::Object(Default::default())),
+        "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority })).collect::<Vec<_>>(),
         "keys": keys,
