@@ -116,6 +116,12 @@ pub fn make_recipe(
             return Err("unsupported_shape");
         }
     }
+    // A reference to account-scoped state belongs to the account that served the request, while a probe
+    // follows a pin a sibling's request may have moved since; the relay checks portability against the pin it
+    // finds, so such a body must never be retained in the first place.
+    if !phoebis_relay::is_portable(body) {
+        return Err("unsupported_shape");
+    }
     let thinking = root
         .pointer("/thinking/type")
         .and_then(Value::as_str)

@@ -582,3 +582,33 @@ async fn reason_counters_measure_the_gates_and_survive_close() {
     );
     assert_eq!(r.engine.stats().retained_bytes, 0);
 }
+
+/// A gap drops one event and leaves the rest of the queue behind it. A request observed inside that backlog
+/// may be one whose terminal event the gap dropped, so nothing it carries may arm a recipe; once the backlog
+/// has drained, the next request arms as before.
+#[tokio::test]
+async fn a_request_observed_inside_a_gaps_backlog_never_arms() {
+    let r = rig(RigSpec::default()).await;
+    // Three events were queued behind the gap: this request's own completion may be the one it dropped.
+    r.engine.bus_gap(1, 3);
+    r.engine.observe(r.observed("inside", "main", BODY));
+    r.engine.observe(r.selected("inside", "a"));
+    r.engine
+        .observe(r.complete("inside", Outcome::Succeeded, Some(usage(2_000, 0))));
+    assert_eq!(
+        (
+            r.status("main").reason,
+            r.status("main").next_probe_at,
+            r.engine.stats().retained_bytes
+        ),
+        (Reason::BusGap, None, 0),
+        "the request inside the backlog armed nothing"
+    );
+    // The backlog has drained, so the next request is evidence again.
+    r.engine.observe(r.observed("after", "main", BODY));
+    r.engine.observe(r.selected("after", "a"));
+    r.engine
+        .observe(r.complete("after", Outcome::Succeeded, Some(usage(2_000, 0))));
+    assert_eq!(r.status("main").reason, Reason::Scheduled);
+    assert!(r.status("main").next_probe_at.is_some() && r.engine.stats().retained_bytes > 0);
+}

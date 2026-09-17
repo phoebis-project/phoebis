@@ -397,3 +397,26 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
         }
     );
 }
+
+/// A reference to account-scoped state belongs to the account that served the request, and a probe follows a
+/// pin a sibling request may have moved, so such a body can never become a recipe.
+#[test]
+fn a_body_bound_to_its_account_is_refused() {
+    let document = json!([{"role": "user", "content": [{"type": "document", "source": {"type": "file", "file_id": "file_1"}}]}]);
+    let server_tool = json!([{"role": "user", "content": [{"type": "code_execution_tool_result", "tool_use_id": "x", "content": {}}]}]);
+    for (label, body) in [
+        ("a container", with("container", json!("cont_1"))),
+        ("a file-backed document", with("messages", document)),
+        ("a server-side tool result", with("messages", server_tool)),
+    ] {
+        assert_eq!(
+            make_recipe(&headers(), &body, "routing-alias", 1 << 20).unwrap_err(),
+            "unsupported_shape",
+            "{label}"
+        );
+    }
+    assert!(
+        make_recipe(&headers(), BODY.as_bytes(), "routing-alias", 1 << 20).is_ok(),
+        "a body that carries no such reference still builds"
+    );
+}

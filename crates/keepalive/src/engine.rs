@@ -338,6 +338,9 @@ pub(crate) struct Observation {
     pub expected: u64,
     pub ttl_ms: i64,
     pub prior: Option<PriorCoverage>,
+    /// Observed inside a gap's backlog, so this request's own terminal event may be one the gap dropped:
+    /// nothing it carries may arm a recipe.
+    pub poisoned: bool,
 }
 
 /// Probes a stopped recipe leaves unanswered, with the label the stop gives them. Queued under the lock and
@@ -368,6 +371,9 @@ pub(crate) struct Inner {
     pub skipped: Vec<(SessionKey, String)>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
+    /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that
+    /// backlog cannot be trusted: the terminal event of any request among them may be one the gap dropped.
+    pub gap_backlog: usize,
     pub next_incarnation: u64,
 }
 
@@ -396,6 +402,7 @@ impl Engine {
                 settlements: Vec::new(),
                 skipped: Vec::new(),
                 bus_gaps: 0,
+                gap_backlog: 0,
                 next_incarnation: 0,
             }),
             parts,
@@ -634,7 +641,9 @@ pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
                 .dropped
                 .load(std::sync::atomic::Ordering::Relaxed);
             if dropped > seen_dropped {
-                engine.bus_gap(dropped - seen_dropped);
+                // What is already queued behind the gap is the backlog the engine has to distrust, so its
+                // depth is read here, where the receiver is.
+                engine.bus_gap(dropped - seen_dropped, subscriber.events.len());
                 seen_dropped = dropped;
             }
             engine.observe(event);
@@ -654,15 +663,22 @@ impl Engine {
             BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
             BusEvent::RequestComplete(complete) => self.on_complete(complete),
         }
+        // One event of the backlog applied. The count is read before the arm above rather than after, so the
+        // event a gap was noticed on is itself inside its own backlog.
+        {
+            let mut inner = self.lock();
+            inner.gap_backlog = inner.gap_backlog.saturating_sub(1);
+        }
         self.flush();
     }
 
     /// Events were lost between the last one seen and this one. Whatever was still open cannot be completed
     /// with confidence: the lost events may have been the completion, or a failover onto another account. An
     /// armed recipe's evidence was complete before the gap and stays.
-    pub fn bus_gap(&self, dropped: u64) {
+    pub fn bus_gap(&self, dropped: u64, backlog: usize) {
         let mut inner = self.lock();
         inner.bus_gaps += 1;
+        inner.gap_backlog = backlog;
         tracing::warn!(
             dropped,
             "the keepalive subscriber fell behind the bus; pending observations discarded"
@@ -778,6 +794,7 @@ impl Engine {
                 ttl_ms: agent.ttl_ms,
             })
         };
+        let poisoned = inner.gap_backlog > 0;
         inner.discard(&key, &agent_id, Reason::AwaitingSelection, None);
         let session = inner.sessions.get_mut(&key).unwrap();
         session.last_real_at = Some(now);
@@ -839,6 +856,7 @@ impl Engine {
             expected: 0,
             ttl_ms: 0,
             prior,
+            poisoned,
         });
         inner.pending.insert(observed.request_id, (key, agent_id));
     }
@@ -908,7 +926,8 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap();
         if let Some(observation) = agent.current.as_mut() {
-            observation.ready = true;
+            // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
+            observation.ready = !observation.poisoned;
         }
         if agent.account.as_deref() != Some(selected.account_id.as_str()) {
             agent.cold = 0;
@@ -1053,21 +1072,31 @@ impl Engine {
             .and_then(|a| a.current.as_ref())
             .is_some_and(|o| o.ready && o.expected > 0);
         if !proved {
+            let poisoned = inner.sessions[&key]
+                .agents
+                .get(&agent_id)
+                .and_then(|a| a.current.as_ref())
+                .is_some_and(|o| o.poisoned);
             let current = inner.sessions[&key].agents.get(&agent_id).map(|a| a.reason);
-            // A foreign host is a property of one attempt's network path and can differ on a retry, so the
-            // request's terminal verdict is the evidence one; the other four gates are pool, key, or
-            // credential-kind properties that do not vary between attempts of one request, so ending the
-            // observation must not recount a reason the request already carries.
-            match current {
-                Some(
-                    Reason::KeepaliveOff
-                    | Reason::OptedOut
-                    | Reason::OauthUnverified
-                    | Reason::IneligibleCredential,
-                ) if !ready => {
-                    inner.end_observation(&key, &agent_id, None);
+            if poisoned {
+                // The gap that poisoned it is what this request proved nothing under.
+                inner.discard(&key, &agent_id, Reason::BusGap, None);
+            } else {
+                // A foreign host is a property of one attempt's network path and can differ on a retry, so
+                // the request's terminal verdict is the evidence one; the other four gates are pool, key, or
+                // credential-kind properties that do not vary between attempts of one request, so ending the
+                // observation must not recount a reason the request already carries.
+                match current {
+                    Some(
+                        Reason::KeepaliveOff
+                        | Reason::OptedOut
+                        | Reason::OauthUnverified
+                        | Reason::IneligibleCredential,
+                    ) if !ready => {
+                        inner.end_observation(&key, &agent_id, None);
+                    }
+                    _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
                 }
-                _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
             }
         }
         drop(inner);
