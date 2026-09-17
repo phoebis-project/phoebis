@@ -1,0 +1,1293 @@
+import { JSDOM } from 'jsdom';
+
+const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://127.0.0.1/', pretendToBeVisual: true });
+const { window } = dom;
+for (const key of ['document', 'navigator', 'HTMLElement', 'HTMLDialogElement', 'Element', 'Node', 'SVGElement', 'localStorage', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'MouseEvent', 'KeyboardEvent', 'Event']) {
+  Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true });
+}
+globalThis.window = window;
+window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+globalThis.matchMedia = window.matchMedia;
+class RO {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+window.ResizeObserver = RO;
+globalThis.ResizeObserver = RO;
+window.HTMLDialogElement.prototype.showModal = function () {
+  this.setAttribute('open', '');
+};
+window.HTMLDialogElement.prototype.close = function () {
+  this.removeAttribute('open');
+  this.dispatchEvent(new window.Event('close'));
+};
+
+const problems = [];
+const noise = /width\(0\) and height\(0\)|ResponsiveContainer|act\(\.\.\.\)/;
+for (const level of ['error', 'warn']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    const msg = args.map((a) => (a instanceof Error ? a.stack : String(a))).join(' ');
+    if (noise.test(msg)) return;
+    problems.push(`[console.${level}] ${msg.slice(0, 300)}`);
+    orig(...args);
+  };
+}
+window.addEventListener('error', (e) => problems.push(`[window.error] ${e.message}`));
+process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?.stack ?? e}`));
+
+const { mount, requests } = await import('./dist/entry.js');
+
+const results = [];
+function expect(name, text, needles) {
+  const missing = needles.filter((n) => !text.includes(n));
+  results.push({ name, ok: missing.length === 0, missing, length: text.length });
+}
+
+// The generator skips overnight rows by wall-clock hour, so pick rows by the
+// shape each check needs rather than by position.
+const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
+const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
+const failoverRow = requests.find((r) => r.attempts.some((a) => a.outcome === 'failover' && a.cooldownSet));
+{
+  const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
+  results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
+}
+
+let m = await mount('/');
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Synced', 'admin', 'Fable', 'n/a']);
+results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
+{
+  const t = m.text();
+  results.push({ name: '/ donut center says remaining, not average', ok: !t.includes('average') && (m.container.querySelectorAll('.donut__label').length >= 2), missing: [] });
+  const fableAbsent = m.container.querySelectorAll('.account-mini .wbar--absent[title="no Fable window"]').length;
+  results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
+  const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
+  results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
+}
+m.unmount();
+
+m = await mount('/observe');
+{
+  const t = m.text();
+  expect('/observe metric strip', t, ['Requests per second', 'Active streams', 'Error rate', 'TTFB p50', 'TTFB p95', 'TTFB p99', 'Output tokens per second', 'Estimated cost per minute', 'measured', 'derived', 'estimated']);
+  const inflight = m.container.querySelectorAll('.live-table .ldot--inflight').length;
+  results.push({ name: '/observe has in-flight rows', ok: inflight >= 1, missing: [String(inflight)] });
+  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Upstream', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
+  const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
+  results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
+  const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
+  results.push({ name: '/observe range axis labels every 5 minutes', ok: tickLabels.length >= 6 && tickLabels.every((l) => /^\d{2}:\d{2}$/.test(l)), missing: tickLabels.slice(0, 8) });
+  const minorTicks = m.container.querySelectorAll('.range__tick:not(.is-major)').length;
+  results.push({ name: '/observe range axis has minute ticks between the labels', ok: minorTicks >= 20, missing: [String(minorTicks)] });
+  const nowMark = m.container.querySelector('.range__now');
+  results.push({ name: '/observe range has a live now marker', ok: nowMark !== null && !nowMark.classList.contains('is-anchored') && /^now \d{2}:\d{2}$/.test(nowMark.textContent ?? ''), missing: [nowMark?.textContent ?? 'absent'] });
+  const densityBars = [...m.container.querySelectorAll('.range__bar')];
+  results.push({ name: '/observe range strip draws a bar per clock minute', ok: densityBars.length === 31 && densityBars.every((b) => b.style.left !== '' && b.style.width !== ''), missing: [String(densityBars.length)] });
+  results.push({ name: '/observe drops the session dropdown only when a chip holds one', ok: [...m.container.querySelectorAll('.mselect__trigger')].some((t) => t.textContent?.includes('Session')), missing: [] });
+  const firstRow = m.container.querySelector('.live-table tbody tr');
+  firstRow?.click();
+  await m.settle(300);
+  expect('/observe detail pane', m.text(), ['Phases', 'Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished', 'Attempts', 'Usage', 'Cache write, 5m', 'Cache write, 1h']);
+  const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
+  streamsBtn?.click();
+  await m.settle(300);
+  const tiles = m.container.querySelectorAll('.stile').length;
+  results.push({ name: '/observe Streams toggle renders tiles', ok: tiles >= 1, missing: [String(tiles)] });
+  expect('/observe streams', m.text(), ['Fullscreen', 'tok/s']);
+  const pauseBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Pause');
+  pauseBtn?.click();
+  await m.settle(200);
+  results.push({ name: '/observe pause toggles to Resume', ok: m.text().includes('Resume') && m.text().includes('Paused.'), missing: [] });
+  const tableBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Table');
+  tableBtn?.click();
+  await m.settle(250);
+  const trail = m.container.querySelector('.live-table .trail');
+  results.push({ name: '/observe attempts cell is a trail of badges', ok: (trail?.querySelectorAll('.trail__step').length ?? 0) >= 1, missing: [String(trail?.querySelectorAll('.trail__step').length)] });
+  const handles = [...m.container.querySelectorAll('.range__handle')];
+  results.push({ name: '/observe range has a start and an end handle', ok: handles.map((h) => h.getAttribute('aria-label')).join(',') === 'Range start,Range end', missing: handles.map((h) => h.getAttribute('aria-label')) });
+  results.push({ name: '/observe handles step by 30 s', ok: handles.every((h) => h.getAttribute('step') === '30'), missing: handles.map((h) => h.getAttribute('step')) });
+  if (handles.length === 2) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(handles[0], '300');
+    handles[0].dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+    results.push({ name: '/observe start handle alone keeps the feed live', ok: !m.text().includes('Historical: deltas not replayed'), missing: [] });
+    setter.call(handles[1], '900');
+    handles[1].dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(200);
+    expect('/observe end handle before now turns historical', m.text(), ['Historical: deltas not replayed', ' to ', 'Live']);
+    const tinted = m.container.querySelectorAll('.range__bar.is-in').length;
+    results.push({ name: '/observe selected span tints its minutes', ok: tinted > 0 && tinted < 30, missing: [String(tinted)] });
+    const label = m.container.querySelector('.range__foot .num')?.textContent ?? '';
+    results.push({ name: '/observe label reads start to end plus duration', ok: /^\d{2}:\d{2}:\d{2} to \d{2}:\d{2}:\d{2}, (\d+m( \d+s)?|\d+s)$/.test(label.trim()), missing: [label] });
+    const liveBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Live');
+    liveBtn?.click();
+    await m.settle(200);
+    results.push({ name: '/observe Live snaps the end handle back to now', ok: !m.text().includes('Historical: deltas not replayed'), missing: [] });
+  } else {
+    results.push({ name: '/observe range handles found', ok: false, missing: [String(handles.length)] });
+  }
+}
+m.unmount();
+
+m = await mount('/quota');
+expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant', 'Loading quota']);
+{
+  const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
+  const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
+  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 3 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
+  const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
+  results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
+  results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
+  const toneOf = (label) => {
+    const chip = [...m.container.querySelectorAll('.qcard__windows .qchip')].find((c) => c.textContent?.trim() === label);
+    return [...(chip?.classList ?? [])].find((n) => n.startsWith('qchip--')) ?? 'missing';
+  };
+  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59%') === 'qchip--good' && toneOf('5h38%') === 'qchip--warn' && toneOf('7d12%') === 'qchip--low', missing: [toneOf('7d59%'), toneOf('5h38%'), toneOf('7d12%')] });
+  const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
+  results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
+  const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
+  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === 3 && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
+  results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
+  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
+  results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
+  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
+  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
+  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
+  results.push({ name: '/quota timeline labels the current window with used share and reset', ok: live.length >= 3 && live.every((l) => / used · /.test(l)), missing: live.slice(0, 3) });
+  results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
+}
+m.unmount();
+
+m = await mount('/accounts');
+results.push({
+  name: '/accounts redirects to the upstreams page',
+  ok: m.text().includes('Add upstream') && m.container.querySelector('input[placeholder="Search upstreams"]') !== null,
+  missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
+});
+results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'Max 20x', 'max_20x', 'Subscription status', 'Subscription since', 'Billing type', 'Trial end', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Extra usage this month', 'Add upstream']);
+{
+  const head = m.container.querySelector('.detail__head');
+  const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect'].every((l) => headButtons.includes(l)), missing: headButtons });
+  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Clear cooldown', 'Clear funding flag', 'Disconnect'].includes(t ?? ''));
+  results.push({ name: '/upstreams no action buttons below header', ok: below.length === 0, missing: below });
+  const danger = head?.querySelector('.btn--danger');
+  results.push({ name: '/upstreams Disconnect is danger and last', ok: danger?.textContent?.trim() === 'Disconnect' && head?.querySelector('.detail__actions')?.lastElementChild === danger, missing: [] });
+  const pair = m.container.querySelector('.detail__pair');
+  results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
+  const fable = m.container.querySelector('.detail .wbars--3');
+  results.push({ name: '/upstreams usage card has three bars', ok: (fable?.querySelectorAll('.wbar').length ?? 0) === 3, missing: [String(fable?.querySelectorAll('.wbar').length)] });
+  const newTag = [...m.container.querySelectorAll('.served__list .badge')].some((b) => b.textContent?.trim() === 'new');
+  results.push({ name: '/upstreams served models shows new tag', ok: newTag, missing: [] });
+  const unchecked = [...m.container.querySelectorAll('.served__list input[type=checkbox]')].filter((c) => !c.checked).length;
+  results.push({ name: '/upstreams new model is unchecked', ok: unchecked === 1, missing: [String(unchecked)] });
+  // Pairing dialog: step 1 link, step 2 paste, step 3 preview.
+  const repair = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
+  repair?.click();
+  await m.settle(500);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/upstreams pairing step 1', dlg?.textContent ?? '', ['Re-pair business', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'I have logged in']);
+  // Read before step 1 unmounts: the callback the browser lands on carries this state, and the mock now checks it.
+  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  const next = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in');
+  next?.click();
+  await m.settle(200);
+  expect('/upstreams pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
+  const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
+  results.push({ name: '/upstreams pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
+  results.push({ name: '/upstreams pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const type = async (value) => {
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+  };
+  if (input) {
+    await type(`http://localhost:54545/callback?code=abc123&state=${state}`);
+    const submit = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit');
+    submit?.click();
+    await m.settle(900);
+    expect('/upstreams pairing step 3', dlg?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm', 'Cancel']);
+    const confirm = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm');
+    confirm?.click();
+    await m.settle(600);
+    results.push({ name: '/upstreams pairing closes after confirm', ok: !m.container.querySelector('dialog[open]'), missing: [] });
+  } else {
+    results.push({ name: '/upstreams pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
+  }
+  // A bare code is the other half of the field's promise, so it gets its own pass through the dialog.
+  repair?.click();
+  await m.settle(500);
+  const bare = [...m.container.querySelectorAll('dialog[open]')].pop();
+  [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in')?.click();
+  await m.settle(200);
+  const bareInput = bare?.querySelector('input[placeholder^="http://localhost"]');
+  if (bareInput) {
+    setter.call(bareInput, 'abc123');
+    bareInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit')?.click();
+    await m.settle(900);
+    expect('/upstreams pairing accepts a bare code', bare?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm']);
+    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(300);
+  } else {
+    results.push({ name: '/upstreams pairing accepts a bare code', ok: false, missing: ['no input on the second pass'] });
+  }
+}
+await m.navigate('/accounts/team');
+expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'trialing', 'n/a']);
+{
+  const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
+  results.push({ name: '/upstreams/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+}
+await m.navigate('/upstreams/mail');
+expect('/upstreams/mail', m.text(), ['Cooling down', 'Clear cooldown', 'rate_limited', 'n/a']);
+{
+  const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
+  results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+}
+await m.navigate('/upstreams/personal');
+expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-sonnet-4-5-20250929', 'Clear funding flag', 'Payment method declined']);
+m.unmount();
+
+m = await mount('/pools');
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Priority, then random', 'Least utilized', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop after 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+{
+  const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
+  results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
+}
+{
+  const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
+  edit?.click();
+  await m.settle(300);
+  const dlg = m.container.querySelector('dialog[open]');
+  const t = dlg?.textContent ?? '';
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Default allowed models', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool']);
+  const nameInput = dlg?.querySelector('input[placeholder="research"]');
+  results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
+  const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
+  results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
+
+  // Sectioned dialog: a nav rail beside one scrolling body, one heading per section.
+  const navLabels = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/pools dialog nav lists every section', ok: JSON.stringify(navLabels) === JSON.stringify(['General', 'Routing', 'Overage', 'Cache warming', 'Capture', 'Members', 'Keys']), missing: navLabels });
+  const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
+  results.push({ name: '/pools dialog body repeats the sections in order', ok: JSON.stringify(headings) === JSON.stringify(navLabels), missing: headings });
+  results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__split > .dialog__body').length ?? 0) === 1, missing: [] });
+  results.push({ name: '/pools dialog marks one nav entry active', ok: (dlg?.querySelectorAll('.dialog-nav__link.is-active').length ?? 0) === 1, missing: [] });
+  const footButtons = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/pools dialog footer holds Cancel and Save', ok: footButtons.join(',') === 'Cancel,Save pool', missing: footButtons });
+  const keepaliveNav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Cache warming');
+  keepaliveNav?.click();
+  await m.settle(120);
+  results.push({ name: '/pools dialog nav click moves the highlight', ok: keepaliveNav?.classList.contains('is-active') === true, missing: [...(dlg?.querySelectorAll('.dialog-nav__link.is-active') ?? [])].map((b) => b.textContent) });
+
+  // Affinity: 10m is a preset chip, custom reveals a seconds input.
+  const chips = [...(dlg?.querySelectorAll('[aria-label="Session affinity"] .pill') ?? [])];
+  results.push({ name: '/pools affinity chips are off/5m/10m/1h/4h/custom', ok: JSON.stringify(chips.map((c) => c.textContent?.trim())) === JSON.stringify(['off', '5m', '10m', '1h', '4h', 'custom']), missing: chips.map((c) => c.textContent) });
+  results.push({ name: '/pools affinity preset 10m is selected', ok: chips.find((c) => c.textContent?.trim() === '10m')?.getAttribute('aria-pressed') === 'true', missing: [] });
+  results.push({ name: '/pools affinity has no seconds input until custom', ok: dlg?.querySelector('input[aria-label="Session affinity in seconds"]') === null, missing: [] });
+  chips.find((c) => c.textContent?.trim() === 'custom')?.click();
+  await m.settle(120);
+  const custom = dlg?.querySelector('input[aria-label="Session affinity in seconds"]');
+  results.push({ name: '/pools custom affinity reveals the seconds input', ok: custom?.value === '600', missing: [custom?.value] });
+  chips.find((c) => c.textContent?.trim() === '10m')?.click();
+  await m.settle(120);
+
+  // Migration is off by default and reveals a percent input when switched on.
+  const migrateBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Migrate above utilization'));
+  results.push({ name: '/pools migrate starts off', ok: migrateBox?.checked === false && t.includes('Off'), missing: [] });
+  migrateBox?.click();
+  await m.settle(120);
+  expect('/pools migrate on reveals a percent field', dlg?.textContent ?? '', ['Utilization (%)', 'A pinned session moves to another member once its upstream crosses this line on any window.']);
+  migrateBox?.click();
+  await m.settle(120);
+
+  // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
+  expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.']);
+  expect('/pools cache warming stops when probes stop paying', dlg?.textContent ?? '', [
+    'Stop when probes cost more than they save',
+    'gross cache savings',
+    'Grace probes after the net turns negative',
+  ]);
+  {
+    const grace = dlg?.querySelector('input[aria-label="Grace probes after the net turns negative"]');
+    const netToggle = [...(dlg?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Stop when probes cost more than they save');
+    results.push({ name: '/pools net-negative stop is on with two grace probes', ok: netToggle?.getAttribute('aria-checked') === 'true' && grace?.value === '2', missing: [netToggle?.getAttribute('aria-checked'), grace?.value] });
+    netToggle?.click();
+    await m.settle(150);
+    results.push({ name: '/pools grace count hides while the stop is off', ok: !(dlg?.textContent ?? '').includes('Grace probes after the net turns negative'), missing: [] });
+    netToggle?.click();
+    await m.settle(150);
+    expect('/pools grace help says the budget is granted again on every real request', dlg?.textContent ?? '', [
+      'The budget is granted again on every real request while the net stays negative, because a cold streak drags the net down and the net only rises on a request that lands warm, which needs a probe first.',
+    ]);
+  }
+  const tuning = [...(dlg?.querySelectorAll('.collapsible__summary') ?? [])].find((b) => b.textContent?.includes('Probe tuning'));
+  results.push({ name: '/pools probe tuning starts collapsed', ok: tuning?.getAttribute('aria-expanded') === 'false' && !(dlg?.textContent ?? '').includes('Cold probe limit'), missing: [] });
+  tuning?.click();
+  await m.settle(120);
+  expect('/pools probe tuning fields', dlg?.textContent ?? '', ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks', '0 keeps probing while the pin lives', '0 means no limit']);
+  results.push({
+    name: '/pools probe tuning drops the two concurrency caps',
+    ok: !(dlg?.textContent ?? '').includes('Max probes in flight') && !(dlg?.textContent ?? '').includes('Max probes per session per hour'),
+    missing: [(dlg?.textContent ?? '').includes('Max probes in flight') ? 'in flight still there' : '', (dlg?.textContent ?? '').includes('Max probes per session per hour') ? 'per session per hour still there' : ''].filter(Boolean),
+  });
+  expect('/pools probe tuning explains a cold probe and the idle limits', dlg?.textContent ?? '', [
+    'A cold probe is one whose response shows no cache read for the prefix it was meant to keep warm',
+    'After this many cold probes in a row the recipe pauses until the next real request.',
+    'since its own last real request',
+    'subagents stop when their lifecycle ends, at their Stop hook or the end of the session, never by idle time',
+    'It applies to the main conversation agent only',
+    "A cold probe is the expensive kind (it rewrites the entry instead of reading it), so a streak also drags the session's net negative; the grace probes in this section are what lets the next turn recover. A probe that migrated the session does not count.",
+  ]);
+  const tuningValues = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])].map((i) => i.value);
+  results.push({ name: '/pools probe tuning defaults', ok: JSON.stringify(tuningValues) === JSON.stringify(['60', '360', '5', '30', '2', '30', '300', '3600', '0']), missing: tuningValues });
+  results.push({ name: '/pools cold probe limit defaults to 2', ok: tuningValues[4] === '2', missing: [tuningValues[4] ?? 'absent'] });
+  tuning?.click();
+  await m.settle(120);
+  results.push({ name: '/pools probe tuning collapses again', ok: !(dlg?.textContent ?? '').includes('Cold probe limit'), missing: [] });
+
+  {
+    const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
+    results.push({ name: '/pools dialog carries Capture between Cache warming and Members', ok: nav.indexOf('Capture') === nav.indexOf('Cache warming') + 1 && nav.indexOf('Members') === nav.indexOf('Capture') + 1, missing: nav });
+    expect('/pools capture section', dlg?.textContent ?? '', ['Capture request and response bodies', 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.', 'Retention (hours)']);
+    const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
+    results.push({ name: '/pools capture prefills the pool retention', ok: hours?.value === '24' && hours?.getAttribute('max') === '72', missing: [hours?.value ?? 'absent', hours?.getAttribute('max') ?? 'absent'] });
+  }
+
+  {
+    const memberLabels = () => [...(dlg?.querySelectorAll('.member-picker > li') ?? [])].map((li) => li.querySelector('label span:nth-child(2)')?.textContent);
+    results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'team']), missing: memberLabels() });
+    const prio = dlg?.querySelector('input[aria-label="Priority for business"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(prio, '5');
+    prio?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+    results.push({ name: '/pools priority keystrokes leave the row where it is', ok: memberLabels()[0] === 'business', missing: memberLabels() });
+    prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await m.settle(150);
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['mail', 'personal', 'Console workspace', 'business', 'team']), missing: memberLabels() });
+    setter.call(prio, '0');
+    dlg?.querySelector('input[aria-label="Priority for business"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+  }
+
+  const overageChosen = [...(dlg?.querySelectorAll('.radio-list input[type="radio"]') ?? [])].map((r) => r.checked);
+  results.push({ name: '/pools overage is a radio group with prefer_plan chosen', ok: JSON.stringify(overageChosen) === JSON.stringify([true, false, false]), missing: overageChosen.map(String) });
+  const createKey = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key');
+  createKey?.click();
+  await m.settle(300);
+  const keyDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const poolSelect = keyDlg?.querySelector('select');
+  results.push({ name: '/pools create key preselects pool and locks it', ok: poolSelect?.value === 'all' && poolSelect?.disabled === true, missing: [poolSelect?.value, String(poolSelect?.disabled)] });
+  expect('/pools locked key dialog names its pool', keyDlg?.textContent ?? '', ['Created in pool all']);
+  results.push({ name: '/pools key dialog pool select has no empty option', ok: [...(poolSelect?.options ?? [])].every((o) => o.value !== ''), missing: [...(poolSelect?.options ?? [])].map((o) => o.value) });
+  const kName = keyDlg?.querySelector('input[placeholder="workstation"]');
+  if (kName) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(kName, 'from-pool');
+    kName.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    const create = [...(keyDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
+    create?.click();
+    await m.settle(700);
+    const secret = [...m.container.querySelectorAll('dialog[open]')].pop();
+    expect('/pools key secret shown', secret?.textContent ?? '', ['API key created', 'phoebis-']);
+    const done = [...(secret?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Done');
+    done?.click();
+    await m.settle(200);
+    results.push({ name: '/pools new key listed in pool dialog', ok: (dlg?.textContent ?? '').includes('from-pool'), missing: [] });
+  }
+
+  // Every hint is a block element, so Firefox cannot run it into its label.
+  const inlineHints = [...(dlg?.querySelectorAll('.field__hint') ?? [])].filter((el) => el.tagName === 'SPAN').map((el) => el.textContent?.slice(0, 40));
+  results.push({ name: '/pools dialog hints are blocks, not inline spans', ok: inlineHints.length === 0, missing: inlineHints });
+  const labelled = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((el) => el.nextElementSibling).filter((el) => el?.classList.contains('field__hint'));
+  results.push({ name: '/pools no label is an inline sibling of its hint', ok: labelled.every((el) => el.tagName === 'P' || el.tagName === 'DIV'), missing: labelled.map((el) => el.tagName) });
+
+  // Keys can leave a pool only by moving to another one or being revoked.
+  const keyRows = () => [...(dlg?.querySelectorAll('.key-list li') ?? [])];
+  const rowNames = keyRows().map((li) => li.children[0]?.textContent?.trim());
+  results.push({ name: '/pools key rows have no plain remove', ok: keyRows().every((li) => ![...li.querySelectorAll('button')].some((b) => ['Remove', 'Delete'].includes(b.textContent?.trim() ?? ''))), missing: rowNames });
+  const desktopRowIdx = rowNames.indexOf('desktop');
+  keyRows()[desktopRowIdx]?.querySelector('.menu__trigger')?.click();
+  await m.settle(120);
+  const items = [...(keyRows()[desktopRowIdx]?.querySelectorAll('[role="menuitem"]') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/pools key row menu offers Move to and Revoke only', ok: JSON.stringify(items) === JSON.stringify(['Move to…', 'Revoke']), missing: items });
+  [...(keyRows()[desktopRowIdx]?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Revoke')?.click();
+  await m.settle(200);
+  const confirmDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/pools revoke asks first', confirmDlg?.textContent ?? '', ['Revoke desktop', 'rejected immediately']);
+  [...(confirmDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Revoke')?.click();
+  await m.settle(250);
+  const revokedBadge = keyRows()[rowNames.indexOf('desktop')]?.querySelector('.badge')?.textContent?.trim();
+  results.push({ name: '/pools revoked key row shows a revoked badge', ok: revokedBadge === 'revoked', missing: [revokedBadge] });
+
+  const laptopIdx = keyRows().map((li) => li.children[0]?.textContent?.trim()).indexOf('laptop');
+  keyRows()[laptopIdx]?.querySelector('.menu__trigger')?.click();
+  await m.settle(120);
+  [...(keyRows()[laptopIdx]?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
+  await m.settle(200);
+  const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
+  expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'codex', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
+  await m.settle(600);
+  results.push({ name: '/pools moved key leaves the list', ok: !keyRows().some((li) => li.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((li) => li.children[0]?.textContent?.trim()) });
+}
+m.unmount();
+
+m = await mount('/keys');
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool default', 'revoked', 'Create API key', 'Never']);
+{
+  const captureOf = (name) => {
+    const tr = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
+    return tr?.children[0]?.querySelector('.sub')?.textContent?.trim() ?? 'absent';
+  };
+  const effective = [captureOf('desktop'), captureOf('laptop'), captureOf('ci')];
+  results.push({
+    name: '/keys shows the effective capture of each key, inherited marked',
+    ok: JSON.stringify(effective) === JSON.stringify(['bodies captured, 24h inherited', 'bodies captured, 6h', 'bodies not captured']),
+    missing: effective,
+  });
+}
+{
+  const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'));
+  btn?.click();
+  await m.settle(200);
+  const dlg = m.container.querySelector('dialog[open]');
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Allowed models', 'Pool default', 'Selected', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out']);
+  results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
+  {
+    const poolSelect = dlg?.querySelector('select');
+    const values = [...(poolSelect?.options ?? [])].map((o) => o.value);
+    results.push({ name: '/keys pool select has no empty option', ok: values.length > 0 && values.every((v) => v !== ''), missing: values });
+    results.push({ name: '/keys pool defaults to the first pool', ok: poolSelect?.value === 'all' && poolSelect?.disabled === false, missing: [poolSelect?.value, String(poolSelect?.disabled)] });
+    const inlineHints = [...(dlg?.querySelectorAll('.field__hint') ?? [])].filter((el) => el.tagName === 'SPAN').map((el) => el.textContent?.slice(0, 40));
+    results.push({ name: '/keys dialog hints are blocks, not inline spans', ok: inlineHints.length === 0, missing: inlineHints });
+    const save = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
+    results.push({ name: '/keys save stays disabled until the key is named', ok: save?.disabled === true, missing: [String(save?.disabled)] });
+  }
+  {
+    const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
+    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Models', 'Cache warming', 'Capture']), missing: nav });
+    const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
+    results.push({ name: '/keys dialog body repeats the sections', ok: JSON.stringify(headings) === JSON.stringify(nav), missing: headings });
+  }
+  const nameInput = dlg?.querySelector('input[placeholder="workstation"]');
+  if (nameInput) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(nameInput, 'smoke');
+    nameInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    const create = [...dlg.querySelectorAll('button')].find((b) => b.textContent === 'Create');
+    create?.click();
+    await m.settle(700);
+    const secretDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    expect('/keys secret modal', secretDlg?.textContent ?? '', ['API key created', 'phoebis-', 'Copy']);
+    await m.settle(200);
+    expect('/keys table has new key', m.text(), ['smoke']);
+    const done = [...m.container.querySelectorAll('dialog[open] button')].find((b) => b.textContent?.trim() === 'Done');
+    done?.click();
+    await m.settle(200);
+  } else {
+    results.push({ name: '/keys name input found', ok: false, missing: ['input[placeholder=workstation]'] });
+  }
+  // Edit an existing key and move it to another pool.
+  const menu = m.container.querySelector('.menu__trigger');
+  menu?.click();
+  await m.settle(100);
+  const edit = [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit');
+  edit?.click();
+  await m.settle(300);
+  const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save']);
+  {
+    const radios = [...(editDlg?.querySelectorAll('.radio-list[aria-label="Capture request and response bodies"] .radio-list__item') ?? [])].map((l) => l.textContent?.trim().replace(/\s+/g, ' '));
+    results.push({ name: '/keys capture offers inherit, override and off', ok: radios.length === 3 && radios[0].startsWith('Inherit from pool (') && radios[1].startsWith('Override:') && radios[2] === 'Off for this key', missing: radios });
+  }
+  const sel = editDlg?.querySelector('select');
+  if (sel) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(sel, sel.value === 'all' ? 'codex' : 'all');
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await m.settle(100);
+    expect('/keys moving pool shows note', editDlg?.textContent ?? '', ['Moving this key ends its current session pins.']);
+  }
+}
+m.unmount();
+
+m = await mount('/requests');
+expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude-fable-5-1', 'desktop', 'laptop', 'of ']);
+{
+  const rowsBefore = m.container.querySelectorAll('tbody tr').length;
+  results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
+  const trails = [...m.container.querySelectorAll('tbody .trail')];
+  results.push({ name: '/requests every row carries an attempt trail', ok: trails.length === rowsBefore, missing: [String(trails.length), String(rowsBefore)] });
+  const singles = trails.filter((t) => t.querySelectorAll('.trail__step').length === 1).length;
+  results.push({ name: '/requests a single attempt is one badge', ok: singles >= 1, missing: [String(singles)] });
+  const multi = trails.filter((t) => t.querySelectorAll('.trail__step').length > 1);
+  results.push({ name: '/requests a failover reads as several badges', ok: multi.length >= 1, missing: [String(multi.length)] });
+  const trailText = multi.map((t) => [...t.querySelectorAll('.trail__step')].map((b) => b.textContent?.trim()).join(' '));
+  results.push({ name: '/requests trail badges name account and status', ok: trailText.every((x) => /\w+ \d{3}/.test(x)), missing: trailText.slice(0, 3) });
+  const tip = multi[0]?.getAttribute('title') ?? '';
+  results.push({ name: '/requests trail tooltip lists outcome and cooldown per attempt', ok: /1\..*(failed over|rate limited|succeeded)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
+}
+{
+  const trail429 = requests.filter((r) => r.attempts.length > 1 && r.attempts[0].upstreamStatus === 429 && r.attempts[r.attempts.length - 1].upstreamStatus === 200);
+  results.push({ name: 'fixture has 429-then-200 trails', ok: trail429.length >= 3, missing: [String(trail429.length)] });
+  const three = requests.filter((r) => r.attempts.length === 3);
+  results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
+}
+await m.navigate(`/requests/${laptopRow.id}`);
+expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+await m.navigate(`/requests/${desktopRow.id}`);
+expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
+if (failoverRow) {
+  await m.navigate(`/requests/${failoverRow.id}`);
+  expect('/requests/:failover drawer', m.text(), ['cooldown set', 'Failed over', 'used', 'resets']);
+  const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
+  // An API-key upstream reports no quota windows at all, so its attempt carries the cache row alone.
+  results.push({
+    name: '/requests attempts read all three windows then the cache row, in a fixed order',
+    ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
+    missing: [...new Set(slots)],
+  });
+}
+{
+  const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));
+  results.push({ name: 'fixture reports a Fable window on some attempts', ok: Boolean(fableAttempt), missing: [] });
+  const noFable = requests.find((r) => r.attempts.some((a) => a.windows.length > 0 && !a.windows.some((w) => w.id === '7d_fable')));
+  results.push({ name: 'fixture also has attempts with no Fable headers', ok: Boolean(noFable), missing: [] });
+  if (fableAttempt) {
+    await m.navigate(`/requests/${fableAttempt.id}`);
+    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
+    results.push({ name: '/requests Fable row reads a utilization and a reset', ok: rows.some((r) => /^Fable \d+% used resets /.test(r)), missing: rows.slice(0, 3) });
+  }
+  if (noFable) {
+    await m.navigate(`/requests/${noFable.id}`);
+    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
+    results.push({ name: '/requests Fable row reads n/a without Fable headers', ok: rows.some((r) => r === 'Fable n/a not reported'), missing: rows.slice(0, 3) });
+  }
+}
+{
+  const cacheRows = () => [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache').map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' ').trim());
+  {
+    const prefixOf = (r) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
+    const oversized = requests.filter((r) => r.attempts.some((a) => a.cacheMissedInputTokens !== null && a.cacheMissedInputTokens > prefixOf(r)));
+    results.push({ name: 'fixture never reports more missed input than the turn carried', ok: oversized.length === 0, missing: oversized.slice(0, 3).map((r) => r.id) });
+    const strays = requests.filter((r) => r.attempts.some((a) => a.cacheMissedInputTokens !== null && !a.cacheMissReason?.endsWith('_changed')));
+    results.push({ name: 'fixture carries a token estimate only for a divergence', ok: strays.length === 0, missing: strays.slice(0, 3).map((r) => r.id) });
+    const failed = requests.filter((r) => r.attempts.some((a) => a.upstreamStatus !== 200 && a.cacheMissReason !== null));
+    results.push({ name: 'fixture diagnoses nothing on an attempt that drew no response', ok: failed.length === 0, missing: failed.slice(0, 3).map((r) => r.id) });
+  }
+  const changedRow = requests.find((r) => r.attempts.some((a) => a.cacheMissReason?.endsWith('_changed')));
+  results.push({ name: 'fixture diagnoses a cache divergence', ok: Boolean(changedRow), missing: [] });
+  if (changedRow) {
+    await m.navigate(`/requests/${changedRow.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests cache row names the divergence and the tokens after it', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited) [\d.,]+[KMB]? tokens after the divergence$/.test(r)), missing: rows });
+  }
+  const noneRow = requests.find((r) => r.attempts.length === 1 && r.attempts[0].cacheMissReason === 'none' && r.usage.cacheRead > 0);
+  results.push({ name: 'fixture has an attempt that found no divergence', ok: Boolean(noneRow), missing: [] });
+  if (noneRow) {
+    await m.navigate(`/requests/${noneRow.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
+  }
+  const notAsked = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'not_requested'));
+  results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: Boolean(notAsked), missing: [] });
+  if (notAsked) {
+    await m.navigate(`/requests/${notAsked.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests cache row reads Not requested, muted, with no detail', ok: rows.includes('Cache Not requested'), missing: rows });
+    const muted = [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache' && li.children[1]?.className === 'muted').length;
+    results.push({ name: '/requests Not requested is muted', ok: muted >= 1, missing: [String(muted)] });
+  }
+  const failedOver = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'previous_message_not_found'));
+  results.push({ name: 'fixture diagnoses a failover as previous message not found', ok: Boolean(failedOver), missing: [] });
+  if (failedOver) {
+    await m.navigate(`/requests/${failedOver.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests cache row names the failover reason', ok: rows.includes('Cache Previous message not found'), missing: rows });
+    results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a no response to read'), missing: rows });
+  }
+}
+m.unmount();
+
+m = await mount('/analytics');
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers and migrations', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Upstreams', 'Peak 5-hour utilization', 'Upstreams in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
+{
+  const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+  const missCard = cardByTitle('Misses by reason');
+  const wasteCard = cardByTitle('Wasted probes');
+  const bars = [...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+  const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
+  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 8 && labels.every((l) => bars.includes(l)), missing: bars });
+  const counts = [...(missCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
+  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 8 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
+  results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
+  const shares = [...(missCard?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
+  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
+  const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
+  results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
+  const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
+  results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
+  {
+    const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
+    const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
+    const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
+    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns', 'Wasted probes']), missing: heads });
+    const panel = Object.fromEntries([...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
+    const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
+    results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
+    const ci = body.find((row) => row[0] === 'ci') ?? [];
+    results.push({ name: '/analytics an API-key upstream only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
+    results.push({ name: '/analytics a key that opts out of cache warming wastes no probes', ok: ci[10] === '0', missing: [ci[10] ?? 'no ci row'] });
+    const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
+    const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
+    results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
+  }
+  {
+    const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
+    const codex = [...(warming?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '')).find((row) => row[0] === 'codex') ?? [];
+    results.push({ name: '/analytics a pool with cache warming off reads zero across the warming table', ok: codex.length > 1 && codex.slice(1, 6).every((v) => v === '0'), missing: codex });
+  }
+  {
+    const wasteBars = [...(wasteCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+    const labels = ['Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended'];
+    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 4 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
+    const wasteCounts = [...(wasteCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
+    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 4 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    const idleShare = Number([...(wasteCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
+    results.push({ name: '/analytics idle limit dominates the wasted probes', ok: idleShare > wasteCounts.reduce((n, v) => n + v, 0) / 2, missing: [String(idleShare), String(wasteCounts.reduce((n, v) => n + v, 0))] });
+    const tiles = [...(wasteCard?.querySelectorAll('.stat--compact .stat__label') ?? [])].map((l) => l.textContent?.trim());
+    results.push({ name: '/analytics wasted probes reports a count, a cost and a share', ok: JSON.stringify(tiles) === JSON.stringify(['Wasted probes', 'Wasted cost', 'Share of probe cost']), missing: tiles });
+    const share = [...(wasteCard?.querySelectorAll('.stat--compact .stat__value') ?? [])][2]?.textContent?.trim() ?? '';
+    results.push({ name: '/analytics wasted share reads as a percentage of probe cost', ok: /^\d+\.\d%$/.test(share), missing: [share] });
+  }
+  {
+    const legend = [...m.container.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '');
+    const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
+    results.push({
+      name: '/analytics probes by outcome carries a migrated slice with its hint',
+      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net"),
+      missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
+    });
+  }
+  results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
+  const hints = m.container.querySelectorAll('[title="±1 bucket"]').length;
+  results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
+  const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
+  results.push({ name: '/analytics has a filter per dimension', ok: ['Key', 'Pool', 'Upstream', 'Model'].every((d) => dims.includes(d)), missing: dims });
+  const custom = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Custom');
+  custom?.click();
+  await m.settle(300);
+  const pickers = m.container.querySelectorAll('input[type="datetime-local"]').length;
+  results.push({ name: '/analytics custom range shows from/to', ok: pickers === 2, missing: [String(pickers)] });
+  const hist = m.container.querySelectorAll('.hist__bars').length;
+  results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
+  const bar = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim());
+  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Upstreams']), missing: bar });
+  // The Upstreams entry anchors on the section id `accounts`, which the rename deliberately left alone.
+  const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => (b.textContent?.trim() === 'Upstreams' ? 'accounts' : b.textContent?.trim().toLowerCase().replace(/ /g, '-')));
+  results.push({ name: '/analytics each bar entry has a section to scroll to', ok: targets.every((id) => m.container.querySelector(`.analytics-section#${id}`) !== null), missing: targets });
+  results.push({ name: '/analytics marks one section active', ok: m.container.querySelectorAll('.section-bar__link.is-active').length === 1, missing: [] });
+  const cost = [...m.container.querySelectorAll('.section-bar__link')].find((b) => b.textContent?.trim() === 'Cost');
+  cost?.click();
+  await m.settle(150);
+  results.push({ name: '/analytics clicking a bar entry moves the highlight', ok: cost?.classList.contains('is-active') === true, missing: [...m.container.querySelectorAll('.section-bar__link.is-active')].map((b) => b.textContent) });
+}
+m.unmount();
+
+m = await mount('/keepalive');
+results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('One row per session'), missing: [m.text().slice(0, 120)] });
+m.unmount();
+
+m = await mount('/sessions');
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Upstream', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
+{
+  const meters = m.container.querySelectorAll('.cost-caps .meter').length;
+  results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
+  const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));
+  const expired = tiles.find((t) => t.label === 'Expired between turns, 24h');
+  results.push({ name: '/sessions expired-between-turns tile follows the probe tile', ok: tiles.findIndex((t) => t.label === 'Expired between turns, 24h') === tiles.findIndex((t) => t.label === 'Cache probes, 24h') + 1, missing: tiles.map((t) => t.label ?? '') });
+  results.push({ name: '/sessions expired-between-turns tile counts the mock', ok: Boolean(expired) && Number(expired.value.replace(/,/g, '')) > 0, missing: [expired?.value ?? 'absent'] });
+  results.push({ name: '/sessions expired-between-turns warns while a pool keeps caches warm', ok: expired?.warn === true, missing: [String(expired?.warn)] });
+  const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 15, missing: [String(rows().length)] });
+  const ci = rows().filter((r) => r.children[1]?.textContent === 'ci');
+  results.push({ name: '/sessions still lists both ci sessions', ok: ci.length === 2, missing: [String(ci.length)] });
+  const ciCells = ci.map((r) => [r.children[10]?.textContent?.trim(), r.children[11]?.textContent?.trim()]);
+  results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
+  results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
+  const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'api key' || t === 'subscription');
+  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 15 && kinds.includes('subscription') && kinds.includes('api key'), missing: [...new Set(kinds)] });
+  const summaries = rows().map((r) => r.children[10]?.textContent?.trim() ?? '');
+  results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (armed|held|probing)/.test(x)), missing: summaries.slice(0, 3) });
+
+  // Companion state: every row carries one of the three, and the silent ones say since when.
+  const companions = rows().map((r) => r.children[9]?.textContent?.trim() ?? '');
+  const silent = companions.filter((c) => c.startsWith('silent'));
+  results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c === 'reporting') && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
+  results.push({ name: '/sessions silent companions say since when', ok: silent.every((c) => /^silent ?since .+ ago$/.test(c)), missing: silent });
+
+  // Expiry now rides under the last-used time rather than in a column of its own.
+  const expiries = rows().map((r) => r.children[5]?.querySelector('.sub')?.textContent?.trim() ?? '');
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 15 && expiries.every((e) => /^expires in \d+[hmd]/.test(e)), missing: expiries.slice(0, 3) });
+  const counts = rows().map((r) => Number(r.children[6]?.textContent?.trim()));
+  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
+
+  // Per-agent pins: a "+N" badge wherever an agent runs another model or sits on another account.
+  {
+    const modelPlus = [...m.container.querySelectorAll('.srow__pin .badge')];
+    results.push({ name: '/sessions marks sessions whose agents run another model', ok: modelPlus.length >= 2 && modelPlus.every((b) => /^\+\d+$/.test(b.textContent?.trim() ?? '')), missing: modelPlus.map((b) => b.textContent?.trim() ?? '') });
+    const modelTitle = modelPlus[0]?.getAttribute('title') ?? '';
+    results.push({ name: '/sessions +N hover lists agent, model and account', ok: /\n\S+: claude-\S+ on \w+/.test(modelTitle), missing: [modelTitle] });
+    const accountPlus = [...m.container.querySelectorAll('.srow__account .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
+    results.push({
+      name: '/sessions marks a subagent pinned to another account',
+      ok: accountPlus.length >= 1 && (accountPlus[0].getAttribute('title') ?? '').includes(' on personal'),
+      missing: [accountPlus[0]?.getAttribute('title') ?? 'absent'],
+    });
+  }
+
+  // The Last request column, and the two rows the state semantics changed.
+  {
+    const heads = [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
+    results.push({ name: '/sessions Last request follows the Requests count', ok: heads[6] === 'Requests' && heads[7] === 'Last request', missing: heads });
+    results.push({ name: '/sessions no longer carries an Epoch, a Created or an Expires column', ok: heads.length === 13 && !heads.includes('Epoch') && !heads.includes('Created') && !heads.includes('Expires'), missing: heads });
+    const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
+    results.push({
+      name: '/sessions a re-created pin says so under the session id',
+      ok: epochLines.length === 3 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
+      missing: epochLines,
+    });
+    const lasts = rows().map((r) => r.children[7]?.textContent?.trim() ?? '');
+    results.push({ name: '/sessions last request is relative or none', ok: lasts.includes('none') && lasts.filter((v) => /ago$|^now$/.test(v)).length >= 12, missing: lasts.slice(0, 5) });
+    const silentRows = rows().filter((r) => (r.children[9]?.textContent?.trim() ?? '').startsWith('silent'));
+    const silentWarming = silentRows.map((r) => r.children[10]?.textContent?.trim() ?? '');
+    results.push({
+      name: '/sessions a silent companion keeps its recipes',
+      ok: silentRows.length === 2 && silentWarming.some((v) => /^idle/.test(v)),
+      missing: silentWarming,
+    });
+    results.push({
+      name: '/sessions the silent session past its idle limit reads no recipe',
+      ok: silentWarming.includes('no recipe') && silentRows.some((r) => r.children[10]?.textContent?.trim() === 'no recipe' && r.children[11]?.textContent?.trim() === 'not scheduled'),
+      missing: silentWarming,
+    });
+    const silentBadge = [...(silentRows[0]?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'silent');
+    results.push({
+      name: '/sessions silent badge says the retained prompts stay',
+      ok: (silentBadge?.getAttribute('title') ?? '').includes("The retained prompts stay and are probed under the pool's idle limits, counted from the last real request") && !(silentBadge?.getAttribute('title') ?? '').includes('lease'),
+      missing: [silentBadge?.getAttribute('title') ?? 'absent'],
+    });
+    const parkedRow = rows().find((r) => (r.children[10]?.textContent?.trim() ?? '').startsWith('parked'));
+    results.push({
+      name: '/sessions parked sessions are probed like busy ones',
+      ok: parkedRow !== undefined && parkedRow.children[11]?.textContent?.trim() !== 'not scheduled' && !(parkedRow.children[10]?.textContent ?? '').includes('held'),
+      missing: [parkedRow?.children[10]?.textContent?.trim() ?? 'absent', parkedRow?.children[11]?.textContent?.trim() ?? 'absent'],
+    });
+    const mixedRow = rows()[0];
+    results.push({
+      name: '/sessions an agent awaiting cache evidence counts as armed in the row summary',
+      ok: (mixedRow?.children[10]?.textContent ?? '').includes('2 armed, 1 held'),
+      missing: [mixedRow?.children[10]?.textContent?.trim() ?? 'absent'],
+    });
+    const parkedBadge = [...(parkedRow?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'parked');
+    results.push({ name: '/sessions parked badge says the idle limits do not apply', ok: (parkedBadge?.getAttribute('title') ?? '').includes('idle limits do not apply'), missing: [parkedBadge?.getAttribute('title') ?? 'absent'] });
+  }
+
+  // A session with no ledgered requests cannot open either view.
+  // Only the first nine sessions also appear in the live feed, so the observe jump needs one of those.
+  const busyRow = () => rows().find((r, i) => i < 9 && Number(r.children[6]?.textContent?.trim()) > 0);
+  const barren = rows().find((r) => Number(r.children[6]?.textContent?.trim()) === 0);
+  const openMenu = async (row) => {
+    row?.querySelector('.menu__trigger')?.click();
+    await m.settle(120);
+    return [...(row?.querySelectorAll('.menu__list button') ?? [])];
+  };
+  results.push({ name: '/sessions keeps the row to one overflow menu', ok: [...(busyRow()?.querySelectorAll('td button') ?? [])].length === 1, missing: [...(busyRow()?.querySelectorAll('td button') ?? [])].map((b) => b.textContent?.trim() ?? '') });
+  {
+    const items = await openMenu(barren);
+    results.push({
+      name: '/sessions the overflow menu carries the same three entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|Release',
+      missing: items.map((b) => b.textContent?.trim() ?? ''),
+    });
+    const jumps = items.filter((b) => b.textContent?.trim().startsWith('View in'));
+    results.push({ name: '/sessions disables both jumps without ledgered requests', ok: jumps.length === 2 && jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
+    await openMenu(barren);
+  }
+  {
+    const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim().startsWith('View in'));
+    results.push({ name: '/sessions enables both jumps with ledgered requests', ok: jumps.length === 2 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
+    await openMenu(busyRow());
+  }
+  {
+    const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
+    release?.click();
+    await m.settle(250);
+    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+    results.push({ name: '/sessions Release from the menu still confirms first', ok: (confirm?.textContent ?? '').includes('Release session') && (confirm?.textContent ?? '').includes('loses its pin to'), missing: [confirm?.textContent?.slice(0, 80) ?? 'no dialog'] });
+    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+  }
+
+  // A row opens into one line per agent and closes again.
+  rows()[0]?.click();
+  await m.settle(150);
+  const detail = m.container.querySelector('.srow__detail');
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Upstream', 'TTL', 'Next probe', 'Last request', 'State', 'main']);
+  {
+    const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
+    results.push({
+      name: '/sessions an agent awaiting cache evidence is armed on the first stream event',
+      ok: mainAgent.includes('on first stream event') && mainAgent.includes('armed') && mainAgent.includes('awaiting cache evidence') && !mainAgent.includes('not scheduled'),
+      missing: [mainAgent || 'absent'],
+    });
+  }
+  results.push({
+    name: '/sessions agent rows carry their own model and account',
+    ok: (detail?.textContent ?? '').includes('claude-fable-5-1') && (detail?.textContent ?? '').includes('claude-sonnet-5') && (detail?.textContent ?? '').includes('personal'),
+    missing: [detail?.textContent?.slice(0, 160) ?? 'absent'],
+  });
+  const agentRows = detail?.querySelectorAll('.agents__row').length ?? 0;
+  results.push({ name: '/sessions expanded row lists a head plus one line per agent', ok: agentRows >= 2, missing: [String(agentRows)] });
+  rows()[0]?.click();
+  await m.settle(150);
+  results.push({ name: '/sessions row collapses again', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
+
+  // Expand all reaches every hold reason and both ci explanations.
+  const expandAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all');
+  expandAll?.click();
+  await m.settle(250);
+  const open = m.container.querySelectorAll('.srow__detail').length;
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 15, missing: [String(open)] });
+  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probe', 'overage', 'unsupported shape']);
+  results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
+  {
+    const netNegative = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'net negative');
+    results.push({
+      name: '/sessions net negative explains the grace probes',
+      ok: (netNegative?.getAttribute('title') ?? '').includes("The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again."),
+      missing: [netNegative?.getAttribute('title') ?? 'absent'],
+    });
+  }
+  {
+    const chips = [...m.container.querySelectorAll('.agents__row .badge')].map((b) => b.textContent?.trim());
+    results.push({ name: '/sessions no recipe chip reads waiting any more', ok: !chips.includes('waiting'), missing: chips.filter((c) => c === 'waiting') });
+    const awaiting = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'awaiting cache evidence');
+    results.push({
+      name: '/sessions awaiting cache evidence says the timer arms from the first stream event',
+      ok: (awaiting?.getAttribute('title') ?? '').includes('the probe timer arms from that event and probes then run while the response is still streaming'),
+      missing: [awaiting?.getAttribute('title') ?? 'absent'],
+    });
+    const badges = [...m.container.querySelectorAll('.badge')];
+    const untitled = badges.filter((b) => !(b.getAttribute('title') ?? '').trim());
+    results.push({ name: '/sessions every badge carries a hover hint', ok: badges.length > 20 && untitled.length === 0, missing: untitled.map((b) => b.textContent?.trim() ?? '') });
+    const stateBadge = badges.find((b) => b.textContent?.trim() === 'armed');
+    results.push({
+      name: '/sessions armed badge covers both the scheduled and the pending case',
+      ok: (stateBadge?.getAttribute('title') ?? '') === 'The next probe is scheduled, or arms from the first stream event of the request in flight.',
+      missing: [stateBadge?.getAttribute('title') ?? 'absent'],
+    });
+    const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
+    results.push({
+      name: '/sessions idle limit reason says the retained prompt was discarded',
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '').includes("The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded."),
+      missing: [idle?.getAttribute('title') ?? 'absent'],
+    });
+    results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });
+    expect('/sessions the idle limit explains the missing recipe', m.text(), ['the idle limit ran out ']);
+  }
+  {
+    const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'paused: cold probe');
+    results.push({ name: '/sessions cold probe reason names the limit', ok: (cold?.getAttribute('title') ?? '').includes("cold probe limit"), missing: [cold?.getAttribute('title')] });
+  }
+  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
+  const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
+  results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
+  collapseAll?.click();
+  await m.settle(200);
+  results.push({ name: '/sessions Collapse all closes every row', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
+
+  // Cost reference.
+  const costLink = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cost reference');
+  costLink?.click();
+  await m.settle(400);
+  const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
+    'Cost reference',
+    'API list prices. For subscription upstreams these approximate quota consumption and are not billed as money.',
+    'Model',
+    'Uncached input',
+    'Cache write 5m',
+    'Cache write 1h',
+    'Cache read',
+    'Output',
+    'Turns to pay off, 5m',
+    'Turns to pay off, 1h',
+    'Hold warm 1h, 5m + probes',
+    'Hold warm 1h, 1h + probe',
+    '1h pays off after',
+    'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
+    'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
+    'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
+    'per prefix token',
+    'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
+    'Without warming, the 1-hour entry wins after a 5-minute pause.',
+    'plan quota rather than money',
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5',
+    'claude-haiku-4-5-20251001',
+  ]);
+  {
+    const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
+    results.push({
+      name: '/sessions cost reference footnote is a definition list of six terms',
+      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Subscription upstreams']),
+      missing: terms,
+    });
+  }
+  const priceRow = (model) => {
+    const tr = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
+    return tr ? [...tr.children].map((td) => td.textContent?.trim()) : [];
+  };
+  const models = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
+  results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 9 && models.every((n) => n.startsWith('claude-')), missing: models });
+  results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 5).join(',') === 'claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
+  const fable = priceRow('claude-fable-5-1');
+  results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === '0.3' && fable[7] === '1.0', missing: fable });
+  const sonnet = priceRow('claude-sonnet-5');
+  results.push({ name: '/sessions cost reference turns to pay off on a standard model', ok: sonnet[6] === '0.3' && sonnet[7] === '1.1', missing: sonnet });
+  results.push({ name: '/sessions cost reference prices holding a prefix warm for an idle hour', ok: sonnet[8] === '2.75x' && sonnet[9] === '2.1x' && sonnet[10] === '30 min', missing: sonnet });
+  results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === 'never within 1h', missing: fable });
+  const haiku = priceRow('claude-haiku-4-5-20251001');
+  results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
+  const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
+  close?.click();
+  await m.settle(200);
+
+  const sessionId = busyRow()?.children[2]?.getAttribute('title') ?? '';
+  const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
+  const chipText = () => [...m.container.querySelectorAll('.chip--removable')].map((c) => c.textContent?.trim() ?? '');
+
+  (await jump('View in analytics'))?.click();
+  await m.settle(900);
+  results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
+  {
+    const chip = m.container.querySelector('.chip--removable');
+    results.push({ name: '/analytics session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });
+    chip?.querySelector('button')?.click();
+    await m.settle(400);
+    results.push({ name: '/analytics session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
+  }
+
+  await m.navigate('/sessions');
+  (await jump('View in observe'))?.click();
+  await m.settle(900);
+  results.push({ name: '/sessions View in observe pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Requests per second'), missing: chipText() });
+  {
+    const chip = m.container.querySelector('.chip--removable');
+    results.push({ name: '/observe session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });
+    const sessions = [...m.container.querySelectorAll('.live-table tbody tr')].map((tr) => tr.children[2]?.getAttribute('title'));
+    results.push({ name: '/observe feed holds only the filtered session', ok: sessions.length > 0 && sessions.every((v) => v === sessionId), missing: [...new Set(sessions)].map(String) });
+    chip?.querySelector('button')?.click();
+    await m.settle(400);
+    results.push({ name: '/observe session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
+  }
+}
+m.unmount();
+
+
+m = await mount('/alerts');
+expect('/alerts', m.text(), [
+  'Rules',
+  'Create rule',
+  'Re-auth required',
+  'Utilization above threshold',
+  'Pool exhausted',
+  'Waiting for user input',
+  'Client version drift',
+  'All traffic',
+  'Signed',
+  'Unsigned',
+  'Events',
+  'Any condition',
+  'open',
+  'resolved',
+  'timeout',
+  'connect timeout after 10s',
+  'asked: The ledger migration can rewrite rows in place',
+  'client 2.1.274, caught by the version check',
+  'agent main',
+]);
+{
+  // The kind filter narrows the events list to one condition.
+  const filter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by condition');
+  const kinds = [...(filter?.options ?? [])].map((o) => o.textContent?.trim());
+  results.push({ name: '/alerts kind filter offers both new kinds', ok: kinds.includes('Waiting for user input') && kinds.includes('Client version drift'), missing: kinds });
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue.call(filter, 'client_drift');
+  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(250);
+  const rows = [...m.container.querySelectorAll('table')].pop()?.querySelectorAll('tbody tr') ?? [];
+  results.push({ name: '/alerts kind filter narrows the events list', ok: rows.length === 1 && rows[0].textContent.includes('Client version drift'), missing: [String(rows.length), rows[0]?.textContent?.slice(0, 60) ?? ''] });
+  setValue.call(filter, 'all');
+  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(250);
+}
+{
+  // The rule form explains each new kind and offers only the scopes it allows.
+  const create = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create rule');
+  create?.click();
+  await m.settle(350);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const kindSelect = dlg?.querySelector('select');
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue.call(kindSelect, 'ask_user_question');
+  kindSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(200);
+  expect('/alerts rule form explains ask_user_question', dlg?.textContent ?? '', ['AskUserQuestion tool call', "resolves on the session's next request"]);
+  const scopes = [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim());
+  results.push({ name: '/alerts ask_user_question scopes by key, pool, or all', ok: scopes.includes('All traffic') && scopes.some((o) => o.startsWith('Key ')) && scopes.some((o) => o.startsWith('Pool ')), missing: scopes });
+  setValue.call(kindSelect, 'client_drift');
+  kindSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(200);
+  expect('/alerts rule form explains client_drift', dlg?.textContent ?? '', ['billing-hash check', 'Re-pin the profile']);
+  const driftScopes = [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim());
+  results.push({ name: '/alerts client_drift scopes to all traffic only', ok: JSON.stringify(driftScopes) === JSON.stringify(['All traffic']), missing: driftScopes });
+  const cancel = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel');
+  cancel?.click();
+  await m.settle(200);
+}
+m.unmount();
+
+m = await mount('/settings');
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', '7d', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
+results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
+{
+  expect('/settings pricing meta', m.text(), ['Effective Sep 08, 2026', 'source: shipped table']);
+  const priceRow = (model) => {
+    const row = [...m.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === model);
+    return row ? [...row.children].slice(1).map((td) => td.textContent?.trim()) : null;
+  };
+  const shipped = {
+    'claude-fable-5-1': ['$10.00', '$0.25', '$12.50', '$20.00', '$50.00'],
+    'claude-opus-5': ['$5.00', '$0.50', '$6.25', '$10.00', '$25.00'],
+    'claude-sonnet-5': ['$2.00', '$0.20', '$2.50', '$4.00', '$10.00'],
+    'claude-haiku-4-5-20251001': ['$1.00', '$0.10', '$1.25', '$2.00', '$5.00'],
+  };
+  const heads = [...m.container.querySelectorAll('thead th')].map((th) => th.textContent?.trim());
+  for (const [model, want] of Object.entries(shipped)) {
+    const got = priceRow(model);
+    results.push({ name: `/settings price row ${model}`, ok: got !== null && want.every((v) => got.includes(v)), missing: got ?? ['row missing', ...heads] });
+  }
+  const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
+  results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 9 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
+  results.push({
+    name: '/settings no longer carries the other upstream prices section',
+    ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
+    missing: [m.text().includes('Other upstream prices') ? 'heading still there' : '', /gpt-\d/.test(m.text()) ? 'a gpt row is still priced' : ''].filter(Boolean),
+  });
+  expect('/settings import help', m.text(), [
+    'Accepts the LiteLLM model_prices_and_context_window.json or a models.dev catalog.',
+    'Per-token costs are converted to USD per million; the 1h write price comes from the above-1hr field.',
+    'Only models the router serves are imported, and nothing is written until you confirm the diff.',
+  ]);
+}
+
+// Importing a catalog: the diff lists only what changes, and Confirm writes it.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const urlInput = [...m.container.querySelectorAll('input')].find((i) => i.placeholder === 'Import from URL');
+  setter.call(urlInput, 'https://models.dev/api.json');
+  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  [...m.container.querySelectorAll('.price-import button')].find((b) => b.textContent?.trim() === 'Import')?.click();
+  await m.settle(800);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/settings import dialog', dlg?.textContent ?? '', ['Review import', '13 models in the file, 10 the router serves; 10 changes. Nothing is written until you confirm.', 'Model', 'Field', 'Current', 'Imported', 'Cancel', 'Confirm']);
+  results.push({
+    name: '/settings import dialog keeps the models the router does not serve out of the diff',
+    ok: !(dlg?.textContent ?? '').includes('gemini'),
+    missing: [(dlg?.textContent ?? '').includes('gemini') ? 'a gemini row reached the diff' : ''].filter(Boolean),
+  });
+  const diff = [...(dlg?.querySelectorAll('.diff-table tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim()).join(' '));
+  results.push({ name: '/settings import diff omits unchanged rows', ok: diff.length === 10 && diff.every((r) => r.startsWith('claude-haiku')), missing: diff.slice(0, 4) });
+  results.push({ name: '/settings import diff reads current against imported', ok: diff.includes('claude-haiku-4-5-20251001 Input $1.00 $0.80'), missing: diff.filter((r) => r.includes('Input')) });
+  results.push({ name: '/settings import diff marks a model the table does not carry', ok: diff.some((r) => r.startsWith('claude-haiku-5new ') && r.includes('- $')), missing: diff.filter((r) => r.includes('new ')).slice(0, 2) });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm')?.click();
+  await m.settle(300);
+  results.push({
+    name: '/settings Confirm applies the import and names the host',
+    ok: m.text().includes('source: imported from models.dev') && m.text().includes('claude-haiku-5') && m.text().includes('$0.80'),
+    missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
+  });
+}
+
+// Editing a price by hand: cell, Save bar, validation, Discard.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  m.container.querySelector('.price-cell__btn')?.click();
+  await m.settle(150);
+  const cell = m.container.querySelector('input.input--price');
+  results.push({
+    name: '/settings a price cell turns into a numeric input',
+    ok: cell !== null && cell.type === 'number' && cell.min === '0' && cell.step === '0.0001',
+    missing: [cell ? `${cell.type} min=${cell.min} step=${cell.step}` : 'no input'],
+  });
+  results.push({ name: '/settings the table is clean until a price changes', ok: m.container.querySelector('.save-bar') === null, missing: [] });
+  setter.call(cell, '11.5');
+  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(200);
+  results.push({ name: '/settings an edited price raises the Save bar', ok: m.container.querySelector('.save-bar') !== null && m.text().includes('Unsaved price edits.'), missing: [] });
+  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
+  await m.settle(250);
+  results.push({
+    name: '/settings Save stamps the table as edited by hand',
+    ok: m.text().includes('source: edited by hand') && m.text().includes('$11.50') && m.container.querySelector('.save-bar') === null,
+    missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
+  });
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add model')?.click();
+  await m.settle(200);
+  results.push({ name: '/settings Add model appends a row with an empty model id', ok: m.container.querySelector('input[aria-label="Model id"]') !== null, missing: [] });
+  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
+  await m.settle(200);
+  results.push({ name: '/settings Save refuses a row without a model id', ok: m.text().includes('Every row needs a model id.') && m.container.querySelector('.save-bar__msg.is-error') !== null, missing: [] });
+  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Discard')?.click();
+  await m.settle(200);
+  results.push({
+    name: '/settings Discard drops the edit and the Save bar',
+    ok: m.container.querySelector('input[aria-label="Model id"]') === null && m.container.querySelector('.save-bar') === null,
+    missing: [],
+  });
+  const remove = [...m.container.querySelectorAll('.price-table button')].find((b) => (b.getAttribute('title') ?? '').startsWith('Remove claude-fable-5-1'));
+  remove?.click();
+  await m.settle(250);
+  const confirmDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  results.push({ name: '/settings Remove asks before dropping a model', ok: (confirmDlg?.textContent ?? '').includes('Remove model') && (confirmDlg?.textContent ?? '').includes('loses its prices'), missing: [confirmDlg?.textContent?.slice(0, 80) ?? 'absent'] });
+  [...(confirmDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+
+// The downstream client configuration card: two snippets and one definition per variable.
+{
+  const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
+  results.push({
+    name: '/settings main snippet is the three required lines',
+    ok: snippets[0]?.split('\n').length === 3 && !snippets[0].includes('CC_KEEPALIVE_OWNER_ID'),
+    missing: [snippets[0] ?? 'absent'],
+  });
+  results.push({
+    name: '/settings optional snippet carries the owner id pair',
+    ok: (snippets[1] ?? '').includes('CC_KEEPALIVE_OWNER_ID=$(uuidgen)') && (snippets[1] ?? '').includes('ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"'),
+    missing: [snippets[1] ?? 'absent'],
+  });
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.textContent?.includes('Downstream client configuration'));
+  const copies = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim()).filter((t) => t === 'Copy' || t === 'Copy snippet');
+  results.push({ name: '/settings each snippet has its own copy button', ok: copies.length === 2, missing: copies });
+  const terms = [...m.container.querySelectorAll('.envdl dt')].map((dt) => dt.textContent?.trim());
+  const want = [
+    'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
+    'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
+    'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
+    'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
+  ];
+  results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
+  expect('/settings variable definitions', m.text(), [
+    "Points Claude Code at the router. Every model request and the cache-keepalive companion's reports go here.",
+    'Holds the router API key. Claude Code treats it as a subscription credential',
+    'an ANTHROPIC_API_KEY would switch those off.',
+    'Makes Claude Code send its first-party request shape to the router',
+    'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
+    'Optional hardening.',
+    'They need a wrapper script, since the env block of Claude Code',
+    'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',
+    'Worth setting for Fable 5.1 sessions in a pool with cache warming on',
+    'Leave it unset without warming.',
+  ]);
+}
+{
+  const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
+  dark?.click();
+  await m.settle(100);
+  results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
+  const sw = m.container.querySelector('button[role="switch"][aria-label="Preview as viewer"]');
+  sw?.click();
+  await m.settle(100);
+  results.push({ name: 'viewer toggle persisted', ok: localStorage.getItem('phoebis.role') === 'viewer', missing: [localStorage.getItem('phoebis.role')] });
+}
+m.unmount();
+
+// Viewer mode: no mutating controls, no bodies.
+m = await mount('/keys');
+{
+  const t = m.text();
+  results.push({ name: 'viewer: /keys hides Create API key', ok: !t.includes('Create API key'), missing: [] });
+  results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
+}
+await m.navigate(`/requests/${laptopRow.id}`);
+{
+  const t = m.text();
+  results.push({ name: 'viewer: bodies hidden', ok: t.includes('only the admin secret can read bodies') && !t.includes('cache_control'), missing: [] });
+}
+await m.navigate('/accounts/business');
+{
+  const t = m.text();
+  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add account') && !t.includes('Re-sync'), missing: [] });
+}
+await m.navigate('/settings');
+results.push({
+  name: 'viewer: /settings price table is the plain one',
+  ok: m.container.querySelector('.price-cell__btn') === null && m.container.querySelector('.price-import') === null && !m.text().includes('Add model') && m.text().includes('claude-fable-5-1'),
+  missing: [],
+});
+await m.navigate('/sessions');
+{
+  const row = m.container.querySelector('tbody tr.srow');
+  row?.querySelector('.menu__trigger')?.click();
+  await m.settle(150);
+  const items = [...(row?.querySelectorAll('.menu__list button') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: 'viewer: /sessions hides Release', ok: !items.includes('Release'), missing: items });
+  results.push({ name: 'viewer: /sessions keeps both read-only jumps', ok: items.includes('View in analytics') && items.includes('View in observe'), missing: items });
+}
+await m.navigate('/observe');
+{
+  const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop');
+  laptopRow?.click();
+  await m.settle(300);
+  results.push({ name: 'viewer: /observe preview gated', ok: laptopRow ? m.text().includes('Preview is available to admin sessions') : true, missing: [laptopRow ? '' : 'no laptop row'] });
+}
+{
+  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
+  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
+}
+m.unmount();
+
+const failed = results.filter((r) => !r.ok);
+for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);
+console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+console.log(`fixture rows: ${requests.length} requests`);
+if (problems.length) {
+  console.log(`\n${problems.length} console problems:`);
+  for (const p of [...new Set(problems)].slice(0, 30)) console.log('  ' + p);
+}
+process.exit(failed.length || problems.length ? 1 : 0);

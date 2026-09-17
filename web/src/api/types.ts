@@ -1,0 +1,596 @@
+// Response shapes for the router's admin API. The mock client in src/mock
+// produces these; a real client would fetch them.
+
+export type AccountKind = 'api_key' | 'oauth';
+export type AccountStatus = 'cooldown' | 'disabled' | 'paused' | 'reauth_required' | 'ready';
+export type WindowId = '5h' | '7d' | '7d_fable';
+
+export interface RateLimitWindow {
+  id: WindowId;
+  label: string;
+  periodHours: number;
+  /** Observed as of `observedAt`; may be stale for accounts that cannot refresh. */
+  observedAt: string;
+  resetsAt: string;
+  utilization: number;
+}
+
+export interface ExtraUsage {
+  /** Set when the provider stopped funding overage, e.g. a failed card. */
+  disabledReason: string | null;
+  enabled: boolean;
+  inUse: boolean;
+  monthlyLimitCredits: number;
+  usedCredits: number;
+}
+
+export interface ServedModel {
+  /** Id clients send; equals `upstreamId` unless the upstream aliases it. */
+  canonicalId: string;
+  id: string;
+  inCatalog: boolean;
+  /** Discovered by a catalog sync after the account was added. */
+  isNew: boolean;
+  longContext: boolean;
+  /** Added by hand rather than discovered from the upstream catalog. */
+  manual: boolean;
+  selected: boolean;
+  upstreamId: string;
+}
+
+export interface Cooldown {
+  reason: string;
+  setAt: string;
+  until: string;
+  windowId: WindowId | null;
+}
+
+export interface Credential {
+  accessTokenExpiresAt: string | null;
+  lastError: string | null;
+  lastRefreshAt: string | null;
+  refreshTokenExpiresAt: string | null;
+}
+
+export interface Subscription {
+  billingType: string;
+  rateLimitTier: string;
+  since: string;
+  status: 'active' | 'past_due' | 'trialing';
+  trialEndsAt: string | null;
+}
+
+export interface PoolMembership {
+  poolId: string;
+  priority: number;
+}
+
+export interface Account {
+  catalogSyncedAt: string;
+  cooldowns: Cooldown[];
+  credential: Credential;
+  email: string | null;
+  extraUsage: ExtraUsage | null;
+  /** Null when the provider reports no Fable window for this plan. */
+  fableWindow: RateLimitWindow | null;
+  id: string;
+  kind: AccountKind;
+  label: string;
+  plan: string | null;
+  pools: PoolMembership[];
+  requests: { last24h: number; last7d: number; lifetime: number };
+  routingEnabled: boolean;
+  servedModels: ServedModel[];
+  status: AccountStatus;
+  subscription: Subscription | null;
+  /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
+  windows: RateLimitWindow[];
+}
+
+/** What the operator pasted: a whole callback URL, which carries its own state, or the bare code with the state the pairing started under. */
+export type PairingInput = { code: string; state: string } | { url: string };
+
+export interface PairingSession {
+  authorizeUrl: string;
+  expiresAt: string;
+  /** Loopback address the router registered for this pairing; nothing listens on it, so the browser only ever shows it. */
+  redirectUri: string;
+  state: string;
+}
+
+export interface PairingPreview {
+  email: string;
+  organization: string;
+  state: string;
+}
+
+export interface CatalogModel {
+  id: string;
+  longContext: boolean;
+}
+
+export interface QuotaSample {
+  at: string;
+  utilization: number;
+}
+
+export interface QuotaHistory {
+  accountId: string;
+  samples: QuotaSample[];
+  windowId: WindowId;
+}
+
+export type QuotaFetchStatus = 'error' | 'loading' | 'success';
+
+export interface QuotaSnapshot {
+  accountId: string;
+  error: string | null;
+  fetchedAt: string | null;
+  status: QuotaFetchStatus;
+}
+
+export type PoolStrategy = 'least_utilized' | 'priority_random';
+export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
+
+export interface PoolKeepalive {
+  /** Retries allowed for a session whose cache already went cold. */
+  coldProbeLimit: number;
+  /** Probes stop for the day once this is spent; null means uncapped. */
+  costCapUsdPerDay: number | null;
+  enabled: boolean;
+  jitterSeconds1h: number;
+  jitterSeconds5m: number;
+  /** Seconds before a 1-hour cache entry expires at which its probe fires. */
+  leadSeconds1h: number;
+  /** Seconds before a 5-minute cache entry expires at which its probe fires. */
+  leadSeconds5m: number;
+  /** 0 means a session keeps being probed for as long as its pin lives. */
+  maxIdleSeconds: number;
+  /** 0 means no limit on consecutive probes without real traffic between them. */
+  maxIdleTicks: number;
+  /** Probes a recipe still gets once its session's net savings have gone below zero. */
+  netNegativeGraceProbes: number;
+  retryMaxSeconds: number;
+  /** First wait after a failed probe; each further failure doubles it. */
+  retrySeconds: number;
+  /** Pause a recipe whose probes have cost more than the cache reads they bought. */
+  stopWhenNetNegative: boolean;
+  /** Subagent recipes are probed too; off warms the main conversation only. */
+  warmSubagents: boolean;
+}
+
+export type CacheTtl = '5m' | '1h';
+
+export interface PoolCacheTtl {
+  /** Off leaves every breakpoint as the client sent it. */
+  enabled: boolean;
+  /** What applies while the serving upstream is in overage; null keeps the rules below. */
+  inOverage: CacheTtl | null;
+  main: CacheTtl;
+  /** Per-model overrides; a model absent here takes the pool rule. */
+  models: { main: CacheTtl; model: string; subagent: CacheTtl }[];
+  subagent: CacheTtl;
+}
+
+export interface TrafficBucket {
+  at: string;
+  requests: number;
+  tokens: number;
+}
+
+export interface Pool {
+  activePins: number;
+  /** Idle seconds before a session's pin to an account expires; 0 disables affinity. */
+  affinityTtlSeconds: number;
+  /** Hours of captured request and response bodies for keys with no override; 0 is off. */
+  bodyCaptureHours: number;
+  cacheTtl: PoolCacheTtl;
+  cost24h: number;
+  defaultAllowedModels: string[] | null;
+  id: string;
+  keepalive: PoolKeepalive;
+  members: { accountId: string; priority: number }[];
+  /** Null disables utilization-driven migration. */
+  migrateAboveUtilization: number | null;
+  name: string;
+  overagePolicy: OveragePolicy;
+  requests24h: number;
+  /** `active` and `disabled` are set by hand; the rest are observed. */
+  status: 'active' | 'degraded' | 'disabled' | 'exhausted';
+  strategy: PoolStrategy;
+  traffic24h: TrafficBucket[];
+}
+
+export type KeyStatus = 'active' | 'expired' | 'revoked';
+
+export interface ApiKey {
+  allowedModels: string[] | null;
+  /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
+  bodyCaptureHours: number | null;
+  createdAt: string;
+  expiresAt: string | null;
+  id: string;
+  /** Sessions on this key never receive cache-warming probes. */
+  keepaliveOptOut: boolean;
+  lastUsedAt: string | null;
+  lifetime: { cost: number; requests: number };
+  name: string;
+  notes: string | null;
+  poolId: string;
+  prefix: string;
+  status: KeyStatus;
+  usage7d: { cost: number; requests: number; tokens: number };
+}
+
+export interface CreatedApiKey {
+  key: ApiKey;
+  /** Shown once at creation and never stored in plain text. */
+  secret: string;
+}
+
+export type RequestKind = 'count_tokens' | 'inference' | 'probe';
+export type Transport = 'json' | 'sse';
+export type AttemptOutcome = 'failover' | 'ok' | 'overloaded' | 'rate_limited' | 'upstream_error';
+
+export interface AttemptWindow {
+  id: WindowId;
+  resetsAt: string;
+  utilization: number;
+}
+
+/**
+ * Why the prompt-cache prefix did not hit, from the cache diagnostics beta.
+ * Ordered as the beta documents it rather than alphabetically: the no-divergence
+ * answer first, then the diagnosed divergences, then the two non-answers.
+ */
+export type CacheMissReason = 'none' | 'model_changed' | 'system_changed' | 'tools_changed' | 'messages_changed' | 'previous_message_not_found' | 'unavailable' | 'not_requested';
+
+export interface Attempt {
+  accountId: string;
+  /** Estimated input that fell after the divergence point; set only for the `*_changed` reasons. */
+  cacheMissedInputTokens: number | null;
+  /** Null when the attempt drew no response body to read diagnostics from. */
+  cacheMissReason: CacheMissReason | null;
+  cooldownSet: { reason: string; until: string } | null;
+  durationMs: number;
+  index: number;
+  outcome: AttemptOutcome;
+  startedAt: string;
+  upstreamStatus: number;
+  windows: AttemptWindow[];
+}
+
+export interface Usage {
+  cacheRead: number;
+  cacheWrite1h: number;
+  cacheWrite5m: number;
+  input: number;
+  output: number;
+}
+
+export interface RequestLog {
+  accountId: string;
+  agentId: string;
+  at: string;
+  attempts: Attempt[];
+  capturedBodies: boolean;
+  costUsd: number;
+  durationMs: number;
+  errorCode: string | null;
+  id: string;
+  keyId: string;
+  kind: RequestKind;
+  model: string;
+  poolId: string;
+  sessionId: string;
+  status: number;
+  transport: Transport;
+  ttfbMs: number | null;
+  /** First content token; later than `ttfbMs` on streams that open with metadata. */
+  ttftMs: number | null;
+  usage: Usage;
+}
+
+export interface CapturedBodies {
+  request: unknown;
+  requestId: string;
+  response: unknown;
+}
+
+export interface RequestQuery {
+  accountIds?: string[];
+  from?: string;
+  keyIds?: string[];
+  kind?: RequestKind | null;
+  models?: string[];
+  poolIds?: string[];
+  search?: string;
+  statuses?: number[];
+  to?: string;
+}
+
+export interface CostSplit {
+  cacheRead: number;
+  cacheWrite: number;
+  input: number;
+  output: number;
+}
+
+/** Counts per bucket; the 64 log-spaced edges are defined in src/lib/histogram.ts. */
+export interface LatencyHistograms {
+  durationMs: number[];
+  outputTps: number[];
+  ttfbMs: number[];
+  ttftMs: number[];
+}
+
+/** Why a recipe stopped while probes it had already paid for were still in the air. */
+export type WastedProbeReason = 'idle_limit' | 'released' | 'replaced' | 'session_ended';
+
+export interface HourlyRollup {
+  accountId: string;
+  cacheHits: number;
+  cacheMisses: number;
+  /** Attempts that carried diagnostics, counted by what they reported. */
+  cacheMissReasons: Record<CacheMissReason, number>;
+  cost: CostSplit;
+  costUsd: number;
+  /**
+   * Requests that diagnosed no divergence yet read no cache, so the entry
+   * expired between turns. The reason counts cannot be split this way once
+   * summed, which is why the ledger carries it.
+   */
+  expiredBetweenTurns: number;
+  /** Attempts that moved to another member before the request succeeded. */
+  failovers: number;
+  histograms: LatencyHistograms;
+  hour: string;
+  /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
+  keptWarm: { requests: number; tokens: number };
+  keyId: string;
+  kind: RequestKind;
+  /** Session pins moved to another member during the hour. */
+  migrations: number;
+  model: string;
+  poolId: string;
+  /** Probes served by another account than the recipe's; they count for neither the cold streak nor the net. */
+  probeMigrated: number;
+  probes: { failed: number; ok: number; skipped: number };
+  requests: { ok: number; overloaded: number; rate_limited: number; upstream_error: number };
+  savings: { grossUsd: number; probeCostUsd: number };
+  /** The mock rolls up per session so analytics can filter by one; a real ledger filters rows instead. */
+  sessionId: string;
+  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; uncachedInput: number };
+  uncached: number;
+  /** Probes no real request ever followed, settled when the recipe stopped. */
+  wastedProbes: number;
+  wastedProbeReasons: Record<WastedProbeReason, number>;
+  wastedProbeUsd: number;
+}
+
+export interface AccountRollup {
+  accountId: string;
+  cooldownSeconds: number;
+  hour: string;
+  overageSeconds: number;
+  peak: { '5h': number; '7d': number; '7d_fable': number | null };
+  pins: { created: number; migratedIn: number; migratedOut: number };
+}
+
+export type KeepaliveState = 'busy' | 'idle' | 'parked';
+
+/** Whether a cache-keepalive companion is registered for the session and still reporting. */
+export type CompanionState = 'none' | 'reporting' | 'silent';
+
+export interface Session {
+  accountId: string;
+  agents: number;
+  companion: CompanionState;
+  /** When the companion last reported; set only while `companion` is `silent`. */
+  companionSince: string | null;
+  createdAt: string;
+  epoch: number;
+  /** `state` is null when the session carries no cache-warming recipe at all. */
+  keepalive: { nextProbeAt: string | null; state: KeepaliveState | null };
+  keyId: string;
+  /** Last ledgered client request; null for a session that has not been seen in the ledger. */
+  lastRequestAt: string | null;
+  lastUsedAt: string;
+  model: string;
+  /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
+  requests: number;
+  sessionId: string;
+}
+
+export type RecipeState = 'armed' | 'held' | 'probing';
+export type RecipeReason = 'affinity_too_short' | 'awaiting_cache_evidence' | 'cap_reached' | 'cooled' | 'idle_limit' | 'net_negative' | 'overage' | 'unsupported_shape';
+
+/** One cache-warming recipe per agent: what the next probe replays and why it may be held. */
+export interface KeepaliveRecipe {
+  accountId: string;
+  agentId: string;
+  keyId: string;
+  /** This agent's last real request; null for an agent that has not sent one yet. */
+  lastRequestAt: string | null;
+  model: string;
+  nextProbeAt: string | null;
+  poolId: string;
+  reason: RecipeReason | null;
+  sessionId: string;
+  state: RecipeState;
+  ttlSeconds: number;
+}
+
+export interface KeepaliveOverview {
+  agents: Record<KeepaliveState, number>;
+  costToday: { capUsd: number | null; poolId: string; usd: number }[];
+  /** Requests whose prefix expired between turns in the last 24 hours. */
+  expiredBetweenTurns24h: number;
+  netSaved7dUsd: number;
+  probes24h: { failed: number; migrated: number; ok: number; skipped: number };
+  sessions: number;
+}
+
+export type AlertKind = 'ask_user_question' | 'client_drift' | 'pool_exhausted' | 'reauth_required' | 'utilization_above';
+
+/** What an event of one of the session-scoped kinds captured; null for the kinds that need no extra fields. */
+export type AlertEventDetail =
+  | { agentId: string; keyId: string; question: string | null; sessionId: string; type: 'ask_user_question' }
+  | { clientVersion: string; trigger: 'billing_hash' | 'version'; type: 'client_drift' };
+
+export interface AlertRule {
+  enabled: boolean;
+  hasSecret: boolean;
+  id: string;
+  kind: AlertKind;
+  scope: { id: string | null; type: 'account' | 'all' | 'any_account' | 'key' | 'pool' };
+  threshold: number | null;
+  webhookUrl: string;
+  windowId: WindowId | null;
+}
+
+export interface Delivery {
+  at: string;
+  error: string | null;
+  status: number | null;
+}
+
+export interface AlertEvent {
+  deliveries: Delivery[];
+  detail: AlertEventDetail | null;
+  id: string;
+  kind: AlertKind;
+  openedAt: string;
+  resolvedAt: string | null;
+  ruleId: string;
+  state: 'open' | 'resolved';
+  subject: string;
+}
+
+export interface ModelPrice {
+  cacheReadPerM: number;
+  cacheWrite1hPerM: number;
+  cacheWrite5mPerM: number;
+  inputPerM: number;
+  model: string;
+  outputPerM: number;
+}
+
+export interface PriceImportPreview {
+  /** One change per field the diff would write, against the table the router serves. */
+  changes: number;
+  /** Models the file carries, before the ones the router does not serve are dropped. */
+  inFile: number;
+  /** The rows that survived the filter, which is what the diff is built from. */
+  models: ModelPrice[];
+  /** How many of the models in the file the router serves. */
+  served: number;
+}
+
+export interface Settings {
+  about: { profile: string; publicUrl: string; version: string };
+  lastSyncAt: string;
+  /** The price table shown to the user and used to cost the ledger. */
+  pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
+  retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number };
+  /** How long a session stays listed after its last activity. */
+  sessions: { expireAfterSeconds: number };
+}
+
+export interface Overview {
+  cost24h: number;
+  errorRate24h: number;
+  hourly: { at: string; cost: number; errors: number; requests: number; tokens: number }[];
+  requests24h: number;
+  tokens24h: number;
+  tokensCached24h: number;
+  topErrorCode: string | null;
+}
+
+/* Live traffic feed */
+
+export type LiveState = 'finished' | 'in_flight';
+export type MetricQuality = 'derived' | 'estimated' | 'measured';
+
+/** Timestamps land as each phase is observed; an absent field means "not yet", never zero. */
+export interface LivePhases {
+  finishedAt?: string;
+  firstContentAt?: string;
+  headAt?: string;
+  receivedAt: string;
+  selectedAt?: string;
+  streamEndAt?: string;
+  writtenAt?: string;
+}
+
+export interface LiveAttempt {
+  accountId: string;
+  cooldownSet: { reason: string; until: string } | null;
+  index: number;
+  outcome: AttemptOutcome | 'in_flight';
+  startedAt: string;
+  upstreamStatus: number | null;
+  windows: AttemptWindow[];
+}
+
+export interface LiveRequest {
+  accountId: string | null;
+  agentId: string;
+  attempts: LiveAttempt[];
+  costUsd: number;
+  errorCode: string | null;
+  id: string;
+  keyId: string;
+  kind: RequestKind;
+  model: string;
+  outputTps: number | null;
+  phases: LivePhases;
+  poolId: string;
+  /** Output text so far; only keys that capture bodies carry it. */
+  preview: string | null;
+  sessionId: string;
+  state: LiveState;
+  status: number | null;
+  transport: Transport;
+  usage: Usage;
+}
+
+export interface LiveMetric {
+  quality: MetricQuality;
+  /** One value per second for the last minute, oldest first. */
+  series: number[];
+  value: number | null;
+}
+
+export interface LiveTick {
+  at: string;
+  metrics: {
+    activeStreams: LiveMetric;
+    costPerMinute: LiveMetric;
+    errorRate: LiveMetric;
+    outputTps: LiveMetric;
+    requestsPerSecond: LiveMetric;
+    ttfbP50: LiveMetric;
+    ttfbP95: LiveMetric;
+    ttfbP99: LiveMetric;
+  };
+}
+
+export interface LiveSnapshot {
+  cursor: number;
+  inFlight: LiveRequest[];
+  /** Finished requests from the last 30 minutes, newest first. */
+  recent: LiveRequest[];
+  tick: LiveTick;
+}
+
+export type LiveDelta =
+  | { at: string; cursor: number; id: string; type: 'selected'; accountId: string; attempt: LiveAttempt; failed?: LiveAttempt }
+  | { at: string; cursor: number; id: string; type: 'head'; attempt: LiveAttempt; status: number }
+  | { at: string; cursor: number; id: string; type: 'progress'; outputTps: number | null; usage: Usage }
+  | { cursor: number; id: string; type: 'preview'; chunk: string }
+  | { at: string; cursor: number; id: string; type: 'finished'; costUsd: number; errorCode: string | null; phases: LivePhases; status: number; usage: Usage }
+  | { cursor: number; request: LiveRequest; type: 'started' }
+  | { cursor: number; tick: LiveTick; type: 'tick' };
+
+export type LiveEvent = { kind: 'delta'; delta: LiveDelta } | { kind: 'snapshot'; snapshot: LiveSnapshot };

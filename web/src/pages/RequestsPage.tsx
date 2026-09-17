@@ -1,0 +1,472 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { api } from '@/api';
+import type { Attempt, CapturedBodies, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
+import { AttemptTrail } from '@/components/ui/AttemptTrail';
+import { MultiSelect } from '@/components/ui/MultiSelect';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconChevronsRight, IconColumns, IconX } from '@/components/ui/icons';
+import { Badge, Button, Card, CopyButton, EmptyState, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
+import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
+import { useAsync, useNow } from '@/lib/hooks';
+import { StatusBadge } from './DashboardPage';
+
+const COLUMNS = [
+  { id: 'time', label: 'Time' },
+  { id: 'key', label: 'Key' },
+  { id: 'pool', label: 'Pool' },
+  { id: 'account', label: 'Upstream' },
+  { id: 'model', label: 'Model' },
+  { id: 'kind', label: 'Kind' },
+  { id: 'transport', label: 'Transport' },
+  { id: 'status', label: 'Status' },
+  { id: 'attempts', label: 'Attempts' },
+  { id: 'ttfb', label: 'TTFB' },
+  { id: 'tokens', label: 'Tokens' },
+  { id: 'cost', label: 'Cost' },
+] as const;
+type ColumnId = (typeof COLUMNS)[number]['id'];
+
+const RANGES = [
+  { label: 'Last hour', value: '1h', ms: 3_600_000 },
+  { label: 'Last 6 hours', value: '6h', ms: 6 * 3_600_000 },
+  { label: 'Last 24 hours', value: '24h', ms: 24 * 3_600_000 },
+];
+
+const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
+  failover: 'Failed over',
+  ok: 'Succeeded',
+  overloaded: 'Overloaded',
+  rate_limited: 'Rate limited',
+  upstream_error: 'Upstream error',
+};
+
+// A fixed three-slot readout: a plan that serves no Fable reports two windows in
+// its headers, and the empty third slot is the point rather than a gap to hide.
+const ATTEMPT_WINDOWS: { id: WindowId; label: string }[] = [
+  { id: '5h', label: '5h' },
+  { id: '7d', label: '7d' },
+  { id: '7d_fable', label: 'Fable' },
+];
+
+export function RequestsPage() {
+  const { requestId } = useParams();
+  const navigate = useNavigate();
+  const now = useNow();
+  const keys = useAsync(() => api.listKeys(), []);
+  const pools = useAsync(() => api.listPools(), []);
+  const accounts = useAsync(() => api.listAccounts(), []);
+  const catalog = useAsync(() => api.listCatalog(), []);
+
+  const [search, setSearch] = useState('');
+  const [keyIds, setKeyIds] = useState<string[]>([]);
+  const [poolIds, setPoolIds] = useState<string[]>([]);
+  const [accountIds, setAccountIds] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>([]);
+  const [statuses, setStatuses] = useState<string[]>([]);
+  const [kind, setKind] = useState<'' | RequestKind>('');
+  const [range, setRange] = useState('24h');
+  const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id)));
+  const [colsOpen, setColsOpen] = useState(false);
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(0);
+
+  const query = useMemo<RequestQuery>(() => {
+    const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
+    return { search, keyIds, poolIds, accountIds, models, statuses: statuses.map(Number), kind: kind || null, from: new Date(now - r.ms).toISOString() };
+    // now changes every tick; refetching each tick would flash the list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, keyIds, poolIds, accountIds, models, statuses, kind, range]);
+  const requests = useAsync(() => api.listRequests(query), [query]);
+
+  useEffect(() => setPage(0), [query, pageSize]);
+
+  const rows = requests.data ?? [];
+  const pageRows = rows.slice(page * pageSize, (page + 1) * pageSize);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const active = search || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
+  const reset = () => {
+    setSearch('');
+    setKeyIds([]);
+    setPoolIds([]);
+    setAccountIds([]);
+    setModels([]);
+    setStatuses([]);
+    setKind('');
+    setRange('24h');
+  };
+  const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
+
+  return (
+    <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
+      <div className="stack">
+        <div className="filters">
+          <SearchInput placeholder="Search id, session, key, upstream, model, error" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
+          <Select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
+            {RANGES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </Select>
+          <MultiSelect label="Keys" options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))} value={keyIds} onChange={setKeyIds} mono />
+          <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
+          <MultiSelect label="Upstreams" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
+          <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
+          <MultiSelect
+            label="Status"
+            options={[
+              { label: '200 OK', value: '200' },
+              { label: '429 Rate limited', value: '429' },
+              { label: '502 Bad gateway', value: '502' },
+              { label: '529 Overloaded', value: '529' },
+            ]}
+            value={statuses}
+            onChange={setStatuses}
+          />
+          <Select value={kind} onChange={(e) => setKind(e.target.value as '' | RequestKind)} aria-label="Kind">
+            <option value="">Any kind</option>
+            <option value="inference">Inference</option>
+            <option value="count_tokens">Count tokens</option>
+            <option value="probe">Probe</option>
+          </Select>
+          {active ? (
+            <button type="button" className="link-btn" onClick={reset}>
+              Reset
+            </button>
+          ) : null}
+          <div className="filters__cols">
+            <Button size="sm" icon={<IconColumns size={14} />} onClick={() => setColsOpen((v) => !v)} aria-expanded={colsOpen}>
+              Columns ({visible.size})
+            </Button>
+            {colsOpen && (
+              <div className="cols-popover">
+                {COLUMNS.map((c) => (
+                  <label key={c.id}>
+                    <input
+                      type="checkbox"
+                      checked={visible.has(c.id)}
+                      onChange={(e) => {
+                        const next = new Set(visible);
+                        if (e.target.checked) next.add(c.id);
+                        else next.delete(c.id);
+                        setVisible(next);
+                      }}
+                    />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <Card padded={false} className="card--table">
+          <div className="table-wrap">
+            <table className="table table--hover requests__table">
+              <thead>
+                <tr>
+                  {visible.has('time') && <th>Time</th>}
+                  {visible.has('key') && <th>Key</th>}
+                  {visible.has('pool') && <th>Pool</th>}
+                  {visible.has('account') && <th>Upstream</th>}
+                  {visible.has('model') && <th>Model</th>}
+                  {visible.has('kind') && <th>Kind</th>}
+                  {visible.has('transport') && <th>Transport</th>}
+                  {visible.has('status') && <th>Status</th>}
+                  {visible.has('attempts') && <th>Attempts</th>}
+                  {visible.has('ttfb') && <th className="right">TTFB</th>}
+                  {visible.has('tokens') && <th className="right">Tokens</th>}
+                  {visible.has('cost') && <th className="right">Cost</th>}
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {requests.loading && !requests.data
+                  ? Array.from({ length: 8 }, (_, i) => (
+                      <tr key={i}>
+                        <td colSpan={visible.size + 1}>
+                          <Skeleton />
+                        </td>
+                      </tr>
+                    ))
+                  : pageRows.map((r) => (
+                      <tr key={r.id} className={r.id === requestId ? 'is-selected' : ''} onClick={() => navigate(`/requests/${r.id}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && navigate(`/requests/${r.id}`)}>
+                        {visible.has('time') && (
+                          <td className="num" title={fmtAbsolute(r.at)}>
+                            {fmtTime(r.at)}
+                            <span className="sub mono">{shortId(r.id, 12)}</span>
+                          </td>
+                        )}
+                        {visible.has('key') && <td className="mono">{r.keyId}</td>}
+                        {visible.has('pool') && <td className="mono">{r.poolId}</td>}
+                        {visible.has('account') && <td>{r.accountId}</td>}
+                        {visible.has('model') && <td className="mono">{r.model}</td>}
+                        {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
+                        {visible.has('transport') && (
+                          <td>
+                            <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
+                          </td>
+                        )}
+                        {visible.has('status') && (
+                          <td>
+                            <StatusBadge status={r.status} />
+                          </td>
+                        )}
+                        {visible.has('attempts') && (
+                          <td>
+                            <AttemptTrail attempts={r.attempts} />
+                          </td>
+                        )}
+                        {visible.has('ttfb') && <td className="right num">{fmtMs(r.ttfbMs)}</td>}
+                        {visible.has('tokens') && (
+                          <td className="right num">
+                            {fmtCompact(tokensTotal(r.usage))}
+                            <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
+                          </td>
+                        )}
+                        {visible.has('cost') && <td className="right num">{fmtUsd(r.costUsd)}</td>}
+                        <td className="right">
+                          <Link to={`/requests/${r.id}`} onClick={(e) => e.stopPropagation()}>
+                            Details
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                {!requests.loading && rows.length === 0 && (
+                  <tr>
+                    <td colSpan={visible.size + 1}>
+                      <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <footer className="pager">
+            <label className="row">
+              <span className="muted">Rows</span>
+              <Select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                {[10, 25, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <span className="muted num">
+              {rows.length === 0 ? '0' : `${page * pageSize + 1} to ${Math.min(rows.length, (page + 1) * pageSize)}`} of {fmtInt(rows.length)}
+            </span>
+            <div className="pager__nav">
+              <button type="button" onClick={() => setPage(0)} disabled={page === 0} aria-label="First page">
+                <IconChevronsLeft size={15} />
+              </button>
+              <button type="button" onClick={() => setPage((p) => p - 1)} disabled={page === 0} aria-label="Previous page">
+                <IconChevronLeft size={15} />
+              </button>
+              <button type="button" onClick={() => setPage((p) => p + 1)} disabled={page >= pageCount - 1} aria-label="Next page">
+                <IconChevronRight size={15} />
+              </button>
+              <button type="button" onClick={() => setPage(pageCount - 1)} disabled={page >= pageCount - 1} aria-label="Last page">
+                <IconChevronsRight size={15} />
+              </button>
+            </div>
+          </footer>
+        </Card>
+      </div>
+
+      {requestId && <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate('/requests')} />}
+    </div>
+  );
+}
+
+function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
+  const { canMutate } = useAppSettings();
+  const fetched = useAsync(() => (request ? Promise.resolve(request) : api.getRequest(requestId)), [requestId, request]);
+  const r = request ?? fetched.data ?? null;
+  const bodies = useAsync<CapturedBodies | null>(() => (r?.capturedBodies && canMutate ? api.getCapturedBodies(r.id) : Promise.resolve(null)), [r?.id, canMutate]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <aside className="drawer" aria-label="Request details">
+      <header className="drawer__head">
+        <div>
+          <h2 className="drawer__title mono">{r?.id ?? requestId}</h2>
+          {r && (
+            <p className="muted" title={fmtAbsolute(r.at)}>
+              {fmtAbsolute(r.at)} ({fmtRelative(r.at, now)})
+            </p>
+          )}
+        </div>
+        <button type="button" className="dialog__close" onClick={onClose} aria-label="Close details">
+          <IconX size={16} />
+        </button>
+      </header>
+      {!r ? (
+        fetched.loading ? (
+          <Skeleton height={200} />
+        ) : (
+          <EmptyState title="Request not found" body="It may have aged out of the ledger." />
+        )
+      ) : (
+        <div className="drawer__body">
+          <section>
+            <h3 className="section-title">Summary</h3>
+            <KeyValue
+              rows={[
+                { label: 'Session', value: r.sessionId, mono: true },
+                { label: 'Agent', value: r.agentId, mono: true },
+                { label: 'Key', value: r.keyId, mono: true },
+                { label: 'Pool', value: r.poolId, mono: true },
+                { label: 'Upstream', value: <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
+                { label: 'Model', value: r.model, mono: true },
+                { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
+                { label: 'Status', value: <StatusBadge status={r.status} /> },
+                { label: 'TTFB', value: fmtMs(r.ttfbMs) },
+                { label: 'Duration', value: fmtMs(r.durationMs) },
+                { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },
+              ]}
+            />
+          </section>
+
+          <section>
+            <h3 className="section-title">Attempts</h3>
+            <ol className="attempts">
+              {r.attempts.map((a) => (
+                <li key={a.index} className={`attempt attempt--${a.outcome}`}>
+                  <div className="attempt__head">
+                    <span className="attempt__index">{a.index + 1}</span>
+                    <Link to={`/upstreams/${a.accountId}`}>{a.accountId}</Link>
+                    <StatusBadge status={a.upstreamStatus} />
+                    <span className="secondary">{OUTCOME_LABEL[a.outcome]}</span>
+                    <span className="muted num" style={{ marginLeft: 'auto' }}>
+                      {fmtMs(a.durationMs)}
+                    </span>
+                  </div>
+                  <ul className="attempt__windows">
+                    {a.windows.length > 0 &&
+                      ATTEMPT_WINDOWS.map(({ id, label }) => {
+                        const w = a.windows.find((x) => x.id === id) ?? null;
+                        return (
+                          <li key={id}>
+                            <span className="muted">{label}</span>
+                            <span className={`num ${w ? '' : 'muted'}`}>{w ? `${fmtPct(w.utilization)} used` : 'n/a'}</span>
+                            <span className="muted" title={w ? fmtAbsolute(w.resetsAt) : undefined}>
+                              {w ? `resets ${fmtRelative(w.resetsAt, now)}` : 'not reported'}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    <CacheRow attempt={a} usage={r.usage} />
+                  </ul>
+                  {a.cooldownSet && (
+                    <div className="attempt__cooldown">
+                      <Badge tone="warning">cooldown set</Badge>
+                      <span>
+                        {a.cooldownSet.reason}, until <span title={fmtAbsolute(a.cooldownSet.until)}>{fmtRelative(a.cooldownSet.until, now)}</span>
+                      </span>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section>
+            <h3 className="section-title">Usage</h3>
+            <table className="table usage-table">
+              <tbody>
+                <tr>
+                  <td>Input (uncached)</td>
+                  <td className="right num">{fmtInt(r.usage.input)}</td>
+                </tr>
+                <tr>
+                  <td>Cache read</td>
+                  <td className="right num">{fmtInt(r.usage.cacheRead)}</td>
+                </tr>
+                <tr>
+                  <td>Cache write, 5m</td>
+                  <td className="right num">{fmtInt(r.usage.cacheWrite5m)}</td>
+                </tr>
+                <tr>
+                  <td>Cache write, 1h</td>
+                  <td className="right num">{fmtInt(r.usage.cacheWrite1h)}</td>
+                </tr>
+                <tr>
+                  <td>Output</td>
+                  <td className="right num">{fmtInt(r.usage.output)}</td>
+                </tr>
+                <tr>
+                  <td>
+                    <b>Estimated cost</b>
+                  </td>
+                  <td className="right num">
+                    <b>{fmtUsd(r.costUsd)}</b>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section>
+            <h3 className="section-title">Captured bodies</h3>
+            {!r.capturedBodies ? (
+              <p className="muted">Not captured for this key. Enable body capture on the key to record the exchange.</p>
+            ) : !canMutate ? (
+              <p className="muted">Captured, but only the admin secret can read bodies.</p>
+            ) : bodies.loading ? (
+              <Skeleton height={120} />
+            ) : bodies.data ? (
+              <div className="bodies">
+                <BodyBlock label="Request" value={bodies.data.request} />
+                <BodyBlock label="Response" value={bodies.data.response} />
+              </div>
+            ) : (
+              <p className="muted">Bodies for this request have aged out of retention.</p>
+            )}
+          </section>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+/**
+ * The cache diagnostics reading for one attempt, on the same three-slot grid as
+ * the window rows above it. The usage is the request's: diagnostics and the
+ * token counts both come off the response the final attempt drew.
+ */
+function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
+  const reason = attempt.cacheMissReason;
+  const detail = () => {
+    if (reason === null) return 'no response to read';
+    if (reason === 'none') return `${fmtCompact(usage.cacheRead)} read, ${fmtCompact(usage.cacheWrite5m + usage.cacheWrite1h)} written`;
+    if (isDivergence(reason)) return `${fmtCompact(attempt.cacheMissedInputTokens ?? 0)} tokens after the divergence`;
+    return '';
+  };
+  return (
+    <li>
+      <span className="muted">Cache</span>
+      <span className={reason === null || reason === 'not_requested' ? 'muted' : ''}>{reason === null ? 'n/a' : CACHE_MISS_LABEL[reason]}</span>
+      <span className="muted">{detail()}</span>
+    </li>
+  );
+}
+
+function BodyBlock({ label, value }: { label: string; value: unknown }) {
+  const text = JSON.stringify(value, null, 2);
+  return (
+    <div className="body-block">
+      <div className="body-block__head">
+        <span>{label}</span>
+        <CopyButton text={text} />
+      </div>
+      <pre className="body-block__pre">{text}</pre>
+    </div>
+  );
+}
