@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::Request;
+use axum::Router;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
@@ -21,13 +22,16 @@ use crate::messages::{router, Relay};
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
-/// Serves the relayed routes until `stop` flips, then waits for the connections already accepted.
+/// Serves the relayed routes, and whatever `extra` adds beside them, until `stop` flips, then waits for the
+/// connections already accepted. `extra` is merged rather than nested so a route on it keeps its full path;
+/// the relay's own fallback still answers everything neither names.
 pub async fn serve(
     listener: TcpListener,
     relay: Arc<Relay>,
+    extra: Router,
     mut stop: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
-    let app = router(relay);
+    let app = router(relay).merge(extra);
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
     // which is the silently different outbound shape the pass-through exists to prevent; refusing the
     // connection is the honest answer.

@@ -340,3 +340,44 @@ async fn shutdown_writes_everything_the_channel_held() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepalive() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                allow_oauth: true,
+            },
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (row, attempts) = ledgered(&h, &id).await;
+    assert_eq!(
+        (
+            row.kind.as_str(),
+            row.origin.as_str(),
+            row.key_id.as_deref(),
+            attempts.len()
+        ),
+        ("probe", "keepalive", Some("desktop"), 1)
+    );
+    let rollups =
+        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+            .unwrap();
+    assert!(
+        rollups.iter().any(|r| r.kind == "probe" && r.requests == 1),
+        "the rollup row is keyed kind = probe"
+    );
+    up.shutdown().await;
+}

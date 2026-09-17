@@ -497,6 +497,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "rand 0.10.2",
+ "reqwest",
  "serde_json",
  "sha2",
  "subtle",

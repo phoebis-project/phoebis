@@ -220,7 +220,12 @@ async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(phoebis_relay::serve(listener, relay, stop_rx));
+    tokio::spawn(phoebis_relay::serve(
+        listener,
+        relay,
+        axum::Router::new(),
+        stop_rx,
+    ));
     (addr, stop)
 }
 

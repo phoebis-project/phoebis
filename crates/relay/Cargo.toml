@@ -37,5 +37,6 @@ phoebis-bus = { path = "../bus" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
 http-body-util = { workspace = true }
+reqwest = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true }

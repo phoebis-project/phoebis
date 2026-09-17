@@ -107,10 +107,16 @@ pub struct RelayOutcome {
     pub head_at: Option<i64>,
 }
 
-/// Marks a request the keepalive companion sent on a session's behalf. Set on the request's extensions by the
-/// probe path; the relay publishes such a request as a probe and ledgers it under `kind = probe`.
-#[derive(Clone, Copy, Debug)]
-pub struct Probe;
+/// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
+/// engine never holds a key's secret (the store keeps a digest), so a probe authenticates by id; the extension
+/// can only be set in process, so the by-id path is not reachable from the socket. `allow_oauth` is the
+/// operator's statement that the expiry-crossing experiment passed; without it an `oauth` account serves no
+/// probe on any attempt.
+#[derive(Clone, Debug)]
+pub struct Probe {
+    pub key_id: String,
+    pub allow_oauth: bool,
+}
 
 pub struct Relay {
     bus: Option<Bus>,
@@ -154,6 +160,13 @@ impl Relay {
             bus: Some(bus),
             ..self
         }
+    }
+
+    /// A keepalive probe: the recipe's headers and body, run through the same admission, selection, edit, and
+    /// failover loop a real request takes, so the pin follows, renews, and migrates as it would for one.
+    pub async fn probe(&self, probe: Probe, mut request: Request) -> Response {
+        request.extensions_mut().insert(probe);
+        self.handle(request).await
     }
 }
 
@@ -401,18 +414,18 @@ impl From<AccessToken> for Credential {
 impl Relay {
     async fn handle(&self, request: Request) -> Response {
         let received_at = (self.clock)();
-        let probe = request.extensions().get::<Probe>().is_some();
+        let probe = request.extensions().get::<Probe>().cloned();
         let count_tokens = request.uri().path().ends_with("/count_tokens");
         let trace = Trace {
             bus: self.bus.clone(),
             request_id: new_request_id(),
             received_at,
-            origin: if probe {
+            origin: if probe.is_some() {
                 Origin::Keepalive
             } else {
                 Origin::Client
             },
-            kind: if probe {
+            kind: if probe.is_some() {
                 Kind::Probe
             } else if count_tokens {
                 Kind::CountTokens
@@ -422,24 +435,35 @@ impl Relay {
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
-        // Before the body: an unauthenticated caller that could reach the read below would hold the whole
-        // request limit per connection for as long as it cared to keep sending.
-        let presented = match presented_key(&parts.headers) {
-            Ok(presented) => presented,
-            Err(error) => {
-                trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
-                return self.refused(&trace, auth_failure(&error), None, None, None);
-            }
-        };
         // The snapshot is pinned for the whole request: the key, the pool, and the candidates all come from one
         // registry, and a write that lands mid-request is seen by the next request.
         let snapshot = self.router.snapshot();
-        let key = match snapshot.authenticate(presented, received_at) {
-            Ok(key) => key.clone(),
-            Err(refusal) => {
-                tracing::debug!(%refusal, "a presented key was refused");
-                trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
-                return self.refused(&trace, key_refusal(&refusal), None, None, None);
+        let key = match &probe {
+            // Before the body, as for a caller: an unauthenticated probe never holds the request limit either.
+            Some(probe) => match snapshot.authenticate_id(&probe.key_id, received_at) {
+                Ok(key) => key.clone(),
+                Err(refusal) => {
+                    tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                    trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                    return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                }
+            },
+            None => {
+                let presented = match presented_key(&parts.headers) {
+                    Ok(presented) => presented,
+                    Err(error) => {
+                        trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                        return self.refused(&trace, auth_failure(&error), None, None, None);
+                    }
+                };
+                match snapshot.authenticate(presented, received_at) {
+                    Ok(key) => key.clone(),
+                    Err(refusal) => {
+                        tracing::debug!(%refusal, "a presented key was refused");
+                        trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                        return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                    }
+                }
             }
         };
         self.router.touch_key(&key.id);
@@ -515,6 +539,20 @@ impl Relay {
                     client_version.as_deref(),
                 )
             }
+        };
+        // A probe may only run where the engine admitted it: the failover loop re-selects from this list on
+        // every attempt, so the filter is what keeps a 429 or a migration off an account the operator has not
+        // cleared for probes.
+        let candidates = match &probe {
+            None => candidates,
+            Some(probe) => candidates
+                .into_iter()
+                .filter(|c| {
+                    snapshot.account(&c.account_id).is_some_and(|account| {
+                        account.kind == AccountKind::ApiKey || probe.allow_oauth
+                    })
+                })
+                .collect(),
         };
         let portable = is_portable(&raw);
         let target = parts

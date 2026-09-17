@@ -38,6 +38,7 @@ pub struct Harness {
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
     pub metrics: Arc<Metrics>,
+    pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
@@ -302,12 +303,13 @@ pub async fn harness_on(
         .with_bus(bus.clone()),
     );
     Harness {
-        app: router(relay),
+        app: router(relay.clone()),
         bus,
         clock: clock_cell,
         db,
         ledger,
         metrics,
+        relay,
         router: router_handle,
         store,
     }

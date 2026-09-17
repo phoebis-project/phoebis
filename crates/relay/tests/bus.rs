@@ -881,3 +881,215 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     );
     up.shutdown().await;
 }
+
+/// The probe path authenticates by key id through an extension nothing on the socket can set, and publishes the
+/// request as a keepalive probe: the ledger's `kind = probe` and the engine's own-probe filter both read that.
+#[tokio::test]
+async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive() {
+    use phoebis_profile::fixtures::{body as fixture_body, BodyFixture};
+    let body_oauth = fixture_body(BodyFixture::Oauth);
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"output_tokens":0}}"#.to_vec() },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    // No credential header at all: the engine holds the key's id, never its secret.
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    req.headers_mut().remove("authorization");
+    req.extensions_mut().remove::<phoebis_relay::OriginalHead>();
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                allow_oauth: true,
+            },
+            req,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let out = outcome(&resp);
+    assert_eq!(
+        (
+            out.key_id.as_deref(),
+            out.account_id.as_str(),
+            out.session_id.as_deref()
+        ),
+        (Some("desktop"), "a", Some("s1"))
+    );
+    let _ = resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(
+        (observed.origin, observed.kind, observed.key_id.as_deref()),
+        (
+            phoebis_bus::Origin::Keepalive,
+            phoebis_bus::Kind::Probe,
+            Some("desktop")
+        )
+    );
+    let sent = up.requests();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].credential(),
+        Some(A),
+        "the account's own credential went upstream"
+    );
+    let names: Vec<&str> = sent[0].headers.iter().map(|(n, _)| n.as_str()).collect();
+    let version = names
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case("anthropic-version"))
+        .unwrap();
+    assert!(
+        names[version + 1].eq_ignore_ascii_case("authorization"),
+        "no recorded head, so the credential lands after anthropic-version: {names:?}"
+    );
+    // An unknown, revoked, or disabled id is the relay's 401 with nothing sent upstream.
+    let probe = |key: &str| phoebis_relay::Probe {
+        key_id: key.into(),
+        allow_oauth: true,
+    };
+    let refused = h
+        .relay
+        .probe(probe("nobody"), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(refused.status(), 401);
+    assert_eq!(refused.headers()["x-phoebis-error-code"], "auth_unknown");
+    h.store.revoke_api_key("desktop", NOW, "test").unwrap();
+    h.router.reload().await.unwrap();
+    assert_eq!(
+        h.relay
+            .probe(
+                probe("desktop"),
+                request_for(KEY, "claude-sonnet-4-5", "s1")
+            )
+            .await
+            .status(),
+        401
+    );
+    assert_eq!(up.requests().len(), 1);
+    // Nothing on the socket can set the extension: a request through the router with a bogus bearer and no
+    // secret is refused, whatever it claims.
+    let served = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = served.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(phoebis_relay::serve(
+        served,
+        h.relay.clone(),
+        axum::Router::new(),
+        stop_rx,
+    ));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{addr}/v1/messages"))
+        .header("authorization", "Bearer phoebis-not-a-key")
+        .header("content-type", "application/json")
+        .body(body_oauth.to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "an extension set in process is not something the wire can carry"
+    );
+    let _ = stop.send(true);
+    up.shutdown().await;
+}
+
+/// A probe's eligibility holds on every attempt: a 429 on the eligible account fails over to nothing when the
+/// only sibling is an unverified `oauth` account, and the probe gets the exhaustion answer.
+#[tokio::test]
+async fn a_probe_fails_over_only_to_an_eligible_sibling() {
+    let up = FakeUpstream::start_tls_for(
+        vec![Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        }],
+        &["api.anthropic.com"],
+    )
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-AAAA",
+        "/v1/messages",
+        json_429_unified(4_600, "five_hour"),
+    );
+    for (name, sibling, allow_oauth) in [(
+        "unverified oauth",
+        oauth("o", "sk-ant-oat01-OOOO", 1),
+        false,
+    )] {
+        let h = harness_with_bus(
+            &up,
+            &[api_key("a", "sk-ant-api03-AAAA", 0), sibling],
+            PoolSpec::default(),
+            Bus::new(),
+        )
+        .await;
+        let before = up.requests().len();
+        let resp = h
+            .relay
+            .probe(
+                phoebis_relay::Probe {
+                    key_id: "desktop".into(),
+                    allow_oauth,
+                },
+                request_for(KEY, "claude-sonnet-4-5", "s1"),
+            )
+            .await;
+        // The eligible account cools down on its own 429; the sibling is never a candidate, so the re-select
+        // finds the eligible account cooling and nothing else, which is a timed exhaustion rather than an
+        // untimed one.
+        assert_eq!(
+            resp.status(),
+            429,
+            "{name}: the only eligible account is now cooling down"
+        );
+        assert_eq!(resp.headers()["x-phoebis-error-code"], "accounts_exhausted");
+        assert!(resp.headers().contains_key("retry-after"));
+        let sent: Vec<_> = up.requests().into_iter().skip(before).collect();
+        assert_eq!(
+            sent.len(),
+            1,
+            "{name}: one attempt on the eligible account and none on the sibling"
+        );
+        assert_eq!(sent[0].credential(), Some("sk-ant-api03-AAAA"));
+        assert!(
+            !credentials_seen(&up)
+                .iter()
+                .any(|c| c == "sk-ant-oat01-OOOO" || c == "vendor-key"),
+            "{name}"
+        );
+    }
+    // Allowed, the oauth sibling takes the probe as a real request's failover would.
+    let h = harness_with_bus(
+        &up,
+        &[
+            api_key("a", "sk-ant-api03-AAAA", 0),
+            oauth("o", "sk-ant-oat01-OOOO", 1),
+        ],
+        PoolSpec::default(),
+        Bus::new(),
+    )
+    .await;
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                allow_oauth: true,
+            },
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "o")
+    );
+    up.shutdown().await;
+}
