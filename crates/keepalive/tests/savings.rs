@@ -959,3 +959,95 @@ async fn a_probe_that_rebuilt_most_of_the_prefix_covered_nothing() {
         "a partial read is no coverage to credit"
     );
 }
+
+/// A warm answer for a real request: the prefix read back, with a little output.
+fn warm_answer() -> Respond {
+    Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_read_input_tokens":2000,"output_tokens":10}}"#.to_vec() }
+}
+
+/// The kept-warm credit belongs to the account the covering probe warmed. A request that failed over reads a
+/// prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
+#[tokio::test]
+async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one covering probe on a");
+    // Past the TTL the request meets a 429 on a and reads the cache on b.
+    r.advance(60_000);
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.up.push_credential_rule(B, "/v1/messages", warm_answer());
+    let elsewhere = r.observe_with("main", &body).await;
+    let status = r.status("main");
+    assert_eq!(status.account_id.as_deref(), Some("b"));
+    assert!(
+        status.net_usd < 0.0,
+        "no probe of this recipe warmed b, so nothing rose the net: {status:?}"
+    );
+    assert!(!row(&r, &elsewhere).await.kept_warm);
+    // The same gap and the same covering probe, with the request served by the account the probe warmed.
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(60_000);
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let here = r.observe_with("main", &body).await;
+    let status = r.status("main");
+    assert_eq!(status.account_id.as_deref(), Some("a"));
+    assert!(
+        status.net_usd > 0.0,
+        "the account the probe warmed served it: {status:?}"
+    );
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    assert!(row(&r, &here).await.kept_warm);
+}
+
+/// A probe answer that reports only the aggregate cache-write field is charged for that write: the relay's
+/// own parser reads the field as five-minute writes, and the cap has to see the same charge.
+#[tokio::test]
+async fn an_aggregate_only_cache_write_reaches_the_cap() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cost_cap_usd_per_day: Some(0.0005),
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":500,"output_tokens":0}}"#.to_vec() });
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    // Sonnet 5: 2,000 read at 0.2 and 500 written at 2.5 per million.
+    let expected = (2_000.0 * 0.2 + 500.0 * 2.5) / 1_000_000.0;
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let probe = probe_rows(&rows);
+    assert!(
+        (probe.probe_cost_usd - expected).abs() < 1e-12,
+        "{probe:?} against {expected}"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::CapReached),
+        "one aggregate-only write spent the day's cap"
+    );
+}

@@ -28,13 +28,20 @@ pub(crate) fn probe_cost(
     canonical_model: &str,
     usage: ProbeUsage,
 ) -> Option<f64> {
+    // An answer that reports the aggregate `cache_creation_input_tokens` and no TTL breakdown is priced as
+    // five-minute writes, which is how the relay's own usage parser reads the same answer; the estimate here
+    // would otherwise miss a charge the request ledger recognises.
+    let (five_minutes, one_hour) = match (usage.five_minutes, usage.one_hour) {
+        (0, 0) => (usage.write, 0),
+        split => split,
+    };
     table
         .estimate(
             canonical_model,
             usage.input,
             usage.read,
-            usage.five_minutes,
-            usage.one_hour,
+            five_minutes,
+            one_hour,
             usage.output,
         )
         .map(|(total, _)| total)
@@ -198,6 +205,28 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The relay's own usage parser reads an aggregate `cache_creation_input_tokens` as five-minute writes,
+    /// so a probe answer that carries only the aggregate costs what the same answer with the split costs.
+    #[test]
+    fn an_aggregate_only_cache_write_costs_a_five_minute_write() {
+        let table = PriceTable::shipped();
+        let split = ProbeUsage {
+            write: 2_000,
+            five_minutes: 2_000,
+            ..ProbeUsage::default()
+        };
+        let aggregate = ProbeUsage {
+            write: 2_000,
+            ..ProbeUsage::default()
+        };
+        let priced = probe_cost(&table, "claude-sonnet-5", split).expect("a priced model");
+        assert!(priced > 0.0, "{priced}");
+        assert_eq!(
+            probe_cost(&table, "claude-sonnet-5", aggregate),
+            Some(priced)
+        );
+    }
 
     #[test]
     fn a_delta_without_an_account_takes_the_ledgers_reserved_id() {

@@ -474,6 +474,7 @@ impl Inner {
         agent.jitter_frac = rand::random::<f64>();
         if covered {
             agent.covered_since_real = true;
+            agent.covered_account = Some(record.account.clone());
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.

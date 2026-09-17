@@ -245,6 +245,9 @@ pub(crate) struct Agent {
     pub grace_left: u32,
     pub unanswered: Vec<f64>,
     pub covered_since_real: bool,
+    /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
+    /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
+    pub covered_account: Option<String>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -284,6 +287,7 @@ impl Agent {
             grace_left: 0,
             unanswered: Vec::new(),
             covered_since_real: false,
+            covered_account: None,
             last_real_at: None,
             last_stop: None,
         }
@@ -317,6 +321,7 @@ impl Agent {
 /// TTL this request's own evidence shortens, cannot reach into it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PriorCoverage {
+    pub account: Option<String>,
     pub covered: bool,
     pub model: String,
     pub real_at: i64,
@@ -766,6 +771,7 @@ impl Engine {
         let prior = {
             let agent = &inner.sessions[&key].agents[&agent_id];
             agent.last_real_at.map(|real_at| PriorCoverage {
+                account: agent.covered_account.clone(),
                 covered: agent.covered_since_real,
                 model: agent.canonical_model.clone(),
                 real_at,
@@ -777,6 +783,7 @@ impl Engine {
         session.last_real_at = Some(now);
         let agent = session.agents.get_mut(&agent_id).unwrap();
         agent.covered_since_real = false;
+        agent.covered_account = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -996,14 +1003,20 @@ impl Engine {
                     let ttl = prior.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
                     let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
                     let same_model = prior.model == agent.canonical_model;
-                    (prior.covered && gap_exceeded && same_model && read > 0).then(|| {
-                        (
-                            read,
-                            agent.pool_id.clone(),
-                            agent.account.clone(),
-                            agent.canonical_model.clone(),
-                        )
-                    })
+                    // The account that served this request, after any failover, has to be the one the
+                    // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
+                    // saving to claim.
+                    let same_account = prior.account == agent.account;
+                    (prior.covered && gap_exceeded && same_model && same_account && read > 0).then(
+                        || {
+                            (
+                                read,
+                                agent.pool_id.clone(),
+                                agent.account.clone(),
+                                agent.canonical_model.clone(),
+                            )
+                        },
+                    )
                 })
         };
         if let Some((read, pool_id, account, model)) = credit {
