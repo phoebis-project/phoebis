@@ -433,3 +433,63 @@ fn every_engine_reason_maps_onto_the_view_vocabulary() {
         r#""quota_exhausted""#
     );
 }
+
+/// A `session_end` leaves the session listed, as the tombstone the lifecycle protocol needs, but nothing is
+/// reporting for it any more: the view says so, and the overview leaves it out of the companion count.
+#[tokio::test]
+async fn an_ended_session_is_listed_without_a_companion() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let start = |sequence, event: &str| Event {
+        event: event.into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence,
+        ..Default::default()
+    };
+    parts
+        .keepalive
+        .apply_event("desktop", start(1, "session_start"))
+        .unwrap();
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            overview["sessions"].as_u64(),
+            overview["sessions_with_companion"].as_u64()
+        ),
+        (Some(1), Some(1)),
+        "the registered session is reporting"
+    );
+    parts
+        .keepalive
+        .apply_event("desktop", start(2, "session_end"))
+        .unwrap();
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .expect("an ended session is still listed");
+    assert_eq!(
+        (row["companion"].as_str(), row["companion_since"].as_i64()),
+        (Some("none"), Some(common::NOW)),
+        "the end time is when the companion stopped reporting"
+    );
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            overview["sessions"].as_u64(),
+            overview["sessions_with_companion"].as_u64()
+        ),
+        (Some(1), Some(0))
+    );
+}

@@ -157,14 +157,23 @@ impl Engine {
             .values()
             .map(|s| {
                 let main = s.agents.get(MAIN_AGENT).filter(|a| holds_recipe(a));
+                // An ended session keeps its tombstone for the lifecycle protocol, but its companion is
+                // gone: the engine refuses further events under that instance, and the lease sweep leaves an
+                // ended session alone, so `attended` stays as the last heartbeat left it.
+                let companion = if s.ended {
+                    CompanionState::None
+                } else if s.attended {
+                    CompanionState::Reporting
+                } else {
+                    CompanionState::Silent
+                };
                 SessionView {
                     agents: s.agents.len(),
-                    companion: if s.attended {
-                        CompanionState::Reporting
-                    } else {
-                        CompanionState::Silent
-                    },
-                    companion_since: (!s.attended).then_some(s.last_report_at),
+                    companion,
+                    // The end and the lapse are both the moment the companion stopped reporting, which is
+                    // the last report either way; a reporting companion has no such moment.
+                    companion_since: (companion != CompanionState::Reporting)
+                        .then_some(s.last_report_at),
                     key_id: s.key_id.clone(),
                     keepalive: KeepaliveSummary {
                         next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),
