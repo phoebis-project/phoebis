@@ -80,12 +80,20 @@ Eight groups of limits are compiled into the binary, and the file has no key for
 ANTHROPIC_BASE_URL=https://<router host>
 CLAUDE_CODE_OAUTH_TOKEN=<key secret>
 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
+DISABLE_TELEMETRY=1
 ```
 
 The third line is optional and switches the client to the full first-party request shape: two extra betas,
 `x-client-request-id`, the `cch` billing header, `cc_prompt_id`, `diagnostics`, and the global cache scope. Without it
 the client sends the reduced shape and `phoebis` relays that as it arrives. The variable is an internal one that a later
 client build may drop.
+
+The fourth line is optional too. The client's event logger posts its telemetry batches to `api.anthropic.com` whatever
+`ANTHROPIC_BASE_URL` says, and it authenticates them with the credential it was given, which behind the router is your
+key secret, so the secret leaves your network on every send. `DISABLE_TELEMETRY=1` switches the logger off;
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and also stops update checks and the bootstrap lookup. The
+policy and settings lookups the client makes at start still go to `api.anthropic.com` with the secret under either
+setting; they fail there and the client tolerates that.
 
 Request headers travel as the client sent them, in its own order and spelling: `phoebis` drops the hop-by-hop and
 forwarding headers, puts the account's credential where the client put yours, adjusts `anthropic-beta` to what the
