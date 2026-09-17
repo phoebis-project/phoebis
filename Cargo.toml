@@ -3,6 +3,7 @@ members = [
     "crates/admin",
     "crates/bus",
     "crates/cch",
+    "crates/keepalive",
     "crates/ledger",
     "crates/live",
     "crates/oauth",

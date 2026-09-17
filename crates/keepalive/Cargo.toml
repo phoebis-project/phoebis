@@ -1,0 +1,33 @@
+[package]
+name = "phoebis-keepalive"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+phoebis-bus = { path = "../bus" }
+phoebis-cch = { path = "../cch" }
+phoebis-ledger = { path = "../ledger" }
+phoebis-oauth = { path = "../oauth" }
+phoebis-relay = { path = "../relay" }
+phoebis-routing = { path = "../routing" }
+phoebis-store = { path = "../store" }
+http-body-util = { workspace = true }
+jiff = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+boring = { workspace = true }
+phoebis-profile = { path = "../profile" }
+phoebis-transport = { path = "../transport" }
+fake-upstream = { path = "../../tests/fake_upstream" }
+tower = { workspace = true }

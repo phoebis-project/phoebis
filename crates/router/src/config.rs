@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+use phoebis_keepalive::{KeepaliveLimits, LimitsError};
 use phoebis_store::Secret;
 use serde::Deserialize;
 
@@ -17,6 +18,10 @@ use serde::Deserialize;
 pub struct Config {
     pub admin: AdminConfig,
     pub compatibility: CompatConfig,
+    /// Process-wide keepalive limits, read once at start; whether probes run, and their tuning, are per-pool
+    /// registry settings.
+    #[serde(default)]
+    pub keepalive: KeepaliveLimits,
     pub proxy: ProxyConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
@@ -156,6 +161,8 @@ pub enum ConfigError {
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
     GzipUnsupported,
+    #[error("{0}")]
+    Keepalive(#[from] LimitsError),
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
     LedgerPath { path: PathBuf },
     #[error("routing.max_attempts must be between 1 and 8, not {value}")]
@@ -299,6 +306,7 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: config.routing.max_attempts,
         });
     }
+    config.keepalive.validate()?;
     // A sync walks every account against its upstream, so a short interval turns into a standing load on
     // hosts that change their model list a few times a year.
     if config.routing.catalog_sync_interval_seconds < 300 {

@@ -537,6 +537,67 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
     );
 }
 
+#[test]
+fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
+    use phoebis_router::config::{load, ConfigError};
+    let dir = tempfile::tempdir().unwrap();
+    let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+    let base =
+        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
+    let with = |name: &str, extra: &str| {
+        let path = dir.path().join(format!("{name}.yaml"));
+        std::fs::write(&path, format!("{text}{extra}")).unwrap();
+        path
+    };
+    let defaults = load(&with("defaults", "")).unwrap();
+    assert_eq!(
+        (
+            defaults.keepalive.lease_seconds,
+            defaults.keepalive.max_workers,
+            defaults.keepalive.oauth_prewarm_verified
+        ),
+        (90, 4, false),
+        "an absent block is the spec's defaults"
+    );
+    let full = load(&with("full", "keepalive:\n  lease_seconds: 120\n  max_agents: 2048\n  max_request_bytes: 1048576\n  max_retained_bytes: 16777216\n  max_sessions: 256\n  max_workers: 8\n  oauth_prewarm_verified: true\n")).unwrap();
+    assert_eq!(
+        (
+            full.keepalive.lease_seconds,
+            full.keepalive.max_agents,
+            full.keepalive.max_workers,
+            full.keepalive.oauth_prewarm_verified
+        ),
+        (120, 2_048, 8, true)
+    );
+    assert!(matches!(
+        load(&with("lease", "keepalive:\n  lease_seconds: 9\n")),
+        Err(ConfigError::Keepalive(
+            phoebis_keepalive::LimitsError::OutOfRange {
+                field: "lease_seconds",
+                ..
+            }
+        ))
+    ));
+    assert!(matches!(
+        load(&with(
+            "retained",
+            "keepalive:\n  max_request_bytes: 4194304\n  max_retained_bytes: 2097152\n"
+        )),
+        Err(ConfigError::Keepalive(
+            phoebis_keepalive::LimitsError::RetainedBelowRequest
+        ))
+    ));
+    assert!(
+        matches!(
+            load(&with("unknown", "keepalive:\n  probe_enabled: true\n")),
+            Err(ConfigError::Syntax(_))
+        ),
+        "the Go engine's probe_enabled is not a field of the block; probing is a pool setting"
+    );
+}
+
 #[tokio::test]
 async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_on_shutdown() {
     let up = FakeUpstream::start(vec![

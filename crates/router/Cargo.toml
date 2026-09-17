@@ -19,6 +19,7 @@ axum = { workspace = true }
 phoebis-admin = { path = "../admin" }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
+phoebis-keepalive = { path = "../keepalive" }
 phoebis-ledger = { path = "../ledger" }
 phoebis-live = { path = "../live" }
 phoebis-oauth = { path = "../oauth" }

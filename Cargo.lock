@@ -363,6 +363,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoebis-keepalive"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "boring",
+ "bytes",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "fake-upstream",
+ "http-body-util",
+ "jiff",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "phoebis-ledger"
 version = "0.1.0"
 dependencies = [
@@ -488,6 +517,7 @@ dependencies = [
  "phoebis-admin",
  "phoebis-bus",
  "phoebis-cch",
+ "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-live",
  "phoebis-oauth",
