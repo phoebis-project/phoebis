@@ -6,7 +6,7 @@
 //! landed, so dead-code warnings are silenced here rather than per item.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,13 +17,13 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
-use phoebis_routing::RouterHandle;
-use phoebis_store::AccountKind;
+use phoebis_routing::{RegistrySnapshot, RouterHandle};
+use phoebis_store::{AccountKind, AccountState, OveragePolicy};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy};
+use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::usage::ProbeUsage;
@@ -1059,6 +1059,7 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let max_workers = self.parts.limits.max_workers;
+        let view = self.router_view(now).await;
         let jobs = {
             let mut inner = self.lock();
             if inner.closed {
@@ -1093,6 +1094,37 @@ impl Engine {
                     );
                     continue;
                 }
+                let spent = inner
+                    .spent_today
+                    .get(&inner.sessions[&key].agents[&agent_id].pool_id)
+                    .copied()
+                    .unwrap_or(0.0);
+                let agent = inner
+                    .sessions
+                    .get_mut(&key)
+                    .unwrap()
+                    .agents
+                    .get_mut(&agent_id)
+                    .unwrap();
+                match gate(&view, agent, &key.1, spent) {
+                    Some(Gate::Drop(reason, label)) => {
+                        inner.discard(&key, &agent_id, reason, Some(label));
+                        continue;
+                    }
+                    Some(Gate::Hold(reason)) => {
+                        if at <= now {
+                            inner.skipped.push((key.clone(), agent_id.clone()));
+                        }
+                        inner.set_reason(&key, &agent_id, reason);
+                        continue;
+                    }
+                    None => {}
+                }
+                // The gate may have refreshed the agent's policy from the pool, so the due time here reads
+                // whatever tuning edit just landed rather than the one this tick started with.
+                let Some(at) = inner.sessions[&key].agents[&agent_id].due_at() else {
+                    continue;
+                };
                 if at <= now {
                     due.push((at, key, agent_id));
                 }
@@ -1138,6 +1170,8 @@ impl Engine {
                 inner.set_reason(&key, &agent_id, Reason::Probing);
                 jobs.push(job);
             }
+            // Task 10 drains these into the ledger as probes_skipped; until then the tick just counts them.
+            inner.skipped.clear();
             jobs
         };
         for job in jobs {
@@ -1167,4 +1201,167 @@ impl Engine {
         self.workers.close();
         self.workers.wait().await;
     }
+}
+
+pub(crate) struct RouterView {
+    pub cooled: BTreeSet<(String, String)>,
+    pub overage: BTreeSet<String>,
+    /// `(key, session, canonical model)` to the pinned account: the account a probe would actually run on.
+    pub pins: BTreeMap<(String, String, String), String>,
+    pub snapshot: Arc<RegistrySnapshot>,
+}
+
+/// What the gate decided for a due recipe: wait with a reason, or drop it with the label its probes settle under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gate {
+    Drop(Reason, Wasted),
+    Hold(Reason),
+}
+
+impl Engine {
+    /// Three asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
+    /// command per agent in front of selection.
+    pub(crate) async fn router_view(&self, now: i64) -> RouterView {
+        let snapshot = self.parts.router.snapshot();
+        let pins = self
+            .parts
+            .router
+            .pins()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+            .collect();
+        let cooled = self
+            .parts
+            .router
+            .cooldowns()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.until > now)
+            .map(|c| (c.account_id, c.scope))
+            .collect();
+        let overage = self
+            .parts
+            .router
+            .overages()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, e)| e.in_use)
+            .map(|(id, _)| id)
+            .collect();
+        RouterView {
+            cooled,
+            overage,
+            pins,
+            snapshot,
+        }
+    }
+
+    /// The recipes one session holds, for a test or a view that asks by ids.
+    pub fn recipes_for(&self, key_id: &str, session_id: &str) -> Vec<String> {
+        let inner = self.lock();
+        inner
+            .sessions
+            .get(&(key_id.to_string(), session_id.to_string()))
+            .map(|s| {
+                s.agents
+                    .values()
+                    .filter(|a| a.current.is_some())
+                    .map(|a| a.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn spawn_scheduler(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => engine.step().await,
+                    _ = engine.cancel.cancelled() => return,
+                }
+            }
+        })
+    }
+}
+
+/// The spec's "Scheduling against router state" row, in its order. `Some` names why the due probe waits, or
+/// why the recipe goes.
+pub(crate) fn gate(
+    view: &RouterView,
+    agent: &mut Agent,
+    session_id: &str,
+    spent_today: f64,
+) -> Option<Gate> {
+    let key_id = agent.key_id.clone();
+    // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
+    // rather than held, because nothing on that key may be probed again until the flag is cleared.
+    let Some(key) = view.snapshot.key(&key_id).filter(|k| !k.keepalive_opt_out) else {
+        return Some(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
+    };
+    let Some(pool) = view.snapshot.pool(&key.pool_id).filter(|p| p.enabled) else {
+        return Some(Gate::Hold(Reason::PoolDisabled));
+    };
+    if pool.affinity_ttl_seconds < MIN_AFFINITY_SECONDS {
+        return Some(Gate::Hold(Reason::AffinityTooShort));
+    }
+    let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
+    // The pool's tuning may have changed since admission; the due time reads the policy the agent holds.
+    agent.policy = policy.clone();
+    if !policy.enabled {
+        return Some(Gate::Hold(Reason::KeepaliveOff));
+    }
+    // The pin is what the probe will follow, so the pin's account is the one to gate: a sibling agent's real
+    // request may have moved it since this recipe last ran.
+    let pinned = view.pins.get(&(
+        key_id.clone(),
+        session_id.to_string(),
+        agent.canonical_model.clone(),
+    ));
+    if let Some(pinned) = pinned {
+        agent.account = Some(pinned.clone());
+    }
+    let Some(account) = agent
+        .account
+        .as_deref()
+        .and_then(|id| view.snapshot.account(id))
+    else {
+        return Some(Gate::Hold(Reason::Paused));
+    };
+    if !account.enabled {
+        return Some(Gate::Hold(Reason::Paused));
+    }
+    if matches!(
+        account.state,
+        AccountState::ReauthRequired | AccountState::FundingRequired
+    ) {
+        return Some(Gate::Hold(Reason::Reauth));
+    }
+    let model_scope = format!("model:{}", agent.canonical_model);
+    if view
+        .cooled
+        .contains(&(account.id.clone(), "account".into()))
+        || view.cooled.contains(&(account.id.clone(), model_scope))
+    {
+        return Some(Gate::Hold(Reason::Cooled));
+    }
+    if view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
+        return Some(Gate::Hold(Reason::Overage));
+    }
+    if policy
+        .probe_cost_cap_usd_per_day
+        .is_some_and(|cap| spent_today >= cap)
+    {
+        return Some(Gate::Hold(Reason::CapReached));
+    }
+    if policy.stop_when_net_negative && agent.net_usd < 0.0 && agent.grace_left == 0 {
+        return Some(Gate::Hold(Reason::NetNegative));
+    }
+    None
 }
