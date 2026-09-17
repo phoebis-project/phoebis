@@ -2,6 +2,7 @@
 //! reconciles against; the Go events and lifecycle suites.
 mod common;
 use std::str::FromStr;
+use std::time::Duration;
 
 use phoebis_keepalive::{decode_query_event, AgentState, Event, EventError, KeepaliveLimits};
 use common::*;
@@ -242,6 +243,30 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         r.now() + 3_600_000
     );
     assert_eq!(r.agent("worker").state, AgentState::Parked);
+    // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
+    // leaves the companion's own lease alone.
+    r.advance(1_000);
+    let untouched = r
+        .event(Event {
+            event: "activity".into(),
+            agent_id: Some("worker".into()),
+            request_generation: Some(r.agent("worker").request_generation),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(untouched.lease_expires, renewed.lease_expires);
+    let reheartbeat = r
+        .event(Event {
+            event: "heartbeat".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        jiff::Timestamp::from_str(&reheartbeat.lease_expires)
+            .unwrap()
+            .as_millisecond(),
+        r.now() + 3_600_000
+    );
     // Agents: a restart needs the released generation; activity and state need the current one.
     assert_eq!(
         r.event(Event {
@@ -534,5 +559,42 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
             .map(|a| (a.agent_id.as_str(), a.state))
             .collect::<Vec<_>>(),
         [("main", AgentState::Busy), ("worker", AgentState::Busy)]
+    );
+}
+
+#[tokio::test]
+async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_the_engine() {
+    let r = rig(RigSpec {
+        session_expiry: Duration::from_millis(1),
+        ..RigSpec::default()
+    })
+    .await;
+    r.advance(2);
+    r.engine.expire();
+    assert_eq!((r.engine.stats().sessions, r.engine.stats().agents), (0, 0));
+    assert_eq!(
+        r.engine
+            .reasons()
+            .get(&phoebis_keepalive::Reason::SessionExpired)
+            .copied(),
+        Some(1)
+    );
+
+    let mut r2 = rig(RigSpec::default()).await;
+    r2.engine.close();
+    assert_eq!(
+        r2.event(Event {
+            event: "heartbeat".into(),
+            ..Default::default()
+        })
+        .unwrap_err(),
+        EventError {
+            code: "quiesced",
+            status: 503
+        }
+    );
+    assert_eq!(
+        (r2.engine.stats().agents, r2.engine.stats().retained_bytes),
+        (0, 0)
     );
 }
