@@ -294,6 +294,7 @@ async fn writer(
 fn table_of(record: &Record) -> &'static str {
     match record {
         Record::Event(_) => "events",
+        Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
         Record::Samples { .. } => "samples",
     }
@@ -337,6 +338,9 @@ async fn land(
                     Record::Event(event) => {
                         insert_event_in(&tx, event)?;
                         crate::rollup::fold_event(&tx, event)?;
+                    }
+                    Record::Keepalive(delta) => {
+                        crate::rollup::fold_keepalive(&tx, delta)?;
                     }
                     Record::Request {
                         request,

@@ -1,0 +1,632 @@
+//! Savings accounting: a kept-warm request's gross saving, a probe's cost, a migrated probe's exemption, the
+//! wasted count settled when a recipe stops, the net that can go negative, and the daily cap.
+mod common;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
+use phoebis_ledger::{hour_of, read_rollups, RollupRow};
+use common::*;
+use fake_upstream::Respond;
+
+/// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
+/// rather than the rig's own hour: a test that moves the clock to the next UTC day writes past it.
+async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow> {
+    wait_for(Duration::from_secs(5), || {
+        let rows =
+            r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+                .unwrap();
+        want(&rows).then_some(rows)
+    })
+    .await
+}
+
+fn probe_rows(rows: &[RollupRow]) -> RollupRow {
+    let mut sum = RollupRow::key(0, "", "", "", "", "probe", "");
+    for row in rows.iter().filter(|r| r.kind == "probe") {
+        sum.add(row);
+    }
+    sum
+}
+
+fn inference_rows(rows: &[RollupRow]) -> RollupRow {
+    let mut sum = RollupRow::key(0, "", "", "", "", "inference", "");
+    for row in rows.iter().filter(|r| r.kind == "inference") {
+        sum.add(row);
+    }
+    sum
+}
+
+// claude-sonnet-4-5 is not in the shipped price table; the harness serves it under that id alone. Every test
+// here serves and requests claude-sonnet-5, which the table prices, so the saving and the cost are numbers the
+// assertions can name. The routing snapshot is rebuilt after the served list changes, or the relay would still
+// resolve against the old one.
+const PRICED: &str = "claude-sonnet-5";
+
+async fn priced(r: &mut Rig) {
+    // A manual served row, selected: a sync after the harness's first one would add the id unselected, and an
+    // unselected id is not served.
+    let served = |id: &str| phoebis_store::ServedModelWrite {
+        upstream_id: id.into(),
+        selected: true,
+        long_context: false,
+    };
+    for account in ["a", "b"] {
+        r.h.store
+            .put_served_models(
+                account,
+                &[
+                    served("claude-sonnet-4-5"),
+                    served("claude-opus-5"),
+                    served(PRICED),
+                ],
+                "test",
+            )
+            .unwrap();
+    }
+    r.h.router.reload().await.unwrap();
+}
+
+fn priced_body() -> String {
+    BODY.replace("claude-sonnet-4-5", PRICED)
+}
+
+/// Sonnet 5: input 2, cache read 0.2 per million; 2,000 cached tokens save (2 - 0.2) * 2000 / 1e6.
+const SAVING_2000: f64 = 2_000.0 * (2.0 - 0.2) / 1_000_000.0;
+
+/// A real request answered with a five-minute write of 2,000 tokens (the cache was cold) or a read of 2,000
+/// (the cache was warm); the standing rule answers reads.
+fn cold_answer() -> Respond {
+    Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec() }
+}
+
+/// The request row, once the ledger landed it; a missing row is a failure, never a pass by absence.
+async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
+    wait_for(Duration::from_secs(5), || {
+        r.db.request(id).unwrap().map(|(row, _)| row)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let cost = r.status("main").net_usd;
+    assert!(
+        cost < 0.0,
+        "the probe's cost counts against the net: {cost}"
+    );
+    // Past the five-minute TTL of the first request, a real request reads the cache the probe kept.
+    r.advance(60_000);
+    let second = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_requests, credit.kept_warm_tokens),
+        (1, 2_000)
+    );
+    assert!(
+        (credit.saved_usd_gross - SAVING_2000).abs() < 1e-12,
+        "{}",
+        credit.saved_usd_gross
+    );
+    let probe = probe_rows(&rows);
+    assert!(
+        probe.probe_cost_usd > 0.0
+            && (r.status("main").net_usd - (SAVING_2000 - probe.probe_cost_usd)).abs() < 1e-12
+    );
+    assert!(row(&r, &second).await.kept_warm);
+    // The same gap without a probe, or with a cold probe, credits nothing.
+    let third = r.observe_with("main", &body).await;
+    r.advance(330_000);
+    let fourth = r.observe_with("main", &body).await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    r.advance(60_000);
+    let fifth = r.observe_with("main", &body).await;
+    for id in [&third, &fourth, &fifth] {
+        assert!(
+            !row(&r, id).await.kept_warm,
+            "{id}: neither the probe-less gap nor the cold probe credited"
+        );
+    }
+    let rows = rollups(&r, |rows| probe_rows(rows).requests >= 2).await;
+    assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
+    // A model switch discards the recipe the probe warmed: after a covering probe on the first model, a request
+    // on another model past the TTL is not credited, and a request back on the first model inside the second's
+    // TTL is not either, since no probe covered it since the switch.
+    let other = BODY.replace("claude-sonnet-4-5", "claude-opus-5");
+    r.advance(270_000);
+    r.step().await;
+    r.advance(60_000);
+    let sixth = r.observe_with("main", &other).await;
+    r.advance(60_000);
+    let seventh = r.observe_with("main", &body).await;
+    assert!(
+        !row(&r, &sixth).await.kept_warm && !row(&r, &seventh).await.kept_warm,
+        "a switch of model earns no credit in either direction"
+    );
+    let rows = rollups(&r, |rows| probe_rows(rows).requests >= 3).await;
+    assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
+}
+
+#[tokio::test]
+async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
+    // A stream arms the schedule before it completes; a probe that runs while it is open must not credit it.
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert!(r.status("main").probes == 1);
+    r.advance(60_000);
+    let events = vec![
+        fake_upstream::SseEvent { event: "message_start".into(), data: r#"{"type":"message_start","message":{"id":"msg_s","usage":{"input_tokens":10,"cache_read_input_tokens":2000}}}"#.into() },
+        fake_upstream::SseEvent { event: "message_delta".into(), data: r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#.into() },
+        fake_upstream::SseEvent { event: "message_stop".into(), data: r#"{"type":"message_stop"}"#.into() },
+    ];
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events,
+        },
+    );
+    // The fixture body already asks for a stream, so the gated rule answers this one event by event.
+    let streamed = body.as_str();
+    let resp =
+        r.h.app
+            .clone()
+            .oneshot(r.request_with("main", streamed))
+            .await
+            .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let mut streaming = resp.into_body();
+    r.pump_until(|r| r.status("main").next_probe_at.is_some())
+        .await;
+    // The stream is open, the schedule is armed from its first event; the probe due now runs against the open
+    // request's own prefix.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2);
+    r.up.release();
+    while let Some(Ok(_)) = http_body_util::BodyExt::frame(&mut streaming).await {}
+    r.pump(Some(&id)).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    assert!(
+        row(&r, &id).await.kept_warm,
+        "the covering probe before the stream started credits it"
+    );
+    // A one-hour recipe with a covering probe, then a request inside that hour whose own evidence is a
+    // five-minute write: the gap is measured against the hour the prior recipe had, so nothing is credited.
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let hour = priced_body().replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000},"output_tokens":10}}"#.to_vec() });
+    r.observe_with("main", &hour).await;
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    r.advance(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(300_000);
+    r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_read_input_tokens":2000,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec() });
+    let later = r.observe_with("main", &priced_body()).await;
+    assert!(
+        !row(&r, &later).await.kept_warm,
+        "fifty-nine minutes is inside the hour the prior recipe was warm for"
+    );
+    assert_eq!(
+        r.status("main").cache_ttl_ms,
+        300_000,
+        "this request's own evidence shortened the TTL after the check"
+    );
+}
+
+#[tokio::test]
+async fn a_migrated_probe_is_exempt_and_the_next_request_counts_as_kept_warm() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    // The two accounts rank equally, so which one serves the first request is not known until it has: the
+    // standing rule answers it on either, and nothing is left queued in front of the probe's own answer.
+    r.observe_with("main", &body).await;
+    let first = r.status("main").account_id.clone().unwrap();
+    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
+    let other_id = if first == "a" { "b" } else { "a" };
+    r.up.push_credential_rule(
+        mine,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.migrations,
+            status.cold,
+            status.net_usd,
+            status.account_id.as_deref(),
+            status.unanswered
+        ),
+        (1, 0, 0.0, Some(other_id), 1),
+        "{status:?}"
+    );
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_migrated == 1).await;
+    assert_eq!(
+        probe_rows(&rows).probe_cost_usd,
+        0.0,
+        "a migrated probe's cost is left out"
+    );
+    r.advance(60_000);
+    let second = r.observe_with("main", &body).await;
+    assert_eq!(
+        r.status("main").account_id.as_deref(),
+        Some(other_id),
+        "the pin moved with the probe"
+    );
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    assert!(
+        row(&r, &second).await.kept_warm,
+        "the write the probe paid on the new account is the one the request would have paid"
+    );
+}
+
+#[tokio::test]
+async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            max_idle_ticks: 3,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.state("main", "idle");
+    for _ in 0..3 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    assert_eq!(r.status("main").probes, 3);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::IdleLimit);
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
+    let probe = probe_rows(&rows);
+    assert!(
+        (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        "every probe since the last real request"
+    );
+    assert_eq!(
+        probe.wasted_probe_reasons,
+        BTreeMap::from([("idle_limit".to_string(), 3)])
+    );
+    // A real request before the stop resets the count: two probes, a request, one probe, then a release.
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    for _ in 0..2 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    r.state("main", "released");
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    assert_eq!(
+        probe_rows(&rows).wasted_probe_reasons,
+        BTreeMap::from([("released".to_string(), 1)])
+    );
+    // session_end and a replacement carry their own labels.
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    assert_eq!(
+        probe_rows(&rows)
+            .wasted_probe_reasons
+            .keys()
+            .collect::<Vec<_>>(),
+        ["session_ended"]
+    );
+    // A migrated probe nobody came back for is a wasted probe too, at no cost.
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    r.observe_with("main", &body).await;
+    let first = r.status("main").account_id.clone().unwrap();
+    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
+    r.up.push_credential_rule(
+        mine,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").migrations, 1);
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    assert_eq!(
+        (
+            probe_rows(&rows).wasted_probe_usd,
+            probe_rows(&rows)
+                .wasted_probe_reasons
+                .get("session_ended")
+                .copied()
+        ),
+        (0.0, Some(1))
+    );
+}
+
+#[tokio::test]
+async fn a_late_or_orphaned_probe_is_still_paid_for() {
+    for action in ["new_request", "release", "replace"] {
+        let mut r = rig(RigSpec::default()).await;
+        priced(&mut r).await;
+        let body = priced_body();
+        r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+        r.observe_with("main", &body).await;
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Gated(Box::new(probe_answer(2_000, 0))),
+        );
+        r.advance(270_000);
+        r.engine.step().await;
+        wait_for(Duration::from_secs(5), || {
+            (r.up.requests().len() == 2).then_some(())
+        })
+        .await;
+        match action {
+            "new_request" => {
+                r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+                r.observe_with("main", &body).await;
+            }
+            "release" => r.state("main", "released"),
+            _ => {
+                r.engine
+                    .apply_event(
+                        "desktop",
+                        Event {
+                            event: "session_start".into(),
+                            session_id: "session".into(),
+                            instance_id: "second".into(),
+                            sequence: 1,
+                            previous_instance_id: Some("instance".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        r.up.release();
+        r.engine.wait_idle().await;
+        // The upstream served it, so it is paid for whatever the fence said: the pool's spend and the probe
+        // row carry its cost, and a result whose recipe had stopped settles as one wasted probe under that stop.
+        let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+        let probe = probe_rows(&rows);
+        assert!(probe.probe_cost_usd > 0.0, "{action}");
+        assert!(
+            r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
+            "{action}"
+        );
+        match action {
+            "new_request" => {
+                assert_eq!(probe.wasted_probes, 0, "{action}: the request answered it")
+            }
+            "release" => assert_eq!(
+                probe.wasted_probe_reasons.get("released").copied(),
+                Some(1),
+                "{action}: {probe:?}"
+            ),
+            _ => assert_eq!(
+                probe.wasted_probe_reasons.get("replaced").copied(),
+                Some(1),
+                "{action}: {probe:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_negative_net_holds_after_the_grace_probes_and_a_real_request_regrants_them() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            net_negative_grace_probes: 2,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // The first paid probe turns the net negative and grants the two grace probes; the second and third spend
+    // them; the fourth holds.
+    for (tick, expected) in [1, 2, 3, 3].into_iter().enumerate() {
+        r.advance(270_000);
+        r.step().await;
+        assert_eq!(r.status("main").probes, expected, "tick {tick}");
+    }
+    assert_eq!(
+        (r.status("main").reason, r.status("main").grace_left),
+        (Reason::NetNegative, 0)
+    );
+    assert!(r.status("main").net_usd < 0.0);
+    let rows = rollups(&r, |rows| probe_rows(rows).probes_skipped >= 1).await;
+    assert!(
+        probe_rows(&rows).probes_skipped >= 1,
+        "the withheld probe is ledgered as skipped"
+    );
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    assert_eq!(
+        r.status("main").grace_left,
+        2,
+        "granted again on a real request while the net stays negative"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 4);
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            stop_when_net_negative: false,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    for _ in 0..5 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    assert_eq!(
+        r.status("main").probes,
+        5,
+        "with the rule off a negative net never holds"
+    );
+}
+
+#[tokio::test]
+async fn the_daily_cost_cap_pauses_probes_until_midnight() {
+    // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session; this
+    // case is about the cap alone, so the idle limit is off.
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cost_cap_usd_per_day: Some(0.0005),
+            max_idle_seconds: 0,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // Each probe reads 2,000 tokens at 0.2 per million: 0.0004; the second probe crosses the cap.
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::CapReached)
+    );
+    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
+    r.clock
+        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 3, "the cap resets at UTC midnight");
+    // A restart sums the day from the rollups.
+    let rows = rollups(&r, |rows| probe_rows(rows).requests == 3).await;
+    assert!(probe_rows(&rows).probe_cost_usd > 0.0);
+    let spent = r.engine.load_spent_today().await;
+    assert!(
+        (spent.get("main").copied().unwrap_or(0.0) - 0.0004).abs() < 1e-9,
+        "the row after midnight: {spent:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
+    // A caller that asks for `Claude-Sonnet-5[1m]` is served under `claude-sonnet-5`: the replay keeps the
+    // spelling, and the cost and the rollup key take the canonical id.
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let spelled = BODY.replace("claude-sonnet-4-5", "Claude-Sonnet-5[1m]");
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &spelled).await;
+    assert_eq!(r.status("main").canonical_model, "claude-sonnet-5");
+    r.advance(270_000);
+    r.step().await;
+    let probe = r.up.requests().into_iter().last().unwrap();
+    assert!(
+        std::str::from_utf8(&probe.body)
+            .unwrap()
+            .contains(r#""model":"claude-sonnet-5""#),
+        "the relay's edit resolved the served id"
+    );
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let row = rows.iter().find(|row| row.kind == "probe").unwrap();
+    assert_eq!(row.canonical_model, "claude-sonnet-5");
+    let expected = 2_000.0 * 0.2 / 1_000_000.0;
+    assert!(
+        (row.probe_cost_usd - expected).abs() < 1e-12,
+        "priced as the canonical model: {}",
+        row.probe_cost_usd
+    );
+    assert!((r.status("main").net_usd + expected).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").net_usd,
+        0.0,
+        "claude-sonnet-4-5 is not in the shipped table, so nothing is estimated"
+    );
+    let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
+    assert_eq!(
+        (
+            probe_rows(&rows).probe_cost_usd,
+            r.status("main").unanswered
+        ),
+        (0.0, 1),
+        "a probe at no cost is still a probe nobody answered yet"
+    );
+}

@@ -1,0 +1,412 @@
+//! The keepalive record: folded into the hourly rollups on the delta's key, the kept-warm mark on the request,
+//! the derived probe counts, and the migration that adds the skipped column.
+mod common;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use phoebis_ledger::{
+    fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
+    Record, RequestRecord,
+};
+use common::*;
+use fake_upstream::FakeUpstream;
+
+fn delta(at: i64, kind: &str) -> KeepaliveDelta {
+    KeepaliveDelta {
+        at,
+        key_id: "desktop".into(),
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        kind: kind.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let at = 1_700_000_000_000;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            user_agent: Some("claude-cli/2.1.269 (external, cli)".into()),
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                kept_warm_request_id: Some("r1".into()),
+                kept_warm_requests: 1,
+                kept_warm_tokens: 2_000,
+                saved_usd_gross: 0.0036,
+                ..delta(at, "inference")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                probe_cost_usd: 0.0004,
+                ..delta(at + 1_000, "probe")
+            },
+        )?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                probe_migrated: 1,
+                ..delta(at + 2_000, "probe")
+            },
+        )?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                probes_skipped: 2,
+                ..delta(at + 3_000, "probe")
+            },
+        )?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                wasted_probes: 3,
+                wasted_probe_usd: 0.0012,
+                wasted_probe_reasons: BTreeMap::from([("idle_limit".to_string(), 3)]),
+                ..delta(at + 4_000, "probe")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .unwrap();
+    let inference = rows
+        .iter()
+        .find(|r| r.kind == "inference" && r.user_agent == "-")
+        .expect("the credit lands on a user-agent-less row of the request's key");
+    assert_eq!(
+        (
+            inference.kept_warm_requests,
+            inference.kept_warm_tokens,
+            inference.saved_usd_gross,
+            inference.requests
+        ),
+        (1, 2_000, 0.0036, 0),
+        "the delta touches no request counter"
+    );
+    let probe = rows.iter().find(|r| r.kind == "probe").unwrap();
+    assert_eq!(
+        (
+            probe.probe_cost_usd,
+            probe.probe_migrated,
+            probe.probes_skipped,
+            probe.wasted_probes,
+            probe.wasted_probe_usd
+        ),
+        (0.0004, 1, 2, 3, 0.0012)
+    );
+    assert_eq!(
+        probe.wasted_probe_reasons.get("idle_limit").copied(),
+        Some(3)
+    );
+    let (row, _) = db.request("r1").unwrap().unwrap();
+    assert!(row.kept_warm, "the request row carries the mark");
+    // The mark can land before the row: a request inserted later under a marked id is kept warm.
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                kept_warm_request_id: Some("r2".into()),
+                kept_warm_requests: 1,
+                ..delta(at, "inference")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r2".into(),
+            received_at: at,
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[],
+        None,
+    )
+    .unwrap();
+    assert!(db.request("r2").unwrap().unwrap().0.kept_warm);
+    // The derived probe counts.
+    db.insert_request(
+        &RequestRecord {
+            id: "p1".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "p1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "p2".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            status: Some(429),
+            outcome: "failed".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "p2".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "rate_limited".into(),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .unwrap();
+    let groups = phoebis_ledger::breakdown(
+        &phoebis_ledger::apply_filter(
+            rows.clone(),
+            &phoebis_ledger::RollupFilter {
+                include_probes: true,
+                ..Default::default()
+            },
+        ),
+        "key",
+    );
+    let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
+    assert_eq!(
+        (
+            desktop.probes.ok,
+            desktop.probes.failed,
+            desktop.probes.migrated,
+            desktop.probes.skipped
+        ),
+        (1, 1, 1, 2)
+    );
+    assert_eq!(
+        desktop.requests, 3,
+        "the request counters stay the raw rows' (r1, p1, p2)"
+    );
+    let without = phoebis_ledger::breakdown(
+        &phoebis_ledger::apply_filter(rows, &phoebis_ledger::RollupFilter::default()),
+        "key",
+    );
+    assert_eq!(
+        (without[0].requests, without[0].probes.ok),
+        (1, 0),
+        "excluded probe rows contribute nothing, the credit row stays"
+    );
+    // A request without a user agent shares the reserved row with the credits of its key. Replacing it under
+    // another account moves its own counters and leaves the credit where it was.
+    db.insert_request(
+        &RequestRecord {
+            id: "r3".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            user_agent: None,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r3".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                kept_warm_request_id: Some("r3".into()),
+                kept_warm_requests: 1,
+                kept_warm_tokens: 500,
+                saved_usd_gross: 0.0009,
+                ..delta(at, "inference")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r3".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 2,
+            user_agent: None,
+            ..Default::default()
+        },
+        &[
+            AttemptRecord {
+                request_id: "r3".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "api_key".into(),
+                outcome: "rate_limited".into(),
+                ..Default::default()
+            },
+            AttemptRecord {
+                request_id: "r3".into(),
+                attempt: 2,
+                account_id: "b".into(),
+                account_kind: "api_key".into(),
+                outcome: "succeeded".into(),
+                ..Default::default()
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .unwrap();
+    let credited = rows
+        .iter()
+        .find(|r| r.kind == "inference" && r.account_id == "a" && r.user_agent == "-")
+        .expect("the credit row on the old account survives the replace");
+    assert_eq!(
+        (
+            credited.requests,
+            credited.kept_warm_requests,
+            credited.kept_warm_tokens
+        ),
+        (0, 3, 2_500),
+        "r1, r2 and r3 were all credited on this key"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.kind == "inference" && r.account_id == "b")
+            .map(|r| r.requests),
+        Some(1),
+        "the request moved to its serving account"
+    );
+}
+
+#[test]
+fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = LedgerDb::open(&path).unwrap();
+        db.write(|c| { c.execute_batch("ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
+    }
+    let db = LedgerDb::open(&path).unwrap();
+    assert_eq!(db.schema_version().unwrap(), 5);
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                probes_skipped: 1,
+                ..delta(0, "probe")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        db.read(|c| read_rollups(c, 0, 3_600)).unwrap()[0].probes_skipped,
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_writer_lands_a_keepalive_record_in_its_batch() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.ledger.record(Record::Keepalive(KeepaliveDelta {
+        probe_cost_usd: 0.5,
+        ..delta(NOW, "probe")
+    }));
+    let rows = wait_for(Duration::from_secs(5), || {
+        let rows = h.db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(rows[0].probe_cost_usd, 0.5);
+    up.shutdown().await;
+}

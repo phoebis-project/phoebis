@@ -160,19 +160,23 @@ impl Engine {
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let lease = self.parts.limits.lease_ms();
         let limits = self.parts.limits.clone();
-        let mut inner = self.lock();
-        if inner.closed {
-            return Err(err("quiesced", 503));
-        }
-        inner.expire(now, expiry);
-        inner.apply(
-            key_id,
-            event,
-            now,
-            lease,
-            limits.max_sessions,
-            limits.max_agents,
-        )
+        let acked = {
+            let mut inner = self.lock();
+            if inner.closed {
+                return Err(err("quiesced", 503));
+            }
+            inner.expire(now, expiry);
+            inner.apply(
+                key_id,
+                event,
+                now,
+                lease,
+                limits.max_sessions,
+                limits.max_agents,
+            )
+        };
+        self.flush();
+        acked
     }
 
     pub fn snapshot(&self, key_id: &str) -> Snapshot {

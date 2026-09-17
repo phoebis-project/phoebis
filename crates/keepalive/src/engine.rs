@@ -26,6 +26,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
+use crate::savings::gross_saving;
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -962,6 +963,47 @@ impl Engine {
             return;
         }
         inner.pending.remove(&complete.request_id);
+        let mut credited = None;
+        // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
+        // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
+        let credit = {
+            let agent = &inner.sessions[&key].agents[&agent_id];
+            let read = complete
+                .usage
+                .as_ref()
+                .and_then(|u| u.cache_read_tokens)
+                .unwrap_or(0);
+            agent
+                .current
+                .as_ref()
+                .and_then(|o| o.prior.as_ref())
+                .and_then(|prior| {
+                    let ttl = prior.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
+                    let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
+                    let same_model = prior.model == agent.canonical_model;
+                    (prior.covered && gap_exceeded && same_model && read > 0).then(|| {
+                        (
+                            read,
+                            agent.pool_id.clone(),
+                            agent.account.clone().unwrap_or_default(),
+                            agent.canonical_model.clone(),
+                        )
+                    })
+                })
+        };
+        if let Some((read, pool_id, account, model)) = credit {
+            if let Some(saving) = gross_saving(&self.parts.pricing.current(), &model, read) {
+                inner
+                    .sessions
+                    .get_mut(&key)
+                    .unwrap()
+                    .agents
+                    .get_mut(&agent_id)
+                    .unwrap()
+                    .net_usd += saving;
+                credited = Some((read, pool_id, account, model, saving));
+            }
+        }
         let (ready, armed) = inner.sessions[&key]
             .agents
             .get(&agent_id)
@@ -1000,6 +1042,20 @@ impl Engine {
                 _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
             }
         }
+        drop(inner);
+        if let Some((read, pool_id, account, model, saving)) = credited {
+            self.record_kept_warm(
+                now,
+                &key,
+                &pool_id,
+                &account,
+                &model,
+                &complete.request_id,
+                read,
+                saving,
+            );
+        }
+        self.flush();
     }
 }
 
@@ -1066,6 +1122,13 @@ impl Engine {
                 return;
             }
             inner.expire(now, expiry);
+            // The cap is a budget per UTC day, so the day it was summed for is carried with the sum and the
+            // first tick of a new day starts it over.
+            let day = now.div_euclid(86_400_000);
+            if inner.spent_day != day {
+                inner.spent_today.clear();
+                inner.spent_day = day;
+            }
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
@@ -1170,10 +1233,9 @@ impl Engine {
                 inner.set_reason(&key, &agent_id, Reason::Probing);
                 jobs.push(job);
             }
-            // Task 10 drains these into the ledger as probes_skipped; until then the tick just counts them.
-            inner.skipped.clear();
             jobs
         };
+        self.flush();
         for job in jobs {
             self.workers.spawn(run_job(self.clone(), job));
         }

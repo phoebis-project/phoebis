@@ -33,12 +33,12 @@ pub use query::{
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};
 pub use record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
-    RequestRecord,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
+    QuotaSampleRecord, RequestRecord,
 };
 pub use rollup::{
-    bucket_of, delta_of, fold_account, fold_event, fold_request, hour_of, read_account_rollups,
-    read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
+    bucket_of, delta_of, fold_account, fold_event, fold_keepalive, fold_request, hour_of,
+    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 

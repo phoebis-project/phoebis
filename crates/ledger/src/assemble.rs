@@ -15,8 +15,8 @@ use serde_json::json;
 use crate::bodies::MAX_CAPTURED_BODY;
 use crate::quota::samples_from_unified;
 use crate::record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
-    RequestRecord,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
+    QuotaSampleRecord, RequestRecord,
 };
 
 /// Well past the relay's own ten-minute idle wait: an entry nothing has touched for this long belongs to a
@@ -29,6 +29,7 @@ pub const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 #[allow(clippy::large_enum_variant)]
 pub enum Record {
     Event(EventRecord),
+    Keepalive(KeepaliveDelta),
     Request {
         request: RequestRecord,
         attempts: Vec<AttemptRecord>,

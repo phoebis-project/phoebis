@@ -42,7 +42,8 @@ pub fn run_retention(
                 "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1)",
                 params![request_cutoff],
             )?,
-            requests: tx.execute("DELETE FROM requests WHERE received_at < ?1", params![request_cutoff])?,
+            requests: tx.execute("DELETE FROM requests WHERE received_at < ?1", params![request_cutoff])?
+                + tx.execute("DELETE FROM kept_warm_marks WHERE marked_at < ?1", params![request_cutoff])?,
             events: tx.execute("DELETE FROM events WHERE at < ?1", params![request_cutoff])?,
             quota_samples: tx.execute("DELETE FROM quota_samples WHERE bucket < ?1", params![sample_cutoff])?,
             extra_usage_samples: tx

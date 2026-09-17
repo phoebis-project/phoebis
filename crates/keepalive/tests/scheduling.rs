@@ -261,6 +261,24 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
         "the recipe is gone"
     );
     assert!(r.engine.recipes_for("desktop", "session").is_empty());
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+                .unwrap();
+        rows.iter()
+            .any(|row| row.wasted_probes == 1)
+            .then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.wasted_probes == 1)
+            .unwrap()
+            .wasted_probe_reasons
+            .get("released")
+            .copied(),
+        Some(1)
+    );
 }
 
 #[tokio::test]

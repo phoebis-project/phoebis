@@ -1,6 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, and `events`, plus `meta` for the schema
-//! marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `kept_warm_marks`, and `events`, plus `meta`
+//! for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS rollups_hourly (
   wasted_probes INTEGER NOT NULL,
   wasted_probe_usd REAL NOT NULL,
   wasted_probe_reasons_json TEXT NOT NULL,
+  probes_skipped INTEGER NOT NULL DEFAULT 0,
   ttfb_hist BLOB NOT NULL,
   ttfc_hist BLOB NOT NULL,
   duration_hist BLOB NOT NULL,
@@ -158,6 +159,7 @@ CREATE TABLE IF NOT EXISTS cooldown_spans (
   until INTEGER NOT NULL,
   PRIMARY KEY (account_id, scope)
 );
+CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   at INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -187,6 +189,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end it has
 /// already counted for a scope, and the hour it counted it in, to add only what an extension moves the end
 /// by and to take back what a clear cut short.
+///
+/// Version 5: the due probes a scheduling gate withheld are a count of their own, and a kept-warm credit
+/// leaves a mark for a request row that has not landed yet, since the engine credits at completion while the
+/// writer batches.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -256,5 +262,10 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;",
   until INTEGER NOT NULL,
   PRIMARY KEY (account_id, scope)
 );",
+    ),
+    (
+        5,
+        "ALTER TABLE rollups_hourly ADD COLUMN probes_skipped INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL);",
     ),
 ];

@@ -470,7 +470,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
         .collect()
 }
 
-fn group_row(key: &str, sum: &RollupRow) -> GroupRow {
+fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow) -> GroupRow {
     let expired = sum
         .cache_miss_reasons
         .get("expired_between_turns")
@@ -525,7 +525,14 @@ fn group_row(key: &str, sum: &RollupRow) -> GroupRow {
             requests: sum.kept_warm_requests,
             tokens: sum.kept_warm_tokens,
         },
-        probes: ProbeCounts::default(),
+        // Derived from the group's probe rows alone: a probe's own request row carries its outcome, and the
+        // engine's deltas carry what never ran.
+        probes: ProbeCounts {
+            failed: probes.failed + probes.rate_limited + probes.exhausted + probes.rejected,
+            migrated: probes.probe_migrated,
+            ok: probes.succeeded,
+            skipped: probes.probes_skipped,
+        },
         savings: Savings {
             gross_usd: sum.saved_usd_gross,
             probe_cost_usd: sum.probe_cost_usd,
@@ -537,18 +544,25 @@ fn group_row(key: &str, sum: &RollupRow) -> GroupRow {
 }
 
 fn sum_groups(rows: &[&RollupRow], group_by: &str) -> Vec<GroupRow> {
-    let mut sums: BTreeMap<String, RollupRow> = BTreeMap::new();
+    // Two sums per group: the whole, and the probe rows on their own, which the derived probe counts read.
+    let mut sums: BTreeMap<String, (RollupRow, RollupRow)> = BTreeMap::new();
     for row in rows {
         let key = group_of(row, group_by);
-        sums.entry(key.clone())
-            .and_modify(|s| s.add(row))
-            .or_insert_with(|| {
-                let mut s = RollupRow::key(0, &key, "", "", "", "", "");
-                s.add(row);
-                s
-            });
+        let entry = sums.entry(key.clone()).or_insert_with(|| {
+            (
+                RollupRow::key(0, &key, "", "", "", "", ""),
+                RollupRow::key(0, &key, "", "", "", "", ""),
+            )
+        });
+        entry.0.add(row);
+        if row.kind == "probe" {
+            entry.1.add(row);
+        }
     }
-    let mut out: Vec<GroupRow> = sums.iter().map(|(k, s)| group_row(k, s)).collect();
+    let mut out: Vec<GroupRow> = sums
+        .iter()
+        .map(|(k, (sum, probes))| group_row(k, sum, probes))
+        .collect();
     out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
     out
 }

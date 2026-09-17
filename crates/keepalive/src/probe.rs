@@ -194,7 +194,6 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let table = engine.parts.pricing.current();
     let (record, applied) = {
         let mut inner = engine.lock();
-        inner.running -= 1;
         let record = inner.probe_record(&job, &exchange, &table);
         if record.outcome != ProbeOutcome::Migrated {
             *inner
@@ -206,6 +205,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
+    engine.flush();
+    // The worker slot comes back only after both sends: `wait_idle` returns on a zero count, and a caller that
+    // asserts on the ledger right after it would otherwise race the records this probe owes.
+    engine.lock().running -= 1;
     engine.idle.notify_waiters();
 }
 
@@ -299,13 +302,22 @@ impl Inner {
             })
             && self.live(key, agent_id);
         if !fenced {
-            let label = self
+            // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
+            // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
+            // not wasted. A record that is gone or re-incarnated leaves no label to read, and what replaced it
+            // is what orphaned the result.
+            let label = match self
                 .sessions
                 .get(key)
                 .and_then(|s| s.agents.get(agent_id))
                 .filter(|agent| agent.incarnation == job.incarnation)
-                .and_then(|agent| agent.last_stop)
-                .unwrap_or(Wasted::Replaced);
+            {
+                Some(agent) => agent.last_stop,
+                None => Some(Wasted::Replaced),
+            };
+            let Some(label) = label else {
+                return Applied::Orphaned;
+            };
             self.settlements.push(crate::engine::Settlement {
                 key: key.clone(),
                 agent_id: agent_id.to_string(),
@@ -539,12 +551,6 @@ impl Inner {
                     .max_idle_ms()
                     .is_some_and(|limit| now >= since + limit))
     }
-}
-
-impl Engine {
-    /// The ledger side of a probe record, outside the lock. Task 10 fills it in; until then every probe is
-    /// counted in the metrics alone.
-    pub(crate) fn record_probe(&self, _record: &ProbeRecord, _applied: Applied, _now: i64) {}
 }
 
 pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {

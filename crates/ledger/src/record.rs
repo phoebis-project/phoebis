@@ -114,3 +114,26 @@ pub struct ExtraUsageSampleRecord {
     pub overage_reset: Option<i64>,
     pub source: String,
 }
+
+/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, the cost of a probe, or
+/// the settlement of a stopped recipe. Never a request counter: those come from the request rows alone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KeepaliveDelta {
+    pub at: i64,
+    pub key_id: String,
+    pub pool_id: String,
+    pub account_id: String,
+    pub canonical_model: String,
+    pub kind: String,
+    /// The request the credit is for, marked `kept_warm` by id.
+    pub kept_warm_request_id: Option<String>,
+    pub kept_warm_requests: u64,
+    pub kept_warm_tokens: u64,
+    pub saved_usd_gross: f64,
+    pub probe_cost_usd: f64,
+    pub probe_migrated: u64,
+    pub probes_skipped: u64,
+    pub wasted_probes: u64,
+    pub wasted_probe_usd: f64,
+    pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
+}

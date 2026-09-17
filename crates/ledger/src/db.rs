@@ -272,6 +272,17 @@ pub(crate) fn insert_request_in(
             Some((row, old))
         }
     };
+    // A kept-warm credit is recorded at completion while the writer batches, so the mark can be in the table
+    // before the request's own row lands here.
+    let marked: bool = tx
+        .query_row(
+            "SELECT 1 FROM kept_warm_marks WHERE request_id = ?1",
+            params![request.id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let kept_warm = request.kept_warm || marked;
     tx.execute(
         "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
@@ -280,7 +291,7 @@ pub(crate) fn insert_request_in(
             request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
             request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
             request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
-            request.kept_warm, request.bodies_captured, request.user_agent,
+            kept_warm, request.bodies_captured, request.user_agent,
         ],
     )?;
     tx.execute(
@@ -509,7 +520,7 @@ mod tests {
     fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 4);
+        assert_eq!(db.schema_version().unwrap(), 5);
         let mode: String = db
             .read(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
