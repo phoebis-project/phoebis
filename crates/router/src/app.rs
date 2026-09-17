@@ -381,7 +381,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Ok(())
         }
     };
-    // The observer ends on its own when the bus closes; the abort here only matters on the timeout path.
+    // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();
     scheduler.abort();
     scheduler_tick.abort();

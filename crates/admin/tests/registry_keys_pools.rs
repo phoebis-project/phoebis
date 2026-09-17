@@ -425,6 +425,52 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
 #[tokio::test]
 async fn sessions_list_live_pins_and_a_release_expires_them() {
     let (_first, _up, store, _router) = common::admin_parts().await;
+    // The pins' key and its pool are registered first: `RoutingState::purge` deletes a pin whose key it
+    // cannot resolve, so without them the router's first tick races the release and wins about as often as
+    // the runtime parks between the two.
+    let secret = "phoebis-testkey0000000000000000000000000000000000";
+    store
+        .insert_pool(
+            &phoebis_store::PoolRow {
+                id: "main".into(),
+                label: "Main".into(),
+                enabled: true,
+                strategy: phoebis_store::Strategy::PriorityRandom,
+                affinity_ttl_seconds: 3_600,
+                overage_policy: phoebis_store::OveragePolicy::Allow,
+                migrate_above_utilization: None,
+                select_below_utilization: None,
+                default_allowed_models: None,
+                keepalive_json: "{}".into(),
+                body_capture_hours: 0,
+                created_at: common::NOW,
+                updated_at: common::NOW,
+            },
+            "test",
+        )
+        .unwrap();
+    store
+        .insert_api_key(
+            &phoebis_store::ApiKeyRow {
+                id: "k".into(),
+                label: "k".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                allowed_models: None,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: store.api_key_digest(secret).to_vec(),
+                prefix: phoebis_store::key_prefix(secret),
+                created_at: common::NOW,
+                rotated_at: None,
+                last_used_at: None,
+            },
+            "test",
+        )
+        .unwrap();
     store
         .upsert_pin(&phoebis_store::PinRow {
             key_id: "k".into(),
