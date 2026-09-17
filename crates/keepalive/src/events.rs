@@ -182,30 +182,34 @@ impl Engine {
     pub fn snapshot(&self, key_id: &str) -> Snapshot {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
-        let mut inner = self.lock();
-        inner.expire(now, expiry);
-        Snapshot {
-            sessions: inner
-                .sessions
-                .values()
-                .filter(|s| s.key_id == key_id)
-                .map(|s| SnapshotSession {
-                    agents: s
-                        .agents
-                        .values()
-                        .map(|a| SnapshotAgent {
-                            agent_id: a.id.clone(),
-                            request_generation: a.generation,
-                            state: a.state,
-                        })
-                        .collect(),
-                    ended: s.ended || !s.attended,
-                    instance_id: s.instance.clone(),
-                    sequence: s.sequence,
-                    session_id: s.session_id.clone(),
-                })
-                .collect(),
-        }
+        let snapshot = {
+            let mut inner = self.lock();
+            inner.expire(now, expiry);
+            Snapshot {
+                sessions: inner
+                    .sessions
+                    .values()
+                    .filter(|s| s.key_id == key_id)
+                    .map(|s| SnapshotSession {
+                        agents: s
+                            .agents
+                            .values()
+                            .map(|a| SnapshotAgent {
+                                agent_id: a.id.clone(),
+                                request_generation: a.generation,
+                                state: a.state,
+                            })
+                            .collect(),
+                        ended: s.ended || !s.attended,
+                        instance_id: s.instance.clone(),
+                        sequence: s.sequence,
+                        session_id: s.session_id.clone(),
+                    })
+                    .collect(),
+            }
+        };
+        self.flush();
+        snapshot
     }
 }
 

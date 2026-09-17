@@ -1,10 +1,6 @@
 //! The engine: every session the companion registered or a request revealed, every agent's recipe, and the
 //! counters behind the views. One mutex, as the Go engine had, held for microseconds at a time; nothing under
 //! it does I/O.
-//!
-//! This file grows across several tasks; a field or method with no reader yet belongs to one that hasn't
-//! landed, so dead-code warnings are silenced here rather than per item.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -331,7 +327,6 @@ pub(crate) struct PriorCoverage {
 /// One real request the engine is following from its observation to its completion.
 pub(crate) struct Observation {
     pub id: String,
-    pub generation: u64,
     pub attempt: u8,
     pub started: i64,
     pub recipe: Recipe,
@@ -345,7 +340,6 @@ pub(crate) struct Observation {
 /// written to the ledger by the engine once the lock is released.
 pub(crate) struct Settlement {
     pub key: SessionKey,
-    pub agent_id: String,
     pub pool_id: String,
     pub canonical_model: String,
     pub account: Option<String>,
@@ -439,8 +433,11 @@ impl Engine {
     pub fn expire(&self) {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
-        let mut inner = self.lock();
-        inner.expire(now, expiry);
+        {
+            let mut inner = self.lock();
+            inner.expire(now, expiry);
+        }
+        self.flush();
     }
 
     pub fn close(&self) {
@@ -516,7 +513,6 @@ impl Inner {
         if let (Some(label), false) = (wasted, costs.is_empty()) {
             let settlement = Settlement {
                 key: key.clone(),
-                agent_id: agent_id.to_string(),
                 pool_id: agent.pool_id.clone(),
                 canonical_model: agent.canonical_model.clone(),
                 account: agent.account.clone(),
@@ -552,12 +548,12 @@ impl Inner {
             .map(|(k, _)| k.clone())
             .collect();
         for key in lapsed {
-            let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
             // The recipes stay: a silent companion is not an ended session, and the idle limits bound what the
-            // engine spends on it. The reason counts the lapse once per agent, as the Go engine counted it.
-            for agent in agents {
-                self.set_reason(&key, &agent, Reason::LeaseExpired);
-            }
+            // engine spends on it. The lapse is counted once per agent, as the Go engine counted it, but no
+            // agent's own reason is rewritten: a recipe the scheduler keeps probing would otherwise read held
+            // in every view until its next probe.
+            let agents = self.sessions[&key].agents.len() as u64;
+            *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.attended = false;
             }
@@ -702,7 +698,12 @@ impl Engine {
     }
 
     fn on_observed(&self, observed: RequestObserved) {
-        if observed.origin == phoebis_bus::Origin::Keepalive {
+        // Only an inference request says anything about the cache entry a recipe is for. Token counting
+        // carries the same session and agent headers and writes no cache, so it must reach nothing below:
+        // not the recipe, not the schedule, and not the request time the kept-warm gap is measured from.
+        if observed.origin == phoebis_bus::Origin::Keepalive
+            || observed.kind != phoebis_bus::Kind::Inference
+        {
             return;
         }
         let (Some(key_id), Some(session_id), Some(agent_id)) = (
@@ -803,7 +804,6 @@ impl Engine {
             return;
         }
         inner.retained += recipe.size;
-        let generation = inner.sessions[&key].agents[&agent_id].generation;
         inner
             .sessions
             .get_mut(&key)
@@ -813,7 +813,6 @@ impl Engine {
             .unwrap()
             .current = Some(Observation {
             id: observed.request_id.clone(),
-            generation,
             attempt: 0,
             started: now,
             recipe,
@@ -1148,7 +1147,9 @@ impl Engine {
                     .current
                     .as_ref()
                     .is_some_and(|o| o.ready && o.expected > 0);
-                let Some(at) = agent.due_at() else { continue };
+                if !agent.armed() {
+                    continue;
+                }
                 if !ready || agent.in_flight {
                     continue;
                 }
@@ -1179,10 +1180,19 @@ impl Engine {
                         continue;
                     }
                     Some(Gate::Hold(reason)) => {
-                        if at <= now {
-                            inner.skipped.push((key.clone(), agent_id.clone()));
+                        // A hold is counted where it begins, not on every tick it spans: the production
+                        // ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000
+                        // withheld probes for the one it actually withheld. The due time is read after the
+                        // gate, so the policy the gate just refreshed decides whether a probe was due.
+                        let agent = &inner.sessions[&key].agents[&agent_id];
+                        let began = agent.reason != reason;
+                        let was_due = agent.due_at().is_some_and(|at| at <= now);
+                        if began {
+                            if was_due {
+                                inner.skipped.push((key.clone(), agent_id.clone()));
+                            }
+                            inner.set_reason(&key, &agent_id, reason);
                         }
-                        inner.set_reason(&key, &agent_id, reason);
                         continue;
                     }
                     None => {}
@@ -1226,7 +1236,6 @@ impl Engine {
                     canonical_model: agent.canonical_model.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
-                    idle,
                 };
                 agent.in_flight = true;
                 agent.probes += 1;

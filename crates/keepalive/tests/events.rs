@@ -4,7 +4,9 @@ mod common;
 use std::str::FromStr;
 use std::time::Duration;
 
-use phoebis_keepalive::{decode_query_event, AgentState, Event, EventError, KeepaliveLimits};
+use phoebis_keepalive::{
+    decode_query_event, AgentState, Event, EventError, KeepaliveLimits, RecipeState,
+};
 use common::*;
 
 #[tokio::test]
@@ -479,6 +481,13 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         ..RigSpec::default()
     })
     .await;
+    r.observe("main").await;
+    let armed = r.engine.recipes();
+    let reason = r.status("main").reason;
+    assert_eq!(
+        (armed.len(), armed[0].state, armed[0].reason),
+        (1, RecipeState::Armed, None)
+    );
     r.advance(90_000);
     r.engine.expire();
     let session = &r.engine.snapshot("desktop").sessions[0];
@@ -486,6 +495,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         session.ended,
         "the companion sees an ended instance and re-registers"
     );
+    // A silent companion says nothing about the recipe: the lapse is counted, and the views keep reading the
+    // reason the recipe's own last probe left.
+    assert_eq!(r.status("main").reason, reason);
+    assert_eq!(r.engine.recipes(), armed);
     assert_eq!(
         r.event(Event {
             event: "heartbeat".into(),

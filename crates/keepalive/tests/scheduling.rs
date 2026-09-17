@@ -3,6 +3,7 @@
 //! time and the idle limits come from the pool's tuning.
 mod common;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
+use phoebis_ledger::{hour_of, read_rollups};
 use phoebis_routing::{EvidenceSource, OverageEvidence, Report};
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
 use common::*;
@@ -438,4 +439,86 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
             .is_ok(),
         "the ticker stops on shutdown"
     );
+}
+
+/// The skipped-probe total the ledger writer has landed, once it has reached `want`.
+async fn skipped(r: &Rig, want: u64) -> u64 {
+    wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+                .unwrap();
+        let total: u64 = rows.iter().map(|row| row.probes_skipped).sum();
+        (total >= want).then_some(total)
+    })
+    .await
+}
+
+/// A hold is a transition, not a state the ticker re-counts: a five-hour cooldown withholds one probe, not
+/// one per second of it, and the reason behind it is counted once per hold rather than once per tick.
+#[tokio::test]
+async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let until = r.now() + 600_000;
+    r.h.router.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until,
+            set_at: r.now(),
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
+    settled(&r, |r| async move {
+        r.h.router
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.account_id == "a")
+    })
+    .await;
+    r.advance(270_000);
+    for _ in 0..10 {
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Cooled)
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::Cooled).copied(),
+        Some(1),
+        "ten ticks of one hold"
+    );
+    assert_eq!(skipped(&r, 1).await, 1, "one withheld probe, not ten");
+    // A hold whose reason changes is a new hold: the account comes out of the cooldown disabled.
+    r.h.router.clear_cooldown("a", "account").await.unwrap();
+    r.h.store.set_enabled("a", false).unwrap();
+    r.h.router.reload().await.unwrap();
+    for _ in 0..5 {
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Paused)
+    );
+    assert_eq!(
+        (
+            r.engine.reasons().get(&Reason::Cooled).copied(),
+            r.engine.reasons().get(&Reason::Paused).copied()
+        ),
+        (Some(1), Some(1)),
+        "once per reason"
+    );
+    assert_eq!(skipped(&r, 2).await, 2, "one withheld probe per hold");
 }

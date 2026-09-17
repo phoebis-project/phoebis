@@ -442,10 +442,54 @@ async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
     );
 }
 
+/// A sweep run by a reader settles from that reader: `expire` and `snapshot` reach `Inner::expire` without a
+/// tick behind them, and what they queue has to land while the ledger is still up rather than wait for a
+/// `step` that a shutdown may never run.
+#[tokio::test]
+async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
+    for sweep in ["expire", "snapshot"] {
+        let mut r = rig(RigSpec {
+            session_expiry: Duration::from_secs(600),
+            ..RigSpec::default()
+        })
+        .await;
+        priced(&mut r).await;
+        let body = priced_body();
+        r.observe_with("main", &body).await;
+        r.advance(270_000);
+        r.step().await;
+        assert_eq!(r.status("main").probes, 1, "{sweep}");
+        r.advance(400_000);
+        match sweep {
+            "expire" => r.engine.expire(),
+            _ => {
+                r.engine.snapshot("desktop");
+            }
+        }
+        let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+        let probe = probe_rows(&rows);
+        assert_eq!(
+            probe.wasted_probe_reasons.get("session_ended").copied(),
+            Some(1),
+            "{sweep}: {probe:?}"
+        );
+        assert!(probe.wasted_probe_usd > 0.0, "{sweep}: {probe:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_late_or_orphaned_probe_is_still_paid_for() {
-    for action in ["new_request", "release", "replace"] {
-        let mut r = rig(RigSpec::default()).await;
+    for action in ["close", "expire", "new_request", "release", "replace"] {
+        let mut r = rig(RigSpec {
+            // The expiry case sweeps the session out from under the probe in flight; the others keep the
+            // rig's day-long expiry.
+            session_expiry: match action {
+                "expire" => Duration::from_secs(600),
+                _ => RigSpec::default().session_expiry,
+            },
+            ..RigSpec::default()
+        })
+        .await;
         priced(&mut r).await;
         let body = priced_body();
         r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -462,6 +506,11 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
         })
         .await;
         match action {
+            "close" => r.engine.close(),
+            "expire" => {
+                r.advance(400_000);
+                r.engine.expire();
+            }
             "new_request" => {
                 r.up.push_credential_rule(A, "/v1/messages", cold_answer());
                 r.observe_with("main", &body).await;
@@ -485,6 +534,22 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
         }
         r.up.release();
         r.engine.wait_idle().await;
+        if action == "close" {
+            // A restart cancels the exchange before any answer, so nothing was served and no recipe is left
+            // for the probe to be wasted by. The ledger is drained rather than polled, since what this case
+            // asserts is that no row lands at all.
+            r.ledger.clone().shutdown().await.unwrap();
+            let rows =
+                r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+                    .unwrap();
+            let probe = probe_rows(&rows);
+            assert_eq!(
+                (probe.wasted_probes, probe.probe_cost_usd),
+                (0, 0.0),
+                "{action}: {probe:?}"
+            );
+            continue;
+        }
         // The upstream served it, so it is paid for whatever the fence said: the pool's spend and the probe
         // row carry its cost, and a result whose recipe had stopped settles as one wasted probe under that stop.
         let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
@@ -495,6 +560,11 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             "{action}"
         );
         match action {
+            "expire" => assert_eq!(
+                probe.wasted_probe_reasons.get("session_ended").copied(),
+                Some(1),
+                "{action}: {probe:?}"
+            ),
             "new_request" => {
                 assert_eq!(probe.wasted_probes, 0, "{action}: the request answered it")
             }

@@ -2,10 +2,6 @@
 //! from the response the relay returns rather than from the bus, which is best-effort. What the probe cost is
 //! settled from the exchange alone; what it does to the recipe is settled only when the recipe is still the
 //! one the probe ran for.
-//!
-//! Like `engine.rs`, this file grows across several tasks: a field the accounting reads belongs to one that
-//! hasn't landed, so dead-code warnings are silenced here rather than per item.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +37,6 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
-    pub idle: bool,
 }
 
 pub(crate) struct ProbeResult {
@@ -50,7 +45,6 @@ pub(crate) struct ProbeResult {
     /// The relay's own code for an answer it built itself, `accounts_exhausted` and `accounts_unavailable`
     /// among them; `None` for an upstream answer forwarded as it came.
     pub error_code: Option<String>,
-    pub pin_epoch: Option<u64>,
     /// `None` when the read crossed the usage bound or failed: nothing past it is a usage block.
     pub body: Option<Bytes>,
 }
@@ -155,7 +149,6 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             status: 0,
             account: None,
             error_code: None,
-            pin_epoch: None,
             body: None,
         }),
         Ok(request) => {
@@ -177,7 +170,6 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                         .map(|o| o.account_id.clone())
                         .filter(|a| !a.is_empty()),
                     error_code: outcome.as_ref().and_then(|o| o.error_code.clone()),
-                    pin_epoch: outcome.and_then(|o| o.pin_epoch),
                     body,
                 }
             };
@@ -308,23 +300,29 @@ impl Inner {
         if !fenced {
             // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
             // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
-            // not wasted. A record that is gone or re-incarnated leaves no label to read, and what replaced it
-            // is what orphaned the result.
-            let label = match self
-                .sessions
-                .get(key)
-                .and_then(|s| s.agents.get(agent_id))
-                .filter(|agent| agent.incarnation == job.incarnation)
-            {
-                Some(agent) => agent.last_stop,
-                None => Some(Wasted::Replaced),
+            // not wasted. A record that is gone leaves no label to read, so what removed it is what labels the
+            // probe: a restart clears every recipe at once and wastes none of them, a session that went is a
+            // session that ended, and anything else replaced the record.
+            let label = if self.closed {
+                None
+            } else {
+                match self.sessions.get(key) {
+                    None => Some(Wasted::SessionEnded),
+                    Some(session) => match session
+                        .agents
+                        .get(agent_id)
+                        .filter(|agent| agent.incarnation == job.incarnation)
+                    {
+                        Some(agent) => agent.last_stop,
+                        None => Some(Wasted::Replaced),
+                    },
+                }
             };
             let Some(label) = label else {
                 return Applied::Orphaned;
             };
             self.settlements.push(crate::engine::Settlement {
                 key: key.clone(),
-                agent_id: agent_id.to_string(),
                 pool_id: job.pool_id.clone(),
                 canonical_model: job.canonical_model.clone(),
                 account: Some(record.account.clone()),

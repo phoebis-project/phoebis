@@ -3,7 +3,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_bus::{Outcome, Phase, ResponseChunk, Usage};
+use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{AgentState, Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use common::*;
 
@@ -54,6 +54,26 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
         status.next_probe_at,
         "an ignored probe did not move the schedule"
     );
+}
+
+/// Token counting carries the same session and agent headers as an inference request, and its body has no
+/// `max_tokens`. Nothing about it proves or disproves a cache entry, so the recipe the last inference armed
+/// stays exactly as it was, including the request time the kept-warm gap is measured from.
+#[tokio::test]
+async fn a_count_tokens_request_leaves_the_armed_recipe_alone() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed = r.status("main");
+    let recipes = r.engine.recipes();
+    assert_eq!(recipes.len(), 1);
+    let counting = BODY.replace(r#""max_tokens":1024,"#, "");
+    let BusEvent::RequestObserved(mut observed) = r.observed("counting", "main", &counting) else {
+        unreachable!()
+    };
+    observed.kind = Kind::CountTokens;
+    r.engine.observe(BusEvent::RequestObserved(observed));
+    assert_eq!(r.status("main"), armed);
+    assert_eq!(r.engine.recipes(), recipes);
 }
 
 #[tokio::test]
