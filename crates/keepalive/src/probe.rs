@@ -187,6 +187,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let (record, applied) = {
         let mut inner = engine.lock();
         let record = inner.probe_record(&job, &exchange, &table);
+        inner.roll_day(now);
         if record.outcome != ProbeOutcome::Migrated {
             *inner
                 .spent_today
@@ -351,6 +352,33 @@ impl Inner {
             self.probe_error(key, agent_id, result.status, exhausted, now);
             return Applied::Landed { covered: false };
         }
+        // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
+        // here, before any branch below pauses the recipe over what the answer said: the agent's net and the
+        // settlement a stop leaves would otherwise disagree with the ledger. Every probe since the last real
+        // request is unanswered until one arrives; a migrated probe carries no cost (the write it paid is the
+        // one the next request would have paid there) but is still a probe nobody came back for.
+        let migrated = record.outcome == ProbeOutcome::Migrated;
+        let agent = self
+            .sessions
+            .get_mut(key)
+            .unwrap()
+            .agents
+            .get_mut(agent_id)
+            .unwrap();
+        agent
+            .unanswered
+            .push(if migrated { 0.0 } else { record.cost_usd });
+        if !migrated {
+            let was_negative = agent.net_usd < 0.0;
+            agent.net_usd -= record.cost_usd;
+            // The grace budget is granted on the way into a negative net, so the first paid probe leaves the
+            // configured allowance; each further paid probe while negative spends one.
+            if agent.net_usd < 0.0 && !was_negative {
+                agent.grace_left = agent.policy.net_negative_grace_probes;
+            } else if agent.net_usd < 0.0 && agent.grace_left > 0 {
+                agent.grace_left -= 1;
+            }
+        }
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
             self.pause(key, agent_id);
@@ -393,41 +421,25 @@ impl Inner {
             .agents
             .get_mut(agent_id)
             .unwrap();
-        let migrated = record.outcome == ProbeOutcome::Migrated;
         if migrated {
             agent.account = Some(account.clone());
             agent.migrations += 1;
             agent.cold = 0;
         }
-        // Full coverage is the whole prefix read back. A migrated probe wrote the prefix on its new account
-        // instead, and that write is the coverage the next request reads; it counts for neither the cold
-        // streak nor the net.
+        // Full coverage is the whole prefix read back, which is what the next real request would read; a
+        // write beside it is the prefix rebuilt rather than kept. A migrated probe wrote the prefix on its
+        // new account instead, and that write is the coverage the next request reads there; it counts for
+        // neither the cold streak nor the net.
         let covered = if migrated {
             usage.evidence() >= job.expected
         } else {
-            usage.evidence() >= job.expected && usage.read > 0
+            usage.read >= job.expected
         };
         if !migrated {
             if covered {
                 agent.cold = 0;
             } else {
                 agent.cold += 1;
-            }
-        }
-        // Every probe since the last real request is unanswered until one arrives; a migrated probe carries
-        // no cost but is still a probe nobody came back for if the recipe stops here.
-        agent
-            .unanswered
-            .push(if migrated { 0.0 } else { record.cost_usd });
-        if !migrated {
-            let was_negative = agent.net_usd < 0.0;
-            agent.net_usd -= record.cost_usd;
-            // The grace budget is granted on the way into a negative net, so the first paid probe leaves the
-            // configured allowance; each further paid probe while negative spends one.
-            if agent.net_usd < 0.0 && !was_negative {
-                agent.grace_left = agent.policy.net_negative_grace_probes;
-            } else if agent.net_usd < 0.0 && agent.grace_left > 0 {
-                agent.grace_left -= 1;
             }
         }
         let cold = agent.cold;
@@ -440,7 +452,9 @@ impl Inner {
             self.retry(key, agent_id, Reason::NoProbeCacheEvidence, now);
             return Applied::Landed { covered: false };
         }
-        if usage.evidence() < job.expected {
+        // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
+        // read none of it rebuilt the entry, which the cold streak counts instead.
+        if usage.evidence() < job.expected || (usage.read > 0 && !covered) {
             self.set_reason(key, agent_id, Reason::PartialCacheCoverage);
             self.pause(key, agent_id);
             return Applied::Landed { covered: false };

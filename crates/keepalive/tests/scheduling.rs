@@ -2,7 +2,7 @@
 //! reached, or while the recipe's net is negative past its grace, and runs once the condition clears; the due
 //! time and the idle limits come from the pool's tuning.
 mod common;
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
 use phoebis_routing::{EvidenceSource, OverageEvidence, Report};
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
@@ -521,4 +521,167 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
         "once per reason"
     );
     assert_eq!(skipped(&r, 2).await, 2, "one withheld probe per hold");
+}
+
+/// A pause clears the schedule, so a recipe paused by a 429 is not armed; the retention rules still have to
+/// reach it, or an opt-out could never discard it and the idle limit could never settle it while the
+/// companion keeps reporting.
+#[tokio::test]
+async fn the_retention_rules_reach_a_paused_recipe() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").next_probe_at),
+        (Reason::ProbeQuotaExhausted, None),
+        "the 429 paused the recipe and cleared its schedule"
+    );
+    assert!(!r.engine.recipes_for("desktop", "session").is_empty());
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.keepalive_opt_out = true;
+    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (Reason::KeyOptedOut, 0),
+        "the opt-out discarded the paused recipe"
+    );
+    // The idle limit settles one too, once the companion has gone silent for longer than the limit.
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        limits: KeepaliveLimits {
+            lease_seconds: 10,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one probe to settle as wasted");
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").next_probe_at, None, "paused by the 429");
+    r.advance(3_600_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (Reason::IdleLimit, 0)
+    );
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+                .unwrap();
+        rows.iter()
+            .any(|row| row.wasted_probes == 1)
+            .then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.wasted_probes == 1)
+            .unwrap()
+            .wasted_probe_reasons
+            .get("idle_limit")
+            .copied(),
+        Some(1)
+    );
+}
+
+/// A five-hour cooldown on the rig's one account, applied and settled.
+async fn cool_account(r: &Rig) {
+    r.h.router.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "account".into(),
+            until: r.now() + 600_000,
+            set_at: r.now(),
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    });
+    settled(r, |r| async move {
+        r.h.router
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.account_id == "a")
+    })
+    .await;
+}
+
+/// A hold that begins before its probe is due withholds nothing yet: the skip is counted once the due time
+/// passes, whichever tick the hold started on.
+#[tokio::test]
+async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    // The account is cooled ten seconds in, with the probe due at 270 s.
+    r.advance(10_000);
+    cool_account(&r).await;
+    for _ in 0..3 {
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Cooled)
+    );
+    // Drained rather than polled: what this half asserts is that no skipped row lands at all.
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
+        0,
+        "no probe was due while the hold began"
+    );
+    // The same hold once the due time has passed: one withheld probe, however many ticks follow it.
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.advance(10_000);
+    cool_account(&r).await;
+    for _ in 0..3 {
+        r.step().await;
+    }
+    r.advance(270_000);
+    for _ in 0..5 {
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Cooled)
+    );
+    assert_eq!(
+        skipped(&r, 1).await,
+        1,
+        "one withheld probe, counted when it came due"
+    );
 }

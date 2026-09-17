@@ -230,6 +230,9 @@ pub(crate) struct Agent {
     /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
     pub canonical_model: String,
     pub reason: Reason,
+    /// Whether the current hold has already ledgered the probe it withheld. A hold can begin before its
+    /// probe is due, so the skip is counted when the due time passes rather than where the hold started.
+    pub hold_counted: bool,
     pub paused: bool,
     pub in_flight: bool,
     pub probes: u64,
@@ -271,6 +274,7 @@ impl Agent {
             pool_id: String::new(),
             canonical_model: String::new(),
             reason: Reason::AwaitingRequest,
+            hold_counted: false,
             paused: false,
             in_flight: false,
             probes: 0,
@@ -299,11 +303,6 @@ impl Agent {
             (None, None) => None,
             (a, b) => Some(a.unwrap_or(i64::MIN).max(b.unwrap_or(i64::MIN))),
         }
-    }
-
-    /// Whether a probe is scheduled at all, which the Go engine expressed as a non-zero next refresh time.
-    pub(crate) fn armed(&self) -> bool {
-        self.due_at().is_some()
     }
 
     pub(crate) fn pause(&mut self) {
@@ -538,6 +537,18 @@ impl Inner {
                         !matches!(a.state, AgentState::Released | AgentState::Unknown)
                     })
             })
+    }
+
+    /// The cap is a budget per UTC day, so the day the sum was taken for is carried with it and the first
+    /// writer past midnight starts it over. Every writer of `spent_today` rolls under the same lock it
+    /// charges: a probe that completes after midnight would otherwise land on yesterday's sum and have its
+    /// charge cleared by the next tick.
+    pub(crate) fn roll_day(&mut self, now: i64) {
+        let day = now.div_euclid(86_400_000);
+        if self.spent_day != day {
+            self.spent_today.clear();
+            self.spent_day = day;
+        }
     }
 
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
@@ -776,6 +787,7 @@ impl Engine {
         agent.idle_ticks = 0;
         agent.cold = 0;
         agent.failures = 0;
+        agent.hold_counted = false;
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         // A real request grants the grace budget again while the net is negative: the net only rises on a
@@ -1125,13 +1137,7 @@ impl Engine {
                 return;
             }
             inner.expire(now, expiry);
-            // The cap is a budget per UTC day, so the day it was summed for is carried with the sum and the
-            // first tick of a new day starts it over.
-            let day = now.div_euclid(86_400_000);
-            if inner.spent_day != day {
-                inner.spent_today.clear();
-                inner.spent_day = day;
-            }
+            inner.roll_day(now);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
@@ -1143,16 +1149,16 @@ impl Engine {
                     continue;
                 }
                 let agent = &inner.sessions[&key].agents[&agent_id];
+                // The idle limit and the gate run for every retained recipe, armed or not: a pause clears the
+                // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and the idle
+                // limit could never settle it while the companion keeps reporting.
+                if agent.current.is_none() {
+                    continue;
+                }
                 let ready = agent
                     .current
                     .as_ref()
                     .is_some_and(|o| o.ready && o.expected > 0);
-                if !agent.armed() {
-                    continue;
-                }
-                if !ready || agent.in_flight {
-                    continue;
-                }
                 if inner.idle_limited(&key, &agent_id, now) {
                     inner.discard(
                         &key,
@@ -1162,40 +1168,56 @@ impl Engine {
                     );
                     continue;
                 }
-                let spent = inner
-                    .spent_today
-                    .get(&inner.sessions[&key].agents[&agent_id].pool_id)
-                    .copied()
-                    .unwrap_or(0.0);
-                let agent = inner
-                    .sessions
-                    .get_mut(&key)
-                    .unwrap()
-                    .agents
-                    .get_mut(&agent_id)
-                    .unwrap();
-                match gate(&view, agent, &key.1, spent) {
+                let held = {
+                    // One reborrow, so the gate reads the day's spend per pool while it holds the agent:
+                    // the pool it resolves is the one whose budget bounds this probe.
+                    let inner = &mut *inner;
+                    let spent = &inner.spent_today;
+                    let agent = inner
+                        .sessions
+                        .get_mut(&key)
+                        .unwrap()
+                        .agents
+                        .get_mut(&agent_id)
+                        .unwrap();
+                    gate(&view, agent, &key.1, spent)
+                };
+                match held {
                     Some(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
                     }
                     Some(Gate::Hold(reason)) => {
-                        // A hold is counted where it begins, not on every tick it spans: the production
+                        // One hold withholds one probe, whatever number of ticks it spans: the production
                         // ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000
-                        // withheld probes for the one it actually withheld. The due time is read after the
-                        // gate, so the policy the gate just refreshed decides whether a probe was due.
+                        // withheld probes for the one it actually withheld. A hold that begins before the
+                        // due time has withheld nothing yet, so the skip waits for the due time to pass.
+                        // The due time is read after the gate, so the policy the gate just refreshed
+                        // decides whether a probe was due, and a probe already in flight was not withheld.
                         let agent = &inner.sessions[&key].agents[&agent_id];
                         let began = agent.reason != reason;
-                        let was_due = agent.due_at().is_some_and(|at| at <= now);
+                        let counted = agent.hold_counted && !began;
+                        let was_due =
+                            !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
+                        if !counted && was_due {
+                            inner.skipped.push((key.clone(), agent_id.clone()));
+                        }
+                        if let Some(agent) = inner
+                            .sessions
+                            .get_mut(&key)
+                            .and_then(|s| s.agents.get_mut(&agent_id))
+                        {
+                            agent.hold_counted = counted || was_due;
+                        }
                         if began {
-                            if was_due {
-                                inner.skipped.push((key.clone(), agent_id.clone()));
-                            }
                             inner.set_reason(&key, &agent_id, reason);
                         }
                         continue;
                     }
                     None => {}
+                }
+                if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
+                    continue;
                 }
                 // The gate may have refreshed the agent's policy from the pool, so the due time here reads
                 // whatever tuning edit just landed rather than the one this tick started with.
@@ -1238,19 +1260,28 @@ impl Engine {
                     expected: observation.expected,
                 };
                 agent.in_flight = true;
+                agent.hold_counted = false;
                 agent.probes += 1;
                 if idle {
                     agent.idle_ticks += 1;
                 }
                 inner.running += 1;
                 inner.set_reason(&key, &agent_id, Reason::Probing);
-                jobs.push(job);
+                // The tracker counts the job from here, under the lock that reserved the worker: the spawn
+                // below happens after the lock is released, and a `shutdown` that passes between the two
+                // would otherwise find an empty tracker and return while this job was still to come.
+                jobs.push((job, self.workers.token()));
             }
             jobs
         };
         self.flush();
-        for job in jobs {
-            self.workers.spawn(run_job(self.clone(), job));
+        for (job, token) in jobs {
+            let engine = self.clone();
+            self.workers.spawn(async move {
+                // Bound rather than dropped here: the tracker counts the job while the token lives.
+                let _token = token;
+                run_job(engine, job).await;
+            });
         }
     }
 
@@ -1372,7 +1403,7 @@ pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
     session_id: &str,
-    spent_today: f64,
+    spent_today: &BTreeMap<String, f64>,
 ) -> Option<Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
@@ -1387,8 +1418,11 @@ pub(crate) fn gate(
         return Some(Gate::Hold(Reason::AffinityTooShort));
     }
     let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
-    // The pool's tuning may have changed since admission; the due time reads the policy the agent holds.
+    // The pool's tuning may have changed since admission, and an admin may have moved the key to another
+    // pool without a request following; the due time, the budget, and the probe's own delta all read the pool
+    // the key belongs to now.
     agent.policy = policy.clone();
+    agent.pool_id = key.pool_id.clone();
     if !policy.enabled {
         return Some(Gate::Hold(Reason::KeepaliveOff));
     }
@@ -1429,9 +1463,11 @@ pub(crate) fn gate(
     if view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
         return Some(Gate::Hold(Reason::Overage));
     }
+    // The cap bounds the pool the probe runs under, which the refresh above may have just moved.
+    let spent = spent_today.get(&agent.pool_id).copied().unwrap_or(0.0);
     if policy
         .probe_cost_cap_usd_per_day
-        .is_some_and(|cap| spent_today >= cap)
+        .is_some_and(|cap| spent >= cap)
     {
         return Some(Gate::Hold(Reason::CapReached));
     }

@@ -756,3 +756,206 @@ async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
         "a probe at no cost is still a probe nobody answered yet"
     );
 }
+
+/// The day roll belongs to the lock that charges: a probe that lands after UTC midnight before any tick
+/// charges the new day, and the tick that follows must not clear the charge it just took.
+#[tokio::test]
+async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
+    let mut r = rig(RigSpec {
+        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
+        policy: KeepalivePolicy {
+            max_idle_seconds: 0,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
+    r.clock
+        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    r.up.release();
+    r.engine.wait_idle().await;
+    let spent = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
+    assert!(spent > 0.0, "the probe after midnight charged its pool");
+    // The opt-out keeps the next tick from starting another probe, so the sum it leaves is the probe's own.
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.keepalive_opt_out = true;
+    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.step().await;
+    assert_eq!(
+        r.engine.spent_today().get("main").copied(),
+        Some(spent),
+        "the first tick of the new day kept the charge the probe already took"
+    );
+}
+
+/// A key moved to another pool takes that pool's budget with it: the cap the gate reads and the delta the
+/// probe charges belong to the pool that serves the probe, not to the one the last real request selected.
+#[tokio::test]
+async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // Two probes at 0.0004 each under the key's own pool, past the cap the warm pool carries below.
+    for _ in 0..2 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    assert_eq!(r.status("main").probes, 2);
+    assert!(r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0003);
+    r.h.store
+        .insert_pool(
+            &phoebis_store::PoolRow {
+                id: "warm".into(),
+                label: "warm".into(),
+                enabled: true,
+                strategy: phoebis_store::Strategy::PriorityRandom,
+                affinity_ttl_seconds: 3_600,
+                overage_policy: phoebis_store::OveragePolicy::PreferPlan,
+                migrate_above_utilization: None,
+                select_below_utilization: None,
+                default_allowed_models: None,
+                keepalive_json: serde_json::to_string(&KeepalivePolicy {
+                    probe_cost_cap_usd_per_day: Some(0.0003),
+                    ..RigSpec::default().policy
+                })
+                .unwrap(),
+                body_capture_hours: 0,
+                created_at: NOW,
+                updated_at: NOW,
+            },
+            "test",
+        )
+        .unwrap();
+    r.h.store
+        .set_pool_members("warm", &[("a".to_string(), 0)], "test")
+        .unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.pool_id = "warm".into();
+    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    // The warm pool has spent nothing of its own cap, so the recipe the moved key holds probes once more.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (3, Reason::Scheduled),
+        "the destination pool's cap is not spent yet"
+    );
+    assert_eq!(
+        r.engine.recipes().first().map(|v| v.pool_id.clone()),
+        Some("warm".to_string()),
+        "the recipe moved with its key, without another request"
+    );
+    let spent = r.engine.spent_today();
+    assert!(
+        spent.get("warm").copied().unwrap_or(0.0) > 0.0,
+        "the probe's delta landed on the pool that served it: {spent:?}"
+    );
+    let rows = rollups(&r, |rows| {
+        rows.iter()
+            .any(|row| row.kind == "probe" && row.pool_id == "warm")
+    })
+    .await;
+    assert!(rows
+        .iter()
+        .any(|row| row.pool_id == "warm" && row.probe_cost_usd > 0.0));
+    // And that one probe spends the destination pool's cap, which holds the next one without a request.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (3, Reason::CapReached)
+    );
+}
+
+/// A probe the upstream served and charged for is on the recipe's own books before any branch that pauses
+/// it: the agent's net and the settlement a release leaves would otherwise disagree with the ledger.
+#[tokio::test]
+async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // A 2xx answer with valid usage that generated output: paid for, and no evidence about the entry.
+    r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"output_tokens":1}}"#.to_vec() });
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.unanswered),
+        (Reason::UnexpectedOutput, 1),
+        "{status:?}"
+    );
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let cost = probe_rows(&rows).probe_cost_usd;
+    assert!(
+        (status.net_usd + cost).abs() < 1e-12,
+        "the net carries what the ledger charged: {status:?}"
+    );
+    r.state("main", "released");
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        probe.wasted_probe_reasons.get("released").copied(),
+        Some(1),
+        "{probe:?}"
+    );
+    assert!(
+        (probe.wasted_probe_usd - cost).abs() < 1e-12,
+        "settled as wasted at what it cost: {probe:?}"
+    );
+}
+
+/// Coverage is the prefix read back, not reads plus writes: a probe that read a hundred tokens of a two
+/// thousand token prefix and rebuilt the rest never warmed it, so it is partial coverage, it counts against
+/// the cold streak, and the request that follows earns no credit.
+#[tokio::test]
+async fn a_probe_that_rebuilt_most_of_the_prefix_covered_nothing() {
+    let mut r = rig(RigSpec::default()).await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 1_900));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.reason,
+            status.cold,
+            status.next_probe_at
+        ),
+        (1, Reason::PartialCacheCoverage, 1, None),
+        "{status:?}"
+    );
+    // Past the TTL of the last real request; the credited case of the same gap is
+    // `a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm`.
+    r.advance(60_000);
+    let next = r.observe_with("main", &body).await;
+    assert!(
+        !row(&r, &next).await.kept_warm,
+        "a partial read is no coverage to credit"
+    );
+}
