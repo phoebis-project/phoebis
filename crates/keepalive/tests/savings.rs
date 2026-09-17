@@ -156,6 +156,15 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     );
     let rows = rollups(&r, |rows| probe_rows(rows).requests >= 3).await;
     assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
+    let text = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(&format!(
+            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {SAVING_2000}"#
+        )),
+        "{text}"
+    );
 }
 
 #[tokio::test]

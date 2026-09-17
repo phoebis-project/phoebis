@@ -192,6 +192,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
         ],
         overage: vec![("a".into(), true), ("b".into(), false)],
         pins_by_pool: vec![("main".into(), 7)],
+        ..RoutingGauges::default()
     };
     let text = metrics.render(&gauges, &[], 0);
     for line in [
@@ -249,7 +250,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         phoebis_routing::RouterConfig::default(),
     )
     .unwrap();
-    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000).await;
+    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, None).await;
     assert_eq!(
         gauges.cooldowns,
         vec![("a".into(), "model:other".into(), 120)],
@@ -295,4 +296,61 @@ async fn a_landed_request_reaches_the_request_and_attempt_series() {
         "the shipped table does not price claude-sonnet-4-5, so the label is other:\n{text}"
     );
     up.shutdown().await;
+}
+
+/// The renderer's family list and its registry cannot drift apart: every family in `FAMILIES` renders its TYPE
+/// line, and every TYPE line rendered is in `FAMILIES`.
+#[test]
+fn every_registered_family_renders_and_nothing_else_does() {
+    let metrics = Metrics::new();
+    metrics.observe_probe("a", "ok");
+    metrics.observe_probe("a", "migrated");
+    metrics.observe_probe("b", "failed");
+    metrics.observe_saving("main", 0.25);
+    metrics.observe_saving("main", 0.5);
+    let gauges = RoutingGauges {
+        keepalive_agents: phoebis_ledger::KeepaliveAgents {
+            busy: 2,
+            idle: 1,
+            parked: 0,
+        },
+        ..RoutingGauges::default()
+    };
+    let text = metrics.render(
+        &gauges,
+        &[("ledger", Arc::new(SubscriberStats::default()))],
+        0,
+    );
+    let typed: BTreeSet<(String, String)> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("# TYPE "))
+        .map(|l| {
+            let (name, kind) = l.split_once(' ').unwrap();
+            (name.to_string(), kind.to_string())
+        })
+        .collect();
+    let registered: BTreeSet<(String, String)> = phoebis_ledger::FAMILIES
+        .iter()
+        .map(|(n, k)| (n.to_string(), k.to_string()))
+        .collect();
+    assert_eq!(typed, registered);
+    for line in [
+        r#"phoebis_keepalive_agents{state="busy"} 2"#,
+        r#"phoebis_keepalive_agents{state="idle"} 1"#,
+        r#"phoebis_keepalive_agents{state="parked"} 0"#,
+        r#"phoebis_keepalive_probes_total{account="a",outcome="migrated"} 1"#,
+        r#"phoebis_keepalive_probes_total{account="a",outcome="ok"} 1"#,
+        r#"phoebis_keepalive_probes_total{account="b",outcome="failed"} 1"#,
+        r#"phoebis_keepalive_saved_usd_total{pool="main"} 0.75"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+    let order: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("# TYPE "))
+        .map(|l| l.split(' ').next().unwrap())
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted, "families render in name order");
 }

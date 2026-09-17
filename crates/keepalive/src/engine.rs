@@ -1058,6 +1058,7 @@ impl Engine {
                 read,
                 saving,
             );
+            self.parts.metrics.observe_saving(&pool_id, saving);
         }
     }
 }

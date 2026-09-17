@@ -1,6 +1,10 @@
 //! What the admin routes read from the engine: one row per session, one per recipe, and the counts the
 //! overview tiles show. Every reason here is a member of a closed set the UI knows.
 
+use std::sync::Arc;
+
+use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
+
 use crate::engine::{Agent, AgentState, Engine, Reason, Wasted, MAIN_AGENT};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -228,6 +232,20 @@ impl Engine {
         };
         self.flush();
         released
+    }
+
+    /// A closure the metrics renderer can call on every scrape without the ledger crate depending on this
+    /// one: it reads the engine's own lock fresh each time rather than pushing a stale snapshot.
+    pub fn gauge_source(self: &Arc<Self>) -> KeepaliveGaugeSource {
+        let engine = self.clone();
+        Arc::new(move || {
+            let counts = engine.agent_counts();
+            KeepaliveAgents {
+                busy: counts.busy,
+                idle: counts.idle,
+                parked: counts.parked,
+            }
+        })
     }
 }
 

@@ -20,7 +20,9 @@ pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
-pub use metrics::{gather, metrics_router, Metrics, RoutingGauges};
+pub use metrics::{
+    gather, metrics_router, KeepaliveAgents, KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
+};
 pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
     PriceTable, Pricing,

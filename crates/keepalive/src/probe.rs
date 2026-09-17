@@ -205,6 +205,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
+    engine
+        .parts
+        .metrics
+        .observe_probe(&record.account, record.outcome.as_str());
     engine.flush();
     // The worker slot comes back only after both sends: `wait_idle` returns on a zero count, and a caller that
     // asserts on the ledger right after it would otherwise race the records this probe owes.

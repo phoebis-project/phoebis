@@ -471,6 +471,13 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
         (r.status("main").reason, r.status("main").next_probe_at),
         (Reason::ProbeTransportError, None)
     );
+    let text = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(r#"phoebis_keepalive_probes_total{account="a",outcome="timed_out"} 1"#),
+        "{text}"
+    );
     r.up.release();
     // Shutdown with a stalled probe in flight ends inside the drain window: the cancellation wins the select.
     let mut r = rig(RigSpec::default()).await;
@@ -584,6 +591,22 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
         ),
         (1, 3, 2, Reason::Scheduled, 6_000),
         "{status:?}"
+    );
+    let text = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    let other_id = if first == "a" { "b" } else { "a" };
+    assert!(
+        text.contains(&format!(
+            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="migrated"}} 1"#
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="ok"}} 2"#
+        )),
+        "{text}"
     );
     assert_eq!(
         status.account_id.as_deref(),

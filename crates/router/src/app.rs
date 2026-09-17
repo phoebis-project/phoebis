@@ -212,6 +212,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
     });
+    // Captured here, before `keepalive` moves into `admin`: the metrics listener reads the engine's agent
+    // counts on every scrape without depending on the keepalive crate.
+    let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
     let admin = Arc::new(AdminState {
         store,
@@ -340,6 +343,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 pricing.clone(),
                 bus.clone(),
                 clock.clone(),
+                Some(keepalive_gauge_source),
             ),
         )
         .with_graceful_shutdown(stopped(stop_rx))
