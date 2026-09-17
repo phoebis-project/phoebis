@@ -1093,3 +1093,71 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
     );
     up.shutdown().await;
 }
+
+/// A registry write landing while the eligible account's attempt is gated bumps the revision the router task
+/// compares against; the reselect that follows recomputes candidates from the current registry, past the
+/// pre-loop filter. The sibling it re-admits is still the one `allow_oauth: false` disallows, so the reselect
+/// must never dispatch to it.
+#[tokio::test]
+async fn a_mid_request_reload_still_only_serves_a_probe_an_eligible_account() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-AAAA",
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
+    );
+    let h = harness_with_bus(
+        &up,
+        &[
+            api_key("a", "sk-ant-api03-AAAA", 0),
+            oauth("o", "sk-ant-oat01-OOOO", 1),
+        ],
+        PoolSpec::default(),
+        Bus::new(),
+    )
+    .await;
+    let relay = h.relay.clone();
+    let pending = tokio::spawn(async move {
+        relay
+            .probe(
+                phoebis_relay::Probe {
+                    key_id: "desktop".into(),
+                    allow_oauth: false,
+                },
+                request_for(KEY, "claude-sonnet-4-5", "s1"),
+            )
+            .await
+    });
+    wait_for(Duration::from_secs(2), || {
+        credentials_seen(&up)
+            .contains(&"sk-ant-api03-AAAA".to_string())
+            .then_some(())
+    })
+    .await;
+    // Any admin write bumps the revision; the pool's label is an arbitrary field that does it without
+    // changing anything the request itself depends on.
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.label = "renamed".into();
+    h.store.update_pool(&pool, "test").unwrap();
+    h.router.reload().await.unwrap();
+    up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(
+        resp.status(),
+        429,
+        "the only eligible account is now cooling down; the reselect must not reach the oauth sibling"
+    );
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "accounts_exhausted");
+    let sent = up.requests();
+    assert_eq!(sent.len(), 1, "the oauth sibling never dispatches");
+    assert_eq!(sent[0].credential(), Some("sk-ant-api03-AAAA"));
+    assert!(
+        !credentials_seen(&up).contains(&"sk-ant-oat01-OOOO".to_string()),
+        "a registry write that re-admits the sibling still must not serve a probe with it"
+    );
+    up.shutdown().await;
+}
