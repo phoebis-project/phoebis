@@ -632,6 +632,9 @@ pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
 
 impl Engine {
     pub fn observe(&self, event: BusEvent) {
+        // Each arm takes the lock and gives it back before returning. The drain belongs here rather than in
+        // the arms: an observation sweeps the lapsed sessions, and the settlements that sweep leaves have to
+        // reach the ledger stamped with this event rather than with whatever call drains next.
         match event {
             BusEvent::RequestObserved(observed) => self.on_observed(observed),
             BusEvent::AccountSelected(selected) => self.on_selected(selected),
@@ -639,6 +642,7 @@ impl Engine {
             BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
             BusEvent::RequestComplete(complete) => self.on_complete(complete),
         }
+        self.flush();
     }
 
     /// Events were lost between the last one seen and this one. Whatever was still open cannot be completed
@@ -985,7 +989,7 @@ impl Engine {
                         (
                             read,
                             agent.pool_id.clone(),
-                            agent.account.clone().unwrap_or_default(),
+                            agent.account.clone(),
                             agent.canonical_model.clone(),
                         )
                     })
@@ -1048,14 +1052,13 @@ impl Engine {
                 now,
                 &key,
                 &pool_id,
-                &account,
+                account.as_deref(),
                 &model,
                 &complete.request_id,
                 read,
                 saving,
             );
         }
-        self.flush();
     }
 }
 

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PriceTable, Record};
+use phoebis_ledger::{KeepaliveDelta, PriceTable, Record, UNATTRIBUTED};
 
 use crate::engine::{Engine, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
@@ -40,11 +40,13 @@ pub(crate) fn probe_cost(
         .map(|(total, _)| total)
 }
 
+/// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, which is
+/// what every reader groups an unattributed row under; an empty string would read as an account of its own.
 fn delta(
     at: i64,
     key: &SessionKey,
     pool_id: &str,
-    account: &str,
+    account: Option<&str>,
     canonical_model: &str,
     kind: &str,
 ) -> KeepaliveDelta {
@@ -52,7 +54,10 @@ fn delta(
         at,
         key_id: key.0.clone(),
         pool_id: pool_id.to_string(),
-        account_id: account.to_string(),
+        account_id: account
+            .filter(|a| !a.is_empty())
+            .unwrap_or(UNATTRIBUTED)
+            .to_string(),
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
         ..Default::default()
@@ -67,7 +72,7 @@ impl Engine {
             now,
             &record.key,
             &record.pool_id,
-            &record.account,
+            Some(&record.account),
             &record.canonical_model,
             "probe",
         );
@@ -86,7 +91,7 @@ impl Engine {
         at: i64,
         key: &SessionKey,
         pool_id: &str,
-        account: &str,
+        account: Option<&str>,
         canonical_model: &str,
         request_id: &str,
         tokens: u64,
@@ -105,7 +110,7 @@ impl Engine {
             at,
             &settlement.key,
             &settlement.pool_id,
-            settlement.account.as_deref().unwrap_or(""),
+            settlement.account.as_deref(),
             &settlement.canonical_model,
             "probe",
         );
@@ -121,7 +126,7 @@ impl Engine {
         at: i64,
         key: &SessionKey,
         pool_id: &str,
-        account: &str,
+        account: Option<&str>,
         canonical_model: &str,
     ) {
         let mut d = delta(at, key, pool_id, account, canonical_model, "probe");
@@ -136,7 +141,7 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<(SessionKey, String, String, String, String)> = Vec::new();
+            let mut skipped: Vec<(SessionKey, String, String, Option<String>, String)> = Vec::new();
             for (key, agent_id) in queued {
                 let Some(agent) = inner
                     .sessions
@@ -149,7 +154,7 @@ impl Engine {
                     key,
                     agent_id,
                     agent.pool_id.clone(),
-                    agent.account.clone().unwrap_or_default(),
+                    agent.account.clone(),
                     agent.canonical_model.clone(),
                 ));
             }
@@ -159,7 +164,7 @@ impl Engine {
             self.record_settlement(now, settlement);
         }
         for (key, _, pool_id, account, model) in skipped {
-            self.record_skipped(now, &key, &pool_id, &account, &model);
+            self.record_skipped(now, &key, &pool_id, account.as_deref(), &model);
         }
     }
 
@@ -187,5 +192,19 @@ impl Engine {
         inner.spent_today = spent.clone();
         inner.spent_day = now.div_euclid(86_400_000);
         spent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_delta_without_an_account_takes_the_ledgers_reserved_id() {
+        let key = ("desktop".to_string(), "session".to_string());
+        let of = |account| delta(0, &key, "main", account, "claude-sonnet-5", "probe").account_id;
+        assert_eq!(of(None), UNATTRIBUTED, "a recipe with no account");
+        assert_eq!(of(Some("")), UNATTRIBUTED, "a probe record that named none");
+        assert_eq!(of(Some("a")), "a");
     }
 }

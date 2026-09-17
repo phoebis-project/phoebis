@@ -401,6 +401,38 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     );
 }
 
+/// A session that lapses is swept by the expiry the next observation runs, and nothing after it on that path
+/// reports: no selection, no completion, no tick. The settlement the sweep leaves has to reach the ledger from
+/// the observation itself, stamped when the sweep happened rather than whenever the next caller drains.
+#[tokio::test]
+async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
+    let mut r = rig(RigSpec {
+        session_expiry: Duration::from_secs(600),
+        ..RigSpec::default()
+    })
+    .await;
+    priced(&mut r).await;
+    let body = priced_body();
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one probe nobody came back for");
+    r.advance(400_000);
+    // A bare observation: the engine sees the request and nothing else about it, so only the sweep this call
+    // runs can settle the recipe it drops.
+    r.engine.observe(r.observed("later", "main", &body));
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        probe.wasted_probe_reasons.get("session_ended").copied(),
+        Some(1)
+    );
+    assert!(
+        probe.wasted_probe_usd > 0.0,
+        "the probe the lapsed session paid for: {probe:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_late_or_orphaned_probe_is_still_paid_for() {
     for action in ["new_request", "release", "replace"] {
@@ -502,6 +534,15 @@ async fn a_negative_net_holds_after_the_grace_probes_and_a_real_request_regrants
         probe_rows(&rows).probes_skipped >= 1,
         "the withheld probe is ledgered as skipped"
     );
+    let skipped = rows
+        .iter()
+        .find(|row| row.probes_skipped > 0)
+        .expect("the skipped row");
+    assert_eq!(
+        (skipped.account_id.as_str(), skipped.pool_id.as_str()),
+        ("a", "main"),
+        "a delta keys on the account the recipe held, never on an empty id"
+    );
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     assert_eq!(
@@ -568,8 +609,14 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
         .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
     r.step().await;
     assert_eq!(r.status("main").probes, 3, "the cap resets at UTC midnight");
-    // A restart sums the day from the rollups.
-    let rows = rollups(&r, |rows| probe_rows(rows).requests == 3).await;
+    // A restart sums the day from the rollups, so the wait names the row that sum reads: the third probe's
+    // cost is a record of its own and lands in a batch the three request rows need not share.
+    let rows = rollups(&r, |rows| {
+        rows.iter().any(|row| {
+            row.kind == "probe" && row.hour >= midnight / 1_000 && row.probe_cost_usd > 0.0
+        })
+    })
+    .await;
     assert!(probe_rows(&rows).probe_cost_usd > 0.0);
     let spent = r.engine.load_spent_today().await;
     assert!(
