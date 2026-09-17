@@ -687,6 +687,10 @@ fn rate(samples: &VecDeque<(i64, u64)>) -> Option<f64> {
 /// request's parser can finish once these bytes are in it. What is left over waits for the next chunk.
 fn text_of(parser: &mut SseParser, body: &[u8]) -> Option<String> {
     if parser.feed(body).is_err() {
+        // `feed` keeps what it rejected, so a response that closes no event would go on accumulating here
+        // for the whole life of the request. The run is given up on and the preview resumes at the next
+        // event boundary.
+        *parser = SseParser::new(INSPECT_BUFFER);
         return None;
     }
     let mut events = Vec::new();
@@ -861,6 +865,30 @@ mod tests {
         assert_eq!(
             state.snapshot(true).in_flight[0].preview.as_deref(),
             Some("hello world")
+        );
+    }
+
+    /// A run of bytes that closes no event is not a preview, and `feed` keeps what it rejects: held on to,
+    /// one such response would sit in the live state for as long as the request is in flight.
+    #[test]
+    fn a_run_that_closes_no_event_is_dropped_rather_than_held() {
+        let mut state = state();
+        state.apply(observed_capturing("a", 1));
+        state.apply(chunk("a", 0, &vec![b'x'; INSPECT_BUFFER + 1]));
+        assert_eq!(
+            state.in_flight["a"].preview.buffered(),
+            0,
+            "the run past the bound is given up on, not carried into the next chunk"
+        );
+        state.apply(chunk(
+            "a",
+            1,
+            b"event: content_block_delta\ndata: {\"delta\":{\"text\":\"hello\"}}\n\n",
+        ));
+        assert_eq!(
+            state.snapshot(true).in_flight[0].preview.as_deref(),
+            Some("hello"),
+            "and the preview resumes at the next event boundary"
         );
     }
 

@@ -35,6 +35,11 @@ impl SseParser {
         Ok(())
     }
 
+    /// Bytes held that no complete event has been read out of yet, for a caller that bounds its own parser.
+    pub fn buffered(&self) -> usize {
+        self.buf.len()
+    }
+
     pub fn next_event(&mut self) -> Option<SseEvent> {
         let end = self.end_of_first_event()?;
         let raw = self.buf.split_to(end);

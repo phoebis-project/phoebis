@@ -193,13 +193,14 @@ mod tests {
     #[tokio::test]
     async fn a_subscriber_that_went_away_is_forgotten_and_a_panic_is_counted() {
         let bus = Bus::new();
+        let mut live = bus.subscribe("live");
         let gone = bus.subscribe("gone");
         let stats = gone.stats.clone();
         drop(gone);
         bus.publish(observed("r1"));
         assert_eq!(
             bus.stats().len(),
-            1,
+            2,
             "the closed queue leaves the publish path at the next publish, its counters stay"
         );
         assert_eq!(
@@ -207,6 +208,18 @@ mod tests {
             0,
             "a closed queue is not a drop"
         );
+        // The publish above found the queue closed and dropped its slot; the next one has only the live
+        // subscriber to reach, and both subscribers are still counted.
+        bus.publish(observed("r2"));
+        let seen: Vec<String> = std::iter::from_fn(|| live.events.try_recv().ok())
+            .map(|event| event.request_id().to_string())
+            .collect();
+        assert_eq!(
+            seen,
+            ["r1", "r2"],
+            "every event reached the live subscriber"
+        );
+        assert_eq!(bus.stats().len(), 2);
 
         let panicking = bus.subscribe("panicking");
         let stats = panicking.stats.clone();
@@ -222,7 +235,7 @@ mod tests {
         assert_eq!(stats.panics.load(Ordering::SeqCst), 1);
         // The relay side is untouched: publishing after the panic neither fails nor panics.
         bus.publish(observed("r3"));
-        assert_eq!(bus.stats().len(), 2);
+        assert_eq!(bus.stats().len(), 3);
     }
 
     /// A consumer that died is exactly the one an operator has to be able to see: its slot is gone from the

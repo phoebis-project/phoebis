@@ -166,7 +166,8 @@ impl RoutingState {
         ))
     }
 
-    /// The later deadline always wins, as in the store.
+    /// The later deadline always wins, as in the store, and `set_at` advances on its own whenever the
+    /// incoming rejection is the newer one. True when either moved, which is what puts the row on the writer.
     pub fn record_cooldown(&mut self, row: CooldownRow) -> bool {
         let key = (row.account_id.clone(), row.scope.clone());
         let Some(current) = self.cooldowns.get_mut(&key) else {

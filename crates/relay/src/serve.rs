@@ -31,6 +31,9 @@ pub async fn serve(
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
     // which is the silently different outbound shape the pass-through exists to prevent; refusing the
     // connection is the honest answer.
+    //
+    // Left at hyper's default parser configuration on purpose: the recorder ends a head where this builder's
+    // `httparse` pass ends it, and a leniency option set here would have to be given to the recorder too.
     let builder = hyper::server::conn::http1::Builder::new();
     let graceful = GracefulShutdown::new();
     loop {

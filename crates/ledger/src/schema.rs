@@ -179,14 +179,14 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 2: the split a request was folded with has to be readable from its own rows, or a replace cannot
 /// take back what was actually added; version 1 only ever stored `estimated_usd`, the row-level total.
 ///
-/// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end it has
-/// already counted for a scope, and the hour it counted it in, to add only what an extension moves the end
-/// by and to take back what a clear cut short.
-///
 /// Version 3: every client version is relayed on its own headers, so which client made a request is a fact
 /// about the request rather than something the profile implies, and the analytics group by it. The rollup key
 /// gains the agent, which SQLite cannot do to a primary key in place: the table is rebuilt, and every row
 /// folded before the column existed takes the reserved id.
+///
+/// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end it has
+/// already counted for a scope, and the hour it counted it in, to add only what an extension moves the end
+/// by and to take back what a clear cut short.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
