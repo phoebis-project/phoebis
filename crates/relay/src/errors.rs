@@ -142,6 +142,16 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
     }
 }
 
+/// The 401 `handle` answers a refused credential header with, for a route outside this crate that
+/// authenticates the same way and must answer the same way.
+pub fn auth_error_response(error: &AuthError, request_id: &str) -> Response {
+    auth_failure(error).response(request_id)
+}
+
+pub fn key_refusal_response(refusal: &KeyRefusal, request_id: &str) -> Response {
+    key_refusal(refusal).response(request_id)
+}
+
 pub(crate) const ACCOUNTS_UNAVAILABLE: Failure = Failure {
     status: StatusCode::SERVICE_UNAVAILABLE,
     error_type: "api_error",

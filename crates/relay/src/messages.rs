@@ -1833,7 +1833,7 @@ fn inspectable(decoder: &mut dyn Decoder, raw: &[u8]) -> Option<Vec<u8>> {
 
 /// Local identifier for one relayed request, echoed in every local error body so a caller's failure can be
 /// tied to the log line that explains it.
-fn new_request_id() -> String {
+pub fn new_request_id() -> String {
     format!("req_phoebis_{:032x}", rand::random::<u128>())
 }
 

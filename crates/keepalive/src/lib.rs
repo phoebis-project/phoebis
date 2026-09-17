@@ -6,6 +6,7 @@ mod config;
 mod engine;
 mod events;
 mod recipe;
+mod routes;
 mod usage;
 
 pub use config::{
@@ -23,4 +24,5 @@ pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES,
     MAX_HEADER_VALUE, RECIPE_HEADERS,
 };
+pub use routes::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
