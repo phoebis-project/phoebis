@@ -1,0 +1,321 @@
+//! The fake-clock rig: an engine over the relay harness, a bus the test pumps by hand so every event reaches
+//! the engine before the assertion that follows, and a ledger for the accounting tests.
+#![allow(dead_code)]
+
+#[path = "../../../relay/tests/common/mod.rs"]
+pub mod relay_common;
+
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::Request;
+use bytes::Bytes;
+use phoebis_bus::{
+    AccountSelected, Bus, Event as BusEvent, Kind, Origin, Outcome, RequestComplete,
+    RequestObserved, ResponseChunk, Subscriber, Usage,
+};
+use phoebis_keepalive::{
+    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
+};
+use phoebis_ledger::{
+    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
+};
+use phoebis_oauth::Clock;
+use fake_upstream::{FakeUpstream, Respond, Rule};
+// Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
+// of `oauth`, `wait_for`, and `NOW` themselves.
+#[allow(unused_imports)]
+pub use relay_common::{api_key, oauth, wait_for, PoolSpec, TestAccount, KEY, NOW};
+
+pub const A: &str = "sk-ant-api03-AAAA";
+pub const B: &str = "sk-ant-api03-BBBB";
+pub const MINUTE: i64 = 60_000;
+
+/// The request body the Go rig replayed: adaptive thinking, one five-minute marker, one message.
+pub const BODY: &str = r#"{"model":"claude-sonnet-4-5","max_tokens":1024,"stream":true,"thinking":{"type":"adaptive"},"system":[{"type":"text","text":"private prompt","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"session\"}"}}"#;
+
+pub fn probe_answer(read: u64, write: u64) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: format!(r#"{{"id":"msg_p","type":"message","content":[],"usage":{{"input_tokens":0,"cache_read_input_tokens":{read},"cache_creation_input_tokens":{write},"cache_creation":{{"ephemeral_5m_input_tokens":{write},"ephemeral_1h_input_tokens":0}},"output_tokens":0}}}}"#).into_bytes(),
+    }
+}
+
+/// A real request's answer when a test wants one that differs from the standing probe answer: a five-minute
+/// write of 2,000 tokens and a little output. Queue it with `push_credential_rule` on the account the router
+/// will pick.
+pub fn real_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: br#"{"id":"msg_r","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec(),
+    }
+}
+
+pub struct Rig {
+    pub bus: Bus,
+    pub clock: Arc<std::sync::atomic::AtomicI64>,
+    pub db: Arc<LedgerDb>,
+    pub engine: Arc<Engine>,
+    pub h: relay_common::Harness,
+    pub ledger: Ledger,
+    pub metrics: Arc<Metrics>,
+    pub sequence: u64,
+    pub sub: Subscriber,
+    pub up: FakeUpstream,
+}
+
+pub struct RigSpec {
+    pub accounts: Vec<TestAccount>,
+    pub limits: KeepaliveLimits,
+    pub policy: KeepalivePolicy,
+    pub pool: PoolSpec,
+    pub session_expiry: Duration,
+}
+
+impl Default for RigSpec {
+    fn default() -> Self {
+        RigSpec {
+            accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+            limits: KeepaliveLimits {
+                lease_seconds: 3_600,
+                ..KeepaliveLimits::default()
+            },
+            // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
+            // parity cases assert exact times.
+            policy: KeepalivePolicy {
+                enabled: true,
+                lead_seconds_5m: 30,
+                jitter_seconds_5m: 0,
+                lead_seconds_1h: 360,
+                jitter_seconds_1h: 0,
+                ..KeepalivePolicy::default()
+            },
+            pool: PoolSpec::default(),
+            session_expiry: Duration::from_secs(86_400),
+        }
+    }
+}
+
+/// Every account answers `probe_answer(2_000, 0)` by default, through a standing credential rule, so a test
+/// that queues a response with `push_credential_rule` gets the standing answer back once its queue drains. A
+/// real request reads the same answer: 2,000 cached tokens is cache evidence for it exactly as for a probe.
+pub async fn rig(spec: RigSpec) -> Rig {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: probe_answer(2_000, 0),
+    }])
+    .await;
+    for account in &spec.accounts {
+        up.add_credential_rule(account.secret, "/v1/messages", probe_answer(2_000, 0));
+    }
+    let bus = Bus::new();
+    let sub = bus.subscribe("test");
+    let h = relay_common::harness_with_bus(&up, &spec.accounts, spec.pool, bus.clone()).await;
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
+    h.store.update_pool(&pool, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let clock: Clock = {
+        let c = h.clock.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let metrics = Arc::new(Metrics::new());
+    let ledger = spawn_ledger(
+        db.clone(),
+        pricing.clone(),
+        h.store.clone(),
+        None,
+        &bus,
+        h.router.clone(),
+        clock.clone(),
+        metrics.clone(),
+        LedgerConfig::default(),
+    );
+    let engine = Engine::new(EngineParts {
+        bus: bus.clone(),
+        clock,
+        ledger: ledger.clone(),
+        limits: spec.limits,
+        metrics: metrics.clone(),
+        pricing,
+        relay: h.relay.clone(),
+        router: h.router.clone(),
+        session_expiry: spec.session_expiry,
+    });
+    let mut rig = Rig {
+        bus,
+        clock: h.clock.clone(),
+        db,
+        engine,
+        h,
+        ledger,
+        metrics,
+        sequence: 0,
+        sub,
+        up,
+    };
+    rig.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    rig
+}
+
+impl Rig {
+    pub fn now(&self) -> i64 {
+        self.clock.load(Ordering::SeqCst)
+    }
+
+    pub fn advance(&self, ms: i64) {
+        self.clock.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    /// A lifecycle event for the rig's one session and instance, under the harness key, with the next sequence.
+    pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
+        self.sequence += 1;
+        event.sequence = self.sequence;
+        event.session_id = "session".into();
+        event.instance_id = "instance".into();
+        self.engine.apply_event("desktop", event)
+    }
+
+    pub fn state(&mut self, agent: &str, state: &str) {
+        let generation = self.agent(agent).request_generation;
+        self.event(Event {
+            event: "state".into(),
+            agent_id: Some(agent.into()),
+            state: Some(state.into()),
+            request_generation: Some(generation),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+
+    pub fn agent(&self, id: &str) -> phoebis_keepalive::SnapshotAgent {
+        self.engine
+            .snapshot("desktop")
+            .sessions
+            .into_iter()
+            .flat_map(|s| s.agents)
+            .find(|a| a.agent_id == id)
+            .unwrap_or_else(|| panic!("missing agent {id}"))
+    }
+
+    pub fn request(&self, agent: &str) -> Request<Body> {
+        self.request_with(agent, BODY)
+    }
+
+    /// The fixture head over `body`, for a test that sends another model or another cache marker.
+    pub fn request_with(&self, agent: &str, body: &str) -> Request<Body> {
+        let mut req = relay_common::request_from_fixture(
+            phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::ApiKey),
+            body.as_bytes(),
+            KEY,
+        );
+        relay_common::set_header(&mut req, "x-claude-code-session-id", "session");
+        relay_common::set_header(&mut req, "x-claude-code-agent-id", agent);
+        relay_common::set_header(&mut req, "anthropic-beta", "test-beta");
+        req
+    }
+
+    /// Drains every bus event published so far into a vector, waiting for the completion of `request_id` when
+    /// one is named: the relay's body task publishes it a moment after the response.
+    pub async fn pump(&mut self, request_id: Option<&str>) -> Vec<BusEvent> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut events = Vec::new();
+        loop {
+            let mut complete = false;
+            while let Ok(event) = self.sub.events.try_recv() {
+                if let BusEvent::RequestComplete(c) = &event {
+                    complete |= Some(c.request_id.as_str()) == request_id;
+                }
+                events.push(event);
+            }
+            if request_id.is_none() || complete {
+                return events;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no completion for {request_id:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// The model is the body's, as the relay would report it, so a test observes a request on another model by
+    /// changing the body alone.
+    pub fn observed(&self, id: &str, agent: &str, body: &str) -> BusEvent {
+        let model = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v["model"].as_str().map(str::to_string))
+            .unwrap_or_else(|| "claude-sonnet-4-5".into());
+        BusEvent::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("session".into()),
+            agent_id: Some(agent.into()),
+            parent_agent_id: None,
+            owner_id: None,
+            model: model.clone(),
+            canonical_model: model.to_ascii_lowercase(),
+            stream: true,
+            headers: vec![
+                ("anthropic-beta".into(), "test-beta".into()),
+                ("x-claude-code-agent-id".into(), agent.into()),
+                ("x-claude-code-session-id".into(), "session".into()),
+            ],
+            body: Bytes::from(body.to_string()),
+            body_capture_hours: 0,
+            received_at: self.now(),
+        })
+    }
+
+    pub fn selected(&self, id: &str, account: &str) -> BusEvent {
+        BusEvent::AccountSelected(AccountSelected {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "api_key".into(),
+            pin_epoch: Some(1),
+            started_at: self.now(),
+        })
+    }
+
+    pub fn chunk(&self, id: &str, index: u32, body: &str) -> BusEvent {
+        BusEvent::ResponseChunk(ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::from(body.to_string()),
+            phase: None,
+        })
+    }
+
+    pub fn complete(&self, id: &str, outcome: Outcome, usage: Option<Usage>) -> BusEvent {
+        BusEvent::RequestComplete(RequestComplete {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: Some("a".into()),
+            outcome,
+            status: 200,
+            usage,
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: None,
+            client_drift: None,
+            client_version: None,
+            response_bytes: None,
+            finished_at: self.now(),
+        })
+    }
+}
