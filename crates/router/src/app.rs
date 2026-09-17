@@ -14,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
+use phoebis_keepalive::{Engine, EngineParts};
 use phoebis_ledger::{metrics_router, LedgerConfig, LedgerDb, Metrics, Pricing};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
@@ -198,6 +199,19 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )
         .with_bus(bus.clone()),
     );
+    // The scheduler and the observer land in a later task; this only wires the engine so the admin views have
+    // somewhere to read from.
+    let keepalive = Engine::new(EngineParts {
+        bus: bus.clone(),
+        clock: clock.clone(),
+        ledger: ledger.clone(),
+        limits: config.keepalive.clone(),
+        metrics: metrics.clone(),
+        pricing: pricing.clone(),
+        relay: relay.clone(),
+        router: router_task.clone(),
+        session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+    });
     let vault = Arc::new(PairingVault::new());
     let admin = Arc::new(AdminState {
         store,
@@ -235,6 +249,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             body_capture_max_hours: config.stats.body_capture_max_hours,
             catalog_sync_interval_seconds: config.routing.catalog_sync_interval_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
+            keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
             max_attempts: config.routing.max_attempts,
             metrics_listen: config.stats.metrics_listen.to_string(),
@@ -253,6 +268,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
             usage_refresh_concurrency: config.usage.refresh_concurrency,
         }),
+        keepalive,
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });

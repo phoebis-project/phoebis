@@ -13,11 +13,21 @@ use crate::routes::failure;
 use crate::AdminState;
 
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
+    match rows(&state).await {
+        Ok(out) => Json(json!({ "sessions": out })).into_response(),
+        Err(refusal) => refusal,
+    }
+}
+
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, Response> {
     let Ok(pins) = state.router.pins().await else {
-        return failure(
+        return Err(failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "the router is not available",
-        );
+        ));
     };
     let now = (state.clock)();
     let cutoff = now - state.session_expiry.as_millis() as i64;
@@ -27,7 +37,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
         .read(|c| phoebis_ledger::session_activity(c, cutoff))
     {
         Ok(a) => a,
-        Err(e) => return crate::analytics::ledger_failure(e),
+        Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
     let mut rows: std::collections::BTreeMap<(String, String), serde_json::Value> =
         std::collections::BTreeMap::new();
@@ -65,6 +75,54 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
             entry["account_id"] = json!(a.account_id);
         }
     }
+    let engine: std::collections::BTreeMap<(String, String), phoebis_keepalive::SessionView> = state
+        .keepalive
+        .sessions()
+        .into_iter()
+        .map(|s| ((s.key_id.clone(), s.session_id.clone()), s))
+        .collect();
+    for (key, view) in &engine {
+        let entry = rows.entry(key.clone()).or_insert_with(|| {
+            json!({
+                "key_id": key.0, "session_id": key.1, "model": null, "account_id": null, "epoch": null,
+                "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+            })
+        });
+        entry["companion"] = json!(view.companion);
+        entry["companion_since"] = json!(view.companion_since);
+        entry["agents"] = json!(view.agents);
+        entry["keepalive"] = json!(view.keepalive);
+    }
+    for (key, entry) in rows.iter_mut() {
+        if !engine.contains_key(key) {
+            entry["companion"] = json!("none");
+            entry["companion_since"] = json!(null);
+            entry["agents"] = json!(0);
+            entry["keepalive"] = json!({ "next_probe_at": null, "state": null });
+        }
+    }
+    // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
+    // serving account come from its main agent's recipe instead, the first the session's agents sort to.
+    let mut recipe_by_session: std::collections::BTreeMap<
+        (String, String),
+        phoebis_keepalive::RecipeView,
+    > = std::collections::BTreeMap::new();
+    for recipe in state.keepalive.recipes() {
+        recipe_by_session
+            .entry((recipe.key_id.clone(), recipe.session_id.clone()))
+            .or_insert(recipe);
+    }
+    for (key, entry) in rows.iter_mut() {
+        let Some(recipe) = recipe_by_session.get(key) else {
+            continue;
+        };
+        if entry["model"].is_null() {
+            entry["model"] = json!(recipe.model);
+        }
+        if entry["account_id"].is_null() {
+            entry["account_id"] = json!(recipe.account_id);
+        }
+    }
     let mut out: Vec<serde_json::Value> = rows.into_values().collect();
     let latest = |v: &serde_json::Value| {
         v["last_used_at"]
@@ -73,7 +131,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
             .max(v["last_request_at"].as_i64().unwrap_or(0))
     };
     out.sort_by_key(|v| std::cmp::Reverse(latest(v)));
-    Json(json!({ "sessions": out })).into_response()
+    Ok(out)
 }
 
 pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
@@ -92,19 +150,23 @@ pub(crate) async fn release(
     State(state): State<Arc<AdminState>>,
     Path((key, session)): Path<(String, String)>,
 ) -> Response {
-    match state.router.release_session(&key, &session).await {
-        Ok(0) => failure(StatusCode::NOT_FOUND, "no pin for this session"),
-        Ok(n) => {
-            let mut r = StatusCode::NO_CONTENT.into_response();
-            r.headers_mut().insert(
-                "x-phoebis-released",
-                HeaderValue::from_str(&n.to_string()).expect("digits"),
-            );
-            r
+    let pins = match state.router.release_session(&key, &session).await {
+        Ok(n) => n,
+        Err(_) => {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the router is not available",
+            )
         }
-        Err(_) => failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        ),
+    };
+    let recipes = state.keepalive.release(&key, &session);
+    if pins == 0 && recipes == 0 {
+        return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
     }
+    let mut r = StatusCode::NO_CONTENT.into_response();
+    r.headers_mut().insert(
+        "x-phoebis-released",
+        HeaderValue::from_str(&pins.to_string()).expect("digits"),
+    );
+    r
 }

@@ -3,6 +3,7 @@
 mod accounts;
 mod analytics;
 mod dashboard;
+mod keepalive;
 mod keys;
 mod live;
 mod pools;
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::Bus;
+use phoebis_keepalive::{Engine, KeepaliveLimits};
 use phoebis_ledger::{Ledger, Metrics, ModelPrice, Pricing};
 use phoebis_live::LiveFeed;
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
@@ -64,6 +66,7 @@ pub struct AdminState {
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     pub settings: Arc<SettingsView>,
+    pub keepalive: Arc<Engine>,
     pub pending_imports: Mutex<HashMap<String, PendingImport>>,
     /// Held across a whole confirmation, from reading the current table to publishing the overlay, so two
     /// confirmations cannot each overlay the table the other is about to replace and lose its models.
@@ -88,6 +91,7 @@ pub struct SettingsView {
     pub body_capture_max_hours: u32,
     pub catalog_sync_interval_seconds: u64,
     pub cooldown_fallback_seconds: u64,
+    pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub max_attempts: u8,
     pub metrics_listen: String,

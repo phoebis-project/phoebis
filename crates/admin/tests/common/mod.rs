@@ -9,6 +9,7 @@ use axum::http::{Request, Response, StatusCode};
 use axum::Router;
 use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
+use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
 };
@@ -18,7 +19,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
-use phoebis_relay::CatalogService;
+use phoebis_relay::{CatalogService, Limits, Relay};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StorageKey,
@@ -35,6 +36,7 @@ use futures::StreamExt;
 use http_body_util::BodyExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower::ServiceExt;
@@ -61,7 +63,9 @@ const WS_DEADLINE: Duration = Duration::from_secs(10);
 struct Parts {
     app: Router,
     bus: Bus,
+    clock_cell: Arc<AtomicI64>,
     db: Arc<LedgerDb>,
+    keepalive: Arc<Engine>,
     ledger: Ledger,
     live: LiveFeed,
     manager: Arc<CredentialManager>,
@@ -78,7 +82,9 @@ struct Parts {
 pub struct Full {
     pub app: Router,
     pub bus: Bus,
+    pub clock_cell: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
+    pub keepalive: Arc<Engine>,
     pub ledger: Ledger,
     pub live: LiveFeed,
     pub pricing: Arc<Pricing>,
@@ -108,7 +114,9 @@ fn full_from(parts: Parts) -> Full {
     Full {
         app: parts.app,
         bus: parts.bus,
+        clock_cell: parts.clock_cell,
         db: parts.db,
+        keepalive: parts.keepalive,
         ledger: parts.ledger,
         live: parts.live,
         pricing: parts.pricing,
@@ -456,7 +464,11 @@ async fn app_with(
         control_builder.build(),
         resolver.clone(),
     ));
-    let clock: Clock = Arc::new(|| NOW);
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let clock: Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
     let manager = Arc::new(CredentialManager::new(
         store.clone(),
         control.clone(),
@@ -482,7 +494,7 @@ async fn app_with(
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
-        pool,
+        pool.clone(),
         resolver.clone(),
         router_handle.clone(),
         clock.clone(),
@@ -504,12 +516,47 @@ async fn app_with(
         LedgerConfig::default(),
     );
     let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
+    // The admin harness had no relay before this task; keepalive needs one to probe through, even though
+    // nothing here drives its scheduler.
+    let limits = Limits {
+        body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        cooldown_fallback: Duration::from_secs(60),
+        head_timeout: Duration::from_secs(10),
+        hold_timeout: Duration::from_secs(30),
+        idle_timeout: Duration::from_secs(600),
+        max_attempts: 3,
+        max_request_bytes: 32 << 20,
+    };
+    let relay = Arc::new(
+        Relay::new(
+            store.clone(),
+            manager.clone(),
+            pool,
+            router_handle.clone(),
+            resolver.clone(),
+            clock.clone(),
+            limits,
+        )
+        .with_bus(bus.clone()),
+    );
+    let keepalive = Engine::new(EngineParts {
+        bus: bus.clone(),
+        clock: clock.clone(),
+        ledger: ledger.clone(),
+        limits: KeepaliveLimits::default(),
+        metrics: metrics.clone(),
+        pricing: pricing.clone(),
+        relay: relay.clone(),
+        router: router_handle.clone(),
+        session_expiry: Duration::from_secs(86_400),
+    });
     let settings = Arc::new(SettingsView {
         admin_listen: "test".into(),
         admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         catalog_sync_interval_seconds: 86_400,
         cooldown_fallback_seconds: 60,
+        keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
         max_attempts: 3,
         metrics_listen: "127.0.0.1:9464".into(),
@@ -556,13 +603,16 @@ async fn app_with(
         metrics,
         pricing: pricing.clone(),
         settings,
+        keepalive: keepalive.clone(),
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });
     Parts {
         app: router(state),
         bus,
+        clock_cell,
         db,
+        keepalive,
         ledger,
         live,
         manager,

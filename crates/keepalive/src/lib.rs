@@ -10,6 +10,7 @@ mod recipe;
 mod routes;
 mod savings;
 mod usage;
+mod view;
 
 pub use config::{
     KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, FIVE_MINUTES_MS,
@@ -30,6 +31,10 @@ pub use recipe::{
 };
 pub use routes::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
+pub use view::{
+    view_reason, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,
+    SessionView, ViewReason,
+};
 
 /// What a probe declares to the relay when the engine sends it: which key it runs under, and whether the
 /// operator has verified that oauth's expiry-crossing behavior is safe to probe.

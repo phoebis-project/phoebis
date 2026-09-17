@@ -28,7 +28,7 @@ pub use pricing::{
 pub use query::{
     apply_filter, breakdown, bucket_seconds, dashboard, group_of, hour_ceil, latest_quota,
     list_requests, parse_range, pool_traffic, request_by_id, request_events, series,
-    session_activity, Dashboard, GroupRow, RequestFilter, RollupFilter, SeriesPoint,
+    session_activity, Dashboard, GroupRow, ProbeCounts, RequestFilter, RollupFilter, SeriesPoint,
     SessionActivity, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};

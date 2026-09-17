@@ -26,8 +26,8 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, analytics, dashboard, keys, live, pools, pricing, requests, sessions, settings,
-    AdminState, LoginError, Role,
+    accounts, analytics, dashboard, keepalive, keys, live, pools, pricing, requests, sessions,
+    settings, AdminState, LoginError, Role,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -71,6 +71,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/analytics/breakdown", get(analytics::breakdown))
         .route("/admin/analytics/series", get(analytics::series))
         .route("/admin/dashboard", get(dashboard::show))
+        .route("/admin/keepalive/overview", get(keepalive::overview))
+        .route("/admin/keepalive/recipes", get(keepalive::recipes))
         .route("/admin/keys", get(keys::list).post(keys::create))
         .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
@@ -677,6 +679,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             Vec::new()
         }
     };
+    let keepalive_stats = state.keepalive.stats();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
@@ -692,6 +695,13 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),
         "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
+        "keepalive": {
+            "agents": keepalive_stats.agents,
+            "bus_gaps": keepalive_stats.bus_gaps,
+            "retained_bytes": keepalive_stats.retained_bytes,
+            "running_probes": keepalive_stats.running_probes,
+            "sessions": keepalive_stats.sessions,
+        },
     }))
     .into_response()
 }

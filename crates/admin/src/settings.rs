@@ -15,6 +15,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let table = state.pricing.current();
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
+        "keepalive": s.keepalive,
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "pricing": { "version": table.version, "effective": table.effective, "source": table.source, "models": table.models.iter().map(|(m, p)| json!({ "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output })).collect::<Vec<_>>() },
         "quota": { "poll_interval_seconds": s.quota_poll_interval_seconds, "sample_retention_days": s.quota_sample_retention_days },
