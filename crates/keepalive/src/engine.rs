@@ -10,16 +10,20 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_bus::Bus;
+use phoebis_bus::{
+    spawn_subscriber, AccountSelected, Bus, Event as BusEvent, Outcome, Phase, RequestComplete,
+    RequestObserved, ResponseChunk, ResponseHead,
+};
 use phoebis_ledger::{Ledger, Metrics, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::RouterHandle;
+use phoebis_store::AccountKind;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy};
-use crate::recipe::Recipe;
+use crate::recipe::{make_recipe, Recipe};
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -560,5 +564,471 @@ impl Inner {
             self.agents -= agents.len();
             self.sessions.remove(&key);
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentStatus {
+    pub account_id: Option<String>,
+    pub agent_id: String,
+    pub cache_ttl_ms: i64,
+    pub canonical_model: String,
+    pub cold: u32,
+    pub failures: u32,
+    pub grace_left: u32,
+    pub idle_ticks: u64,
+    pub in_flight: bool,
+    pub last_activity: i64,
+    pub migrations: u64,
+    pub net_usd: f64,
+    pub next_probe_at: Option<i64>,
+    pub paused: bool,
+    pub probe_usage: ProbeUsage,
+    pub probes: u64,
+    pub reason: Reason,
+    pub request_generation: u64,
+    pub state: AgentState,
+    pub unanswered: usize,
+}
+
+/// The engine's bus task. Every event is handed to `observe` under the lock; nothing here awaits while holding
+/// it, so a slow registry read never stalls the queue. The bus drops for a subscriber that falls behind and
+/// counts it; a rise in that counter means events this task never saw, so every observation still open is
+/// discarded before the next event is applied.
+pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
+    let subscriber = engine.parts.bus.subscribe("keepalive");
+    spawn_subscriber(subscriber, move |mut subscriber| async move {
+        let mut seen_dropped = 0u64;
+        while let Some(event) = subscriber.events.recv().await {
+            let dropped = subscriber
+                .stats
+                .dropped
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if dropped > seen_dropped {
+                engine.bus_gap(dropped - seen_dropped);
+                seen_dropped = dropped;
+            }
+            engine.observe(event);
+        }
+    })
+}
+
+impl Engine {
+    pub fn observe(&self, event: BusEvent) {
+        match event {
+            BusEvent::RequestObserved(observed) => self.on_observed(observed),
+            BusEvent::AccountSelected(selected) => self.on_selected(selected),
+            BusEvent::ResponseHead(head) => self.on_head(head),
+            BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
+            BusEvent::RequestComplete(complete) => self.on_complete(complete),
+        }
+    }
+
+    /// Events were lost between the last one seen and this one. Whatever was still open cannot be completed
+    /// with confidence: the lost events may have been the completion, or a failover onto another account. An
+    /// armed recipe's evidence was complete before the gap and stays.
+    pub fn bus_gap(&self, dropped: u64) {
+        let mut inner = self.lock();
+        inner.bus_gaps += 1;
+        tracing::warn!(
+            dropped,
+            "the keepalive subscriber fell behind the bus; pending observations discarded"
+        );
+        let open: Vec<(SessionKey, String)> = inner.pending.values().cloned().collect();
+        for (key, agent_id) in open {
+            inner.discard(&key, &agent_id, Reason::BusGap, None);
+        }
+    }
+
+    pub fn parts_bus(&self) -> Bus {
+        self.parts.bus.clone()
+    }
+
+    pub fn agent_status(
+        &self,
+        key_id: &str,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Option<AgentStatus> {
+        let inner = self.lock();
+        let agent = inner
+            .sessions
+            .get(&(key_id.to_string(), session_id.to_string()))?
+            .agents
+            .get(agent_id)?;
+        Some(AgentStatus {
+            account_id: agent.account.clone(),
+            agent_id: agent.id.clone(),
+            cache_ttl_ms: agent.ttl_ms,
+            canonical_model: agent.canonical_model.clone(),
+            cold: agent.cold,
+            failures: agent.failures,
+            grace_left: agent.grace_left,
+            idle_ticks: agent.idle_ticks,
+            in_flight: agent.in_flight,
+            last_activity: agent.last_activity,
+            migrations: agent.migrations,
+            net_usd: agent.net_usd,
+            next_probe_at: agent.due_at(),
+            paused: agent.paused,
+            probe_usage: agent.usage,
+            probes: agent.probes,
+            reason: agent.reason,
+            request_generation: agent.generation,
+            state: agent.state,
+            unanswered: agent.unanswered.len(),
+        })
+    }
+
+    fn on_observed(&self, observed: RequestObserved) {
+        if observed.origin == phoebis_bus::Origin::Keepalive {
+            return;
+        }
+        let (Some(key_id), Some(session_id), Some(agent_id)) = (
+            observed.key_id.clone(),
+            observed.session_id.clone(),
+            observed.agent_id.clone(),
+        ) else {
+            return;
+        };
+        let now = self.now();
+        let expiry = self.parts.session_expiry.as_millis() as i64;
+        let limits = self.parts.limits.clone();
+        let mut inner = self.lock();
+        if inner.closed {
+            return;
+        }
+        inner.expire(now, expiry);
+        let key: SessionKey = (key_id, session_id);
+        let Some(session) = inner.sessions.get(&key) else {
+            return;
+        };
+        if session.ended {
+            return;
+        }
+        let Some(agent) = session.agents.get(&agent_id) else {
+            return;
+        };
+        if agent.state == AgentState::Released {
+            return;
+        }
+        if agent
+            .current
+            .as_ref()
+            .is_some_and(|o| o.id == observed.request_id)
+        {
+            return;
+        }
+        // The header is an optional hardening on top of the registration rule: when both sides name an owner,
+        // they must agree. Foreign traffic proves nothing about this agent, so its own status stays the
+        // baseline "nothing observed yet" rather than naming the foreign owner; the mismatch itself is still
+        // counted, separately from the field a view reads.
+        if let (Some(registered), Some(sent)) = (&session.owner_id, &observed.owner_id) {
+            if registered != sent {
+                inner.set_reason(&key, &agent_id, Reason::AwaitingRequest);
+                *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
+                return;
+            }
+        }
+        // What the previous recipe proved, taken before anything below overwrites it and consumed with the
+        // observation: the kept-warm credit reads this and nothing on the agent.
+        let prior = {
+            let agent = &inner.sessions[&key].agents[&agent_id];
+            agent.last_real_at.map(|real_at| PriorCoverage {
+                covered: agent.covered_since_real,
+                model: agent.canonical_model.clone(),
+                real_at,
+                ttl_ms: agent.ttl_ms,
+            })
+        };
+        inner.discard(&key, &agent_id, Reason::AwaitingSelection, None);
+        let session = inner.sessions.get_mut(&key).unwrap();
+        session.last_real_at = Some(now);
+        let agent = session.agents.get_mut(&agent_id).unwrap();
+        agent.covered_since_real = false;
+        if agent.state == AgentState::Unknown {
+            inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
+            return;
+        }
+        agent.state = AgentState::Busy;
+        agent.last_activity = now;
+        agent.cache_started = now;
+        agent.idle_ticks = 0;
+        agent.cold = 0;
+        agent.failures = 0;
+        agent.last_real_at = Some(now);
+        agent.canonical_model = observed.canonical_model.clone();
+        // A real request grants the grace budget again while the net is negative: the net only rises on a
+        // request that lands warm, which needs a probe first.
+        if agent.net_usd < 0.0 {
+            agent.grace_left = agent.policy.net_negative_grace_probes;
+        }
+        if inner.pending.len() >= limits.max_agents {
+            inner.set_reason(&key, &agent_id, Reason::RequestLimit);
+            return;
+        }
+        let recipe = match make_recipe(
+            &observed.headers,
+            &observed.body,
+            &observed.model,
+            limits.max_request_bytes,
+        ) {
+            Ok(recipe) => recipe,
+            Err(reason) => {
+                inner.set_reason(&key, &agent_id, recipe_reason(reason));
+                return;
+            }
+        };
+        if inner.retained + recipe.size > limits.max_retained_bytes {
+            inner.set_reason(&key, &agent_id, Reason::StorageLimit);
+            return;
+        }
+        inner.retained += recipe.size;
+        let generation = inner.sessions[&key].agents[&agent_id].generation;
+        inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap()
+            .current = Some(Observation {
+            id: observed.request_id.clone(),
+            generation,
+            attempt: 0,
+            started: now,
+            recipe,
+            ready: false,
+            expected: 0,
+            ttl_ms: 0,
+            prior,
+        });
+        inner.pending.insert(observed.request_id, (key, agent_id));
+    }
+
+    fn on_selected(&self, selected: AccountSelected) {
+        let snapshot = self.parts.router.snapshot();
+        let verified = self.parts.limits.oauth_prewarm_verified;
+        let mut inner = self.lock();
+        let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
+            return;
+        };
+        if !inner.live(&key, &agent_id) {
+            return;
+        }
+        let agent = inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap();
+        let Some(observation) = agent.current.as_mut() else {
+            return;
+        };
+        observation.attempt = selected.attempt;
+        observation.ready = false;
+        observation.expected = 0;
+        observation.ttl_ms = 0;
+        agent.cache_started = observation.started;
+        agent.expires = None;
+        inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
+        let (policy, opted_out) = match snapshot.key(&key.0) {
+            Some(row) => (
+                snapshot
+                    .pool(&row.pool_id)
+                    .map(|p| KeepalivePolicy::from_json(&p.keepalive_json))
+                    .unwrap_or_default(),
+                row.keepalive_opt_out,
+            ),
+            None => (KeepalivePolicy::default(), true),
+        };
+        let pool_id = snapshot
+            .key(&key.0)
+            .map(|k| k.pool_id.clone())
+            .unwrap_or_default();
+        let refusal = if !policy.enabled {
+            Some(Reason::KeepaliveOff)
+        } else if opted_out {
+            Some(Reason::OptedOut)
+        } else {
+            match snapshot.account(&selected.account_id).map(|a| a.kind) {
+                Some(AccountKind::ApiKey) => None,
+                Some(AccountKind::Oauth) if verified => None,
+                Some(AccountKind::Oauth) => Some(Reason::OauthUnverified),
+                None => Some(Reason::IneligibleCredential),
+            }
+        };
+        if let Some(reason) = refusal {
+            inner.set_reason(&key, &agent_id, reason);
+            return;
+        }
+        let agent = inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap();
+        if let Some(observation) = agent.current.as_mut() {
+            observation.ready = true;
+        }
+        if agent.account.as_deref() != Some(selected.account_id.as_str()) {
+            agent.cold = 0;
+            agent.ttl_ms = 0;
+        }
+        agent.account = Some(selected.account_id);
+        agent.pool_id = pool_id;
+        agent.policy = policy;
+        inner.set_reason(&key, &agent_id, Reason::AwaitingCacheEvidence);
+    }
+
+    fn on_head(&self, head: ResponseHead) {
+        let mut inner = self.lock();
+        let Some((key, agent_id)) = inner.pending.get(&head.request_id).cloned() else {
+            return;
+        };
+        if !inner.live(&key, &agent_id) {
+            return;
+        }
+        let agent = inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap();
+        if let Some(observation) = agent.current.as_mut() {
+            // A failed attempt is not evidence about the cache; the next selection re-arms the attempt.
+            if observation.attempt == head.attempt && !(200..300).contains(&head.status) {
+                observation.ready = false;
+            }
+        }
+    }
+
+    fn on_chunk(&self, chunk: ResponseChunk) {
+        let usage = match &chunk.phase {
+            Some(Phase::MessageStart { usage }) | Some(Phase::MessageDelta { usage }) => {
+                ProbeUsage::from_bus(usage)
+            }
+            _ => return,
+        };
+        let now = self.now();
+        let mut inner = self.lock();
+        let Some((key, agent_id)) = inner.pending.get(&chunk.request_id).cloned() else {
+            return;
+        };
+        if !inner.live(&key, &agent_id) {
+            return;
+        }
+        let current_attempt = inner.sessions[&key].agents[&agent_id]
+            .current
+            .as_ref()
+            .map(|o| o.attempt);
+        if current_attempt != Some(chunk.attempt) {
+            return;
+        }
+        inner.observe_usage(&key, &agent_id, usage, now);
+    }
+
+    fn on_complete(&self, complete: RequestComplete) {
+        let now = self.now();
+        let mut inner = self.lock();
+        let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
+            return;
+        };
+        let reason = match complete.outcome {
+            Outcome::Succeeded => None,
+            Outcome::Canceled => Some(Reason::RequestCanceled),
+            Outcome::Failed | Outcome::Exhausted => Some(Reason::RequestFailed),
+            Outcome::Rejected => Some(Reason::RequestRejected),
+        };
+        if let Some(reason) = reason {
+            inner.discard(&key, &agent_id, reason, None);
+            return;
+        }
+        inner.pending.remove(&complete.request_id);
+        let (ready, armed) = inner.sessions[&key]
+            .agents
+            .get(&agent_id)
+            .map(|a| {
+                (
+                    a.current.as_ref().is_some_and(|o| o.ready),
+                    a.current.as_ref().is_some_and(|o| o.expected > 0),
+                )
+            })
+            .unwrap_or((false, false));
+        if ready && !armed {
+            if let Some(usage) = complete.usage.as_ref().map(ProbeUsage::from_bus) {
+                inner.observe_usage(&key, &agent_id, usage, now);
+            }
+        }
+        let proved = inner.sessions[&key]
+            .agents
+            .get(&agent_id)
+            .and_then(|a| a.current.as_ref())
+            .is_some_and(|o| o.ready && o.expected > 0);
+        if !proved {
+            let current = inner.sessions[&key].agents.get(&agent_id).map(|a| a.reason);
+            let reason = match current {
+                Some(
+                    r @ (Reason::KeepaliveOff
+                    | Reason::OptedOut
+                    | Reason::OauthUnverified
+                    | Reason::IneligibleCredential),
+                ) if !ready => r,
+                _ => Reason::NoCacheEvidence,
+            };
+            inner.discard(&key, &agent_id, reason, None);
+        }
+    }
+}
+
+fn recipe_reason(reason: &str) -> Reason {
+    match reason {
+        "fixed_thinking" => Reason::FixedThinking,
+        "forced_tool" => Reason::ForcedTool,
+        "headers_too_large" => Reason::HeadersTooLarge,
+        "invalid_cache_control" => Reason::InvalidCacheControl,
+        "invalid_model" => Reason::InvalidModel,
+        "request_too_large" => Reason::RequestTooLarge,
+        "structured_output" => Reason::StructuredOutput,
+        "unsupported_shape" => Reason::UnsupportedShape,
+        _ => Reason::InvalidRequest,
+    }
+}
+
+impl Inner {
+    /// The Go `observeLocked`: evidence from a ready attempt arms the schedule at the entry's expiry, the pool's
+    /// lead and this schedule's jitter taken off by `due_at`. A retry already pending stays in force.
+    pub(crate) fn observe_usage(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        usage: ProbeUsage,
+        _now: i64,
+    ) {
+        let agent = self
+            .sessions
+            .get_mut(key)
+            .unwrap()
+            .agents
+            .get_mut(agent_id)
+            .unwrap();
+        let Some(observation) = agent.current.as_mut() else {
+            return;
+        };
+        if !observation.ready || agent.paused || usage.evidence() == 0 {
+            return;
+        }
+        observation.expected = usage.evidence();
+        agent.ttl_ms = usage.ttl_ms(agent.ttl_ms, observation.recipe.ttl_ms);
+        if observation.ttl_ms > 0 && observation.ttl_ms < agent.ttl_ms {
+            agent.ttl_ms = observation.ttl_ms;
+        }
+        observation.ttl_ms = agent.ttl_ms;
+        agent.expires = Some(agent.cache_started + agent.ttl_ms);
+        agent.jitter_frac = rand::random::<f64>();
+        self.set_reason(key, agent_id, Reason::Scheduled);
     }
 }

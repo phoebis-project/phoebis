@@ -28,6 +28,9 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
 pub use relay_common::{api_key, oauth, wait_for, PoolSpec, TestAccount, KEY, NOW};
+// A test drives the harness's app directly and reads its body, so the traits behind both have to reach it too.
+pub use http_body_util::BodyExt;
+pub use tower::ServiceExt;
 
 pub const A: &str = "sk-ant-api03-AAAA";
 pub const B: &str = "sk-ant-api03-BBBB";
@@ -208,6 +211,13 @@ impl Rig {
             .unwrap_or_else(|| panic!("missing agent {id}"))
     }
 
+    /// The engine's own record of one agent, past what the companion snapshot shows.
+    pub fn status(&self, id: &str) -> phoebis_keepalive::AgentStatus {
+        self.engine
+            .agent_status("desktop", "session", id)
+            .unwrap_or_else(|| panic!("no agent {id}"))
+    }
+
     pub fn request(&self, agent: &str) -> Request<Body> {
         self.request_with(agent, BODY)
     }
@@ -225,25 +235,61 @@ impl Rig {
         req
     }
 
-    /// Drains every bus event published so far into a vector, waiting for the completion of `request_id` when
-    /// one is named: the relay's body task publishes it a moment after the response.
-    pub async fn pump(&mut self, request_id: Option<&str>) -> Vec<BusEvent> {
+    /// Feeds the engine every bus event published so far, and waits for the completion of `request_id` when one
+    /// is named: the relay's body task publishes it a moment after the response.
+    pub async fn pump(&mut self, request_id: Option<&str>) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut events = Vec::new();
         loop {
             let mut complete = false;
             while let Ok(event) = self.sub.events.try_recv() {
                 if let BusEvent::RequestComplete(c) = &event {
                     complete |= Some(c.request_id.as_str()) == request_id;
                 }
-                events.push(event);
+                self.engine.observe(event);
             }
             if request_id.is_none() || complete {
-                return events;
+                return;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "no completion for {request_id:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// One real request through the relay for `agent`, answered by the standing rule, and pumped into the
+    /// engine.
+    pub async fn observe(&mut self, agent: &str) -> String {
+        self.observe_with(agent, BODY).await
+    }
+
+    pub async fn observe_with(&mut self, agent: &str, body: &str) -> String {
+        let resp = self
+            .h
+            .app
+            .clone()
+            .oneshot(self.request_with(agent, body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let id = relay_common::outcome(&resp).request_id;
+        let _ = resp.into_body().collect().await.unwrap();
+        self.pump(Some(&id)).await;
+        id
+    }
+
+    /// Pumps until `ready` holds, for a request whose events arrive while its body is still open.
+    pub async fn pump_until(&mut self, ready: impl Fn(&Rig) -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            self.pump(None).await;
+            if ready(self) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the engine never reached the awaited state"
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

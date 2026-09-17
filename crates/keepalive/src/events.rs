@@ -407,6 +407,9 @@ impl Inner {
         if self.agents - held >= max_agents {
             return Err(err("agent_limit", 429));
         }
+        // Whether this start replaces a live registration under the same key and session, so the fresh main
+        // agent below can carry that history forward instead of reporting a first-ever registration.
+        let replaced = self.sessions.contains_key(&key);
         if let Some(previous) = self.sessions.get(&key) {
             let agents: Vec<String> = previous.agents.keys().cloned().collect();
             for agent in &agents {
@@ -422,10 +425,13 @@ impl Inner {
         let last_real_at = self.sessions.get(&key).and_then(|s| s.last_real_at);
         let mut agents = BTreeMap::new();
         let incarnation = self.incarnation();
-        agents.insert(
-            MAIN_AGENT.to_string(),
-            Agent::new(MAIN_AGENT, &key.0, incarnation, now),
-        );
+        let mut main_agent = Agent::new(MAIN_AGENT, &key.0, incarnation, now);
+        // The counter above already recorded the replacement once, against the agent it discarded; the fresh
+        // agent only carries that status forward until its own first request, not a second occurrence of it.
+        if replaced {
+            main_agent.reason = Reason::InstanceReplaced;
+        }
+        agents.insert(MAIN_AGENT.to_string(), main_agent);
         self.sessions.insert(
             key.clone(),
             Session {
@@ -443,7 +449,9 @@ impl Inner {
             },
         );
         self.agents += 1;
-        self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
+        if !replaced {
+            self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
+        }
         let session = &self.sessions[&key];
         Ok(acknowledge(session, session.agents.get(MAIN_AGENT)))
     }
