@@ -5,8 +5,10 @@
 mod config;
 mod engine;
 mod events;
+mod probe;
 mod recipe;
 mod routes;
+mod savings;
 mod usage;
 
 pub use config::{
@@ -21,6 +23,7 @@ pub use events::{
     decode_query_event, rfc3339, Ack, Event, EventError, Snapshot, SnapshotAgent, SnapshotSession,
     EVENT_FIELDS,
 };
+pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES,
     MAX_HEADER_VALUE, RECIPE_HEADERS,

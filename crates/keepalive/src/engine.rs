@@ -19,10 +19,12 @@ use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::RouterHandle;
 use phoebis_store::AccountKind;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy};
+use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::usage::ProbeUsage;
 
@@ -374,6 +376,8 @@ pub struct Engine {
     pub(crate) inner: Mutex<Inner>,
     pub(crate) parts: EngineParts,
     pub(crate) cancel: CancellationToken,
+    /// Woken by every worker that finishes, which is what `wait_idle` waits on.
+    pub(crate) idle: Notify,
     pub(crate) workers: TaskTracker,
 }
 
@@ -397,6 +401,7 @@ impl Engine {
             }),
             parts,
             cancel: CancellationToken::new(),
+            idle: Notify::new(),
             workers: TaskTracker::new(),
         })
     }
@@ -1044,5 +1049,122 @@ impl Inner {
         agent.expires = Some(agent.cache_started + agent.ttl_ms);
         agent.jitter_frac = rand::random::<f64>();
         self.set_reason(key, agent_id, Reason::Scheduled);
+    }
+}
+
+impl Engine {
+    /// One tick: what is due runs, up to the worker bound. Called by the production ticker every second and by
+    /// the tests directly.
+    pub async fn step(self: &Arc<Self>) {
+        let now = self.now();
+        let expiry = self.parts.session_expiry.as_millis() as i64;
+        let max_workers = self.parts.limits.max_workers;
+        let jobs = {
+            let mut inner = self.lock();
+            if inner.closed {
+                return;
+            }
+            inner.expire(now, expiry);
+            let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
+            let candidates: Vec<(SessionKey, String)> = inner
+                .sessions
+                .iter()
+                .flat_map(|(key, s)| s.agents.keys().map(move |a| (key.clone(), a.clone())))
+                .collect();
+            for (key, agent_id) in candidates {
+                if !inner.live(&key, &agent_id) {
+                    continue;
+                }
+                let agent = &inner.sessions[&key].agents[&agent_id];
+                let ready = agent
+                    .current
+                    .as_ref()
+                    .is_some_and(|o| o.ready && o.expected > 0);
+                let Some(at) = agent.due_at() else { continue };
+                if !ready || agent.in_flight {
+                    continue;
+                }
+                if inner.idle_limited(&key, &agent_id, now) {
+                    inner.discard(
+                        &key,
+                        &agent_id,
+                        Reason::IdleLimit,
+                        wasted_label(Reason::IdleLimit),
+                    );
+                    continue;
+                }
+                if at <= now {
+                    due.push((at, key, agent_id));
+                }
+            }
+            due.sort();
+            let mut jobs = Vec::new();
+            for (_, key, agent_id) in due {
+                if inner.running >= max_workers {
+                    break;
+                }
+                let idle = agent_id == MAIN_AGENT
+                    && inner.sessions[&key].agents[&agent_id].state == AgentState::Idle
+                    || !inner.sessions[&key].attended;
+                let agent = inner
+                    .sessions
+                    .get_mut(&key)
+                    .unwrap()
+                    .agents
+                    .get_mut(&agent_id)
+                    .unwrap();
+                let observation = agent.current.as_ref().unwrap();
+                let job = ProbeJob {
+                    key: key.clone(),
+                    agent_id: agent_id.clone(),
+                    incarnation: agent.incarnation,
+                    observation_id: observation.id.clone(),
+                    generation: agent.generation,
+                    attempt: observation.attempt,
+                    started: now,
+                    account: agent.account.clone(),
+                    pool_id: agent.pool_id.clone(),
+                    canonical_model: agent.canonical_model.clone(),
+                    recipe: observation.recipe.clone(),
+                    expected: observation.expected,
+                    idle,
+                };
+                agent.in_flight = true;
+                agent.probes += 1;
+                if idle {
+                    agent.idle_ticks += 1;
+                }
+                inner.running += 1;
+                inner.set_reason(&key, &agent_id, Reason::Probing);
+                jobs.push(job);
+            }
+            jobs
+        };
+        for job in jobs {
+            self.workers.spawn(run_job(self.clone(), job));
+        }
+    }
+
+    /// Resolves once no probe is in flight; the tests drive `step` and then wait here.
+    pub async fn wait_idle(&self) {
+        loop {
+            let notified = self.idle.notified();
+            tokio::pin!(notified);
+            // Registered before the counter is read, so a worker that finishes between the two wakes this
+            // waiter instead of notifying nobody.
+            notified.as_mut().enable();
+            if self.lock().running == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Stops the scheduler, cancels the probes in flight, and waits for their tasks: the caller drains the
+    /// listeners after this, so a probe never outlives the relay it runs through.
+    pub async fn shutdown(&self) {
+        self.close();
+        self.workers.close();
+        self.workers.wait().await;
     }
 }

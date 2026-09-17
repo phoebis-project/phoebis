@@ -295,6 +295,15 @@ impl Rig {
         }
     }
 
+    /// One engine tick, drained: the probes it starts are awaited and their bus events pumped, so an assertion
+    /// on the line after it reads a settled engine. A test that has to look at a probe still in flight drives
+    /// `engine.step` itself instead.
+    pub async fn step(&mut self) {
+        self.engine.step().await;
+        self.engine.wait_idle().await;
+        self.pump(None).await;
+    }
+
     /// The model is the body's, as the relay would report it, so a test observes a request on another model by
     /// changing the body alone.
     pub fn observed(&self, id: &str, agent: &str, body: &str) -> BusEvent {
