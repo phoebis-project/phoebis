@@ -271,12 +271,15 @@ impl Store {
     }
 
     /// `true` when the row landed, `false` when another open event already holds the rule and subject, so two
-    /// concurrent openers cannot both believe they opened it.
+    /// concurrent openers cannot both believe they opened it. Every other conflict is an error, a reused `id`
+    /// above all: an opener that read its own earlier row as someone else's would drop the alert in silence.
     pub fn insert_alert_event(&self, row: &AlertEventRow) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         // The unique open index is the check: the insert either lands or reports the conflict, in one statement.
+        // The target repeats that index's predicate, which is how SQLite names a partial index, so only the
+        // rule-and-subject clash is swallowed.
         let landed = conn.execute(
-            "INSERT INTO alert_events (id, rule_id, kind, subject, state, opened_at, resolved_at, detail_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT DO NOTHING",
+            "INSERT INTO alert_events (id, rule_id, kind, subject, state, opened_at, resolved_at, detail_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(rule_id, subject) WHERE state = 'open' DO NOTHING",
             params![row.id, row.rule_id, row.kind, row.subject, row.state, row.opened_at, row.resolved_at, row.detail_json],
         )?;
         Ok(landed > 0)

@@ -922,15 +922,8 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
             observed_at: 1_500,
         },
     });
-    // The report lands on the task's next turn; a short async poll reads it without blocking a worker.
-    let mut samples = handle.samples().await.unwrap();
-    for _ in 0..100 {
-        if !samples.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        samples = handle.samples().await.unwrap();
-    }
+    // The report and the ask share one sender, so the task has applied the sample before it answers this.
+    let samples = handle.samples().await.unwrap();
     assert_eq!(
         samples
             .iter()

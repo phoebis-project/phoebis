@@ -139,6 +139,11 @@ ALTER TABLE cooldowns ADD COLUMN set_at INTEGER NOT NULL DEFAULT 0;
 
 // Alert rules are registry rows edited in the UI, so they live beside pools and keys; events and deliveries
 // cascade with their rule because an event without its rule has no subject to show.
+//
+// The two `state` vocabularies differ by design and the checks hold them apart: an event is `open` or
+// `resolved`, while a delivery names the transition it carried, `opened` or `resolved`. Without the check an
+// event could be stored in a state that escapes both the partial open index and the purge, leaving a row
+// nothing ever closes.
 const V10: &str = r#"
 CREATE TABLE IF NOT EXISTS alert_rules (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id TEXT,
@@ -147,13 +152,14 @@ CREATE TABLE IF NOT EXISTS alert_rules (
 );
 CREATE TABLE IF NOT EXISTS alert_events (
   id TEXT PRIMARY KEY, rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL, subject TEXT NOT NULL, state TEXT NOT NULL, opened_at INTEGER NOT NULL,
-  resolved_at INTEGER, detail_json TEXT
+  kind TEXT NOT NULL, subject TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('open', 'resolved')),
+  opened_at INTEGER NOT NULL, resolved_at INTEGER, detail_json TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS alert_events_open ON alert_events (rule_id, subject) WHERE state = 'open';
 CREATE TABLE IF NOT EXISTS alert_deliveries (
   id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES alert_events(id) ON DELETE CASCADE,
-  state TEXT NOT NULL, attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT
+  state TEXT NOT NULL CHECK (state IN ('opened', 'resolved')),
+  attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT
 );
 CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id, id);
 "#;

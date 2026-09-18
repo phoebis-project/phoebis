@@ -130,6 +130,26 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
         "a second open row for the rule and subject is refused by the unique open index"
     );
     assert!(store.alert_event("e1-again").unwrap().is_none());
+    assert!(
+        store
+            .insert_alert_event(&AlertEventRow {
+                subject: "mail".into(),
+                ..event.clone()
+            })
+            .is_err(),
+        "a reused id is an error, not the `false` that says someone else holds the subject"
+    );
+    assert!(
+        store
+            .insert_alert_event(&AlertEventRow {
+                id: "e-bogus".into(),
+                subject: "bogus".into(),
+                state: "bogus".into(),
+                ..event.clone()
+            })
+            .is_err(),
+        "a state outside the two the check names would escape the open index and the purge"
+    );
     assert_eq!(
         store
             .open_alert_event("r1", "business")
@@ -203,10 +223,62 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
         1,
         "the resolved one is purged, the open one stays"
     );
+    assert!(
+        store.alert_deliveries("e1").unwrap().is_empty(),
+        "the purge took the resolved event's deliveries with it"
+    );
+    // The open event needs a delivery of its own, or the rule delete has no delivery row left to cascade
+    // through and the assertion below would pass on the purge's work.
+    store
+        .insert_alert_delivery(&AlertDeliveryRow {
+            id: 0,
+            event_id: "e2".into(),
+            state: "opened".into(),
+            attempt: 1,
+            at: 5_001,
+            status: Some(200),
+            error: None,
+        })
+        .unwrap();
+    assert_eq!(store.alert_deliveries("e2").unwrap().len(), 1);
     store.delete_alert_rule("r1", "admin").unwrap();
     assert!(
         store.alert_event("e2").unwrap().is_none()
-            && store.alert_deliveries("e1").unwrap().is_empty(),
-        "the cascade"
+            && store.alert_deliveries("e2").unwrap().is_empty(),
+        "deleting the rule takes its open event and that event's deliveries"
+    );
+}
+
+#[test]
+fn a_sealed_secret_copied_onto_another_rule_does_not_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .upsert_alert_rule(&rule("r1"), Some(Some(&Secret::new("hunter2"))), "admin")
+        .unwrap();
+    store.upsert_alert_rule(&rule("r2"), None, "admin").unwrap();
+    drop(store);
+    // Write access to the file is not access to the secret: the sealed bytes move onto a rule whose webhook
+    // url the mover controls, which is the attack the aad exists to stop.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "UPDATE alert_rules SET \
+           secret_sealed = (SELECT secret_sealed FROM alert_rules WHERE id = 'r1'), \
+           secret_nonce = (SELECT secret_nonce FROM alert_rules WHERE id = 'r1') \
+         WHERE id = 'r2';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        store.alert_rule_secret("r1").unwrap().unwrap().expose(),
+        "hunter2",
+        "the rule it was sealed for still opens it"
+    );
+    assert!(
+        matches!(store.alert_rule_secret("r2"), Err(StoreError::Crypto)),
+        "the aad names the rule, so the same blob does not open on another one"
     );
 }
