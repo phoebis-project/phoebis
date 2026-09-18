@@ -326,7 +326,7 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
       <td>{KIND_LABEL[event.kind]}</td>
       <td>
         {event.subject}
-        {event.detail && <EventDetail detail={event.detail} />}
+        {event.detail && <EventDetail kind={event.kind} detail={event.detail} />}
       </td>
       <td title={fmtAbsolute(event.openedAt)}>{fmtRelative(event.openedAt, now)}</td>
       <td title={event.resolvedAt ? fmtAbsolute(event.resolvedAt) : undefined}>{event.resolvedAt ? fmtRelative(event.resolvedAt, now) : <span className="muted">-</span>}</td>
@@ -334,6 +334,8 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
         <ul className="deliveries">
           {event.deliveries.map((d, i) => (
             <li key={i} title={fmtAbsolute(d.at)}>
+              {/* The deliverer counts attempts per run, so the transition is what tells two `#1` rows apart. */}
+              <span className="muted">{d.state}</span>
               <span className="muted">#{d.attempt}</span>
               <Badge tone={deliveryTone(d)}>{d.status ?? 'no answer'}</Badge>
               {d.error && <span className="muted">{d.error}</span>}
@@ -350,24 +352,26 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
   );
 }
 
-// The wire carries a free-form object per kind; the two kinds below have a shape this page draws, and anything
-// else is listed as it arrived so a detail a later build adds is still readable.
-function EventDetail({ detail }: { detail: AlertEventDetail }) {
+// A detail is the free-form object the signal built, so the event's kind says which keys it holds. The two kinds
+// below read as a sentence; every other kind is listed as it arrived, and so is a detail missing the keys its kind
+// promises, so a shape a later build changes stays readable.
+function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKind }) {
   if (detail === null) return null;
-  if (detail.type === 'client_drift') {
+  if (kind === 'client_drift' && typeof detail.client_version === 'string') {
     const drift = detail as unknown as ClientDriftDetail;
     return (
       <span className="sub">
-        client {drift.clientVersion}, caught by {triggerLabel(drift.trigger)}
+        client {drift.client_version}, caught by {triggerLabel(drift.trigger)}
       </span>
     );
   }
-  if (detail.type === 'ask_user_question') {
+  if (kind === 'ask_user_question' && typeof detail.session === 'string') {
     const asked = detail as unknown as AskUserQuestionDetail;
     return (
       <>
-        <span className="sub mono" title={asked.sessionId}>
-          key {asked.keyId}, session {shortId(asked.sessionId, 8)}, agent {asked.agentId}
+        <span className="sub mono" title={asked.session}>
+          key {asked.key}, session {shortId(asked.session, 8)}
+          {asked.agent && `, agent ${asked.agent}`}
         </span>
         {asked.question ? <span className="sub">asked: {asked.question}</span> : <span className="sub muted">question not captured</span>}
       </>
@@ -524,9 +528,12 @@ function RuleDialog({
       >
         <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} />
       </Field>
-      <Field label="Enabled" inline>
+      <div className="field--inline field">
+        <span className="field__text">
+          <span className="field__label">Enabled</span>
+        </span>
         <Toggle checked={enabled} onChange={setEnabled} label="Enabled" />
-      </Field>
+      </div>
     </Dialog>
   );
 }

@@ -529,19 +529,24 @@ export type AlertKind =
 /** What an event of one of the session-scoped kinds captured; null for the kinds that need no extra fields. */
 export type AlertEventDetail = Record<string, unknown> | null;
 
+/**
+ * The two details a page draws a sentence from. A detail is the free-form object the signal built, passed through
+ * undecoded, so both carry the wire's own spelling rather than the camelCase every decoded type uses.
+ */
 export interface AskUserQuestionDetail {
-  agentId: string;
-  keyId: string;
+  agent: string | null;
+  key: string;
   question: string | null;
-  sessionId: string;
-  type: 'ask_user_question';
+  /** True with a null question when a viewer reads the event: the text sits behind the admin secret. */
+  question_redacted?: boolean;
+  session: string;
 }
 
 export interface ClientDriftDetail {
-  clientVersion: string;
+  client_version: string;
+  key: string | null;
   /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
   trigger: string;
-  type: 'client_drift';
 }
 
 export interface AlertRule {

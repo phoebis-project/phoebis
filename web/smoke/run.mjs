@@ -1047,7 +1047,13 @@ m.unmount();
 
 
 m = await mount('/alerts');
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client version drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274', 'agent main', 'Resolve']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client version drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve']);
+{
+  // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
+  const row = [...[...m.container.querySelectorAll('table')].pop().querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
+  const items = [...(row?.querySelectorAll('.deliveries li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+  results.push({ name: '/alerts a delivery row names the transition it belongs to', ok: items.length === 2 && items[0].startsWith('opened') && items[1].startsWith('resolved'), missing: items });
+}
 {
   const stateFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by state');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -1315,19 +1321,26 @@ await m.navigate('/accounts/business');
 }
 await m.navigate('/alerts');
 {
-  const rows = [...m.container.querySelectorAll('tbody tr')].length;
+  // Loaded rows only: a table still drawing its skeletons would otherwise stand in for the lists.
+  const rows = [...m.container.querySelectorAll('tbody tr')].filter((r) => r.querySelector('.skeleton') === null).length;
   // Buttons outside the dialogs: a closed dialog's own footer is in the DOM on every page and reaches nobody.
   const buttons = [...m.container.querySelectorAll('button')].filter((b) => b.closest('dialog') === null).map((b) => b.textContent?.trim());
   results.push({
     name: 'viewer: /alerts lists rules and events without a control that writes',
     ok:
       rows > 2 &&
-      m.text().includes('Client version drift') &&
+      m.text().includes('https://hooks.example.com/phoebis/question') &&
       !buttons.includes('Create rule') &&
       !buttons.includes('Resolve') &&
       m.container.querySelector('.menu__trigger') === null &&
       m.container.querySelector('dialog[open]') === null,
     missing: [String(rows), ...buttons],
+  });
+  // The route blanks a question's text for a viewer, and the page has to say so rather than draw an empty line.
+  results.push({
+    name: 'viewer: /alerts draws the redaction the route applies to a question',
+    ok: m.text().includes('question not captured') && !m.text().includes('The ledger migration'),
+    missing: [],
   });
 }
 await m.navigate('/settings');

@@ -31,6 +31,16 @@ const seededSession = (): boolean => {
   }
 };
 
+/** The role the mock build previews, which the alert events route reads to decide whether to blank a question. */
+const PREVIEW_ROLE_KEY = 'phoebis.role';
+const previewsViewer = (): boolean => {
+  try {
+    return localStorage.getItem(PREVIEW_ROLE_KEY) === 'viewer';
+  } catch {
+    return false;
+  }
+};
+
 /** Set to stand in for a fresh installation, whose alert lists are empty until an operator writes a rule. */
 const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
 const emptyStore = (): boolean => {
@@ -52,6 +62,13 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
   const state = params.get('state');
   return code && state ? { code, state } : null;
 }
+
+/**
+ * What the events route hands a viewer: the question text came out of a captured body, which a viewer may not read
+ * there either, so the route blanks it and says it did.
+ */
+const redactForViewer = (e: AlertEvent): AlertEvent =>
+  e.detail !== null && 'question' in e.detail ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
 
 function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
   // A request the router never attributed matches no filter on that field.
@@ -310,7 +327,8 @@ export class MockApi implements Api {
   }
 
   listAlertEvents(state?: 'open' | 'resolved') {
-    const events = emptyStore() ? [] : this.events;
+    const stored = emptyStore() ? [] : this.events;
+    const events = previewsViewer() ? stored.map(redactForViewer) : stored;
     return latency(state ? events.filter((e) => e.state === state) : events);
   }
 
