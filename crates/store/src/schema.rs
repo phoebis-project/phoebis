@@ -41,6 +41,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (9, V9),
     (10, V10),
     (11, V11),
+    (12, V12),
 ];
 
 const V2: &str = r#"
@@ -172,4 +173,7 @@ const V11: &str = r#"
 ALTER TABLE pools ADD COLUMN prefer_subscription INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pools ADD COLUMN api_key_sub_strategy TEXT NOT NULL DEFAULT 'priority_random';
 ALTER TABLE pins ADD COLUMN migrated_at INTEGER;
+"#;
+
+const V12: &str = r#"
 "#;
