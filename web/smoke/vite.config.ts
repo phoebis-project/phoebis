@@ -7,6 +7,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
+  // A lib bundle serves no public assets, and a copy of them beside it would be picked up as another entry.
+  publicDir: false,
   define: { 'process.env.NODE_ENV': JSON.stringify('development'), 'import.meta.env.VITE_PHOEBIS_MOCK': '"1"' },
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
@@ -15,5 +17,7 @@ export default defineConfig({
     rollupOptions: { external: [] },
     minify: false,
     cssCodeSplit: false,
+    // The api module awaits the mock's dynamic import at the top level, which needs a target that carries it.
+    target: 'es2022',
   },
 });

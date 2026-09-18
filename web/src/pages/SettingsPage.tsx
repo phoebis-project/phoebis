@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { api } from '@/api';
+import { api, MOCK } from '@/api';
 import type { ModelPrice, PriceImportPreview, Settings } from '@/api/types';
-import { useAppSettings, type Role, type ThemeChoice } from '@/app/settings';
+import { useSession } from '@/app/session';
+import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, Field, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { fmtDate } from '@/lib/format';
@@ -130,9 +131,15 @@ function diffRows(current: ModelPrice[], imported: ModelPrice[]): DiffRow[] {
   return out;
 }
 
+/** The admin secret reads configured while the settings load, since no session reaches this page without one. */
+function SecretBadge({ configured }: { configured: boolean }) {
+  return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
+}
+
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
-  const { theme, setTheme, timeFormat, setTimeFormat, role, setRole, canMutate } = useAppSettings();
+  const { theme, setTheme, timeFormat, setTimeFormat, role, canMutate } = useAppSettings();
+  const { setPreviewRole } = useSession();
   const [expiry, setExpiry] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const s = settings.data;
@@ -180,30 +187,32 @@ export function SettingsPage() {
           <div>
             <b>Admin secret</b>
             <p className="muted">
-              <code>PHOEBIS_ADMIN_SECRET</code>. Full read and write, including captured bodies.
+              The secret the variable <code>admin.secret_env</code> names. Full read and write, including captured bodies.
             </p>
           </div>
-          <Badge tone="good">configured</Badge>
+          <SecretBadge configured={s?.access.adminConfigured ?? true} />
         </div>
         <div className="setting-row">
           <div>
             <b>Viewer secret</b>
             <p className="muted">
-              <code>PHOEBIS_VIEWER_SECRET</code>. Reads everything except captured request and response bodies. Cannot create, edit, or delete.
+              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured request and response bodies. Cannot create, edit, or delete.
             </p>
           </div>
-          <Badge tone="good">configured</Badge>
+          <SecretBadge configured={s?.access.viewerConfigured ?? false} />
         </div>
-        <div className="setting-row setting-row--demo">
-          <div>
-            <b>Preview as viewer</b>
-            <p className="muted">Hides every mutating control and the captured-bodies section, as the viewer secret would see it.</p>
+        {MOCK && (
+          <div className="setting-row setting-row--demo">
+            <div>
+              <b>Preview as viewer</b>
+              <p className="muted">Hides every mutating control and the captured-bodies section, as the viewer secret would see it.</p>
+            </div>
+            <label className="row">
+              <span className="secondary">{role === 'viewer' ? 'viewer' : 'admin'}</span>
+              <Toggle checked={role === 'viewer'} onChange={(v) => setPreviewRole(v ? 'viewer' : 'admin')} label="Preview as viewer" />
+            </label>
           </div>
-          <label className="row">
-            <span className="secondary">{role === 'viewer' ? 'viewer' : 'admin'}</span>
-            <Toggle checked={role === 'viewer'} onChange={(v) => setRole((v ? 'viewer' : 'admin') as Role)} label="Preview as viewer" />
-          </label>
-        </div>
+        )}
       </Card>
 
       <PricingCard canMutate={canMutate} pricing={s ? s.pricing : null} onToast={setToast} />

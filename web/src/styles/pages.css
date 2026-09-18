@@ -2924,6 +2924,19 @@
   }
 }
 
+.login {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login__card {
+  display: grid;
+  gap: 16px;
+  width: min(380px, 100%);
+}
+
 @media (max-width: 720px) {
   .wbars--3,
   .streams--2,

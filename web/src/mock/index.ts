@@ -1,6 +1,11 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import type { ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestQuery, ServedModel, Settings } from '@/api/types';
+import { ApiError } from '@/api/http';
+import type {
+  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LiveEvent, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
+  ServedModel, Session, SessionInfo, Settings, SyncResult,
+} from '@/api/types';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
+import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -15,6 +20,16 @@ const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) =>
 // The registered redirect is a loopback port on the machine running Claude Code,
 // so the callback the operator pastes carries both halves of the exchange.
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
+
+/** The smoke runner writes this so every mount starts signed in instead of on the login screen. */
+const SEEDED_SESSION_KEY = 'phoebis.mockSession';
+const seededSession = (): boolean => {
+  try {
+    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
+  } catch {
+    return false;
+  }
+};
 
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
   let params: URLSearchParams;
@@ -48,14 +63,47 @@ function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
 
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
+  private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, string | null>();
   private pools: Pool[] = POOLS.map((p) => ({ ...p }));
+  private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(Date.now() % 100_000);
+  private session: SessionInfo | null = null;
+  private sessions: Session[] = [...SESSIONS];
   private settings: Settings = { ...SETTINGS };
 
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
+  }
+
+  private account(accountId: string): Account {
+    const a = this.accounts.find((x) => x.id === accountId);
+    if (!a) throw new ApiError(404, `Unknown account ${accountId}`, 'not_found');
+    return a;
+  }
+
+  private putAccount(next: Account): Account {
+    this.accounts = this.accounts.map((a) => (a.id === next.id ? next : a));
+    return next;
+  }
+
+  cancelPairing(pairingId: string) {
+    this.pairings.delete(pairingId);
+    return latency(undefined, 150);
+  }
+
+  async clearCooldown(accountId: string, scope: string) {
+    const a = this.account(accountId);
+    const cooldowns = a.cooldowns.filter((c) => c.windowId !== scope && c.reason !== scope);
+    this.putAccount({ ...a, cooldowns, status: cooldowns.length ? a.status : 'ready' });
+    return latency(undefined, 200);
+  }
+
+  async clearFunding(accountId: string) {
+    const a = this.account(accountId);
+    this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
+    return latency(undefined, 200);
   }
 
   async completePairing(input: PairingInput): Promise<PairingPreview> {
@@ -67,9 +115,44 @@ export class MockApi implements Api {
     return latency({ email: existing?.email ?? 'new.login@example.com', organization: existing ? `${existing.label} workspace` : 'Personal', state: submitted.state }, 500);
   }
 
-  confirmPairing(state: string) {
-    this.pairings.delete(state);
+  confirmPairing(pairingId: string) {
+    this.pairings.delete(pairingId);
     return latency(undefined, 250);
+  }
+
+  confirmPriceImport(_token: string) {
+    this.settings = { ...this.settings, pricing: { ...this.settings.pricing, effectiveDate: iso(NOW), models: IMPORTED_PRICES, source: 'imported' } };
+    return latency(this.settings.pricing, 300);
+  }
+
+  createAccount(input: AccountInput): Promise<Account> {
+    const account: Account = {
+      catalogSyncedAt: null,
+      cooldowns: [],
+      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },
+      email: null,
+      extraUsage: null,
+      fableWindow: null,
+      id: input.id,
+      kind: input.kind,
+      label: input.label,
+      plan: null,
+      pools: [],
+      requests: { last24h: 0, last7d: 0, lifetime: 0 },
+      routingEnabled: true,
+      servedModels: [],
+      status: input.kind === 'oauth' ? 'unpaired' : 'ready',
+      subscription: null,
+      windows: [],
+    };
+    this.accounts = [...this.accounts, account];
+    return latency(account, 300);
+  }
+
+  createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
+    const rule: AlertRule = { createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
+    this.rules = [...this.rules, rule];
+    return latency(rule, 250);
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
@@ -107,6 +190,35 @@ export class MockApi implements Api {
     };
     this.pools = [...this.pools, pool];
     return latency(pool, 300);
+  }
+
+  deleteAlertRule(id: string) {
+    this.rules = this.rules.filter((r) => r.id !== id);
+    return latency(undefined, 200);
+  }
+
+  deleteKey(id: string) {
+    this.keys = this.keys.filter((k) => k.id !== id);
+    return latency(undefined, 200);
+  }
+
+  deletePool(id: string) {
+    this.pools = this.pools.filter((p) => p.id !== id);
+    return latency(undefined, 200);
+  }
+
+  async disconnectAccount(accountId: string) {
+    const a = this.account(accountId);
+    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null }, email: null, status: 'unpaired' });
+    return latency(undefined, 250);
+  }
+
+  getAnalyticsBreakdown(query: AnalyticsQuery) {
+    return latency(breakdownOf(ALL_ROLLUPS, query));
+  }
+
+  getAnalyticsSeries(query: AnalyticsQuery) {
+    return latency(seriesOf(ALL_ROLLUPS, query));
   }
 
   getCapturedBodies(requestId: string) {
@@ -164,6 +276,11 @@ export class MockApi implements Api {
     return latency(requestById.get(id) ?? null);
   }
 
+  getSession(): Promise<SessionInfo | null> {
+    if (this.session) return latency(this.session, 60);
+    return latency(seededSession() ? { role: 'admin' as const, sessionId: 'mock-admin' } : null, 60);
+  }
+
   getSettings() {
     return latency({ ...this.settings, lastSyncAt: ago(40 * 1000) });
   }
@@ -178,12 +295,16 @@ export class MockApi implements Api {
     return latency(this.accounts);
   }
 
-  listAlertEvents() {
-    return latency(ALERT_EVENTS);
+  listAlertDeliveries(eventId: string): Promise<Delivery[]> {
+    return latency(this.events.find((e) => e.id === eventId)?.deliveries ?? []);
+  }
+
+  listAlertEvents(state?: 'open' | 'resolved') {
+    return latency(state ? this.events.filter((e) => e.state === state) : this.events);
   }
 
   listAlertRules() {
-    return latency(ALERT_RULES);
+    return latency(this.rules);
   }
 
   listCatalog() {
@@ -206,6 +327,15 @@ export class MockApi implements Api {
     return latency(QUOTA_SNAPSHOTS);
   }
 
+  listRequestPage(query: RequestQuery = {}): Promise<RequestPage> {
+    const matched = REQUESTS.filter((r) => matchesQuery(r, query));
+    const start = query.cursor ? matched.findIndex((r) => r.id === query.cursor) + 1 : 0;
+    const limit = query.limit ?? matched.length;
+    const page = matched.slice(start, start + limit);
+    // A cursor only rides along while rows are left, which is how the route signals the end of the list.
+    return latency({ nextCursor: start + limit < matched.length ? (page[page.length - 1]?.id ?? null) : null, requests: page });
+  }
+
   listRequests(query: RequestQuery = {}) {
     return latency(REQUESTS.filter((r) => matchesQuery(r, query)));
   }
@@ -217,7 +347,24 @@ export class MockApi implements Api {
   }
 
   listSessions() {
-    return latency(SESSIONS);
+    return latency(this.sessions);
+  }
+
+  login(secret: string): Promise<SessionInfo> {
+    if (secret !== 'admin' && secret !== 'viewer') return Promise.reject(new ApiError(401, 'that secret does not match', null));
+    this.session = { role: secret, sessionId: `mock-${secret}` };
+    return latency(this.session, 200);
+  }
+
+  logout() {
+    this.session = null;
+    return latency(undefined, 150);
+  }
+
+  async pauseAccount(accountId: string) {
+    const a = this.account(accountId);
+    this.putAccount({ ...a, routingEnabled: false, status: 'paused' });
+    return latency(undefined, 250);
   }
 
   previewPriceImport(_url: string) {
@@ -225,6 +372,47 @@ export class MockApi implements Api {
       { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` },
       400,
     );
+  }
+
+  refreshUsage(_accountId: string) {
+    return latency(undefined, 400);
+  }
+
+  releaseSession(keyId: string, sessionId: string) {
+    this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId));
+    return latency(undefined, 250);
+  }
+
+  async renameAccount(accountId: string, label: string) {
+    return latency(this.putAccount({ ...this.account(accountId), label }), 250);
+  }
+
+  resolveAlertEvent(id: string): Promise<AlertEvent> {
+    const event = this.events.find((e) => e.id === id);
+    if (!event) return Promise.reject(new ApiError(404, `Unknown event ${id}`, 'not_found'));
+    const next: AlertEvent = { ...event, resolvedAt: iso(NOW), state: 'resolved' };
+    this.events = this.events.map((e) => (e.id === id ? next : e));
+    return latency(next, 250);
+  }
+
+  async resumeAccount(accountId: string) {
+    const a = this.account(accountId);
+    this.putAccount({ ...a, routingEnabled: true, status: a.cooldowns.length ? 'cooldown' : 'ready' });
+    return latency(undefined, 250);
+  }
+
+  revokeKey(id: string) {
+    this.keys = this.keys.map((k) => (k.id === id ? { ...k, status: 'revoked' as const } : k));
+    return latency(undefined, 250);
+  }
+
+  rotateKey(id: string): Promise<CreatedApiKey> {
+    const key = this.keys.find((k) => k.id === id);
+    if (!key) return Promise.reject(new ApiError(404, `Unknown key ${id}`, 'not_found'));
+    const secret = `phoebis-${this.token(40)}`;
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 8) };
+    this.keys = this.keys.map((k) => (k.id === id ? next : k));
+    return latency({ key: next, secret }, 300);
   }
 
   setSessionExpiry(seconds: number) {
@@ -251,6 +439,28 @@ export class MockApi implements Api {
     return liveFeed().subscribe(handler);
   }
 
+  async syncCatalog(accountId: string): Promise<SyncResult> {
+    const a = this.account(accountId);
+    this.putAccount({ ...a, catalogSyncedAt: iso(NOW) });
+    return latency({ added: [], error: null, missing: a.servedModels.filter((m) => !m.inCatalog).map((m) => m.upstreamId), seeded: false }, 500);
+  }
+
+  testAlertRule(id: string): Promise<AlertDeliveryTest> {
+    const rule = this.rules.find((r) => r.id === id);
+    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, 'not_found'));
+    return latency({ error: null, status: 200 }, 400);
+  }
+
+  updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
+    const rule = this.rules.find((r) => r.id === id);
+    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, 'not_found'));
+    // An absent secret leaves the stored one alone, so the badge only turns off when an empty string clears it.
+    const hasSecret = input.secret === undefined ? rule.hasSecret : input.secret !== '';
+    const next: AlertRule = { ...rule, enabled: input.enabled, hasSecret, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
+    this.rules = this.rules.map((r) => (r.id === id ? next : r));
+    return latency(next, 250);
+  }
+
   updateKey(id: string, input: KeyInput): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
@@ -267,11 +477,12 @@ export class MockApi implements Api {
     return latency(next, 250);
   }
 
-  updateServedModels(accountId: string, models: ServedModel[]) {
-    const idx = this.accounts.findIndex((a) => a.id === accountId);
-    if (idx < 0) return Promise.reject(new Error(`Unknown account ${accountId}`));
-    const next = { ...this.accounts[idx], servedModels: models };
-    this.accounts = this.accounts.map((a, i) => (i === idx ? next : a));
-    return latency(next, 250);
+  async updateServedModels(accountId: string, models: ServedModel[]) {
+    return latency(this.putAccount({ ...this.account(accountId), servedModels: models }), 250);
+  }
+
+  async verifyAccount(accountId: string) {
+    this.account(accountId);
+    return latency({ ok: true, status: 200 }, 400);
   }
 }

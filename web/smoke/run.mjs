@@ -56,6 +56,36 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
 }
 
+{
+  localStorage.removeItem('phoebis.mockSession');
+  const login = await mount('/');
+  expect('login screen without a session', login.text(), ['Admin or viewer secret', 'Log in']);
+  const input = login.container.querySelector('input[type="password"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(input, 'viewer');
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
+  await login.settle(500);
+  results.push({ name: 'a viewer login lands on the dashboard with the viewer badge', ok: login.text().includes('Requests, 24h') && login.text().includes('viewer') && !login.text().includes('Log in'), missing: [] });
+  [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
+  await login.settle(400);
+  results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin or viewer secret'), missing: [] });
+  login.unmount();
+  localStorage.setItem('phoebis.mockSession', 'admin');
+}
+
+{
+  const page = await mount('/settings');
+  const synced = () => page.container.querySelector('.sidebar__row[title]')?.getAttribute('title') ?? '';
+  const before = synced();
+  [...page.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '12h')?.click();
+  await page.settle(100);
+  results.push({ name: 'the time format toggle re-renders every timestamp at once', ok: before !== synced() && /[AP]M/.test(synced()), missing: [before, synced()] });
+  [...page.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
+  await page.settle(100);
+  page.unmount();
+}
+
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Synced', 'admin', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });

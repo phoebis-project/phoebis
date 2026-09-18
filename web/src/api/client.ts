@@ -1,12 +1,19 @@
 import type {
   Account,
+  AccountInput,
   AccountRollup,
+  AlertDeliveryTest,
   AlertEvent,
   AlertRule,
+  AlertRuleInput,
+  AnalyticsGroup,
+  AnalyticsPoint,
+  AnalyticsQuery,
   ApiKey,
   CapturedBodies,
   CatalogModel,
   CreatedApiKey,
+  Delivery,
   HourlyRollup,
   KeepaliveOverview,
   KeepaliveRecipe,
@@ -24,11 +31,16 @@ import type {
   QuotaHistory,
   QuotaSnapshot,
   RequestLog,
+  RequestPage,
   RequestQuery,
   ServedModel,
   Session,
+  SessionInfo,
   Settings,
+  SyncResult,
 } from './types';
+
+export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
 
 export interface KeyInput {
   allowedModels: string[] | null;
@@ -77,37 +89,70 @@ export interface PoolInput {
 }
 
 export interface Api {
+  cancelPairing(pairingId: string): Promise<void>;
+  clearCooldown(accountId: string, scope: string): Promise<void>;
+  clearFunding(accountId: string): Promise<void>;
+  /** One argument until the pairing dialog passes the router's pairing id; the implementation supplies the id it started under. */
   completePairing(input: PairingInput): Promise<PairingPreview>;
-  confirmPairing(state: string): Promise<void>;
+  confirmPairing(pairingId: string): Promise<void>;
+  confirmPriceImport(token: string): Promise<Settings['pricing']>;
+  createAccount(input: AccountInput): Promise<Account>;
+  createAlertRule(input: AlertRuleInput): Promise<AlertRule>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;
   createPool(input: PoolInput): Promise<Pool>;
+  deleteAlertRule(id: string): Promise<void>;
+  deleteKey(id: string): Promise<void>;
+  deletePool(id: string): Promise<void>;
+  disconnectAccount(accountId: string): Promise<void>;
+  getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
+  getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getOverview(): Promise<Overview>;
   getQuotaHistory(accountId: string): Promise<QuotaHistory[]>;
   getRequest(id: string): Promise<RequestLog | null>;
+  /** Null when no session cookie is valid, which is what puts the login screen up. */
+  getSession(): Promise<SessionInfo | null>;
   getSettings(): Promise<Settings>;
   listAccountRollups(from: string, to: string): Promise<AccountRollup[]>;
   listAccounts(): Promise<Account[]>;
-  listAlertEvents(): Promise<AlertEvent[]>;
+  listAlertDeliveries(eventId: string): Promise<Delivery[]>;
+  listAlertEvents(state?: 'open' | 'resolved'): Promise<AlertEvent[]>;
   listAlertRules(): Promise<AlertRule[]>;
   listCatalog(): Promise<CatalogModel[]>;
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
+  listRequestPage(query?: RequestQuery): Promise<RequestPage>;
+  /** Kept beside the paged read until the request and dashboard views take a cursor. */
   listRequests(query?: RequestQuery): Promise<RequestLog[]>;
+  /** Kept until the analytics page reads the series and breakdown routes instead of folding rollup rows itself. */
   listRollups(from: string, to: string): Promise<HourlyRollup[]>;
   listSessions(): Promise<Session[]>;
+  login(secret: string): Promise<SessionInfo>;
+  logout(): Promise<void>;
+  pauseAccount(accountId: string): Promise<void>;
   /** The rows a catalog at this URL yields, already converted to USD per million and reduced to models the router serves, with the counts behind that filter. */
   previewPriceImport(url: string): Promise<PriceImportPreview>;
-  /** Idle time after which the router forgets a session; the sessions list honours it. */
+  refreshUsage(accountId: string): Promise<void>;
+  releaseSession(keyId: string, sessionId: string): Promise<void>;
+  renameAccount(accountId: string, label: string): Promise<Account>;
+  resolveAlertEvent(id: string): Promise<AlertEvent>;
+  resumeAccount(accountId: string): Promise<void>;
+  revokeKey(id: string): Promise<void>;
+  rotateKey(id: string): Promise<CreatedApiKey>;
+  /** Idle time after which the router forgets a session; the sessions list honours it. Kept until the settings page reads the router's own setting. */
   setSessionExpiry(seconds: number): Promise<Settings>;
-  /** Pass null to pair a new account, or an id to re-pair an existing one. */
+  /** Null pairs a new account until the pairing dialog creates the account first. */
   startPairing(accountId: string | null): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
+  syncCatalog(accountId: string): Promise<SyncResult>;
+  testAlertRule(id: string): Promise<AlertDeliveryTest>;
+  updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule>;
   updateKey(id: string, input: KeyInput): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput): Promise<Pool>;
   updateServedModels(accountId: string, models: ServedModel[]): Promise<Account>;
+  verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

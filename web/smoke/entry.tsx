@@ -2,10 +2,14 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { routes } from '@/app/App';
+import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { REQUESTS } from '@/mock/requests';
 
 export const requests = REQUESTS;
+
+// Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
+localStorage.setItem('phoebis.mockSession', 'admin');
 
 export interface Mounted {
   container: HTMLElement;
@@ -23,9 +27,11 @@ export async function mount(path: string): Promise<Mounted> {
   const root = createRoot(container);
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   root.render(
-    <AppSettingsProvider>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
-    </AppSettingsProvider>,
+    <SessionProvider>
+      <AppSettingsProvider>
+        <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      </AppSettingsProvider>
+    </SessionProvider>,
   );
   await wait(600);
   return {

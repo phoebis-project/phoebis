@@ -11,6 +11,7 @@ import { QuotaPage } from '@/pages/QuotaPage';
 import { RequestsPage } from '@/pages/RequestsPage';
 import { SessionsPage } from '@/pages/SessionsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { SessionProvider } from './session';
 import { AppSettingsProvider } from './settings';
 
 /** Keeps a bookmarked /accounts/:id landing on the same upstream. */
@@ -50,8 +51,10 @@ const router = createBrowserRouter(routes);
 
 export function App() {
   return (
-    <AppSettingsProvider>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
-    </AppSettingsProvider>
+    <SessionProvider>
+      <AppSettingsProvider>
+        <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      </AppSettingsProvider>
+    </SessionProvider>
   );
 }

@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
+import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { Badge, Segmented } from '@/components/ui/primitives';
+import { Badge, Button, Segmented, Toast } from '@/components/ui/primitives';
 import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconSliders, IconSun, IconUser, IconRoute } from '@/components/ui/icons';
 
 const NAV: { icon: ReactNode; label: string; to: string }[] = [
@@ -38,7 +39,8 @@ export const PAGE_TITLES: Record<string, string> = {
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { theme, setTheme, role } = useAppSettings();
+  const { theme, setTheme } = useAppSettings();
+  const { clearForbidden, forbidden, logout, role } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(15_000);
   const [navOpen, setNavOpen] = useState(false);
@@ -85,6 +87,9 @@ export function Shell() {
             <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies'}>
               {role}
             </Badge>
+            <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
+              Log out
+            </Button>
             <Segmented<ThemeChoice>
               ariaLabel="Theme"
               value={theme}
@@ -102,6 +107,7 @@ export function Shell() {
         </main>
       </div>
       {navOpen && <button type="button" className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
+      <Toast message={forbidden} onDone={clearForbidden} />
     </div>
   );
 }

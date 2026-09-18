@@ -1,0 +1,128 @@
+import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, HourlyRollup, LatencyHistograms } from '@/api/types';
+import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { DAY, HOUR } from './time';
+
+/** The widths the analytics route buckets a range at, so a mock point covers the same hours the router's does. */
+const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 30 * DAY ? 6 * HOUR : DAY);
+
+const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
+  account: (r) => r.accountId,
+  all: () => 'all',
+  key: (r) => r.keyId,
+  kind: (r) => r.kind,
+  model: (r) => r.model,
+  pool: (r) => r.poolId,
+  // The fixture rollups carry no user agent, so every row falls under the one key.
+  user_agent: () => 'unknown',
+};
+
+const METRICS: (keyof LatencyHistograms)[] = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'];
+const PERCENTILES = { p50: 0.5, p90: 0.9, p95: 0.95, p99: 0.99 };
+const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, PERCENTILES.p50), p90: percentileFromHistogram(h, PERCENTILES.p90), p95: percentileFromHistogram(h, PERCENTILES.p95), p99: percentileFromHistogram(h, PERCENTILES.p99) });
+
+function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: number): boolean {
+  const hour = Date.parse(r.hour);
+  if (hour < fromMs || hour > toMs) return false;
+  if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
+  if (q.keyIds?.length && !q.keyIds.includes(r.keyId)) return false;
+  if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
+  if (q.models?.length && !q.models.includes(r.model)) return false;
+  if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
+  return true;
+}
+
+/**
+ * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
+ * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read.
+ */
+function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
+  const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
+  const probeRows = rows.filter((r) => r.kind === 'probe');
+  const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
+
+  const cacheMissReasons = emptyCacheMissReasons();
+  for (const r of counted) for (const reason of CACHE_MISS_REASONS) cacheMissReasons[reason] += r.cacheMissReasons[reason];
+  const wastedProbeReasons = emptyWastedProbeReasons();
+  for (const r of probeRows) for (const reason of WASTED_PROBE_REASONS) wastedProbeReasons[reason] += r.wastedProbeReasons[reason];
+
+  const histograms = { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() };
+  for (const m of METRICS) histograms[m] = mergeHistograms(counted.map((r) => r.histograms[m]));
+
+  const rateLimited = sum(counted, (r) => r.requests.rate_limited);
+  const overloaded = sum(counted, (r) => r.requests.overloaded);
+  const upstreamError = sum(counted, (r) => r.requests.upstream_error);
+  const succeeded = sum(counted, (r) => r.requests.ok);
+  const requests = succeeded + rateLimited + overloaded + upstreamError;
+  const failovers = sum(counted, (r) => r.failovers);
+  const errors: Record<string, number> = {};
+  if (rateLimited) errors.rate_limit_error = rateLimited;
+  if (overloaded) errors.overloaded_error = overloaded;
+  if (upstreamError) errors.api_error = upstreamError;
+
+  return {
+    // Every attempt past the first on a request is a failover, so the two together are what the upstreams saw.
+    attempts: requests + failovers,
+    cacheHits: sum(counted, (r) => r.cacheHits),
+    cacheMisses: sum(counted, (r) => r.cacheMisses),
+    cacheMissReasons,
+    cost: { cacheRead: sum(counted, (r) => r.cost.cacheRead), cacheWrite: sum(counted, (r) => r.cost.cacheWrite), input: sum(counted, (r) => r.cost.input), output: sum(counted, (r) => r.cost.output) },
+    costUsd: sum(counted, (r) => r.costUsd),
+    errors,
+    // The fixture ledger records neither an exhausted pool nor a rejected request.
+    exhausted: 0,
+    expiredBetweenTurns: sum(counted, (r) => r.expiredBetweenTurns),
+    failed: overloaded + upstreamError,
+    failovers,
+    histograms,
+    keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens: sum(counted, (r) => r.keptWarm.tokens) },
+    key,
+    label: key,
+    percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
+    probes: { failed: sum(probeRows, (r) => r.probes.failed), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
+    rateLimited,
+    rejected: 0,
+    requests,
+    savings: {
+      // The gross saving rides on the inference rows and what the cache cost to keep warm on the probe rows.
+      grossUsd: sum(counted, (r) => r.savings.grossUsd),
+      probeCostUsd: sum(probeRows, (r) => r.savings.probeCostUsd),
+      wastedProbeReasons,
+      wastedProbeUsd: sum(probeRows, (r) => r.wastedProbeUsd),
+      wastedProbes: sum(probeRows, (r) => r.wastedProbes),
+    },
+    succeeded,
+    tokens: { cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output), uncachedInput: sum(counted, (r) => r.tokens.uncachedInput) },
+    uncached: sum(counted, (r) => r.uncached),
+  };
+}
+
+function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
+  const of = GROUP_KEY[q.groupBy];
+  const buckets = new Map<string, HourlyRollup[]>();
+  for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
+  return [...buckets.entries()].map(([key, list]) => groupOf(key, list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+}
+
+export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
+  const fromMs = Date.parse(q.from);
+  const toMs = Date.parse(q.to);
+  return groupsOf(
+    rows.filter((r) => inQuery(r, q, fromMs, toMs)),
+    q,
+  );
+}
+
+export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoint[] {
+  const fromMs = Date.parse(q.from);
+  const toMs = Date.parse(q.to);
+  const bucketMs = bucketMsFor(toMs - fromMs);
+  const kept = rows.filter((r) => inQuery(r, q, fromMs, toMs));
+  const points: AnalyticsPoint[] = [];
+  // Buckets start on a whole multiple of their own width and run to the hour after the range ends, as the route's do.
+  for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) {
+    const inBucket = kept.filter((r) => Date.parse(r.hour) >= at && Date.parse(r.hour) < at + bucketMs);
+    points.push({ at: new Date(at).toISOString(), groups: groupsOf(inBucket, q) });
+  }
+  return points;
+}
