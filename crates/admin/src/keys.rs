@@ -1,6 +1,7 @@
 //! Key routes: issue, edit, rotate, revoke, delete. The secret is shown in the create and rotate answers and
 //! nowhere else.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -104,12 +105,38 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
     Ok(())
 }
 
+/// The two ledger totals every key row shares, read once per call rather than once per key.
+async fn totals(
+    state: &AdminState,
+) -> (
+    BTreeMap<String, phoebis_ledger::Totals>,
+    BTreeMap<String, phoebis_ledger::Totals>,
+) {
+    let now = (state.clock)();
+    let hour = phoebis_ledger::hour_of(now);
+    let read = state.ledger.db().read(|c| {
+        Ok((
+            phoebis_ledger::request_totals(c, "key_id", hour - 7 * 24 * 3_600)?,
+            // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
+            phoebis_ledger::request_totals(c, "key_id", i64::MIN)?,
+        ))
+    });
+    match read {
+        Ok(totals) => totals,
+        Err(error) => {
+            tracing::warn!(%error, "the key view could not read the ledger; usage and lifetime totals are empty");
+            Default::default()
+        }
+    }
+}
+
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match state.store.api_keys() {
         Ok(rows) => {
+            let (week, lifetime) = totals(&state).await;
             let mut out = Vec::new();
             for row in rows {
-                match key_json(&state, &row) {
+                match key_json(&state, &row, &week, &lifetime) {
                     Ok(v) => out.push(v),
                     Err(e) => return store_failure(e),
                 }
@@ -171,7 +198,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match key_json(&state, &row) {
+    let (week, lifetime) = totals(&state).await;
+    match key_json(&state, &row, &week, &lifetime) {
         Ok(mut v) => {
             v["secret"] = json!(secret);
             (StatusCode::CREATED, Json(v)).into_response()
@@ -202,7 +230,8 @@ pub(crate) async fn patch(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match key_json(&state, &row) {
+    let (week, lifetime) = totals(&state).await;
+    match key_json(&state, &row, &week, &lifetime) {
         Ok(v) => Json(v).into_response(),
         Err(e) => store_failure(e),
     }
@@ -235,13 +264,16 @@ pub(crate) async fn rotate(
         return refusal;
     }
     match state.store.api_key(&id) {
-        Ok(Some(row)) => match key_json(&state, &row) {
-            Ok(mut v) => {
-                v["secret"] = json!(secret);
-                Json(v).into_response()
+        Ok(Some(row)) => {
+            let (week, lifetime) = totals(&state).await;
+            match key_json(&state, &row, &week, &lifetime) {
+                Ok(mut v) => {
+                    v["secret"] = json!(secret);
+                    Json(v).into_response()
+                }
+                Err(e) => store_failure(e),
             }
-            Err(e) => store_failure(e),
-        },
+        }
         Ok(None) => failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => store_failure(e),
     }
@@ -276,7 +308,12 @@ pub(crate) async fn remove(
 }
 
 /// Never the digest and never the secret.
-fn key_json(state: &AdminState, row: &ApiKeyRow) -> Result<Value, StoreError> {
+fn key_json(
+    state: &AdminState,
+    row: &ApiKeyRow,
+    week: &BTreeMap<String, phoebis_ledger::Totals>,
+    lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
+) -> Result<Value, StoreError> {
     let effective = row.body_capture_hours.unwrap_or(
         state
             .store
@@ -289,5 +326,7 @@ fn key_json(state: &AdminState, row: &ApiKeyRow) -> Result<Value, StoreError> {
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "allowed_models": row.allowed_models,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
+        "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
+        "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },
     }))
 }

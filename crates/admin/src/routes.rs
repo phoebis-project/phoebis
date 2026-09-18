@@ -1,6 +1,7 @@
 //! The `/admin` surface: one gate in front of every route, then the account, pairing, usage, and system
 //! handlers.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use phoebis_oauth::{
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::ReloadError;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, StoreError,
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
@@ -256,11 +257,11 @@ async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
         Ok(rows) => rows,
         Err(error) => return store_failure(error),
     };
-    // One ask for the whole list: the router holds every account's cooldowns in the same table.
-    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
+    // One ask for what every row shares: the router and the ledger each answer once for the whole list.
+    let ctx = account_context(&state).await;
     let mut accounts = Vec::with_capacity(rows.len());
     for row in &rows {
-        accounts.push(account_view(&state, row, &cooldowns).await);
+        accounts.push(account_view(&state, row, &ctx).await);
     }
     Json(json!({ "accounts": accounts })).into_response()
 }
@@ -816,15 +817,63 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
     }
 }
 
+/// What every account row reads from the ledger and the registry, fetched once per list call.
+pub(crate) struct AccountContext {
+    pub cooldowns: Vec<CooldownRow>,
+    pub day: BTreeMap<String, phoebis_ledger::Totals>,
+    pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
+    pub members: Vec<PoolMember>,
+    pub quota: Vec<phoebis_ledger::QuotaSampleRecord>,
+    pub week: BTreeMap<String, phoebis_ledger::Totals>,
+}
+
+pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
+    let now = (state.clock)();
+    let hour = phoebis_ledger::hour_of(now);
+    let ledger = state.ledger.db().read(|c| {
+        Ok((
+            phoebis_ledger::latest_quota(c, now)?,
+            phoebis_ledger::latest_extra_usage(c, now)?,
+            phoebis_ledger::request_totals(c, "account_id", hour - 24 * 3_600)?,
+            phoebis_ledger::request_totals(c, "account_id", hour - 7 * 24 * 3_600)?,
+            // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
+            phoebis_ledger::request_totals(c, "account_id", i64::MIN)?,
+        ))
+    });
+    let (quota, extra, day, week, lifetime) = match ledger {
+        Ok(read) => read,
+        Err(error) => {
+            tracing::warn!(%error, "the account view could not read the ledger; totals and windows are empty");
+            Default::default()
+        }
+    };
+    let members = state
+        .store
+        .load_registry()
+        .map(|l| l.members)
+        .unwrap_or_default();
+    AccountContext {
+        cooldowns: state.router.cooldowns().await.unwrap_or_default(),
+        day,
+        extra,
+        lifetime,
+        members,
+        quota,
+        week,
+    }
+}
+
 /// Never a token, in any branch: an account view is the one place a credential could plausibly be shown
 /// and must not be.
 pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Value {
-    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
-    account_view(state, row, &cooldowns).await
+    let ctx = account_context(state).await;
+    account_view(state, row, &ctx).await
 }
 
-/// The view over a cooldown list the caller already holds, so listing every account asks the router once.
-async fn account_view(state: &AdminState, row: &AccountRow, cooldowns: &[CooldownRow]) -> Value {
+/// The view over a context the caller already holds, so listing every account asks the router and the
+/// ledger once.
+async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Value {
     let overage = state.router.overage(&row.id).await.ok().flatten();
     let (catalog_synced_at, catalog_error) =
         state.store.catalog_status(&row.id).unwrap_or_default();
@@ -840,6 +889,24 @@ async fn account_view(state: &AdminState, row: &AccountRow, cooldowns: &[Cooldow
     let quarantined = attempt.as_ref().is_some_and(|attempt| {
         attempt.resolved_at.is_none() || attempt.outcome.as_deref() == Some("uncertain")
     });
+    // Built ahead of the `json!` call below: the profile block pushes the macro past its expansion depth,
+    // as `attempt_json` found for the request log.
+    let profile = state
+        .store
+        .profile_json(&row.id)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .map(|p| {
+            json!({
+                "billing_type": p["organization"]["billing_type"],
+                "display_name": p["account"]["display_name"],
+                "has_extra_usage_enabled": p["account"]["has_extra_usage_enabled"],
+                "organization_name": p["organization"]["name"],
+                "organization_type": p["organization"]["organization_type"],
+                "rate_limit_tier": p["organization"]["rate_limit_tier"],
+            })
+        });
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -865,11 +932,12 @@ async fn account_view(state: &AdminState, row: &AccountRow, cooldowns: &[Cooldow
         "lifecycle_generation": row.lifecycle_generation,
         "catalog_error": catalog_error,
         "catalog_synced_at": catalog_synced_at,
-        "cooldowns": cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
+        "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
             "reason": cooldown.reason,
             "window": cooldown.window,
+            "set_at": cooldown.set_at,
         })).collect::<Vec<_>>(),
         "overage": overage.map(|overage| json!({
             "in_use": overage.in_use,
@@ -878,6 +946,12 @@ async fn account_view(state: &AdminState, row: &AccountRow, cooldowns: &[Cooldow
             "observed_at": overage.observed_at,
         })),
         "served_models_count": served_models_count,
+        "profile": profile,
+        "windows": ctx.quota.iter().filter(|q| q.account_id == row.id).map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 })).collect::<Vec<_>>(),
+        "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
+        "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
+        "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
+        "served_models": accounts::models_json(state, &row.id).map(|m| m["models"].clone()).unwrap_or_else(|_| json!([])),
     })
 }
 

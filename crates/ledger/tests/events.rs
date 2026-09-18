@@ -165,3 +165,43 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
     .await;
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_registry_change_lands_with_its_diff_decoded_once() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            event_poll: Duration::from_millis(50),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .update_pool(&h.store.pool("main").unwrap().unwrap(), "test")
+        .unwrap();
+    let row = wait_for(Duration::from_secs(5), || {
+        h.db.events(0, i64::MAX, 100)
+            .unwrap()
+            .into_iter()
+            .find(|e| {
+                e.kind == "registry_changed"
+                    && e.detail
+                        .as_deref()
+                        .is_some_and(|d| d.contains("pool_updated"))
+            })
+    })
+    .await;
+    let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
+    assert!(
+        detail["diff"].is_object(),
+        "the diff is a value, not a string: {detail}"
+    );
+    up.shutdown().await;
+}

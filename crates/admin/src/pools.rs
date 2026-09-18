@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
-use phoebis_store::{OveragePolicy, PoolRow, StoreError, Strategy};
+use phoebis_store::{OveragePolicy, PoolMember, PoolRow, StoreError, Strategy};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -187,7 +187,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
         Ok(rows) => {
             let mut out = Vec::new();
             for row in rows {
-                match pool_json(&state, &row) {
+                match pool_json(&state, &row).await {
                     Ok(v) => out.push(v),
                     Err(e) => return store_failure(e),
                 }
@@ -266,7 +266,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match pool_json(&state, &row) {
+    match pool_json(&state, &row).await {
         Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
         Err(e) => store_failure(e),
     }
@@ -294,7 +294,7 @@ pub(crate) async fn patch(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match pool_json(&state, &row) {
+    match pool_json(&state, &row).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => store_failure(e),
     }
@@ -350,13 +350,13 @@ pub(crate) async fn set_members(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
-    match pool_json(&state, &row) {
+    match pool_json(&state, &row).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => store_failure(e),
     }
 }
 
-pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, StoreError> {
+pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, StoreError> {
     let members = state.store.pool_members(&row.id)?;
     let keys: Vec<Value> = state
         .store
@@ -365,6 +365,52 @@ pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, Stor
         .filter(|k| k.pool_id == row.id)
         .map(|k| json!({ "id": k.id, "label": k.label, "prefix": k.prefix, "enabled": k.enabled }))
         .collect();
+    let now = (state.clock)();
+    let hour = phoebis_ledger::hour_of(now);
+    let (day, traffic) = state
+        .ledger
+        .db()
+        .read(|c| {
+            Ok((
+                phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600)?,
+                phoebis_ledger::pool_traffic(c, &row.id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
+            ))
+        })
+        .unwrap_or_default();
+    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
+    let pins = state.router.pins().await.unwrap_or_default();
+    let key_ids: Vec<String> = keys
+        .iter()
+        .map(|k| k["id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
+    let accounts = state.store.accounts()?;
+    // A member is eligible when routing would consider it: enabled, ready or mid-refresh (the selector's `obstacle`
+    // admits both), and not under an account-wide cooldown.
+    let eligible = |m: &PoolMember| {
+        accounts
+            .iter()
+            .find(|a| a.id == m.account_id)
+            .is_some_and(|a| {
+                a.enabled
+                    && matches!(
+                        a.state,
+                        phoebis_store::AccountState::Ready | phoebis_store::AccountState::Refreshing
+                    )
+            })
+            && !cooldowns
+                .iter()
+                .any(|c| c.account_id == m.account_id && c.scope == "account" && c.until > now)
+    };
+    let status = if !row.enabled {
+        "disabled"
+    } else if members.is_empty() || !members.iter().any(eligible) {
+        "exhausted"
+    } else if !members.iter().all(eligible) {
+        "degraded"
+    } else {
+        "active"
+    };
     Ok(json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
         "strategy": row.strategy.as_str(), "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
@@ -374,6 +420,11 @@ pub(crate) fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, Stor
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority })).collect::<Vec<_>>(),
         "keys": keys,
+        "status": status,
+        "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),
+        "cost_24h": day.get(&row.id).map_or(0.0, |t| t.cost_usd),
+        "active_pins": active_pins,
+        "traffic_24h": traffic,
     }))
 }
 

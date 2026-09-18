@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
-use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
+use crate::record::{
+    AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
+};
 use crate::rollup::{read_rollups, RollupRow, UNATTRIBUTED};
 use crate::LedgerError;
 
@@ -703,6 +705,64 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn latest_extra_usage(
+    conn: &Connection,
+    now: i64,
+) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+    let since = now / 1_000 - 86_400;
+    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source FROM extra_usage_samples e WHERE bucket >= ?1 AND bucket = (SELECT MAX(bucket) FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1) ORDER BY account_id")?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(ExtraUsageSampleRecord {
+            account_id: r.get(0)?,
+            bucket: r.get(1)?,
+            is_enabled: r.get(2)?,
+            in_use: r.get(3)?,
+            monthly_limit: r.get(4)?,
+            used_credits: r.get(5)?,
+            utilization: r.get(6)?,
+            currency: r.get(7)?,
+            disabled_reason: r.get(8)?,
+            overage_reset: r.get(9)?,
+            source: r.get(10)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Totals {
+    pub cost_usd: f64,
+    pub requests: u64,
+    pub tokens: u64,
+}
+
+/// Request, token, and cost totals per key, pool, or account since an hour, probe rows left out. One aggregate
+/// query rather than a rollup read, because the account list asks three times per call. A caller wanting every
+/// row the rollups hold passes a value at or below the earliest hour they can carry.
+pub fn request_totals(
+    conn: &Connection,
+    column: &str,
+    since_hour: i64,
+) -> Result<BTreeMap<String, Totals>, LedgerError> {
+    // The column is one of three identifiers this function names, never a caller's string.
+    assert!(
+        matches!(column, "account_id" | "key_id" | "pool_id"),
+        "request_totals column"
+    );
+    let mut stmt = conn.prepare(&format!("SELECT {column}, SUM(requests), SUM(input_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens + output_tokens), SUM(estimated_usd) FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 GROUP BY {column}"))?;
+    let rows = stmt.query_map(params![since_hour], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            Totals {
+                requests: r.get::<_, i64>(1)? as u64,
+                tokens: r.get::<_, i64>(2)? as u64,
+                cost_usd: r.get::<_, f64>(3)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
 }
 
 #[derive(Clone, Debug, PartialEq)]

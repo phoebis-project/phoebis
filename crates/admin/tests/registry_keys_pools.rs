@@ -526,3 +526,128 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 100),
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(200),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            // The ledger reprices every attempt from the shipped table on write (see `land` in
+            // `crates/ledger/src/task.rs`), so a manually set `estimated_usd` would not survive; the model is
+            // priced instead and the assertions below use the table's own rate.
+            attempts: vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "direct".into(),
+                account_kind: "api_key".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                ..Default::default()
+            }],
+            bodies: None,
+        });
+    }
+    let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
+        v["keys"][0]["lifetime"]["requests"].as_u64() == Some(2)
+    })
+    .await;
+    let key = keys["keys"][0].clone();
+    // claude-sonnet-5 prices at 2.0/input and 10.0/output per million tokens: one request of 100 input and 50
+    // output tokens costs 0.0002 + 0.0005 = 0.0007, and two of them cost 0.0014.
+    assert_eq!(
+        (
+            key["usage_7d"]["requests"].as_u64(),
+            key["usage_7d"]["tokens"].as_u64()
+        ),
+        (Some(2), Some(300))
+    );
+    assert!((key["lifetime"]["cost_usd"].as_f64().unwrap() - 0.0014).abs() < 1e-9);
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            pool["status"].as_str(),
+            pool["requests_24h"].as_u64(),
+            pool["active_pins"].as_u64()
+        ),
+        (Some("active"), Some(1), Some(0))
+    );
+    // Only r1 falls in the last 24h; r2 is two days old. One request costs 0.0007, per the note above.
+    assert!((pool["cost_24h"].as_f64().unwrap() - 0.0007).abs() < 1e-9);
+    let traffic = pool["traffic_24h"].as_array().unwrap();
+    assert_eq!(traffic.len(), 24);
+    assert_eq!(
+        traffic
+            .iter()
+            .map(|b| b["requests"].as_u64().unwrap())
+            .sum::<u64>(),
+        1
+    );
+    parts
+        .store
+        .set_state("direct", phoebis_store::AccountState::Refreshing)
+        .unwrap();
+    assert_eq!(
+        json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
+        "active",
+        "a member mid-refresh still serves, as the selector admits it"
+    );
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts/direct/pause",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert_eq!(
+        json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
+        "exhausted",
+        "every member paused"
+    );
+    assert_eq!(
+        patch(
+            &parts.app,
+            "/admin/pools/main",
+            r#"{"enabled":false}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(
+        json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
+        "disabled"
+    );
+}

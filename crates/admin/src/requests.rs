@@ -149,7 +149,21 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
 }
 
 pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
-    json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": e.detail.as_deref().and_then(|d| serde_json::from_str::<Value>(d).ok()).unwrap_or(Value::Null) })
+    let mut detail = e
+        .detail
+        .as_deref()
+        .and_then(|d| serde_json::from_str::<Value>(d).ok())
+        .unwrap_or(Value::Null);
+    // A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON
+    // string; decoded here so every row reads the same.
+    if let Some(diff) = detail
+        .get("diff")
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+    {
+        detail["diff"] = diff;
+    }
+    json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": detail })
 }
 
 pub(crate) async fn bodies(

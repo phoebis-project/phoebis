@@ -739,3 +739,161 @@ async fn a_sync_that_cannot_publish_says_whether_the_registry_was_written() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() {
+    use phoebis_ledger::{
+        AttemptRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,
+    };
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts.store.set_profile_json("business", r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x"}}"#).unwrap();
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":2}]}"#, Some(&cookie)).await;
+    let bucket = phoebis_ledger::bucket_of(now - 60_000);
+    parts
+        .db
+        .insert_samples(
+            &[
+                QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket,
+                    window: "5h".into(),
+                    utilization: Some(0.62),
+                    reset_at: Some(now + 3_600_000),
+                    source: "poll".into(),
+                },
+                QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket,
+                    window: "fable".into(),
+                    utilization: Some(0.1),
+                    reset_at: None,
+                    source: "poll".into(),
+                },
+            ],
+            Some(&ExtraUsageSampleRecord {
+                account_id: "business".into(),
+                bucket,
+                is_enabled: true,
+                in_use: Some(false),
+                monthly_limit: Some(5_000),
+                used_credits: Some(1_234),
+                utilization: Some(0.25),
+                currency: Some("USD".into()),
+                disabled_reason: None,
+                overage_reset: None,
+                source: "poll".into(),
+            }),
+        )
+        .unwrap();
+    for (id, at) in [
+        ("r1", now - 3_600_000),
+        ("r2", now - 3 * 86_400_000),
+        ("r3", now - 30 * 86_400_000),
+    ] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 100),
+                key_id: Some("k".into()),
+                pool_id: Some("main".into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(200),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                estimated_usd: Some(0.01),
+                ..Default::default()
+            }],
+            bodies: None,
+        });
+    }
+    let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        v["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "business" && a["requests"]["lifetime"].as_u64() == Some(3))
+    })
+    .await;
+    let listed = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            listed["profile"]["rate_limit_tier"].as_str(),
+            listed["profile"]["billing_type"].as_str(),
+            listed["profile"]["has_extra_usage_enabled"].as_bool()
+        ),
+        (
+            Some("default_claude_max_5x"),
+            Some("stripe_subscription"),
+            Some(true)
+        )
+    );
+    assert_eq!(
+        listed["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["5h", "fable"],
+        "sorted by id"
+    );
+    assert_eq!(listed["windows"][0]["utilization"].as_f64(), Some(0.62));
+    assert_eq!(
+        (
+            listed["extra_usage"]["monthly_limit"].as_u64(),
+            listed["extra_usage"]["in_use"].as_bool()
+        ),
+        (Some(5_000), Some(false))
+    );
+    assert_eq!(
+        (
+            listed["pools"][0]["pool_id"].as_str(),
+            listed["pools"][0]["priority"].as_u64()
+        ),
+        (Some("main"), Some(2))
+    );
+    assert_eq!(
+        (
+            listed["requests"]["last_24h"].as_u64(),
+            listed["requests"]["last_7d"].as_u64()
+        ),
+        (Some(1), Some(2))
+    );
+    assert!(listed["served_models"].is_array() && listed["profile"]["display_name"] == "Biz");
+    let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
+    assert!(
+        direct["profile"].is_null()
+            && direct["extra_usage"].is_null()
+            && direct["windows"].as_array().unwrap().is_empty()
+    );
+    assert!(
+        !json(get(&parts.app, "/admin/accounts", Some(&cookie)).await)
+            .await
+            .to_string()
+            .contains("PLACEHOLDER"),
+        "no credential in the list"
+    );
+}

@@ -465,7 +465,7 @@ pub(crate) async fn clear_funding(
     StatusCode::NO_CONTENT.into_response()
 }
 
-fn models_json(state: &AdminState, id: &str) -> Result<Value, StoreError> {
+pub(crate) fn models_json(state: &AdminState, id: &str) -> Result<Value, StoreError> {
     let rows = state.store.served_models(id)?;
     let (synced_at, error) = state.store.catalog_status(id)?;
     // A seed is what an account serves until a discovery lands, so only the newer of the two says which the

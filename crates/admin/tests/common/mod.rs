@@ -233,6 +233,28 @@ pub async fn json(response: Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Polls a GET until `ready` accepts its JSON, within five seconds: the ledger task lands a write a batch
+/// after the record was offered, so a view read straight after a `record` may be one batch behind.
+pub async fn wait_json(
+    app: &Router,
+    path: &str,
+    cookie: &str,
+    ready: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let give_up = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let value = json(get(app, path, Some(cookie)).await).await;
+        if ready(&value) {
+            return value;
+        }
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "{path} never became ready: {value}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 pub fn cookie_of(response: &Response<Body>) -> String {
     response
         .headers()

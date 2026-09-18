@@ -188,7 +188,14 @@ pub fn spawn_event_mirror(
                                 at: change.at,
                                 kind: "registry_changed".into(),
                                 actor: Some(change.actor.clone()),
-                                detail: Some(json!({ "kind": change.kind, "target": change.target, "diff": change.diff_json }).to_string()),
+                                detail: Some(json!({
+                                    "kind": change.kind,
+                                    "target": change.target,
+                                    // Old rows carry `diff_json` re-encoded as a JSON string; a row already parsed
+                                    // this task falls back to that string so both shapes read as a value here.
+                                    "diff": serde_json::from_str::<serde_json::Value>(&change.diff_json)
+                                        .unwrap_or(serde_json::Value::String(change.diff_json.clone())),
+                                }).to_string()),
                                 ..Default::default()
                             }));
                             if change.kind == "catalog_synced" {
