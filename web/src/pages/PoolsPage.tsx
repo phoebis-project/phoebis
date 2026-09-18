@@ -18,7 +18,7 @@ import { KeyDialog } from './KeysPage';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random' };
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
-const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral'> = { active: 'good', expired: 'neutral', revoked: 'critical' };
+const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 const fmtAffinity = (seconds: number) => (seconds === 0 ? 'off' : seconds % 3_600 === 0 ? `${seconds / 3_600}h` : seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`);
 // A scale rather than an alphabetical list.
@@ -1029,12 +1029,13 @@ export function PoolDialog({
         <div className="field">
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <span className="field__label">Keys</span>
-            <Button size="sm" icon={<IconPlus size={13} />} onClick={() => setKeyOpen(true)} disabled={!pool && !form.name.trim()}>
+            {/* A key is posted against a pool id, so there is nothing to create one on until the pool exists. */}
+            <Button size="sm" icon={<IconPlus size={13} />} onClick={() => setKeyOpen(true)} disabled={!pool}>
               Create key
             </Button>
           </div>
           {poolKeys.length === 0 ? (
-            <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool has a name.'}</p>
+            <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
           ) : (
             <ul className="key-list">
               {poolKeys.map((k) => {

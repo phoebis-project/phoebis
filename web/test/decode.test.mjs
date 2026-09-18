@@ -95,6 +95,9 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal(k.usage7d.tokens > 0, true);
   assert.equal(d.decodeKey({ ...fixture('keys').keys[0], revoked_at: 5 }).status, 'revoked');
   assert.equal(d.decodeKey({ ...fixture('keys').keys[0], expires_at: 5 }).status, 'expired');
+  assert.equal(d.decodeKey({ ...fixture('keys').keys[0], enabled: false }).status, 'disabled', 'routing refuses a key that is switched off, so the row may not read active');
+  assert.equal(d.decodeKey({ ...fixture('keys').keys[0], enabled: false, revoked_at: 5 }).status, 'revoked', 'the more final state wins');
+  assert.equal(d.decodeKey({ ...fixture('keys').keys[0], enabled: false, expires_at: 5 }).status, 'expired');
   assert.equal('secret' in d.decodeKey(fixture('key_created')), false);
 });
 
@@ -181,6 +184,24 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   const [m] = d.foldGroups([apiKey], 'all');
   assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);
   assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
+});
+
+test('the downstream snippet keeps the placeholder and names the inference listener when it is known', () => {
+  const known = d.snippetFor('127.0.0.1:8080').split('\n');
+  assert.equal(known.length, 4);
+  assert.equal(known[0], '# inference is served on 127.0.0.1:8080; use the URL that reaches that listener');
+  assert.equal(known[1], `ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'the admin origin is never substituted here');
+  const unknown = d.snippetFor(null).split('\n');
+  assert.deepEqual(unknown, [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<api key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1']);
+});
+
+test('a session fold groups on the client each row named', () => {
+  const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
+  assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)', 'the row carries the agent the route answers');
+  const rows = [captured, { ...failed, userAgent: 'phoebis-batch/0.9 (external, ci)' }, { ...failed, id: 'r-none', userAgent: null }];
+  const groups = d.foldGroups(rows, 'user_agent');
+  assert.deepEqual(groups.map((g) => g.key).sort(), ['claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)', 'unknown']);
+  assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
 });
 
 test('a folded bucket carries one group per key the page groups on', () => {

@@ -9,7 +9,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Fie
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 
-const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral'> = { active: 'good', expired: 'neutral', revoked: 'critical' };
+const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
@@ -106,6 +106,7 @@ export function KeysPage() {
             <Select value={status} onChange={(e) => setStatus(e.target.value as 'all' | KeyStatus)} aria-label="Status">
               <option value="all">All statuses</option>
               <option value="active">Active</option>
+              <option value="disabled">Disabled</option>
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
             </Select>

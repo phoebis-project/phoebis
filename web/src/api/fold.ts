@@ -32,14 +32,14 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   uncached: 0,
 });
 
-// A request row carries no user agent, so that dimension folds onto the one key the rollups give it too.
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'key') return r.keyId ?? '-';
   if (by === 'kind') return r.kind;
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
-  if (by === 'user_agent') return 'unknown';
+  // The rollups file a row that named no client under 'unknown'; a fold over request rows says the same.
+  if (by === 'user_agent') return r.userAgent ?? 'unknown';
   return 'all';
 };
 

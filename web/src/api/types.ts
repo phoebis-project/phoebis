@@ -213,7 +213,7 @@ export interface Pool {
   traffic24h: TrafficBucket[];
 }
 
-export type KeyStatus = 'active' | 'expired' | 'revoked';
+export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
   allowedModels: string[] | null;
@@ -303,6 +303,8 @@ export interface RequestLog {
   /** First content token; later than `ttfbMs` on streams that open with metadata. */
   ttftMs: number | null;
   usage: Usage;
+  /** The client that sent the request, as it named itself; `null` when it named nothing. */
+  userAgent: string | null;
 }
 
 export interface CapturedBodies {

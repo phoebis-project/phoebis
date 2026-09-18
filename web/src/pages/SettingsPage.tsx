@@ -8,12 +8,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Inp
 import { fmtDate, fmtInt } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
-
-const PLACEHOLDER_URL = 'https://router.example.com';
-
-const snippetFor = (publicUrl: string | null) => `ANTHROPIC_BASE_URL=${publicUrl ?? PLACEHOLDER_URL}
-CLAUDE_CODE_OAUTH_TOKEN=<api key>
-_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1`;
+import { snippetFor } from '@/lib/snippet';
 
 const OPTIONAL_SNIPPET = `CC_KEEPALIVE_OWNER_ID=$(uuidgen)
 ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"`;
@@ -151,7 +146,7 @@ export function SettingsPage() {
   const { setPreviewRole } = useSession();
   const [toast, setToast] = useState<string | null>(null);
   const s = settings.data;
-  const snippet = snippetFor(s?.about.publicUrl ?? null);
+  const snippet = snippetFor(s?.listeners.proxy ?? null);
 
   return (
     <div className="settings">

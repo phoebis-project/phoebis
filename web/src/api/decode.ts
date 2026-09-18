@@ -150,7 +150,9 @@ export function decodeKey(v: unknown): ApiKey {
     notes: strOrNull(k.notes),
     poolId: str(k.pool_id),
     prefix: str(k.prefix),
-    status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : 'active',
+    // Routing refuses a key that is revoked, expired or switched off, in that order of finality; a row from
+    // a route that reports no `enabled` is taken as on rather than off.
+    status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : bool(k.enabled, true) ? 'active' : 'disabled',
     usage7d: { cost: num(rec(k.usage_7d).cost_usd), requests: num(rec(k.usage_7d).requests), tokens: num(rec(k.usage_7d).tokens) },
   };
 }
@@ -199,7 +201,7 @@ export function decodeRequest(v: unknown): RequestLog {
     capturedBodies: bool(r.captured_bodies), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
     kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: (['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const).find((o) => o === str(r.outcome)) ?? 'failed',
-    poolId: strOrNull(r.pool_id), sessionId: strOrNull(r.session_id), status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage),
+    poolId: strOrNull(r.pool_id), sessionId: strOrNull(r.session_id), status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
 

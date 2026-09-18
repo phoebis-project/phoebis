@@ -305,6 +305,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   const fetched = useAsync(() => (request ? Promise.resolve(request) : api.getRequest(requestId)), [requestId, request]);
   const r = request ?? fetched.data ?? null;
   const bodies = useAsync<CapturedBodies | null>(() => (r?.capturedBodies && canMutate ? api.getCapturedBodies(r.id) : Promise.resolve(null)), [r?.id, canMutate]);
+  // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
+  // responses belong to the row they were read for and to no other, so that answer is never drawn here.
+  const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -438,7 +441,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               <p className="muted">Not captured for this key. Enable body capture on the key to record the exchange.</p>
             ) : !canMutate ? (
               <p className="muted">Captured, but only the admin secret can read bodies.</p>
-            ) : bodies.loading ? (
+            ) : bodies.error ? (
+              <ErrorState title="Could not load the captured bodies" body={bodies.error} action={<Button onClick={bodies.reload}>Try again</Button>} />
+            ) : bodies.loading || otherRequestsBodies ? (
               <Skeleton height={120} />
             ) : bodies.data ? (
               <div className="bodies">

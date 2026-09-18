@@ -637,6 +637,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
   await m.settle(200);
 }
 {
+  // A key is posted against a pool id, so the create dialog offers none until the pool has been saved.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const nameInput = dlg?.querySelector('input');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(nameInput, 'draft');
+  nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Keys')?.click();
+  await m.settle(150);
+  const createKey = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key');
+  results.push({
+    name: '/pools create dialog keeps Create key disabled until the pool is saved',
+    ok: createKey?.disabled === true && (dlg?.textContent ?? '').includes('Keys can be created once the pool is saved'),
+    missing: [String(createKey?.disabled), (dlg?.textContent ?? '').includes('Keys can be created once the pool is saved') ? '' : 'the hint does not say why'],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex');
   edit?.click();
   await m.settle(300);
@@ -649,6 +670,20 @@ m.unmount();
 
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool default', 'revoked', 'Create API key', 'Never']);
+{
+  // A key an operator switched off is refused at routing, so the table may not draw it as active.
+  const rowOf = (name) => [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
+  const badgeOf = (name) => rowOf(name)?.querySelector('.badge')?.textContent?.trim() ?? 'absent';
+  const rows = [...m.container.querySelectorAll('.card--table tbody tr')].map((row) => [row.children[0]?.querySelector('b')?.textContent?.trim(), row.querySelector('.badge')?.textContent?.trim()]);
+  const active = [...m.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Active')?.querySelector('.stat__value')?.textContent ?? '';
+  results.push({
+    name: '/keys a disabled key reads disabled and is out of the Active count',
+    ok: badgeOf('batch') === 'disabled' && active === String(rows.filter(([, badge]) => badge === 'active').length),
+    missing: [badgeOf('batch'), active, JSON.stringify(rows)],
+  });
+  const select = m.container.querySelector('.table-toolbar select');
+  results.push({ name: '/keys the status filter offers disabled', ok: [...(select?.options ?? [])].map((o) => o.value).includes('disabled'), missing: [...(select?.options ?? [])].map((o) => o.value) });
+}
 {
   const captureOf = (name) => {
     const tr = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
@@ -802,6 +837,25 @@ expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude
 }
 await m.navigate(`/requests/${laptopRow.id}`);
 expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+{
+  // Moving to another request while its bodies fail to load must not leave the previous prompt on screen.
+  const [first, second] = requests.filter((r) => r.capturedBodies && r.id !== laptopRow.id);
+  if (first && second) {
+    await m.navigate(`/requests/${first.id}`);
+    const drew = m.text().includes('cache_control');
+    failNextCall('getCapturedBodies', `/admin/requests/${second.id}/bodies`, 'the ledger is unavailable');
+    await m.navigate(`/requests/${second.id}`);
+    await m.settle(400);
+    const text = m.text();
+    results.push({
+      name: '/requests a failed bodies load reports itself and never draws the request before it',
+      ok: drew && text.includes('Could not load the captured bodies') && !text.includes('cache_control'),
+      missing: [drew ? '' : 'the first request drew no bodies', text.includes('Could not load the captured bodies') ? '' : 'no failed-load state', text.includes('cache_control') ? 'the previous bodies are still drawn' : ''],
+    });
+  } else {
+    results.push({ name: '/requests two captured rows for the bodies check', ok: false, missing: ['fixture'] });
+  }
+}
 await m.navigate(`/requests/${desktopRow.id}`);
 expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
 if (failoverRow) {
@@ -1470,7 +1524,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.home.example', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 // The label and its value run together in textContent, which is what pins the URL to the About row.
 expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);
@@ -1623,8 +1677,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
-    name: '/settings main snippet is the three required lines',
-    ok: snippets[0]?.split('\n').length === 3 && !snippets[0].includes('CC_KEEPALIVE_OWNER_ID'),
+    name: '/settings main snippet is the three required lines under the listener hint',
+    ok: snippets[0]?.split('\n').length === 4 && snippets[0].startsWith('# inference is served on 127.0.0.1:8080') && snippets[0].includes('ANTHROPIC_BASE_URL=https://router.example.com') && !snippets[0].includes('CC_KEEPALIVE_OWNER_ID'),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
