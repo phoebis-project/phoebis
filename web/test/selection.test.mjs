@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { selectionOrder } from './dist/api.js';
+import { sampleDriven, selectionOrder } from './dist/api.js';
 
 const account = (id, over = {}) => ({
   baseUrl: null,
@@ -29,39 +29,46 @@ const inOverage = { disabledReason: null, enabled: true, inUse: true, monthlyLim
 // The eligibility verdict rides on the member, because the router computes it against its own live cooldowns and
 // overages; a case states it there rather than re-deriving it from the account.
 const member = (accountId, priority, eligible = 'eligible') => ({ accountId, eligible, priority });
-const pool = (strategy, overagePolicy, members) => ({
-  activePins: 0,
-  affinityTtlSeconds: 600,
-  bodyCaptureHours: 0,
-  cacheTtl: null,
-  cost24h: 0,
-  defaultAllowedModels: null,
-  id: 'p',
-  keepalive: {
-    coldProbeLimit: 2,
-    costCapUsdPerDay: null,
-    enabled: false,
-    jitterSeconds1h: 30,
-    jitterSeconds5m: 5,
-    leadSeconds1h: 360,
-    leadSeconds5m: 60,
-    maxIdleSeconds: 3600,
-    maxIdleTicks: 0,
-    netNegativeGraceProbes: 2,
-    retryMaxSeconds: 300,
-    retrySeconds: 30,
-    stopWhenNetNegative: true,
-    warmSubagents: null,
-  },
-  members,
-  migrateAboveUtilization: null,
-  name: 'p',
-  overagePolicy,
-  requests24h: 0,
-  status: 'active',
-  strategy,
-  traffic24h: [],
-});
+const pool = (strategy, overagePolicy, members, over = {}) => {
+  const merged = {
+    activePins: 0,
+    affinityTtlSeconds: 600,
+    apiKeySubStrategy: 'priority_random',
+    bodyCaptureHours: 0,
+    cacheTtl: null,
+    cost24h: 0,
+    defaultAllowedModels: null,
+    id: 'p',
+    keepalive: {
+      coldProbeLimit: 2,
+      costCapUsdPerDay: null,
+      enabled: false,
+      jitterSeconds1h: 30,
+      jitterSeconds5m: 5,
+      leadSeconds1h: 360,
+      leadSeconds5m: 60,
+      maxIdleSeconds: 3600,
+      maxIdleTicks: 0,
+      netNegativeGraceProbes: 2,
+      retryMaxSeconds: 300,
+      retrySeconds: 30,
+      stopWhenNetNegative: true,
+      warmSubagents: null,
+    },
+    members,
+    migrateAboveUtilization: null,
+    name: 'p',
+    overagePolicy,
+    preferSubscription: false,
+    requests24h: 0,
+    status: 'active',
+    strategy,
+    traffic24h: [],
+    ...over,
+  };
+  // The route answers the effective flag, never the operator alone, so a case states the stored one and gets both.
+  return { ...merged, preferSubscriptionEffective: merged.preferSubscription || sampleDriven(merged.strategy) };
+};
 const accounts = [account('over', { extraUsage: inOverage }), account('plan')];
 
 test('an overage P0 beside a plan-funded P1 follows each overage policy', () => {
@@ -137,4 +144,14 @@ test('a pin counts only while the session holds it', () => {
     ],
     'an expired session still sits in the list but no longer pins its upstream',
   );
+});
+
+test('the kind order walks plan oauth, overage oauth, then api keys ahead of priority', () => {
+  const trio = [account('key', { kind: 'api_key' }), account('over', { extraUsage: inOverage }), account('plan')];
+  const members = [member('key', 0), member('over', 0), member('plan', 1)];
+  const tiers = selectionOrder(pool('priority_random', 'prefer_plan', members, { preferSubscription: true }), trio, []);
+  assert.deepEqual(tiers.map((t) => [t.group, t.priority, t.next]), [[0, 1, ['plan']], [1, 0, []], [2, 0, []]], 'the plan-funded P1 comes first, then the overage P0, then the key');
+  const forced = selectionOrder(pool('least_utilized', 'prefer_plan', members), trio, []);
+  assert.equal(forced[0].group, 0, 'least_utilized forces the kind order whatever the flag says');
+  assert.deepEqual(selectionOrder(pool('round_robin', 'allow', [member('a', 0), member('b', 0)]), [account('a'), account('b')], [])[0].next.sort(), ['a', 'b'], 'round robin marks every member of the tier as next');
 });

@@ -117,6 +117,18 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
 
+test('a pool decodes round robin, both subscription flags, and the sub-strategy, and encodes the stored one back', () => {
+  const wire = { ...fixture('pools').pools[0], strategy: 'round_robin', prefer_subscription: true, prefer_subscription_effective: true, api_key_sub_strategy: 'round_robin' };
+  const p = d.decodePool(wire);
+  assert.deepEqual([p.strategy, p.preferSubscription, p.preferSubscriptionEffective, p.apiKeySubStrategy], ['round_robin', true, true, 'round_robin']);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.deepEqual([back.strategy, back.prefer_subscription, back.api_key_sub_strategy], ['round_robin', true, 'round_robin']);
+  assert.equal('prefer_subscription_effective' in back, false, 'the effective value is the route\'s answer, never an input');
+  const forced = d.decodePool({ ...fixture('pools').pools[0], strategy: 'least_utilized', prefer_subscription: false, prefer_subscription_effective: true });
+  assert.deepEqual([forced.preferSubscription, forced.preferSubscriptionEffective], [false, true], 'the stored answer and the forced order are read apart');
+  assert.equal(d.decodePool(fixture('pools').pools[0]).apiKeySubStrategy, 'priority_random', 'the recorded row carries the default');
+});
+
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   assert.equal(page.nextCursor, null);

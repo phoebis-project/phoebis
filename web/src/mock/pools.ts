@@ -1,5 +1,6 @@
 import { KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
 import type { ApiKey, Pool, TrafficBucket } from '@/api/types';
+import { sampleDriven } from '@/lib/selection';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
 
@@ -20,12 +21,18 @@ function traffic(seed: number, scale: number): TrafficBucket[] {
 const ALL_TRAFFIC = traffic(41, 62);
 const CODEX_TRAFFIC = traffic(42, 7);
 
-export const POOLS: Pool[] = [
+/** What the route answers for a stored pool: the operator's flag, or the order a sample-driven strategy forces. */
+export const effectiveSubscriptionPreference = (pool: { preferSubscription: boolean; strategy: Pool['strategy'] }) => pool.preferSubscription || sampleDriven(pool.strategy);
+
+// The effective flag is computed rather than written, so no fixture can hold a pair the router would never serve.
+const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
   {
     id: 'all',
     name: 'all',
     status: 'degraded',
-    strategy: 'priority_random',
+    strategy: 'least_utilized',
+    apiKeySubStrategy: 'priority_random',
+    preferSubscription: false,
     overagePolicy: 'prefer_plan',
     migrateAboveUtilization: null,
     affinityTtlSeconds: 600,
@@ -54,7 +61,9 @@ export const POOLS: Pool[] = [
     id: 'codex',
     name: 'codex',
     status: 'active',
-    strategy: 'least_utilized',
+    strategy: 'round_robin',
+    apiKeySubStrategy: 'round_robin',
+    preferSubscription: false,
     overagePolicy: 'allow',
     migrateAboveUtilization: null,
     affinityTtlSeconds: 0,
@@ -68,6 +77,8 @@ export const POOLS: Pool[] = [
     activePins: 2,
   },
 ];
+
+export const POOLS: Pool[] = POOL_ROWS.map((p) => ({ ...p, preferSubscriptionEffective: effectiveSubscriptionPreference(p) }));
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 

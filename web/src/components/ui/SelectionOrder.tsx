@@ -1,16 +1,17 @@
 import type { Account, Pool, Session } from '@/api/types';
-import { INELIGIBLE_LABEL, RULE_NOTE, STRATEGY_RULE, selectionOrder } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, RULE_NOTE, STRATEGY_RULE, kindOrdered, selectionOrder } from '@/lib/selection';
 import { Badge } from './primitives';
 
 /** The tiers the router walks for a fresh session, with the upstream the next one lands on marked. */
 export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account[]; pool: Pool; sessions: Session[] }) {
   const tiers = selectionOrder(pool, accounts, sessions);
+  const grouped = kindOrdered(pool);
   return (
-    <div className="selection-order">
+    <div className={`selection-order ${grouped ? 'selection-order--grouped' : ''}`}>
       {tiers.map((tier) => (
-        <div key={tier.priority} className="selection-order__tier">
-          <span className="pool__prio num" title="Priority">
-            P{tier.priority}
+        <div key={`${tier.group}-${tier.priority}`} className="selection-order__tier">
+          <span className="pool__prio num" title={grouped ? `${GROUP_LABEL[tier.group]} upstreams, priority ${tier.priority}` : 'Priority'}>
+            {grouped ? `${GROUP_LABEL[tier.group]} ` : ''}P{tier.priority}
           </span>
           <span className="chips">
             {tier.placements.map((p) => {

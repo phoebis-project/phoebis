@@ -10,6 +10,7 @@ import type {
   AnalyticsPoint,
   AnalyticsQuery,
   ApiKey,
+  ApiKeySubStrategy,
   CapturedBodies,
   CatalogModel,
   CreatedApiKey,
@@ -75,6 +76,7 @@ export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, inOverage: nul
 
 export interface PoolInput {
   affinityTtlSeconds: number;
+  apiKeySubStrategy: ApiKeySubStrategy;
   bodyCaptureHours: number;
   cacheTtl: PoolCacheTtl;
   defaultAllowedModels: string[] | null;
@@ -83,6 +85,8 @@ export interface PoolInput {
   migrateAboveUtilization: number | null;
   name: string;
   overagePolicy: OveragePolicy;
+  /** The operator's stored answer alone; the effective value is the route's to compute from it and the strategy. */
+  preferSubscription: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
 }

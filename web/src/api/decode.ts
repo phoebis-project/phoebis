@@ -1,5 +1,5 @@
 import type {
-  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, CacheMissReason, CapturedBodies, CatalogModel,
+  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, CacheMissReason, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
   PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
 } from './types';
@@ -158,6 +158,7 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 const ELIGIBILITY: MemberEligibility[] = ['cooldown', 'eligible', 'overage', 'unavailable'];
+const SUB_STRATEGIES: ApiKeySubStrategy[] = ['priority_random', 'round_robin'];
 
 export function decodePool(v: unknown): Pool {
   const p = rec(v);
@@ -165,6 +166,7 @@ export function decodePool(v: unknown): Pool {
   return {
     activePins: num(p.active_pins),
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
+    apiKeySubStrategy: SUB_STRATEGIES.find((x) => x === str(p.api_key_sub_strategy)) ?? 'priority_random',
     bodyCaptureHours: num(p.body_capture_hours),
     cacheTtl: null,
     cost24h: num(p.cost_24h),
@@ -180,9 +182,11 @@ export function decodePool(v: unknown): Pool {
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
     name: str(p.label),
     overagePolicy: (['allow', 'never', 'prefer_plan'] as const).find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
+    preferSubscription: bool(p.prefer_subscription),
+    preferSubscriptionEffective: bool(p.prefer_subscription_effective),
     requests24h: num(p.requests_24h),
     status: (['active', 'degraded', 'disabled', 'exhausted'] as const).find((x) => x === str(p.status)) ?? 'active',
-    strategy: (['earliest_refresh', 'least_utilized', 'priority_random'] as const).find((x) => x === str(p.strategy)) ?? 'priority_random',
+    strategy: (['earliest_refresh', 'least_utilized', 'priority_random', 'round_robin'] as const).find((x) => x === str(p.strategy)) ?? 'least_utilized',
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
   };
 }
@@ -336,8 +340,11 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
 
 export const encodeKey = (i: KeyInput) => ({ allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId });
 export const encodePool = (i: PoolInput) => ({
-  affinity_ttl_seconds: i.affinityTtlSeconds, body_capture_hours: i.bodyCaptureHours, default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
+  affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative },
-  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy, strategy: i.strategy,
+  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
+  // No `prefer_subscription_effective`: the route computes it from the stored flag and the strategy, and an input
+  // that carried one could contradict the strategy it was saved with.
+  prefer_subscription: i.preferSubscription, strategy: i.strategy,
 });
 export const encodeRule = (i: AlertRuleInput) => ({ enabled: i.enabled, kind: i.kind, scope: i.scope, ...(i.secret === undefined ? {} : { secret: i.secret }), threshold: i.threshold, webhook_url: i.webhookUrl, window: i.windowId });

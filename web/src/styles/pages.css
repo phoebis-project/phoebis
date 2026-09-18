@@ -1221,6 +1221,11 @@
   align-items: center;
 }
 
+/* The kind order names a tier's group beside its priority, which outgrows the lead column a plain pool needs. */
+.selection-order--grouped .selection-order__tier {
+  grid-template-columns: 72px 1fr;
+}
+
 .selection-order__rule {
   margin: 4px 0 0;
   font-size: 12px;

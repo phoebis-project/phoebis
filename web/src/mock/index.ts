@@ -9,7 +9,7 @@ import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
-import { KEYS, POOLS } from './pools';
+import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -242,6 +242,8 @@ export class MockApi implements Api {
       cost24h: 0,
       id: input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
       members: input.members.map((m) => ({ ...m, eligible: 'eligible' as const })),
+      // The input carries the operator's flag alone, so the route resolves it against the strategy here.
+      preferSubscriptionEffective: effectiveSubscriptionPreference(input),
       requests24h: 0,
       traffic24h: [],
     };
@@ -533,6 +535,8 @@ export class MockApi implements Api {
       keepalive: { ...input.keepalive, warmSubagents: current.keepalive.warmSubagents },
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set.
       members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) ?? 'eligible' })),
+      // The input carries the operator's flag alone, so the route resolves it against the strategy here.
+      preferSubscriptionEffective: effectiveSubscriptionPreference(input),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(next, 250);

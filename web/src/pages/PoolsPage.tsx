@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, MOCK, type PoolInput } from '@/api';
-import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
+import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -13,10 +13,9 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STRATEGY_RULE } from '@/lib/selection';
+import { STRATEGY_LABEL, STRATEGY_RULE, SUB_STRATEGY_LABEL, kindOrdered, sampleDriven } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
-export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random' };
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
@@ -266,7 +265,10 @@ function PoolCard({
         <dl className="pool__policy">
           <div>
             <dt>Strategy</dt>
-            <dd>{STRATEGY_LABEL[pool.strategy]}</dd>
+            <dd>
+              {STRATEGY_LABEL[pool.strategy]}
+              {kindOrdered(pool) && ' · subscription first'}
+            </dd>
           </div>
           <div>
             <dt>Sessions</dt>
@@ -448,6 +450,7 @@ type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends num
 interface PoolForm {
   affinity: number;
   allowed: string[];
+  apiKeySubStrategy: ApiKeySubStrategy;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
   capture: boolean;
@@ -460,6 +463,7 @@ interface PoolForm {
   migrateOn: boolean;
   name: string;
   overage: OveragePolicy;
+  preferSubscription: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   tuning: ProbeTuning;
@@ -471,6 +475,7 @@ const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === s
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
   allowed: [],
+  apiKeySubStrategy: 'priority_random',
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
   capture: false,
@@ -483,8 +488,9 @@ const blankForm = (): PoolForm => ({
   migrateOn: false,
   name: '',
   overage: 'prefer_plan',
+  preferSubscription: false,
   status: 'active',
-  strategy: 'priority_random',
+  strategy: 'least_utilized',
   tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
   warmSubagents: true,
 });
@@ -492,6 +498,7 @@ const blankForm = (): PoolForm => ({
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   allowed: pool.defaultAllowedModels ?? [],
+  apiKeySubStrategy: pool.apiKeySubStrategy,
   cacheTtl: pool.cacheTtl ? { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) } : { ...CACHE_TTL_DEFAULTS },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
@@ -504,6 +511,8 @@ const formFrom = (pool: Pool): PoolForm => ({
   migrateOn: pool.migrateAboveUtilization !== null,
   name: pool.name,
   overage: pool.overagePolicy,
+  // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
+  preferSubscription: pool.preferSubscription,
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
@@ -603,6 +612,8 @@ export function PoolDialog({
   // has said yet whether it carries them, so only the mock preview offers them there.
   const showCacheTtl = pool ? pool.cacheTtl !== null : MOCK;
   const showWarmSubagents = pool ? pool.keepalive.warmSubagents !== null : MOCK;
+  // Read from the strategy the form holds, so switching the select moves the toggle with it.
+  const forced = sampleDriven(form.strategy);
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
@@ -651,6 +662,7 @@ export function PoolDialog({
     setError(null);
     const input: PoolInput = {
       affinityTtlSeconds: form.affinity,
+      apiKeySubStrategy: form.apiKeySubStrategy,
       bodyCaptureHours: form.capture ? form.captureHours : 0,
       cacheTtl: form.cacheTtl,
       defaultAllowedModels: form.allowed.length ? form.allowed : null,
@@ -659,6 +671,9 @@ export function PoolDialog({
       migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
       name: form.name.trim(),
       overagePolicy: form.overage,
+      // The stored answer, not the toggle's state: a sample-driven strategy draws it on, and sending that back
+      // would overwrite what the operator chose with what the strategy forced.
+      preferSubscription: form.preferSubscription,
       status: form.status,
       strategy: form.strategy,
     };
@@ -706,7 +721,7 @@ export function PoolDialog({
       body: (
         <>
           <Field label="Strategy" hint={STRATEGY_RULE[form.strategy]}>
-            <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)}>
+            <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)} aria-label="Strategy">
               {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
                 <option key={v} value={v}>
                   {STRATEGY_LABEL[v]}
@@ -714,6 +729,27 @@ export function PoolDialog({
               ))}
             </Select>
           </Field>
+          <div className="capture">
+            <div className="field--inline field">
+              <span className="field__text">
+                <span className="field__label">Prioritize subscription upstreams</span>
+                <p className="field__hint">Plan quota first, then upstreams in overage, then API keys; priority orders each of those groups.</p>
+              </span>
+              <Toggle checked={form.preferSubscription || forced} disabled={forced} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
+            </div>
+            {forced && <p className="field__hint">Always on under {STRATEGY_LABEL[form.strategy]}: an API key has no usage sample to order by, so subscription upstreams go first.</p>}
+            {forced && (
+              <Field label="API key sub-strategy" hint="How the API-key group is ordered once every subscription upstream is out.">
+                <Select value={form.apiKeySubStrategy} onChange={(e) => set('apiKeySubStrategy', e.target.value as ApiKeySubStrategy)} aria-label="API key sub-strategy">
+                  {(Object.keys(SUB_STRATEGY_LABEL) as ApiKeySubStrategy[]).map((v) => (
+                    <option key={v} value={v}>
+                      {SUB_STRATEGY_LABEL[v]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+          </div>
           <Field label="Session affinity" hint={AFFINITY_HINT}>
             <span className="chips" role="group" aria-label="Session affinity">
               {AFFINITY_PICKS.map((pick) => {
