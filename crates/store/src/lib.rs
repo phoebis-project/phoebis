@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 
 pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
-pub use alerts::{AlertDeliveryRow, AlertEventRow, AlertRuleRow};
+pub use alerts::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
     Secret,

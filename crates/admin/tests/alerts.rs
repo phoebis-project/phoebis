@@ -483,6 +483,89 @@ async fn a_viewer_reads_an_event_without_the_question_its_detail_carries() {
     assert_eq!(deliveries["deliveries"].as_array().unwrap().len(), 1);
 }
 
+#[tokio::test]
+async fn a_viewer_reads_a_rules_destination_and_none_of_the_credentials_in_its_url() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The three places a receiver can take a credential in its URL: the userinfo, the path and the query.
+    let url = "https://tokenuser:tokenpass@hooks.example:8443/services/pathtoken?key=querytoken";
+    let created = post(
+        &parts.app,
+        "/admin/alerts/rules",
+        &format!(r#"{{"kind":"client_drift","scope":{{"type":"all"}},"webhook_url":"{url}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let listed = json(get(&parts.app, "/admin/alerts/rules", Some(&cookie)).await).await;
+    assert_eq!(
+        listed["rules"][0]["webhook_url"].as_str(),
+        Some(url),
+        "an admin edits the rule, so an admin reads it whole"
+    );
+    let viewer = login(&parts.app, "viewer-secret").await;
+    let listed = json(get(&parts.app, "/admin/alerts/rules", Some(&viewer)).await).await;
+    assert_eq!(
+        listed["rules"][0]["webhook_url"].as_str(),
+        Some("hooks.example:8443"),
+        "the destination, and nothing that authenticates to it"
+    );
+    let body = listed.to_string();
+    for sentinel in [
+        "/services/",
+        "pathtoken",
+        "querytoken",
+        "tokenpass",
+        "tokenuser",
+    ] {
+        assert!(
+            !body.contains(sentinel),
+            "the viewer's answer carries {sentinel}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_question_whose_body_has_expired_is_gone_from_the_event_for_everyone() {
+    use phoebis_alerts::{Kind, Signal};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(&parts.app, "/admin/alerts/rules", r#"{"kind":"ask_user_question","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/hook"}"#, Some(&cookie)).await;
+    assert_eq!(created.status(), 201);
+    // A key that captures for an hour, under a global ceiling of days: the text goes with the body.
+    let expires_at = parts.clock_cell.load(Ordering::SeqCst) + 3_600_000;
+    parts.alerts.signal(&Signal {
+        kind: Kind::AskUserQuestion,
+        account_id: None,
+        key_id: Some("desktop".into()),
+        pool_id: None,
+        subject: "sess-2".into(),
+        detail: serde_json::json!({ "agent": "main", "key": "desktop", "question": "Which branch should I push?", "question_expires_at": expires_at, "session": "sess-2" }),
+    });
+    parts.alerts.wait_idle().await;
+    let seen = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
+    assert_eq!(
+        seen["events"][0]["detail"]["question"].as_str(),
+        Some("Which branch should I push?")
+    );
+    // An hour on, the operator loads the page again; the session that far ahead is a fresh one.
+    parts.clock_cell.store(expires_at, Ordering::SeqCst);
+    let cookie = login(&parts.app, "admin-secret").await;
+    let seen = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
+    assert_eq!(
+        seen["events"][0]["detail"]["question"].as_null(),
+        Some(()),
+        "the read stops answering the text the moment the body it came from is gone"
+    );
+    assert!(!seen.to_string().contains("Which branch"));
+    assert_eq!(
+        seen["events"][0]["detail"]["session"].as_str(),
+        Some("sess-2"),
+        "the event itself stays"
+    );
+}
+
 /// The alerts crate posts wherever a rule points and follows no redirect, so these routes are the only place a
 /// destination is checked. Every other harness leaves the check off, since its receiver is on loopback.
 #[tokio::test]

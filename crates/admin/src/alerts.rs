@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use phoebis_alerts::{allowed_scopes, ipv4_refusal, ipv6_refusal, Kind, ScopeType};
-use phoebis_store::{AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError};
+use phoebis_store::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use url::{Host, Url};
@@ -56,7 +56,13 @@ fn double_option<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
     Option::<T>::deserialize(d).map(Some)
 }
 
-fn rule_json(r: &AlertRuleRow) -> Value {
+/// A webhook URL can carry the receiver's credential in its userinfo, its path or its query, so a viewer is
+/// answered the destination host and nothing else, which is as far as the page shows one anyway.
+fn rule_json(r: &AlertRuleRow, role: Role) -> Value {
+    let webhook_url = match role {
+        Role::Admin => Some(r.webhook_url.clone()),
+        _ => webhook_host(&r.webhook_url),
+    };
     json!({
         "created_at": r.created_at,
         "enabled": r.enabled,
@@ -66,7 +72,7 @@ fn rule_json(r: &AlertRuleRow) -> Value {
         "scope": { "id": r.scope_id, "type": r.scope_type },
         "threshold": r.threshold,
         "updated_at": r.updated_at,
-        "webhook_url": r.webhook_url,
+        "webhook_url": webhook_url,
         "window": r.window,
     })
 }
@@ -76,7 +82,9 @@ fn delivery_json(d: &AlertDeliveryRow) -> Value {
 }
 
 /// The question text in a detail came out of a captured response body, which the viewer may not read on the
-/// bodies route; the event route keeps that line by blanking the text for a viewer and saying it did.
+/// bodies route; the event route keeps that line by blanking the text for a viewer and saying it did. Past
+/// that body's own deadline the text is gone for everyone: the purge runs hourly, and no read may answer
+/// prompt content the operator's retention has already let go.
 fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value, StoreError> {
     let deliveries = state.store.alert_deliveries(&e.id)?;
     let mut detail = e
@@ -84,9 +92,15 @@ fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value
         .as_deref()
         .and_then(|d| serde_json::from_str::<Value>(d).ok())
         .unwrap_or(Value::Null);
-    if role != Role::Admin {
-        if let Some(map) = detail.as_object_mut() {
-            if map.contains_key("question") {
+    if let Some(map) = detail.as_object_mut() {
+        if map.contains_key("question") {
+            let expired = map
+                .get("question_expires_at")
+                .and_then(Value::as_i64)
+                .is_some_and(|at| (state.clock)() >= at);
+            if expired {
+                map.insert("question".into(), Value::Null);
+            } else if role != Role::Admin {
                 map.insert("question".into(), Value::Null);
                 map.insert("question_redacted".into(), Value::Bool(true));
             }
@@ -220,16 +234,24 @@ fn reload_engine(state: &AdminState) {
     }
 }
 
-pub(crate) async fn list_rules(State(state): State<Arc<AdminState>>) -> Response {
+pub(crate) async fn list_rules(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+) -> Response {
     match state.store.alert_rules() {
-        Ok(rows) => {
-            Json(json!({ "rules": rows.iter().map(rule_json).collect::<Vec<_>>() })).into_response()
-        }
+        Ok(rows) => Json(
+            json!({ "rules": rows.iter().map(|r| rule_json(r, caller.role)).collect::<Vec<_>>() }),
+        )
+        .into_response(),
         Err(e) => store_failure(e),
     }
 }
 
-pub(crate) async fn create_rule(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+pub(crate) async fn create_rule(
+    State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
+    body: Bytes,
+) -> Response {
     let Ok(input) = serde_json::from_slice::<RuleInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
@@ -260,7 +282,7 @@ pub(crate) async fn create_rule(State(state): State<Arc<AdminState>>, body: Byte
     }
     reload_engine(&state);
     match state.store.alert_rule(&row.id) {
-        Ok(Some(row)) => (StatusCode::CREATED, Json(rule_json(&row))).into_response(),
+        Ok(Some(row)) => (StatusCode::CREATED, Json(rule_json(&row, caller.role))).into_response(),
         Ok(None) => failure(StatusCode::INTERNAL_SERVER_ERROR, "the rule was not stored"),
         Err(e) => store_failure(e),
     }
@@ -268,6 +290,7 @@ pub(crate) async fn create_rule(State(state): State<Arc<AdminState>>, body: Byte
 
 pub(crate) async fn patch_rule(
     State(state): State<Arc<AdminState>>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
@@ -307,7 +330,7 @@ pub(crate) async fn patch_rule(
     }
     reload_engine(&state);
     match state.store.alert_rule(&id) {
-        Ok(Some(row)) => Json(rule_json(&row)).into_response(),
+        Ok(Some(row)) => Json(rule_json(&row, caller.role)).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "alert rule not found"),
         Err(e) => store_failure(e),
     }

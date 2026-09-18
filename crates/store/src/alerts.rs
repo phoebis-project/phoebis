@@ -83,10 +83,10 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertEventRow> {
     })
 }
 
-/// Where a rule posts, with the port when it names one. A webhook URL may carry a token in its path or its
-/// query, and a registry change is readable by the viewer role, so a change records the destination this far
-/// and no further. A URL that does not parse is recorded as absent rather than whole.
-fn webhook_host(url: &str) -> Option<String> {
+/// Where a rule posts, with the port when it names one. A webhook URL may carry a credential in its userinfo,
+/// its path or its query, and the viewer role reads both a registry change and the rules route, so both stop
+/// at the destination and go no further. A URL that does not parse is answered as absent rather than whole.
+pub fn webhook_host(url: &str) -> Option<String> {
     let url = Url::parse(url).ok()?;
     let host = url.host_str()?;
     Some(match url.port() {
