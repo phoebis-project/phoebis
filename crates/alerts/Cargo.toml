@@ -1,0 +1,26 @@
+[package]
+name = "phoebis-alerts"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+phoebis-bus = { path = "../bus" }
+phoebis-ledger = { path = "../ledger" }
+phoebis-oauth = { path = "../oauth" }
+phoebis-routing = { path = "../routing" }
+phoebis-store = { path = "../store" }
+hmac = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+phoebis-store = { path = "../store" }
+fake-upstream = { path = "../../tests/fake_upstream" }
