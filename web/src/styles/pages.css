@@ -1388,6 +1388,12 @@
   text-overflow: ellipsis;
 }
 
+/* Thirteen columns leave the token counts too little room for their sub to hold one line, and a log a third taller
+   costs more than the scroll the wider table asks for below 1440px. */
+.requests__table .sub {
+  white-space: nowrap;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;
