@@ -19,6 +19,9 @@ use crate::rule::{Kind, ScopeType, Signal};
 pub type SpendSource = Arc<dyn Fn() -> BTreeMap<String, f64> + Send + Sync>;
 
 pub struct AlertInputs {
+    /// How long a captured body is kept, which the question an event detail carries follows: the text came
+    /// out of that body and outliving it would keep prompt content the operator asked to be rid of.
+    pub body_capture_max_hours: u32,
     pub bus: Bus,
     pub router: RouterHandle,
     pub session_expiry: Duration,
@@ -333,6 +336,7 @@ pub struct Poller {
     alerts: Arc<Alerts>,
     failures: BTreeMap<String, u32>,
     last_resolved: (i64, u64),
+    question_retention_ms: i64,
     router: RouterHandle,
     session_expiry_ms: i64,
     spent_today: SpendSource,
@@ -369,6 +373,7 @@ impl Poller {
             alerts: alerts.clone(),
             failures: BTreeMap::new(),
             last_resolved,
+            question_retention_ms: inputs.body_capture_max_hours as i64 * 3_600_000,
             router: inputs.router.clone(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
             spent_today: inputs.spent_today.clone(),
@@ -543,9 +548,10 @@ impl Poller {
             }
         }
         if self.ticks.is_multiple_of(PURGE_EVERY) {
-            let _ = parts
-                .store
-                .purge_alert_events_before(now - EVENT_RETENTION_MS);
+            let _ = parts.store.purge_alert_events_before(
+                now - EVENT_RETENTION_MS,
+                now - self.question_retention_ms,
+            );
         }
     }
 }

@@ -541,3 +541,96 @@ async fn a_rule_may_not_aim_its_webhook_at_an_address_only_the_router_can_reach(
         "an edit is held to the same destinations as a create"
     );
 }
+
+#[tokio::test]
+async fn a_rule_with_an_open_event_refuses_a_change_of_condition_until_it_resolves() {
+    use phoebis_alerts::{Kind, Signal};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let rule = json(post(&parts.app, "/admin/alerts/rules", r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/hook"}"#, Some(&cookie)).await).await;
+    let id = rule["id"].as_str().unwrap().to_string();
+    parts.webhook.answer(Ok(200));
+    parts.alerts.signal(&Signal {
+        kind: Kind::ClientDrift,
+        account_id: None,
+        key_id: Some("desktop".into()),
+        pool_id: None,
+        subject: "client 2.1.274".into(),
+        detail: serde_json::json!({ "client_version": "2.1.274", "key": "desktop" }),
+    });
+    parts.alerts.wait_idle().await;
+    let path = format!("/admin/alerts/rules/{id}");
+    let refused = patch(
+        &parts.app,
+        &path,
+        r#"{"kind":"pool_exhausted"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("the condition cannot change while 1 event is open for this rule")
+    );
+    let stored_kind = |rules: serde_json::Value| {
+        rules["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"].as_str() == Some(id.as_str()))
+            .unwrap()["kind"]
+            .as_str()
+            .map(String::from)
+    };
+    assert_eq!(
+        stored_kind(json(get(&parts.app, "/admin/alerts/rules", Some(&cookie)).await).await),
+        Some("client_drift".into()),
+        "the refused patch wrote nothing"
+    );
+    assert_eq!(
+        patch(&parts.app, &path, r#"{"enabled":false}"#, Some(&cookie))
+            .await
+            .status(),
+        200,
+        "every other field still edits while an event is open"
+    );
+    assert_eq!(
+        patch(
+            &parts.app,
+            &path,
+            r#"{"kind":"client_drift"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200,
+        "the same kind is not a change"
+    );
+    let events = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
+    let event = events["events"][0]["id"].as_str().unwrap().to_string();
+    parts.webhook.answer(Ok(200));
+    assert_eq!(
+        post(
+            &parts.app,
+            &format!("/admin/alerts/events/{event}/resolve"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    parts.alerts.wait_idle().await;
+    assert_eq!(
+        patch(
+            &parts.app,
+            &path,
+            r#"{"kind":"pool_exhausted"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200,
+        "the condition moves once nothing is open under it"
+    );
+}

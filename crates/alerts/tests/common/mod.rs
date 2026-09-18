@@ -257,6 +257,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>) -> Rig {
 
 pub fn inputs(rig: &Rig, spent: BTreeMap<String, f64>) -> AlertInputs {
     AlertInputs {
+        body_capture_max_hours: 168,
         bus: rig.bus.clone(),
         router: rig.router.clone(),
         session_expiry: Duration::from_secs(3_600),

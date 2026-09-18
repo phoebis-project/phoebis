@@ -219,7 +219,7 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
         "newest first"
     );
     assert_eq!(
-        store.purge_alert_events_before(4_500).unwrap(),
+        store.purge_alert_events_before(4_500, 0).unwrap(),
         1,
         "the resolved one is purged, the open one stays"
     );
@@ -280,5 +280,79 @@ fn a_sealed_secret_copied_onto_another_rule_does_not_open() {
     assert!(
         matches!(store.alert_rule_secret("r2"), Err(StoreError::Crypto)),
         "the aad names the rule, so the same blob does not open on another one"
+    );
+}
+
+#[test]
+fn a_rule_change_records_the_webhook_host_and_never_the_token_in_its_path() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .upsert_alert_rule(
+            &AlertRuleRow {
+                webhook_url: "https://hooks.example:8443/services/T0/B0/s3cret-token?key=s3cret"
+                    .into(),
+                ..rule("r1")
+            },
+            None,
+            "admin",
+        )
+        .unwrap();
+    let change = store.registry_changes_after(0, 10).unwrap().pop().unwrap();
+    let diff: serde_json::Value = serde_json::from_str(&change.diff_json).unwrap();
+    assert_eq!(diff["webhook_host"], "hooks.example:8443");
+    assert!(
+        !change.diff_json.contains("s3cret") && !change.diff_json.contains("/services/"),
+        "a viewer reads registry changes, so the path and the query stay out: {}",
+        change.diff_json
+    );
+}
+
+#[test]
+fn a_question_is_purged_on_the_body_retention_while_its_event_stays() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.upsert_alert_rule(&rule("r1"), None, "admin").unwrap();
+    let asked = |id: &str, subject: &str, opened_at: i64| AlertEventRow {
+        id: id.into(),
+        rule_id: "r1".into(),
+        kind: "ask_user_question".into(),
+        subject: subject.into(),
+        state: "open".into(),
+        opened_at,
+        resolved_at: None,
+        detail_json: Some(
+            serde_json::json!({ "key": "desktop", "question": "Which branch should I push to?" })
+                .to_string(),
+        ),
+    };
+    assert!(store
+        .insert_alert_event(&asked("old", "desktop:s1", 1_000))
+        .unwrap());
+    assert!(store
+        .insert_alert_event(&asked("fresh", "desktop:s2", 9_000))
+        .unwrap());
+    assert_eq!(
+        store.purge_alert_events_before(0, 5_000).unwrap(),
+        0,
+        "the question purge deletes no event of its own"
+    );
+    let detail = |id: &str| {
+        serde_json::from_str::<serde_json::Value>(
+            &store.alert_event(id).unwrap().unwrap().detail_json.unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(detail("old")["question"], serde_json::Value::Null);
+    assert_eq!(
+        detail("old")["key"],
+        "desktop",
+        "the rest of the detail is left alone"
+    );
+    assert_eq!(
+        detail("fresh")["question"],
+        "Which branch should I push to?"
+    );
+    assert!(
+        store.alert_event("old").unwrap().is_some(),
+        "the event outlives the prompt content it carried"
     );
 }

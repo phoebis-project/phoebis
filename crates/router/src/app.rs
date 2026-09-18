@@ -225,6 +225,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let alert_inputs = phoebis_alerts::spawn_inputs(
         alerts.clone(),
         phoebis_alerts::AlertInputs {
+            body_capture_max_hours: config.stats.body_capture_max_hours,
             bus: bus.clone(),
             router: router_task.clone(),
             session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),

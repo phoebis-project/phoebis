@@ -312,6 +312,21 @@ pub(crate) async fn patch_rule(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "alert rule not found"),
         Err(e) => return store_failure(e),
     };
+    // An open event keeps the kind it opened under while `finish` posts its resolve under the rule's, so a
+    // kind that moved out from under an open event would deliver an open and a resolve that disagree.
+    if input.kind.as_deref().is_some_and(|kind| kind != row.kind) {
+        let open = match state.store.open_alert_events() {
+            Ok(events) => events.iter().filter(|e| e.rule_id == id).count(),
+            Err(e) => return store_failure(e),
+        };
+        if open > 0 {
+            let subject = if open == 1 { "event is" } else { "events are" };
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("the condition cannot change while {open} {subject} open for this rule"),
+            );
+        }
+    }
     apply(&mut row, &input, (state.clock)());
     if let Err(refusal) = validate(&state, &row) {
         return refusal;

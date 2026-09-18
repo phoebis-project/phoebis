@@ -3,6 +3,7 @@
 //! route; `has_secret` is what the UI learns.
 
 use rusqlite::{params, OptionalExtension};
+use url::Url;
 
 use crate::registry::record_change;
 use crate::{crypto, Secret, Store, StoreError, LOCK_POISONED};
@@ -82,6 +83,18 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertEventRow> {
     })
 }
 
+/// Where a rule posts, with the port when it names one. A webhook URL may carry a token in its path or its
+/// query, and a registry change is readable by the viewer role, so a change records the destination this far
+/// and no further. A URL that does not parse is recorded as absent rather than whole.
+fn webhook_host(url: &str) -> Option<String> {
+    let url = Url::parse(url).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
 fn rule_diff(row: &AlertRuleRow) -> String {
     serde_json::json!({
         "kind": row.kind,
@@ -89,7 +102,7 @@ fn rule_diff(row: &AlertRuleRow) -> String {
         "scope_id": row.scope_id,
         "threshold": row.threshold,
         "window": row.window,
-        "webhook_url": row.webhook_url,
+        "webhook_host": webhook_host(&row.webhook_url),
         "has_secret": row.has_secret,
         "enabled": row.enabled,
     })
@@ -323,13 +336,29 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// Resolved events older than the mark go, deliveries with them; an open event is never purged.
-    pub fn purge_alert_events_before(&self, resolved_before: i64) -> Result<usize, StoreError> {
+    /// Resolved events older than the mark go, deliveries with them; an open event is never purged. The
+    /// question an `ask_user_question` detail carries is prompt content, so it follows the body retention
+    /// instead of the event one: past `questions_before` the key is nulled and the event stays. Answers how
+    /// many events were deleted.
+    pub fn purge_alert_events_before(
+        &self,
+        resolved_before: i64,
+        questions_before: i64,
+    ) -> Result<usize, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        Ok(conn.execute(
+        let purged = conn.execute(
             "DELETE FROM alert_events WHERE state = 'resolved' AND resolved_at < ?1",
             params![resolved_before],
-        )?)
+        )?;
+        // `json_valid` guards the two json calls: a detail this process did not write would otherwise abort
+        // the statement and take the purge with it.
+        conn.execute(
+            "UPDATE alert_events SET detail_json = json_set(detail_json, '$.question', NULL) \
+             WHERE kind = 'ask_user_question' AND opened_at < ?1 AND json_valid(detail_json) \
+               AND json_extract(detail_json, '$.question') IS NOT NULL",
+            params![questions_before],
+        )?;
+        Ok(purged)
     }
 
     /// Every BLOB and TEXT column of the named table as bytes, for tests that assert plaintext is absent.

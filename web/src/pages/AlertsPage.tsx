@@ -4,7 +4,7 @@ import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, Alert
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
-import { fmtAbsolute, fmtPct, fmtRelative, shortId } from '@/lib/format';
+import { fmtAbsolute, fmtPct, fmtRelative, shortId, urlHost } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -150,6 +150,8 @@ export function AlertsPage() {
                     <RuleRow
                       key={rule.id}
                       rule={rule}
+                      // A webhook URL may carry its token in the path, and a viewer may not read one.
+                      webhook={canMutate ? rule.webhookUrl : urlHost(rule.webhookUrl)}
                       scope={scopeLabel(rule.scope, named)}
                       actions={
                         canMutate ? (
@@ -295,7 +297,7 @@ export function AlertsPage() {
   );
 }
 
-function RuleRow({ rule, scope, actions }: { actions: ReactNode; rule: AlertRule; scope: string }) {
+function RuleRow({ rule, scope, webhook, actions }: { actions: ReactNode; rule: AlertRule; scope: string; webhook: string }) {
   return (
     <tr>
       <td>{KIND_LABEL[rule.kind]}</td>
@@ -303,7 +305,7 @@ function RuleRow({ rule, scope, actions }: { actions: ReactNode; rule: AlertRule
       <td className="num">
         {rule.threshold !== null ? `${fmtPct(rule.threshold)} on ${rule.windowId ? ruleWindowLabel(rule.windowId) : 'n/a'}` : <span className="muted">-</span>}
       </td>
-      <td className="mono">{rule.webhookUrl}</td>
+      <td className="mono">{webhook}</td>
       <td>{rule.hasSecret ? <Badge tone="good">Signed</Badge> : <Badge tone="warning">Unsigned</Badge>}</td>
       <td>
         <Badge tone={rule.enabled ? 'good' : 'neutral'} dot>

@@ -1675,12 +1675,18 @@ await m.navigate('/alerts');
     name: 'viewer: /alerts lists rules and events without a control that writes',
     ok:
       rows > 2 &&
-      m.text().includes('https://hooks.example.com/phoebis/question') &&
+      m.text().includes('hooks.example.com') &&
       !buttons.includes('Create rule') &&
       !buttons.includes('Resolve') &&
       m.container.querySelector('.menu__trigger') === null &&
       m.container.querySelector('dialog[open]') === null,
     missing: [String(rows), ...buttons],
+  });
+  // A webhook URL may carry its token in the path, so a viewer is given the host and nothing else.
+  results.push({
+    name: 'viewer: /alerts gives the webhook host without the path a token could sit in',
+    ok: m.text().includes('hooks.example.com') && !m.text().includes('/phoebis/question') && !m.text().includes('https://hooks.example.com'),
+    missing: [[...m.container.querySelectorAll('td.mono')].map((td) => td.textContent).slice(0, 3).join(' | ')],
   });
   // The route blanks a question's text for a viewer, and the page has to say so rather than draw an empty line.
   results.push({
