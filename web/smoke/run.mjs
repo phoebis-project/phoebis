@@ -1439,10 +1439,14 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.home.example', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
-expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Keepalive', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URL', 'https://router.example.com']);
-results.push({ name: '/settings has no BoringSSL line', ok: !m.text().includes('BoringSSL') && m.text().includes('Transport'), missing: [] });
+// The label and its value run together in textContent, which is what pins the URL to the About row.
+expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);
+{
+  const t = m.text();
+  results.push({ name: '/settings has no BoringSSL line', ok: !t.includes('BoringSSL') && t.includes('Transport'), missing: [`BoringSSL absent ${!t.includes('BoringSSL')}`, `Transport present ${t.includes('Transport')}`] });
+}
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   // The 24h needle above also matches the time-format control, so the expiry is read off its own card.
@@ -1485,7 +1489,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const urlInput = [...m.container.querySelectorAll('input')].find((i) => i.placeholder === 'Import from URL');
-  setter.call(urlInput, 'https://models.dev/api.json');
+  setter.call(urlInput, 'https://models.dev/api.json?key=s3cret');
   urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(150);
   [...m.container.querySelectorAll('.price-import button')].find((b) => b.textContent?.trim() === 'Import')?.click();
@@ -1504,10 +1508,17 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm')?.click();
   // Confirm posts the preview token now, so the applied table lands a round trip later.
   await m.settle(600);
+  const pricingSubtitle = () =>
+    [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing')?.querySelector('.card__subtitle')?.textContent ?? 'absent';
   results.push({
     name: '/settings Confirm applies the import and names the host',
     ok: m.text().includes('Price list imported') && m.text().includes('source: imported from models.dev') && m.text().includes('claude-haiku-5') && m.text().includes('$0.80'),
-    missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
+    missing: [pricingSubtitle()],
+  });
+  results.push({
+    name: '/settings the imported source names the host, not the path or the query the router recorded',
+    ok: pricingSubtitle().includes('source: imported from models.dev') && !pricingSubtitle().includes('api.json') && !m.text().includes('s3cret'),
+    missing: [pricingSubtitle()],
   });
 }
 

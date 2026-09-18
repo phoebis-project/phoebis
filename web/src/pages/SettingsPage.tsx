@@ -106,6 +106,20 @@ const toDraft = (m: ModelPrice): PriceDraft => ({
 });
 
 /**
+ * An imported table's source is the URL the router was handed, query string and all, so only its host is shown.
+ * Anything else is a label the router wrote and reads as it stands.
+ */
+function sourceLabel(source: string): string {
+  let url: URL;
+  try {
+    url = new URL(source);
+  } catch {
+    return source;
+  }
+  return url.protocol === 'http:' || url.protocol === 'https:' ? `imported from ${url.host}` : source;
+}
+
+/**
  * The change count is the diff on screen rather than the router's, because the
  * table here may carry price edits the router has never seen.
  */
@@ -267,23 +281,25 @@ export function SettingsPage() {
 
       <Card title="Listeners" subtitle="Addresses the router binds at startup.">
         {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Admin', value: s.listeners.admin, mono: true, title: 'This interface and the admin API.' },
-              { label: 'Metrics', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
-              { label: 'Proxy', value: s.listeners.proxy, mono: true, title: 'Where Claude Code sends its model requests.' },
-            ]}
-          />
+          <>
+            <KeyValue
+              rows={[
+                { label: 'Admin', value: s.listeners.admin, mono: true, title: 'This interface and the admin API.' },
+                { label: 'Metrics', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
+                { label: 'Proxy', value: s.listeners.proxy, mono: true, title: 'Where Claude Code sends its model requests.' },
+              ]}
+            />
+            <p className="muted" style={{ marginTop: 10 }}>
+              {bootstrapNote('admin.listen, proxy.listen, and stats.metrics_listen')}
+            </p>
+            <h3 className="section-title" style={{ marginTop: 14 }}>
+              Transport
+            </h3>
+            <p className="muted">The proxy and admin listeners speak HTTP/1.1 only.</p>
+          </>
         ) : (
           <Skeleton height={60} />
         )}
-        <p className="muted" style={{ marginTop: 10 }}>
-          {bootstrapNote('admin.listen, proxy.listen, and stats.metrics_listen')}
-        </p>
-        <h3 className="section-title" style={{ marginTop: 14 }}>
-          Transport
-        </h3>
-        <p className="muted">The proxy and admin listeners speak HTTP/1.1 only.</p>
       </Card>
 
       <Card
@@ -410,7 +426,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
   return (
     <Card
       title="Pricing"
-      subtitle={pricing ? `Effective ${fmtDate(pricing.effectiveDate)}, source: ${pricing.source}` : undefined}
+      subtitle={pricing ? `Effective ${fmtDate(pricing.effectiveDate)}, source: ${sourceLabel(pricing.source)}` : undefined}
       actions={
         handEdit && (
           <Button

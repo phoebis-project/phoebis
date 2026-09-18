@@ -51,19 +51,6 @@ const emptyStore = (): boolean => {
   }
 };
 
-/** The host a source line names, falling back to what was typed when it is not a URL. */
-function hostOf(url: string): string {
-  const trimmed = url.trim();
-  for (const candidate of [trimmed, `https://${trimmed}`]) {
-    try {
-      return new URL(candidate).host;
-    } catch {
-      continue;
-    }
-  }
-  return trimmed;
-}
-
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
   let params: URLSearchParams;
   try {
@@ -128,8 +115,8 @@ export class MockApi implements Api {
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, { accountId: string; state: string }>();
   private pools: Pool[] = POOLS.map((p) => ({ ...p }));
-  /** What the last preview minted, held beside the host it read, so a confirm writes the rows that were shown. */
-  private pricePreview: { host: string; models: ModelPrice[]; token: string } | null = null;
+  /** What the last preview minted, held beside the URL it read, so a confirm writes the rows that were shown. */
+  private pricePreview: { models: ModelPrice[]; token: string; url: string } | null = null;
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(Date.now() % 100_000);
   private session: SessionInfo | null = null;
@@ -191,7 +178,7 @@ export class MockApi implements Api {
     const current = this.settings.pricing.models;
     const added = preview.models.filter((m) => !current.some((c) => c.model === m.model));
     this.pricePreview = null;
-    this.settings = { ...this.settings, pricing: { effectiveDate: iso(NOW), models: [...current.map((m) => imported.get(m.model) ?? m), ...added], source: `imported from ${preview.host}` } };
+    this.settings = { ...this.settings, pricing: { effectiveDate: iso(NOW), models: [...current.map((m) => imported.get(m.model) ?? m), ...added], source: preview.url } };
     return latency(this.settings.pricing, 300);
   }
 
@@ -434,7 +421,7 @@ export class MockApi implements Api {
 
   previewPriceImport(url: string) {
     const preview = { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
-    this.pricePreview = { host: hostOf(url), models: preview.models, token: preview.token };
+    this.pricePreview = { models: preview.models, token: preview.token, url };
     return latency(preview, 400);
   }
 

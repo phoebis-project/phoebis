@@ -188,7 +188,7 @@ export function SessionsPage() {
           </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: 20 }}>
-            <EmptyState title="No live sessions" body="A session appears here on its first request and drops off once it passes the session expiry." />
+            <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as a companion registers for it, and drops off once it passes the session expiry." />
           </div>
         ) : (
           <div className="table-wrap">
