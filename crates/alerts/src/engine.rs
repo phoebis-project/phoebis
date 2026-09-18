@@ -103,6 +103,10 @@ impl Alerts {
         self.rules.lock().expect(LOCK_POISONED).clone()
     }
 
+    pub fn parts(&self) -> &AlertParts {
+        &self.parts
+    }
+
     /// A condition holds for a subject: every enabled matching rule without an open event for the subject opens
     /// one and posts it.
     pub fn signal(self: &Arc<Self>, signal: &Signal) {
@@ -113,6 +117,19 @@ impl Alerts {
         {
             self.open(rule, signal);
         }
+    }
+
+    /// `signal` narrowed to one rule, for a kind whose condition is the rule's own threshold rather than a
+    /// fact about the world every rule of the kind would read the same way.
+    pub fn signal_rule(self: &Arc<Self>, rule_id: &str, signal: &Signal) {
+        let Some(rule) = self
+            .rules()
+            .into_iter()
+            .find(|r| r.id == rule_id && r.enabled && r.matches(signal))
+        else {
+            return;
+        };
+        self.open(rule, signal);
     }
 
     /// One rule's event for the signal's subject, opened atomically: the insert against the unique open index
@@ -157,6 +174,13 @@ impl Alerts {
             .filter(|e| e.kind == kind.as_str() && e.subject == subject)
         {
             self.finish(event, now);
+        }
+    }
+
+    /// `clear` narrowed to one rule, the dual of `signal_rule`.
+    pub fn clear_rule(self: &Arc<Self>, rule_id: &str, subject: &str) {
+        if let Ok(Some(event)) = self.parts.store.open_alert_event(rule_id, subject) {
+            self.finish(event, (self.parts.clock)());
         }
     }
 

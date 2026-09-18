@@ -209,6 +209,32 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     });
     // The day's spend comes from the rollups so a restart does not reset a pool's cap.
     keepalive.load_spent_today().await;
+    let alerts = phoebis_alerts::Alerts::new(phoebis_alerts::AlertParts {
+        clock: clock.clone(),
+        ledger: ledger.clone(),
+        metrics: metrics.clone(),
+        // The body names this router so a receiver fed by several can tell them apart.
+        router_name: config
+            .admin
+            .origin
+            .clone()
+            .unwrap_or_else(|| config.admin.listen.to_string()),
+        store: store.clone(),
+        webhook: Arc::new(phoebis_alerts::ReqwestWebhook::new()),
+    });
+    let alert_inputs = phoebis_alerts::spawn_inputs(
+        alerts.clone(),
+        phoebis_alerts::AlertInputs {
+            bus: bus.clone(),
+            router: router_task.clone(),
+            session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+            spent_today: Arc::new({
+                let engine = keepalive.clone();
+                move || engine.spent_today()
+            }),
+            tick: Duration::from_secs(1),
+        },
+    );
     let observer = spawn_observer(keepalive.clone());
     let scheduler_tick = keepalive.spawn_scheduler();
     // Captured here so the metrics listener reads the engine's agent counts on every scrape without depending
@@ -382,6 +408,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Ok(())
         }
     };
+    // Every delivery of an event opened before the stop lands before the ledger and the bus close.
+    for handle in alert_inputs {
+        handle.abort();
+    }
+    alerts.shutdown().await;
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();
     scheduler.abort();

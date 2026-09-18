@@ -1,15 +1,17 @@
 //! A store with two accounts and a pool, a fake webhook that records every post and answers what the test
 //! scripted, a ledger over an in-memory database, and a clock the test moves.
 #![allow(dead_code)]
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_alerts::{AlertParts, Alerts, Kind, ScopeType, Signal, Webhook};
-use phoebis_bus::Bus;
+use bytes::Bytes;
+use phoebis_alerts::{AlertInputs, AlertParts, Alerts, Kind, ScopeType, Signal, Webhook};
+// The bus has a `Kind` of its own, and this file already speaks the alert one.
+use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
 };
@@ -115,6 +117,25 @@ pub async fn rig() -> Rig {
 /// The rig over a store the test opened itself, for the case that needs the registry in a file a second
 /// connection can reach.
 pub async fn rig_with_store(store: Arc<Store>) -> Rig {
+    let webhook = FakeWebhook::new();
+    Rig {
+        webhook: webhook.clone(),
+        ..rig_over(store, webhook).await
+    }
+}
+
+/// The rig over any deliverer: the acceptance row hands in the real `ReqwestWebhook`, every other test the
+/// fake that `rig` keeps on `Rig.webhook`; the fake left on the rig this answers is a fresh one nothing posts
+/// to.
+pub async fn rig_with(webhook: Arc<dyn Webhook>) -> Rig {
+    rig_over(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        webhook,
+    )
+    .await
+}
+
+async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>) -> Rig {
     for (id, kind) in [
         ("business", AccountKind::Oauth),
         ("direct", AccountKind::ApiKey),
@@ -209,7 +230,6 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
             ..LedgerConfig::default()
         },
     );
-    let webhook = FakeWebhook::new();
     // The instant sleeper: a retry test walks the three attempts in milliseconds rather than the real backoff.
     let alerts = Alerts::with_sleeper(
         AlertParts {
@@ -218,7 +238,7 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
             metrics: metrics.clone(),
             router_name: "phoebis-test".into(),
             store: store.clone(),
-            webhook: webhook.clone(),
+            webhook,
         },
         Box::new(|_| Box::pin(async {})),
     );
@@ -231,8 +251,63 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
         metrics,
         router,
         store,
-        webhook,
+        webhook: FakeWebhook::new(),
     }
+}
+
+pub fn inputs(rig: &Rig, spent: BTreeMap<String, f64>) -> AlertInputs {
+    AlertInputs {
+        bus: rig.bus.clone(),
+        router: rig.router.clone(),
+        session_expiry: Duration::from_secs(3_600),
+        spent_today: Arc::new(move || spent.clone()),
+        tick: Duration::from_secs(1),
+    }
+}
+
+pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) -> Event {
+    Event::RequestObserved(RequestObserved {
+        request_id: id.into(),
+        origin: Origin::Client,
+        kind: RequestKind::Inference,
+        key_id: Some(key.into()),
+        pool_id: Some(pool.into()),
+        session_id: Some(session.into()),
+        agent_id: Some("main".into()),
+        parent_agent_id: None,
+        owner_id: None,
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        stream: true,
+        headers: vec![],
+        body: Bytes::from_static(b"{}"),
+        body_capture_hours: capture,
+        received_at: NOW,
+    })
+}
+
+pub fn complete(
+    id: &str,
+    outcome: Outcome,
+    status: u16,
+    drift: Option<&str>,
+    version: Option<&str>,
+) -> Event {
+    Event::RequestComplete(RequestComplete {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: Some("business".into()),
+        outcome,
+        status,
+        usage: None,
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: None,
+        client_drift: drift.map(String::from),
+        client_version: version.map(String::from),
+        response_bytes: None,
+        finished_at: NOW,
+    })
 }
 
 pub fn rule(id: &str, kind: Kind, scope: ScopeType, scope_id: Option<&str>) -> AlertRuleRow {

@@ -346,6 +346,7 @@ dependencies = [
 name = "phoebis-alerts"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "phoebis-bus",
  "phoebis-ledger",
  "phoebis-oauth",
@@ -541,6 +542,7 @@ dependencies = [
  "anyhow",
  "axum",
  "phoebis-admin",
+ "phoebis-alerts",
  "phoebis-bus",
  "phoebis-cch",
  "phoebis-keepalive",

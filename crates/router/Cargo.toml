@@ -17,6 +17,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 axum = { workspace = true }
 phoebis-admin = { path = "../admin" }
+phoebis-alerts = { path = "../alerts" }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-keepalive = { path = "../keepalive" }
