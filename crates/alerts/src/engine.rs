@@ -13,7 +13,7 @@ use rand::RngExt;
 use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
 
-use crate::deliver::{body, deliver, signature, Sleeper, Webhook};
+use crate::deliver::{body, deliver, delivered, sign, Sleeper, Webhook};
 use crate::rule::{Kind, Rule, Signal};
 
 const LOCK_POISONED: &str = "alert rules mutex poisoned by a prior panic";
@@ -86,7 +86,9 @@ impl Alerts {
             sleeper,
             workers: TaskTracker::new(),
         });
-        let _ = alerts.reload();
+        if let Err(e) = alerts.reload() {
+            tracing::warn!(%e, "the alert rules could not be read; the engine starts with none");
+        }
         alerts
     }
 
@@ -243,7 +245,7 @@ impl Alerts {
                         this.sleeper.as_ref(),
                     )
                     .await;
-                    let counter = if result.status.is_some_and(|s| (200..300).contains(&s)) {
+                    let counter = if result.status.is_some_and(delivered) {
                         &this.deliveries_ok
                     } else {
                         &this.deliveries_failed
@@ -260,8 +262,16 @@ impl Alerts {
             });
             tx
         });
-        if sender.try_send(transition).is_err() {
-            tracing::warn!(event = %id, "an alert transition was dropped: the event's delivery queue is full");
+        match sender.try_send(transition) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(event = %id, "an alert transition was dropped: the event's delivery queue is full");
+            }
+            // A worker leaves its entry behind only by panicking, so this is a dead delivery task rather than
+            // a busy one, and every later transition for the event would be dropped the same way.
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::error!(event = %id, "an alert transition was dropped: the event's delivery worker is gone");
+            }
         }
     }
 
@@ -286,13 +296,15 @@ impl Alerts {
             detail_json: None,
         };
         let raw = body(&rule, &event, "test", &self.parts.router_name);
-        let signed = self
-            .parts
-            .store
-            .alert_rule_secret(&rule.id)
-            .ok()
-            .flatten()
-            .map(|s| signature(&s, &raw));
+        let signed = match sign(&self.parts, &rule, &raw) {
+            Ok(signed) => signed,
+            Err(error) => {
+                return DeliveryResult {
+                    status: None,
+                    error: Some(error),
+                }
+            }
+        };
         match self
             .parts
             .webhook

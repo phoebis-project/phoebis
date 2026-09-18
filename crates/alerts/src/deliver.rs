@@ -122,8 +122,35 @@ pub fn signature(secret: &Secret, body: &[u8]) -> String {
     )
 }
 
+/// A 2xx is delivered; every other status, and every transport error, is an attempt that failed.
+pub(crate) fn delivered(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+/// What an attempt reports when the rule's secret is expected but cannot be had.
+pub(crate) const SECRET_UNAVAILABLE: &str = "secret unavailable";
+
+/// The signature for this body, or the failure that stops the attempt. A rule the operator marked as signed
+/// never posts unsigned: a receiver that authenticates by signature would drop the body anyway, and one that
+/// accepts it unsigned would trust bytes nobody proved.
+pub(crate) fn sign(parts: &AlertParts, rule: &Rule, raw: &[u8]) -> Result<Option<String>, String> {
+    match parts.store.alert_rule_secret(&rule.id) {
+        Ok(Some(secret)) => Ok(Some(signature(&secret, raw))),
+        Ok(None) if !rule.has_secret => Ok(None),
+        Ok(None) => {
+            tracing::warn!(rule = %rule.id, "the alert rule is signed but its secret is gone");
+            Err(SECRET_UNAVAILABLE.into())
+        }
+        Err(e) => {
+            tracing::warn!(%e, rule = %rule.id, "the alert rule's secret could not be read");
+            Err(SECRET_UNAVAILABLE.into())
+        }
+    }
+}
+
 /// Three attempts at most; the first is immediate and the wait before attempt n + 1 is BACKOFF[n - 1]. Every
-/// attempt lands as a row before the next starts, so an operator reading mid-retry sees the truth so far.
+/// attempt lands as a row before the next starts, so an operator reading mid-retry sees the truth so far. The
+/// secret is resolved per attempt, so a rule whose secret is briefly unreadable signs on the retry.
 pub async fn deliver(
     parts: &AlertParts,
     rule: &Rule,
@@ -132,8 +159,6 @@ pub async fn deliver(
     sleeper: &Sleeper,
 ) -> DeliveryResult {
     let raw = body(rule, event, state, &parts.router_name);
-    let secret = parts.store.alert_rule_secret(&rule.id).ok().flatten();
-    let signature = secret.as_ref().map(|s| signature(s, &raw));
     let mut last = DeliveryResult {
         status: None,
         error: Some("not attempted".into()),
@@ -142,15 +167,20 @@ pub async fn deliver(
         if attempt > 1 {
             sleeper(BACKOFF[attempt as usize - 2]).await;
         }
-        let answer = parts
-            .webhook
-            .post(rule.webhook_url.clone(), raw.clone(), signature.clone())
-            .await;
-        let (status, error) = match &answer {
-            Ok(s) => (Some(*s), None),
-            Err(e) => (None, Some(e.clone())),
+        let (status, error) = match sign(parts, rule, &raw) {
+            Ok(signature) => {
+                match parts
+                    .webhook
+                    .post(rule.webhook_url.clone(), raw.clone(), signature)
+                    .await
+                {
+                    Ok(s) => (Some(s), None),
+                    Err(e) => (None, Some(e)),
+                }
+            }
+            Err(e) => (None, Some(e)),
         };
-        let delivered = status.is_some_and(|s| (200..300).contains(&s));
+        let landed = status.is_some_and(delivered);
         let row = AlertDeliveryRow {
             id: 0,
             event_id: event.id.clone(),
@@ -165,9 +195,9 @@ pub async fn deliver(
         }
         parts
             .metrics
-            .observe_alert_delivery(&rule.id, if delivered { "delivered" } else { "failed" });
+            .observe_alert_delivery(&rule.id, if landed { "delivered" } else { "failed" });
         last = DeliveryResult { status, error };
-        if delivered {
+        if landed {
             return last;
         }
     }

@@ -1,7 +1,12 @@
 mod common;
-use phoebis_alerts::{body, signature, Kind, ScopeType, BACKOFF};
-use phoebis_store::Secret;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use phoebis_alerts::{body, signature, Kind, ReqwestWebhook, ScopeType, Webhook, BACKOFF};
+use phoebis_store::{Secret, StorageKey, Store};
 use common::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn a_secret_signs_the_body_a_failing_endpoint_gets_three_attempts_and_a_test_posts_once() {
@@ -27,10 +32,10 @@ async fn a_secret_signs_the_body_a_failing_endpoint_gets_three_attempts_and_a_te
     settled(&rig).await;
     let posts = rig.webhook.posts();
     assert_eq!(posts.len(), 3, "three attempts until the 200");
-    let raw = serde_json::to_vec(&posts[0].body).unwrap();
     assert_eq!(
         posts[0].signature.as_deref(),
-        Some(signature(&Secret::new("s3cret"), &raw).as_str())
+        Some(signature(&Secret::new("s3cret"), &posts[0].raw).as_str()),
+        "the signature covers the bytes that were posted"
     );
     assert!(posts[0]
         .signature
@@ -208,4 +213,191 @@ fn the_body_is_the_spec_shape_and_the_signature_is_hmac_sha256_hex() {
         ),
         "sha256=f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
     );
+}
+
+#[tokio::test]
+async fn a_signed_rule_whose_secret_cannot_be_read_posts_nothing_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.sqlite");
+    let rig = rig_with_store(Arc::new(
+        Store::open(&path, &StorageKey::generate()).unwrap(),
+    ))
+    .await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("signed", Kind::FundingRequired, ScopeType::AnyAccount, None),
+            Some(Some(&Secret::new("s3cret"))),
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    // The sealed bytes rot under a running engine: a restore from a backup taken under another storage key, or
+    // a byte the disk lost. The rule still says it is signed, and the receiver still expects a signature.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE alert_rules SET secret_sealed = ?1 WHERE id = 'signed'",
+        [b"garbage".to_vec()],
+    )
+    .unwrap();
+    drop(conn);
+    rig.alerts.signal(&signal(
+        Kind::FundingRequired,
+        Some("direct"),
+        None,
+        None,
+        "direct",
+    ));
+    settled(&rig).await;
+    assert!(
+        rig.webhook.posts().is_empty(),
+        "a rule the operator signed never posts unsigned"
+    );
+    let event = &rig.store.open_alert_events().unwrap()[0];
+    assert_eq!(
+        rig.store
+            .alert_deliveries(&event.id)
+            .unwrap()
+            .iter()
+            .map(|d| (d.attempt, d.status, d.error.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (1, None, Some("secret unavailable")),
+            (2, None, Some("secret unavailable")),
+            (3, None, Some("secret unavailable"))
+        ],
+        "every attempt says why it did not go out"
+    );
+    let text = rig
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(r#"phoebis_alert_deliveries_total{outcome="failed",rule="signed"} 3"#),
+        "{text}"
+    );
+    let result = rig.alerts.test("signed").await;
+    assert_eq!(
+        (result.status, result.error.as_deref()),
+        (None, Some("secret unavailable")),
+        "the operator's test delivery answers the failure rather than posting unsigned"
+    );
+    assert!(rig.webhook.posts().is_empty());
+}
+
+#[derive(Clone)]
+struct Received {
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
+impl Received {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// An HTTP/1.1 receiver on the loopback that records every request it is handed and answers `status_line`,
+/// with a `Location` back to itself when `redirect` is set, so a client that followed it is recorded twice.
+async fn loopback(status_line: &str, redirect: bool) -> (SocketAddr, Arc<Mutex<Vec<Received>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = seen.clone();
+    let answer = format!(
+        "HTTP/1.1 {status_line}\r\n{}content-length: 0\r\nconnection: close\r\n\r\n",
+        if redirect {
+            format!("location: http://{addr}/hook\r\n")
+        } else {
+            String::new()
+        }
+    );
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let head_end = loop {
+                if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break at + 4;
+                }
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "the connection closed before the request head");
+                raw.extend_from_slice(&chunk[..read]);
+            };
+            // The request line carries no colon of its own, but skipping it keeps the split unambiguous.
+            let headers: Vec<(String, String)> = String::from_utf8_lossy(&raw[..head_end])
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
+                .collect();
+            let length: usize = headers
+                .iter()
+                .find(|(name, _)| name == "content-length")
+                .and_then(|(_, value)| value.parse().ok())
+                .unwrap_or(0);
+            while raw.len() < head_end + length {
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "the connection closed before the request body");
+                raw.extend_from_slice(&chunk[..read]);
+            }
+            recorder.lock().unwrap().push(Received {
+                body: raw[head_end..head_end + length].to_vec(),
+                headers,
+            });
+            socket.write_all(answer.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+        }
+    });
+    (addr, seen)
+}
+
+#[tokio::test]
+async fn the_reqwest_webhook_posts_the_signed_bytes_and_reports_a_redirect_rather_than_following_it(
+) {
+    let webhook = ReqwestWebhook::new();
+    let raw = br#"{"state":"opened","subject":"business"}"#.to_vec();
+    let signed = signature(&Secret::new("s3cret"), &raw);
+
+    let (addr, seen) = loopback("202 Accepted", false).await;
+    let status = webhook
+        .post(
+            format!("http://{addr}/hook"),
+            raw.clone(),
+            Some(signed.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, 202, "a 2xx comes back as its status");
+    let got = seen
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("the receiver saw the post");
+    // Header names travel case-insensitively; the receiver lowercased what it read off the wire.
+    assert_eq!(got.header("x-router-signature"), Some(signed.as_str()));
+    assert_eq!(got.header("content-type"), Some("application/json"));
+    assert_eq!(
+        got.body, raw,
+        "the bytes that were signed are the bytes that arrived"
+    );
+    assert!(got
+        .header("user-agent")
+        .is_some_and(|agent| agent.starts_with("phoebis/")));
+
+    let (addr, seen) = loopback("302 Found", true).await;
+    let status = webhook
+        .post(format!("http://{addr}/hook"), raw.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        status, 302,
+        "a redirect is a status to report, not a hop to take"
+    );
+    fake_upstream::stays_for(Duration::from_millis(100), || {
+        seen.lock().unwrap().len() == 1
+    })
+    .await;
 }

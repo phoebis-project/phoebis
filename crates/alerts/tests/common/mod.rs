@@ -25,6 +25,8 @@ pub const NOW: i64 = 1_700_000_000_000;
 #[derive(Clone, Debug)]
 pub struct Posted {
     pub body: serde_json::Value,
+    /// The bytes as they were handed to the webhook, which are the bytes the signature covers.
+    pub raw: Vec<u8>,
     pub signature: Option<String>,
     pub url: String,
 }
@@ -77,6 +79,7 @@ impl Webhook for FakeWebhook {
         let hold = self.hold.lock().unwrap().clone();
         self.posts.lock().unwrap().push(Posted {
             body: serde_json::from_slice(&body).unwrap(),
+            raw: body,
             signature,
             url,
         });
@@ -103,7 +106,15 @@ pub struct Rig {
 }
 
 pub async fn rig() -> Rig {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    rig_with_store(Arc::new(
+        Store::open_in_memory(&StorageKey::generate()).unwrap(),
+    ))
+    .await
+}
+
+/// The rig over a store the test opened itself, for the case that needs the registry in a file a second
+/// connection can reach.
+pub async fn rig_with_store(store: Arc<Store>) -> Rig {
     for (id, kind) in [
         ("business", AccountKind::Oauth),
         ("direct", AccountKind::ApiKey),
