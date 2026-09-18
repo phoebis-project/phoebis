@@ -59,8 +59,9 @@ export interface Subscription {
   billingType: string;
   organizationType: string;
   rateLimitTier: string;
+  /** Null unless the wire carried it; the identity card leaves a null field out rather than guessing one. */
   since: string | null;
-  status: 'active' | 'past_due' | 'trialing';
+  status: 'active' | 'past_due' | 'trialing' | null;
   trialEndsAt: string | null;
 }
 
@@ -586,7 +587,8 @@ export interface Settings {
   about: { profile: string; publicUrl: string | null; version: string };
   access: { adminConfigured: boolean; viewerConfigured: boolean };
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
-  lastSyncAt: string;
+  /** The newest catalog sync across the upstreams, or null before the first one. */
+  lastSyncAt: string | null;
   listeners: { admin: string; metrics: string; proxy: string };
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };

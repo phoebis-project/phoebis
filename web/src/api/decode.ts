@@ -87,7 +87,8 @@ export function decodeAccount(v: unknown): Account {
     routingEnabled: bool(a.enabled, true),
     servedModels: list(a.served_models).map(rec).map(decodeServedModel),
     status: accountStatus(a, cooldowns),
-    subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier), since: null, status: 'active', trialEndsAt: null } : null,
+    // The route answers the profile's three labels and nothing else, so the rest stays null rather than being invented.
+    subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier), since: null, status: null, trialEndsAt: null } : null,
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }
@@ -295,7 +296,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { profile: str(rec(s.about).profile), publicUrl: strOrNull(rec(s.about).public_url), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true), viewerConfigured: bool(rec(s.access).viewer_configured) },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
-    lastSyncAt: new Date().toISOString(),
+    lastSyncAt: isoOrNull(s.last_sync_at),
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     pricing: decodePricing(s.pricing),
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days) },

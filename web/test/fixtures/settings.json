@@ -19,6 +19,7 @@
       "max_workers": 4,
       "oauth_prewarm_verified": false
     },
+    "last_sync_at": 1000000,
     "listeners": {
       "admin": "test",
       "metrics": "127.0.0.1:9464",

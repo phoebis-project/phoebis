@@ -239,6 +239,25 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(3_600), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-09-08");
+    assert_eq!(
+        settings["last_sync_at"],
+        serde_json::Value::Null,
+        "a registry whose catalog was never synced answers no instant at all"
+    );
+    parts
+        .store
+        .set_catalog_status("business", Some(1_700_000_000_000), None)
+        .unwrap();
+    parts
+        .store
+        .set_catalog_status("direct", Some(1_600_000_000_000), None)
+        .unwrap();
+    assert_eq!(
+        json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await["last_sync_at"]
+            .as_i64(),
+        Some(1_700_000_000_000),
+        "the newest sync across the accounts is the router's last sync"
+    );
     let text = settings.to_string();
     assert!(
         !text.contains("admin-secret")

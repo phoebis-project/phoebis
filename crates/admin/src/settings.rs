@@ -17,6 +17,9 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
         "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },
         "keepalive": s.keepalive,
+        // The newest sync any account recorded, so the console can say when the catalog was last read
+        // instead of inventing an instant of its own.
+        "last_sync_at": state.store.newest_catalog_sync().ok().flatten(),
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "pricing": { "version": table.version, "effective": table.effective, "source": table.source, "models": table.models.iter().map(|(m, p)| json!({ "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output })).collect::<Vec<_>>() },
         "quota": { "poll_interval_seconds": s.quota_poll_interval_seconds, "sample_retention_days": s.quota_sample_retention_days },

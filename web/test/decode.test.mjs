@@ -12,6 +12,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.kind, 'oauth');
   assert.equal(a.plan, 'Max 5x');
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
+  assert.deepEqual([a.subscription.since, a.subscription.status, a.subscription.trialEndsAt], [null, null, null], 'the route answers none of these, so the card leaves them out rather than reading active');
   assert.deepEqual(fixture('account').windows.map((w) => w.id), ['7d', 'fable', 'five_hour'], 'the route passes each sampler spelling through, in the ledger order');
   assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d'], 'the poll spelling folds onto the UI id and the order is the drawn one');
   assert.equal(a.fableWindow.id, '7d_fable');
@@ -232,6 +233,8 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.equal(s.keepalive.maxWorkers, 4);
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
+  assert.ok(isIso(s.lastSyncAt), 'the route answers the newest catalog sync as milliseconds');
+  assert.equal(d.decodeSettings({ ...fixture('settings'), last_sync_at: null }).lastSyncAt, null, 'a registry that never synced answers no instant, and the strip says so');
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const preview = d.decodePriceImport(fixture('pricing_import'));
   // The imported file carries the one model the router serves, at the five prices the shipped table already

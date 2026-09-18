@@ -455,6 +455,18 @@ impl Store {
         .ok_or_else(|| StoreError::AccountNotFound(id.to_string()))
     }
 
+    /// The newest catalog sync across every account, or `None` before the first one: what the settings view
+    /// calls the router's last sync.
+    pub fn newest_catalog_sync(&self) -> Result<Option<i64>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row("SELECT MAX(catalog_synced_at) FROM accounts", [], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
+        .optional()
+        .map(Option::flatten)
+        .map_err(StoreError::from)
+    }
+
     pub fn set_catalog_status(
         &self,
         id: &str,
