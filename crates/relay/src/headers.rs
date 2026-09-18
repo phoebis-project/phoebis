@@ -110,7 +110,9 @@ pub fn outbound_headers(
             }
             // The relay's upstream connection is pooled and independent of the caller's, so it declares its
             // own hop rather than repeating what the caller said about a connection that ends here.
-            "connection" => out.push((name.into(), "keep-alive".into())),
+            "connection" => {
+                out.push((name.into(), "keep-alive".into()));
+            }
             "content-length" => {
                 if !saw_length {
                     saw_length = true;

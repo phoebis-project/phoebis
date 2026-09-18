@@ -168,6 +168,35 @@ pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
         .then_some((start, end))
 }
 
+/// Raw span of element `index` inside the array at `path`, walked as `string_member_span` walks:
+/// `walk_to_last_segment` positions at the array's `[`, then this skips to `index` the way an array-index path
+/// segment already does, and `Scanner::value(false)` reads the element's own span.
+pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(usize, usize)> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    if !walk_to_last_segment(&mut s, path)? {
+        return None;
+    }
+    if !s.eat(b'[') {
+        return None;
+    }
+    for _ in 0..index {
+        s.value(false).ok()?;
+        s.ws();
+        if !s.eat(b',') {
+            return None;
+        }
+    }
+    s.ws();
+    let start = s.pos;
+    s.value(false).ok()?;
+    Some((start, s.pos))
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -525,6 +554,27 @@ mod tests {
         assert!(bool_member_span(br#"{"model":"m"}"#, &["stream"]).is_none());
         assert!(
             bool_member_span(br#"{"metadata":{"stream":true}}"#, &["metadata", "stream"]).is_some()
+        );
+    }
+
+    #[test]
+    fn an_array_element_span_covers_nested_objects_and_strings_holding_brackets() {
+        let body = br#"{"system":[{"type":"text","text":"[not] {a} bracket"},{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}],"model":"m"}"#;
+        let (start, end) = array_member_span(body, &["system"], 0).unwrap();
+        assert_eq!(
+            &body[start..end],
+            br#"{"type":"text","text":"[not] {a} bracket"}"#,
+            "a bracket inside a string does not end the element early"
+        );
+        let (start, end) = array_member_span(body, &["system"], 1).unwrap();
+        assert_eq!(
+            &body[start..end],
+            br#"{"type":"text","text":"kept","meta":{"tags":["a]b","c}d"]}}"#,
+            "a nested object and array are walked by depth, not skipped"
+        );
+        assert!(
+            array_member_span(body, &["system"], 2).is_none(),
+            "past the last element"
         );
     }
 }

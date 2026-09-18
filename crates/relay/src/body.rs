@@ -7,6 +7,7 @@ use crate::RelayError;
 #[derive(Debug)]
 pub struct BodyEdits {
     pub account_uuid_replaced: bool,
+    pub attribution_stripped: bool,
     pub model_replaced: bool,
     pub cch_restamped: bool,
 }
@@ -91,6 +92,7 @@ pub fn edit_body(
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
         account_uuid_replaced,
+        attribution_stripped: false,
         model_replaced,
         cch_restamped,
     })
