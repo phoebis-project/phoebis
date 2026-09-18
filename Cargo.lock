@@ -315,6 +315,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "phoebis-alerts",
  "phoebis-bus",
  "phoebis-keepalive",
  "phoebis-ledger",

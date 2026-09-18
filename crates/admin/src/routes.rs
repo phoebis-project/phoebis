@@ -27,8 +27,8 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, analytics, dashboard, keepalive, keys, live, pools, pricing, requests, sessions,
-    settings, AdminState, LoginError, Role,
+    accounts, alerts, analytics, dashboard, keepalive, keys, live, pools, pricing, requests,
+    sessions, settings, AdminState, LoginError, Role,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -68,6 +68,24 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage))
         .route("/admin/accounts/{id}/usage/refresh", post(usage))
         .route("/admin/accounts/{id}/verify", post(verify))
+        .route("/admin/alerts/events", get(alerts::list_events))
+        .route(
+            "/admin/alerts/events/{id}/deliveries",
+            get(alerts::list_deliveries),
+        )
+        .route(
+            "/admin/alerts/events/{id}/resolve",
+            post(alerts::resolve_event),
+        )
+        .route(
+            "/admin/alerts/rules",
+            get(alerts::list_rules).post(alerts::create_rule),
+        )
+        .route(
+            "/admin/alerts/rules/{id}",
+            patch(alerts::patch_rule).delete(alerts::delete_rule),
+        )
+        .route("/admin/alerts/rules/{id}/test", post(alerts::test_rule))
         .route("/admin/analytics/accounts", get(analytics::accounts))
         .route("/admin/analytics/breakdown", get(analytics::breakdown))
         .route("/admin/analytics/series", get(analytics::series))
@@ -715,6 +733,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "running_probes": keepalive_stats.running_probes,
             "sessions": keepalive_stats.sessions,
         },
+        "alerts": state.alerts.stats(),
     }))
     .into_response()
 }

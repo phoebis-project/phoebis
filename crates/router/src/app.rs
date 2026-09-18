@@ -300,6 +300,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
         keepalive: keepalive.clone(),
+        alerts: alerts.clone(),
+        allow_local_webhooks: false,
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });

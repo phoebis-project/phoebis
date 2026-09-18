@@ -38,6 +38,12 @@
       "retained_bytes": 116,
       "running_probes": 0,
       "sessions": 1
+    },
+    "alerts": {
+      "deliveries_failed": 0,
+      "deliveries_ok": 0,
+      "open": 0,
+      "rules": 0
     }
   }
 }

@@ -8,6 +8,7 @@ use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
 use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_alerts::{AlertParts, Alerts, Webhook};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
 use phoebis_ledger::{
@@ -34,8 +35,10 @@ use phoebis_transport::{
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -58,9 +61,60 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a socket read may wait before the test fails rather than hangs.
 const WS_DEADLINE: Duration = Duration::from_secs(10);
 
+/// One post the alert deliverer made. The alerts crate has a fake of its own, which no integration test module
+/// in another crate can reach, so the admin harness carries one too.
+#[derive(Clone, Debug)]
+pub struct Posted {
+    pub body: serde_json::Value,
+    pub signature: Option<String>,
+    pub url: String,
+}
+
+/// Answers the alert deliverer whatever the test queued, and keeps every post for it to read back. An empty
+/// queue answers 200, so a test that does not care about a delivery need not script one.
+pub struct FakeWebhook {
+    answers: Mutex<VecDeque<Result<u16, String>>>,
+    posts: Mutex<Vec<Posted>>,
+}
+
+impl FakeWebhook {
+    pub fn new() -> Arc<FakeWebhook> {
+        Arc::new(FakeWebhook {
+            answers: Mutex::new(VecDeque::new()),
+            posts: Mutex::new(Vec::new()),
+        })
+    }
+
+    pub fn answer(&self, a: Result<u16, String>) {
+        self.answers.lock().unwrap().push_back(a);
+    }
+
+    pub fn posts(&self) -> Vec<Posted> {
+        self.posts.lock().unwrap().clone()
+    }
+}
+
+impl Webhook for FakeWebhook {
+    fn post(
+        &self,
+        url: String,
+        body: Vec<u8>,
+        signature: Option<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<u16, String>> + Send>> {
+        self.posts.lock().unwrap().push(Posted {
+            body: serde_json::from_slice(&body).unwrap(),
+            signature,
+            url,
+        });
+        let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Ok(200));
+        Box::pin(async move { answer })
+    }
+}
+
 /// Everything `app_with` builds. A test reaching past the HTTP surface takes what it needs rather than
 /// every helper growing another tuple slot.
 struct Parts {
+    alerts: Arc<Alerts>,
     app: Router,
     bus: Bus,
     clock_cell: Arc<AtomicI64>,
@@ -75,11 +129,13 @@ struct Parts {
     store: Arc<Store>,
     up: FakeUpstream,
     vault: Arc<PairingVault>,
+    webhook: Arc<FakeWebhook>,
 }
 
 /// The app with the observation stack behind it, for the tests that write rows into the ledger and then read
 /// them back through the analytics, request-log, and dashboard routes.
 pub struct Full {
+    pub alerts: Arc<Alerts>,
     pub app: Router,
     pub bus: Bus,
     pub clock_cell: Arc<AtomicI64>,
@@ -92,6 +148,7 @@ pub struct Full {
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
+    pub webhook: Arc<FakeWebhook>,
 }
 
 pub async fn admin_parts_full() -> Full {
@@ -104,6 +161,12 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await)
 }
 
+/// The full harness with the alert webhook destination check on, as every running router has it. The other
+/// builders leave it off so a rule may name the fake receiver, which is on loopback.
+pub async fn admin_parts_full_refusing_local_webhooks() -> Full {
+    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, None, false).await)
+}
+
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
@@ -112,6 +175,7 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 
 fn full_from(parts: Parts) -> Full {
     Full {
+        alerts: parts.alerts,
         app: parts.app,
         bus: parts.bus,
         clock_cell: parts.clock_cell,
@@ -124,6 +188,7 @@ fn full_from(parts: Parts) -> Full {
         router: parts.router,
         store: parts.store,
         up: parts.up,
+        webhook: parts.webhook,
     }
 }
 
@@ -405,6 +470,16 @@ async fn app_with(
     origin: Option<String>,
     store: Option<Arc<Store>>,
 ) -> Parts {
+    app_with_webhook_policy(identity, upstream_uuid, origin, store, true).await
+}
+
+async fn app_with_webhook_policy(
+    identity: Option<Identity>,
+    upstream_uuid: &str,
+    origin: Option<String>,
+    store: Option<Arc<Store>>,
+    allow_local_webhooks: bool,
+) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
     let store =
@@ -572,6 +647,19 @@ async fn app_with(
         router: router_handle.clone(),
         session_expiry: Duration::from_secs(86_400),
     });
+    let webhook = FakeWebhook::new();
+    // The instant sleeper: a delivery walks its three attempts in milliseconds rather than the real backoff.
+    let alerts = Alerts::with_sleeper(
+        AlertParts {
+            clock: clock.clone(),
+            ledger: ledger.clone(),
+            metrics: metrics.clone(),
+            router_name: "phoebis-test".into(),
+            store: store.clone(),
+            webhook: webhook.clone(),
+        },
+        Box::new(|_| Box::pin(async {})),
+    );
     let settings = Arc::new(SettingsView {
         admin_listen: "test".into(),
         admin_origin: origin.clone(),
@@ -623,14 +711,17 @@ async fn app_with(
         bus: bus.clone(),
         ledger: ledger.clone(),
         live: live.clone(),
-        metrics,
+        metrics: metrics.clone(),
         pricing: pricing.clone(),
         settings,
         keepalive: keepalive.clone(),
+        alerts: alerts.clone(),
+        allow_local_webhooks,
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });
     Parts {
+        alerts,
         app: router(state),
         bus,
         clock_cell,
@@ -645,6 +736,7 @@ async fn app_with(
         store,
         up,
         vault,
+        webhook,
     }
 }
 
