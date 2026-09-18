@@ -1606,6 +1606,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Leave it unset without warming.',
   ]);
 }
+// The preview outlives a mount, so the viewer pass below puts this back when it ends.
+const roleBeforePreview = localStorage.getItem('phoebis.role');
 {
   const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
   dark?.click();
@@ -1625,6 +1627,34 @@ m = await mount('/keys');
   results.push({ name: 'viewer: /keys hides Create API key', ok: !t.includes('Create API key'), missing: [] });
   results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
 }
+// Every control named here is a button, and a label is matched against the buttons rather than against the page
+// text because the copy carries the same words: the upstreams status filter alone offers "Paused". A closed
+// dialog's own markup is in the DOM on every page and reaches nobody, so it is filtered out.
+for (const [path, absent, present] of [
+  ['/', [], ['viewer']],
+  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events']],
+  ['/analytics', [], ['Traffic', 'Latency']],
+  ['/keys', ['Create API key'], ['Lifetime cost by key']],
+  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
+  ['/sessions', ['Release'], ['Cache warming']],
+  ['/settings', ['Add model', 'Import'], ['Keepalive', 'Pricing']],
+  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Disconnect', 'Pause', 'Re-pair', 'Re-sync', 'Resume', 'Verify'], ['Identity']],
+]) {
+  await m.navigate(path);
+  const t = m.text();
+  const reachable = (selector) => [...m.container.querySelectorAll(selector)].filter((e) => e.closest('dialog') === null);
+  const labels = reachable('button').map((b) => b.textContent?.trim());
+  results.push({
+    name: `viewer: ${path} hides every mutating control`,
+    ok: absent.every((a) => !labels.includes(a)) && present.every((p) => t.includes(p)),
+    missing: [...absent.filter((a) => labels.includes(a)).map((a) => `offers ${a}`), ...present.filter((p) => !t.includes(p)).map((p) => `lacks ${p}`)],
+  });
+  // The sessions row keeps its menu for the two jumps that only read.
+  results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
+}
+await m.navigate('/upstreams/business');
+results.push({ name: 'viewer: served-model checkboxes are disabled', ok: [...m.container.querySelectorAll('.served__list input[type=checkbox]')].every((c) => c.disabled), missing: [] });
+results.push({ name: 'viewer: /upstreams has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
 await m.navigate(`/requests/${laptopRow.id}`);
 {
   const t = m.text();
@@ -1688,6 +1718,8 @@ await m.navigate('/observe');
   results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
 }
 m.unmount();
+if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
+else localStorage.setItem('phoebis.role', roleBeforePreview);
 
 const failed = results.filter((r) => !r.ok);
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);
