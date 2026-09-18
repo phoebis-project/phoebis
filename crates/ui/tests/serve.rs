@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 /// Pinned here rather than read from the crate, so a loosened policy fails instead of following along.
-const CSP: &str = "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
+const CSP: &str = "base-uri 'none'; connect-src 'self'; default-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'";
 
 fn assert_security_headers(headers: &axum::http::HeaderMap, what: &str) {
     assert_eq!(headers["content-security-policy"], CSP, "{what}");

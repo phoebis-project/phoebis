@@ -124,6 +124,21 @@ async function poolChips(theme) {
   }
 }
 
+/**
+ * The live feed under `connect-src 'self'`: the table keeps its placeholder until a snapshot arrives over the
+ * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead.
+ */
+async function liveFeed(theme) {
+  try {
+    await page.waitForSelector('.card--table .live-table, .card--table .empty', { timeout: 15_000 });
+  } catch {
+    failures.push(`${theme} /observe: no snapshot arrived, so the live feed never connected`);
+    return;
+  }
+  const banner = await page.evaluate(() => [...document.querySelectorAll('.observe__banner')].map((b) => b.textContent ?? '').join(' | '));
+  if (banner.includes('Reconnecting')) failures.push(`${theme} /observe: the feed is reconnecting (${banner})`);
+}
+
 async function wastedProbeRows(theme) {
   try {
     await page.waitForFunction(
@@ -181,6 +196,7 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
+      if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/pools') await poolChips(theme);
       if (view.path === '/analytics') await wastedProbeRows(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
