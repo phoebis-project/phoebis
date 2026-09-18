@@ -74,7 +74,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
       causes.push(ranOut ? `the idle limit ran out ${fmtRelative(ranOut, now)}` : 'the idle limit ran out');
     }
     if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
-    return { account: (session.accountId === null ? null : accountById.get(session.accountId)) ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
+    return { account: accountById.get(session.accountId ?? '') ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
   });
 }
 
@@ -104,24 +104,35 @@ export function SessionsPage() {
   const { canMutate } = useAppSettings();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Row | null>(null);
-  const [released, setReleased] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
   const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
-  // The router forgets a session once it has been idle for the expiry, so this
-  // list has to as well: a shorter preset in Settings must actually shorten it.
+  // The router forgets a session once it has been idle for the expiry, so this list has to as well.
   const rows = useMemo(
     () =>
       sessionData && recipeData
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data ?? [], pools.data ?? [], now)
-            .filter((r) => !released.has(r.session.sessionId))
-            .filter((r) => expireAfterSeconds === null || r.session.lastUsedAt === null || Date.parse(r.session.lastUsedAt) + expireAfterSeconds * 1000 > now)
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data ?? [], pools.data ?? [], now).filter((r) => {
+            const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
+            return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
+          })
         : null,
-    [sessionData, recipeData, accounts.data, keys.data, pools.data, released, expireAfterSeconds, now],
+    [sessionData, recipeData, accounts.data, keys.data, pools.data, expireAfterSeconds, now],
   );
   const o = overview.data;
+  const sessionsNote = o ? `${fmtInt(o.sessionsWithCompanion)} with a companion, ${fmtInt(o.sessions)} with a recipe` : null;
+  const onConfirmRelease = () => {
+    if (!pending) return;
+    void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
+      () => {
+        setToast('Session released');
+        sessions.reload();
+        recipes.reload();
+      },
+      (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
+    );
+  };
   const warmingSomewhere = (pools.data ?? []).some((p) => p.keepalive.enabled);
   const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(r.session.sessionId));
   const toggle = (id: string) =>
@@ -144,7 +155,7 @@ export function SessionsPage() {
       </div>
 
       <div className="stat-grid stat-grid--6">
-        <Tile label="Sessions" value={rows ? fmtInt(rows.length) : null} note={o ? `${fmtInt(o.sessions)} with a recipe` : null} />
+        <Tile label="Sessions" value={rows ? fmtInt(rows.length) : null} note={sessionsNote} />
         <Tile label="Cache-warming agents" value={o ? `${o.agents.busy} busy` : null} note={o ? `${o.agents.idle} idle, ${o.agents.parked} parked` : null} />
         <ProbeTile overview={o} />
         {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
@@ -227,14 +238,10 @@ export function SessionsPage() {
         confirmLabel="Release"
         body={
           pending
-            ? `Session ${shortId(pending.session.sessionId, 13)} loses its pin to ${pending.session.accountId} and every recipe on it is dropped. The next request picks an upstream again and the prompt cache on ${pending.session.accountId} goes cold.`
+            ? `Session ${shortId(pending.session.sessionId, 13)} loses its pin to ${pending.session.accountId ?? 'its upstream'} and every recipe on it is dropped. The next request picks an upstream again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
             : ''
         }
-        onConfirm={() => {
-          if (!pending) return;
-          setReleased((prev) => new Set(prev).add(pending.session.sessionId));
-          setToast('Session released');
-        }}
+        onConfirm={onConfirmRelease}
       />
       <Toast message={toast} onDone={() => setToast(null)} />
     </div>
@@ -269,7 +276,10 @@ function SessionRows({
   // An armed agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = agents.some((a) => a.state === 'armed' && a.nextProbeAt === null);
-  const expiresAt = expireAfterSeconds === null || session.lastUsedAt === null ? null : new Date(Date.parse(session.lastUsedAt) + expireAfterSeconds * 1000).toISOString();
+  // A session known from the ledger or from a registration alone carries no activity of its own, so the last
+  // ledgered request stands in for it and the expiry counts from there.
+  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
+  const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
   // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   return (
@@ -301,15 +311,19 @@ function SessionRows({
         </td>
         <td className="mono">
           <span className="srow__pin">
-            {session.model}
+            {session.model ?? <span className="muted">-</span>}
             <OtherPins agents={otherModels} />
           </span>
         </td>
         <td>
           <span className="srow__account">
-            <Link to={`/upstreams/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
-              {session.accountId}
-            </Link>
+            {session.accountId === null ? (
+              <span className="muted">-</span>
+            ) : (
+              <Link to={`/upstreams/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
+                {session.accountId}
+              </Link>
+            )}
             {account && (
               <Badge tone="neutral" title={KIND_HINT[account.kind]}>
                 {KIND_LABEL[account.kind]}
@@ -319,8 +333,8 @@ function SessionRows({
           </span>
         </td>
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
-        <td title={fmtAbsolute(session.lastUsedAt)}>
-          {fmtRelative(session.lastUsedAt, now)}
+        <td title={fmtAbsolute(lastUsed)}>
+          {fmtRelative(lastUsed, now)}
           {expiresAt && (
             <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
               expires {fmtRelative(expiresAt, now)}
@@ -389,7 +403,7 @@ function SessionRows({
         <tr className="srow__detail">
           <td colSpan={columns}>
             <p className="agents__created">
-              Created {fmtAbsolute(session.createdAt)}, {fmtRelative(session.createdAt, now)}
+              {session.createdAt === null ? 'Created: unknown' : `Created ${fmtAbsolute(session.createdAt)}, ${fmtRelative(session.createdAt, now)}`}
             </p>
             {row.noRecipe && (
               <p className="agents__none">

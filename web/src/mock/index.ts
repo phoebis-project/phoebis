@@ -1,7 +1,7 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { ApiError } from '@/api/http';
 import type {
-  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LiveEvent, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
+  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
   ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
@@ -50,6 +50,19 @@ const emptyStore = (): boolean => {
     return false;
   }
 };
+
+/** The host a source line names, falling back to what was typed when it is not a URL. */
+function hostOf(url: string): string {
+  const trimmed = url.trim();
+  for (const candidate of [trimmed, `https://${trimmed}`]) {
+    try {
+      return new URL(candidate).host;
+    } catch {
+      continue;
+    }
+  }
+  return trimmed;
+}
 
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
   let params: URLSearchParams;
@@ -115,6 +128,8 @@ export class MockApi implements Api {
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, { accountId: string; state: string }>();
   private pools: Pool[] = POOLS.map((p) => ({ ...p }));
+  /** What the last preview minted, held beside the host it read, so a confirm writes the rows that were shown. */
+  private pricePreview: { host: string; models: ModelPrice[]; token: string } | null = null;
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(Date.now() % 100_000);
   private session: SessionInfo | null = null;
@@ -169,8 +184,14 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
-  confirmPriceImport(_token: string) {
-    this.settings = { ...this.settings, pricing: { ...this.settings.pricing, effectiveDate: iso(NOW), models: IMPORTED_PRICES, source: 'imported' } };
+  confirmPriceImport(token: string) {
+    const preview = this.pricePreview;
+    if (!preview || preview.token !== token) return Promise.reject(new ApiError(404, 'that preview is no longer available; import again', 'not_found'));
+    const imported = new Map(preview.models.map((m) => [m.model, m]));
+    const current = this.settings.pricing.models;
+    const added = preview.models.filter((m) => !current.some((c) => c.model === m.model));
+    this.pricePreview = null;
+    this.settings = { ...this.settings, pricing: { effectiveDate: iso(NOW), models: [...current.map((m) => imported.get(m.model) ?? m), ...added], source: `imported from ${preview.host}` } };
     return latency(this.settings.pricing, 300);
   }
 
@@ -411,11 +432,10 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
-  previewPriceImport(_url: string) {
-    return latency(
-      { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` },
-      400,
-    );
+  previewPriceImport(url: string) {
+    const preview = { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
+    this.pricePreview = { host: hostOf(url), models: preview.models, token: preview.token };
+    return latency(preview, 400);
   }
 
   refreshUsage(_accountId: string) {
@@ -457,11 +477,6 @@ export class MockApi implements Api {
     const next: ApiKey = { ...key, prefix: secret.slice(0, 8) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
-  }
-
-  setSessionExpiry(seconds: number) {
-    this.settings = { ...this.settings, sessions: { expireAfterSeconds: seconds } };
-    return latency(this.settings, 250);
   }
 
   startPairing(accountId: string): Promise<PairingSession> {

@@ -993,8 +993,12 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions expired-between-turns tile follows the probe tile', ok: tiles.findIndex((t) => t.label === 'Expired between turns, 24h') === tiles.findIndex((t) => t.label === 'Cache probes, 24h') + 1, missing: tiles.map((t) => t.label ?? '') });
   results.push({ name: '/sessions expired-between-turns tile counts the mock', ok: Boolean(expired) && Number(expired.value.replace(/,/g, '')) > 0, missing: [expired?.value ?? 'absent'] });
   results.push({ name: '/sessions expired-between-turns warns while a pool keeps caches warm', ok: expired?.warn === true, missing: [String(expired?.warn)] });
+  {
+    const tile = [...m.container.querySelectorAll('.stat--compact')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Sessions');
+    results.push({ name: '/sessions the tile counts sessions with a companion', ok: /\d+ with a companion/.test(tile?.textContent ?? ''), missing: [tile?.textContent ?? 'absent'] });
+  }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 15, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 16, missing: [String(rows().length)] });
   const ci = rows().filter((r) => r.children[1]?.textContent === 'ci');
   results.push({ name: '/sessions still lists both ci sessions', ok: ci.length === 2, missing: [String(ci.length)] });
   const ciCells = ci.map((r) => [r.children[10]?.textContent?.trim(), r.children[11]?.textContent?.trim()]);
@@ -1002,6 +1006,14 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
   const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'api key' || t === 'subscription');
   results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 15 && kinds.includes('subscription') && kinds.includes('api key'), missing: [...new Set(kinds)] });
+  {
+    const unrouted = rows().find((r) => r.children[3]?.textContent?.trim() === '-');
+    results.push({
+      name: '/sessions a session the router has not routed yet reads its blanks',
+      ok: unrouted !== undefined && unrouted.children[4]?.textContent?.trim() === '-' && unrouted.children[5]?.textContent?.trim() === '-' && unrouted.querySelector('.srow__epoch') === null,
+      missing: [unrouted ? [...unrouted.children].map((c) => c.textContent?.trim() ?? '').join('|') : 'absent'],
+    });
+  }
   const summaries = rows().map((r) => r.children[10]?.textContent?.trim() ?? '');
   results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (armed|held|probing)/.test(x)), missing: summaries.slice(0, 3) });
 
@@ -1013,7 +1025,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => r.children[5]?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 15 && expiries.every((e) => /^expires in \d+[hmd]/.test(e)), missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 16 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 15, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(r.children[6]?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -1143,7 +1155,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 15, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 16, missing: [String(open)] });
+  results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
   {
@@ -1313,6 +1326,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await m.settle(400);
     results.push({ name: '/observe session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
   }
+
+  // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
+  await m.navigate('/sessions');
+  {
+    const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
+    release?.click();
+    await m.settle(250);
+    [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
+    await m.settle(600);
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 15, missing: [String(rows().length)] });
+  }
 }
 m.unmount();
 
@@ -1415,8 +1439,17 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', '7d', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
+expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Keepalive', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URL', 'https://router.example.com']);
+results.push({ name: '/settings has no BoringSSL line', ok: !m.text().includes('BoringSSL') && m.text().includes('Transport'), missing: [] });
+results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
+{
+  // The 24h needle above also matches the time-format control, so the expiry is read off its own card.
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Sessions');
+  const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  results.push({ name: '/settings reads the session expiry as a value, not a control', ok: rows.join('|') === 'Session expiry=24h' && card?.querySelector('button') === null, missing: rows });
+}
 {
   expect('/settings pricing meta', m.text(), ['Effective Sep 08, 2026', 'source: shipped table']);
   const priceRow = (model) => {
@@ -1469,10 +1502,11 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
   results.push({ name: '/settings import diff reads current against imported', ok: diff.includes('claude-haiku-4-5-20251001 Input $1.00 $0.80'), missing: diff.filter((r) => r.includes('Input')) });
   results.push({ name: '/settings import diff marks a model the table does not carry', ok: diff.some((r) => r.startsWith('claude-haiku-5new ') && r.includes('- $')), missing: diff.filter((r) => r.includes('new ')).slice(0, 2) });
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm')?.click();
-  await m.settle(300);
+  // Confirm posts the preview token now, so the applied table lands a round trip later.
+  await m.settle(600);
   results.push({
     name: '/settings Confirm applies the import and names the host',
-    ok: m.text().includes('source: imported from models.dev') && m.text().includes('claude-haiku-5') && m.text().includes('$0.80'),
+    ok: m.text().includes('Price list imported') && m.text().includes('source: imported from models.dev') && m.text().includes('claude-haiku-5') && m.text().includes('$0.80'),
     missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
   });
 }

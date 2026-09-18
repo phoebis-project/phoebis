@@ -1,15 +1,17 @@
 import { useState } from 'react';
-import { api, ApiError, MOCK } from '@/api';
+import { api, MOCK } from '@/api';
 import type { ModelPrice, PriceImportPreview, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, Field, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
-import { fmtDate } from '@/lib/format';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { fmtDate, fmtInt } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 
-const SNIPPET = `ANTHROPIC_BASE_URL=https://router.example.com
+const PLACEHOLDER_URL = 'https://router.example.com';
+
+const snippetFor = (publicUrl: string | null) => `ANTHROPIC_BASE_URL=${publicUrl ?? PLACEHOLDER_URL}
 CLAUDE_CODE_OAUTH_TOKEN=<api key>
 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1`;
 
@@ -52,6 +54,12 @@ const EXPIRY_PRESETS: { label: string; seconds: number }[] = [
   { label: '24h', seconds: 86_400 },
   { label: '7d', seconds: 604_800 },
 ];
+
+const expiryLabel = (seconds: number) => EXPIRY_PRESETS.find((p) => p.seconds === seconds)?.label ?? `${seconds}s`;
+
+/** These come from the bootstrap file and the admin API only reads them, so each says where it is set. */
+const bootstrapNote = (setting: string) => `Set by ${setting} in the bootstrap file`;
+const EXPIRY_NOTE = bootstrapNote('sessions.expire_after_seconds');
 
 type PriceField = 'cacheReadPerM' | 'cacheWrite1hPerM' | 'cacheWrite5mPerM' | 'inputPerM' | 'outputPerM';
 
@@ -97,19 +105,6 @@ const toDraft = (m: ModelPrice): PriceDraft => ({
   outputPerM: String(m.outputPerM),
 });
 
-/** The host a source line names, falling back to what was typed when it is not a URL. */
-function hostOf(url: string): string {
-  const trimmed = url.trim();
-  for (const candidate of [trimmed, `https://${trimmed}`]) {
-    try {
-      return new URL(candidate).host;
-    } catch {
-      continue;
-    }
-  }
-  return trimmed;
-}
-
 /**
  * The change count is the diff on screen rather than the router's, because the
  * table here may carry price edits the router has never seen.
@@ -140,11 +135,9 @@ export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const { theme, setTheme, timeFormat, setTimeFormat, role, canMutate } = useAppSettings();
   const { setPreviewRole } = useSession();
-  const [expiry, setExpiry] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const s = settings.data;
-  const expirySeconds = expiry ?? s?.sessions.expireAfterSeconds ?? null;
-  const expiryLabel = EXPIRY_PRESETS.find((p) => p.seconds === expirySeconds)?.label ?? null;
+  const snippet = snippetFor(s?.about.publicUrl ?? null);
 
   return (
     <div className="settings">
@@ -217,74 +210,88 @@ export function SettingsPage() {
 
       <PricingCard canMutate={canMutate} pricing={s ? s.pricing : null} onToast={setToast} />
 
-      <Card title="Sessions" subtitle="What the Sessions view lists.">
-        <div className="setting-row">
-          <div>
-            <b>Session expiry</b>
-            <p className="muted">
-              A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an upstream afresh.
+      <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an upstream afresh.">
+        {s ? (
+          <>
+            <KeyValue rows={[{ label: 'Session expiry', value: expiryLabel(s.sessions.expireAfterSeconds), mono: true, title: EXPIRY_NOTE }]} />
+            <p className="muted" style={{ marginTop: 10 }}>
+              {EXPIRY_NOTE}
             </p>
-          </div>
-          {expirySeconds === null ? (
-            <Skeleton width={180} height={30} />
-          ) : canMutate ? (
-            <Segmented<string>
-              ariaLabel="Session expiry"
-              value={String(expirySeconds)}
-              onChange={(v) => {
-                const seconds = Number(v);
-                const previous = expiry;
-                setExpiry(seconds);
-                // The Sessions view drops rows idle past this, so the mock has to
-                // hold the choice rather than leave it in this page's state.
-                void api
-                  .setSessionExpiry(seconds)
-                  .then(() => setToast('Session expiry saved'))
-                  .catch((e: unknown) => {
-                    // A refusal must not leave the control showing a value the router never took.
-                    setExpiry(previous);
-                    setToast(e instanceof ApiError && e.code === 'not_wired' ? 'Session expiry is set in the bootstrap file' : e instanceof Error ? e.message : String(e));
-                  });
-              }}
-              options={EXPIRY_PRESETS.map((p) => ({ value: String(p.seconds), label: p.label }))}
-            />
-          ) : (
-            <span className="mono">{expiryLabel ?? `${expirySeconds}s`}</span>
-          )}
-        </div>
+          </>
+        ) : (
+          <Skeleton height={60} />
+        )}
       </Card>
 
       <Card title="Retention" subtitle="Older rows are deleted by the nightly compaction.">
         {s ? (
-          <div className="form-row form-row--3">
-            <Field label="Ledger (days)" hint="Per-request rows and hourly rollups.">
-              <Input type="number" defaultValue={s.retention.ledgerDays} disabled={!canMutate} />
-            </Field>
-            <Field label="Quota samples (days)" hint="5-minute utilization samples per upstream.">
-              <Input type="number" defaultValue={s.retention.quotaSamplesDays} disabled={!canMutate} />
-            </Field>
-            <Field label="Body capture, max hours" hint="Upper bound for any pool's or key's capture retention.">
-              <Input type="number" defaultValue={s.retention.bodyCaptureMaxHours} disabled={!canMutate} />
-            </Field>
-          </div>
+          <>
+            <KeyValue
+              rows={[
+                { label: 'Ledger (days)', value: fmtInt(s.retention.ledgerDays), mono: true, title: 'Per-request rows and hourly rollups.' },
+                { label: 'Quota samples (days)', value: fmtInt(s.retention.quotaSamplesDays), mono: true, title: '5-minute utilization samples per upstream.' },
+                { label: 'Body capture, max hours', value: fmtInt(s.retention.bodyCaptureMaxHours), mono: true, title: "Upper bound for any pool's or key's capture retention." },
+              ]}
+            />
+            <p className="muted" style={{ marginTop: 10 }}>
+              {bootstrapNote('stats.retention_days, quota.sample_retention_days, and stats.body_capture_max_hours')}
+            </p>
+          </>
         ) : (
           <Skeleton height={60} />
         )}
-        {canMutate && (
-          <div className="row" style={{ marginTop: 14, justifyContent: 'flex-end' }}>
-            <Button variant="primary" onClick={() => setToast('Retention saved')}>
-              Save retention
-            </Button>
-          </div>
+      </Card>
+
+      <Card title="Keepalive" subtitle="Ceilings the router holds cache warming to, whatever a pool asks for.">
+        {s ? (
+          <>
+            <KeyValue
+              rows={[
+                { label: 'Lease (seconds)', value: fmtInt(s.keepalive.leaseSeconds), mono: true, title: 'How long a companion registration stands without a report.' },
+                { label: 'Max agents', value: fmtInt(s.keepalive.maxAgents), mono: true, title: 'Recipes the router holds across every session.' },
+                { label: 'Max request bytes', value: fmtInt(s.keepalive.maxRequestBytes), mono: true, title: 'Largest body a companion may report.' },
+                { label: 'Max retained bytes', value: fmtInt(s.keepalive.maxRetainedBytes), mono: true, title: 'Total size of the prefixes held for replay.' },
+                { label: 'Max sessions', value: fmtInt(s.keepalive.maxSessions), mono: true, title: 'Sessions that may carry a recipe at once.' },
+                { label: 'Max workers', value: fmtInt(s.keepalive.maxWorkers), mono: true, title: 'Probes the router runs in parallel.' },
+                { label: 'OAuth prewarm verified', value: s.keepalive.oauthPrewarmVerified ? 'yes' : 'no', mono: true, title: 'Whether a subscription upstream has been checked to accept a prewarm probe.' },
+              ]}
+            />
+            <p className="muted" style={{ marginTop: 10 }}>
+              {bootstrapNote('the keepalive block')}
+            </p>
+          </>
+        ) : (
+          <Skeleton height={60} />
         )}
+      </Card>
+
+      <Card title="Listeners" subtitle="Addresses the router binds at startup.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Admin', value: s.listeners.admin, mono: true, title: 'This interface and the admin API.' },
+              { label: 'Metrics', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
+              { label: 'Proxy', value: s.listeners.proxy, mono: true, title: 'Where Claude Code sends its model requests.' },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+        <p className="muted" style={{ marginTop: 10 }}>
+          {bootstrapNote('admin.listen, proxy.listen, and stats.metrics_listen')}
+        </p>
+        <h3 className="section-title" style={{ marginTop: 14 }}>
+          Transport
+        </h3>
+        <p className="muted">The proxy and admin listeners speak HTTP/1.1 only.</p>
       </Card>
 
       <Card
         title="Downstream client configuration"
         subtitle="Export these in the shell that launches Claude Code. Replace the token with a key from the API keys page."
-        actions={<CopyButton text={SNIPPET} label="Copy snippet" size="md" />}
+        actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
       >
-        <pre className="snippet">{SNIPPET}</pre>
+        <pre className="snippet">{snippet}</pre>
         <div className="snippet-group">
           <div className="snippet-group__head">
             <h3 className="section-title">Optional</h3>
@@ -310,7 +317,7 @@ export function SettingsPage() {
             rows={[
               { label: 'Version', value: s.about.version, mono: true },
               { label: 'Profile', value: s.about.profile, mono: true },
-              { label: 'Public URL', value: s.about.publicUrl, mono: true },
+              { label: 'Public URL', value: s.about.publicUrl ?? 'not configured', mono: true },
             ]}
           />
         ) : (
@@ -329,17 +336,19 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<PriceDraft | null>(null);
   const [url, setUrl] = useState('');
-  const [review, setReview] = useState<{ host: string; models: ModelPrice[]; preview: PriceImportPreview; rows: DiffRow[] } | null>(null);
+  const [review, setReview] = useState<{ preview: PriceImportPreview; rows: DiffRow[] } | null>(null);
 
   const pricing = applied ?? served;
   const saved = pricing ? pricing.models.map(toDraft) : [];
   const rows = draft ?? saved;
-  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(saved);
   const editable = canMutate && pricing !== null;
+  // Editing a price by hand reaches no route on the router, so only the mock build offers the cells and the bar that saves them.
+  const handEdit = editable && MOCK;
+  const dirty = handEdit && draft !== null && JSON.stringify(draft) !== JSON.stringify(saved);
 
   const edit = (next: (rows: PriceDraft[]) => PriceDraft[]) => setDraft((d) => next(d ?? saved));
   const startEdit = (id: string, field: PriceField) => {
-    if (!editable) return;
+    if (!handEdit) return;
     edit((r) => r);
     setEditing({ field, id });
   };
@@ -383,18 +392,19 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
     onToast('Price table saved');
   };
 
-  const confirmImport = () => {
-    if (!review || !pricing) return;
-    const imported = new Map(review.models.map((m) => [m.model, m]));
-    const kept = pricing.models.map((m) => imported.get(m.model) ?? m);
-    const added = review.models.filter((m) => !pricing.models.some((c) => c.model === m.model));
-    setApplied({ effectiveDate: new Date().toISOString(), models: [...kept, ...added], source: `imported from ${review.host}` });
-    setDraft(null);
-    setEditing(null);
-    setError(null);
-    setReview(null);
-    setUrl('');
-    onToast('Price list imported');
+  const confirmImport = async () => {
+    if (!review) return;
+    try {
+      setApplied(await api.confirmPriceImport(review.preview.token));
+      setDraft(null);
+      setEditing(null);
+      setError(null);
+      setReview(null);
+      setUrl('');
+      onToast('Price list imported');
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -402,7 +412,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
       title="Pricing"
       subtitle={pricing ? `Effective ${fmtDate(pricing.effectiveDate)}, source: ${pricing.source}` : undefined}
       actions={
-        editable && (
+        handEdit && (
           <Button
             size="md"
             onClick={() =>
@@ -429,7 +439,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
                   {f.label}
                 </th>
               ))}
-              {editable && <th />}
+              {handEdit && <th />}
             </tr>
           </thead>
           <tbody>
@@ -446,7 +456,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
                   {PRICE_FIELDS.map((f) => (
                     <PriceCell
                       key={f.key}
-                      editable={editable}
+                      editable={handEdit}
                       editing={editing?.id === row.id && editing.field === f.key}
                       label={f.label}
                       model={row.model}
@@ -456,7 +466,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
                       value={row[f.key]}
                     />
                   ))}
-                  {editable && (
+                  {handEdit && (
                     <td className="right">
                       <Button
                         size="sm"
@@ -502,7 +512,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
             className="row"
             onSubmit={(e) => {
               e.preventDefault();
-              void api.previewPriceImport(url).then((preview) => setReview({ host: hostOf(url), models: preview.models, preview, rows: diffRows(pricing?.models ?? [], preview.models) }));
+              void api.previewPriceImport(url).then((preview) => setReview({ preview, rows: diffRows(pricing?.models ?? [], preview.models) }));
             }}
           >
             <Input placeholder="Import from URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 320 }} />
@@ -538,7 +548,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
             <Button variant="ghost" onClick={() => setReview(null)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!review || review.rows.length === 0} onClick={confirmImport}>
+            <Button variant="primary" disabled={!review || review.rows.length === 0} onClick={() => void confirmImport()}>
               Confirm
             </Button>
           </>

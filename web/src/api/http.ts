@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo, Settings } from './types';
+import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -153,8 +153,6 @@ export class HttpApi implements Api {
     const r = await call<Record<string, unknown>>('POST', `/admin/keys/${enc(id)}/rotate`);
     return { key: d.decodeKey(r), secret: String(r.secret) };
   };
-  /** Keeps the settings page compiling; `/admin/settings` is read-only, so the expiry comes from the router's config. */
-  setSessionExpiry = (): Promise<Settings> => Promise.reject(new ApiError(501, 'session expiry is set in the router configuration', 'not_wired'));
   startPairing = async (accountId: string) => d.decodePairingSession(await call('POST', '/admin/oauth/sessions', { account_id: accountId, login: 'claude_ai' }));
   subscribeLive = (handler: (event: LiveEvent) => void): (() => void) => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';

@@ -70,14 +70,6 @@ test('the analytics reads encode the range, the dimension, and every id list', a
   assert.deepEqual([...breakdown.searchParams.keys()], ['group_by', 'range'], 'an empty list and an unset flag are left off the query');
 });
 
-test('a read the router does not serve refuses with not_wired instead of reaching the network', async () => {
-  const calls = stub(() => answer(200, {}));
-  const api = new HttpApi();
-  const notWired = (e) => e instanceof ApiError && e.code === 'not_wired';
-  await assert.rejects(api.setSessionExpiry(900), notWired);
-  assert.equal(calls.length, 0);
-});
-
 test('getSession answers null on 401 without running the hook', async () => {
   let unauthorized = 0;
   setHooks({ onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });

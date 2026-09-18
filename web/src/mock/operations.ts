@@ -87,6 +87,25 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   };
 });
 
+// A companion registered this session before its first request reached the router, so it holds no pin, no epoch and
+// no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
+SESSIONS.push({
+  accountId: null,
+  agents: 0,
+  companion: 'reporting',
+  companionSince: null,
+  createdAt: null,
+  epoch: null,
+  keepalive: { nextProbeAt: null, state: null },
+  keyId: 'laptop',
+  lastRequestAt: null,
+  lastUsedAt: null,
+  model: null,
+  pinned: false,
+  requests: 0,
+  sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
+});
+
 // One recipe per agent on a pinned session, indexed by session. The reason
 // explains why the main agent's probe is held; `null` means the next probe is
 // scheduled.

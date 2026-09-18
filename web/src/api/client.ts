@@ -136,8 +136,6 @@ export interface Api {
   resumeAccount(accountId: string): Promise<void>;
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;
-  /** Idle time after which the router forgets a session; the sessions list honours it. Kept until the settings page reads the router's own setting. */
-  setSessionExpiry(seconds: number): Promise<Settings>;
   startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
