@@ -72,3 +72,55 @@ sni = next(e.get("sni") for e in hello["extensions"] if e["type"] == 0)
 assert sni == "api.anthropic.com", sni
 print("smoke passed: connect_capture.py recorded a 1499-byte ClientHello for api.anthropic.com")
 PY
+
+CA_DIR="$TMP/ca"
+mkdir -p "$CA_DIR"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=capture-ca \
+  -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
+  -keyout "$CA_DIR/ca.key" -out "$CA_DIR/ca.pem" -days 1 >/dev/null 2>&1
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=api.anthropic.com \
+  -addext subjectAltName=DNS:api.anthropic.com -keyout "$CA_DIR/leaf.key" -out "$CA_DIR/leaf.csr" >/dev/null 2>&1
+openssl x509 -req -CA "$CA_DIR/ca.pem" -CAkey "$CA_DIR/ca.key" -copy_extensions copy \
+  -in "$CA_DIR/leaf.csr" -out "$CA_DIR/leaf.pem" -days 1 -CAcreateserial >/dev/null 2>&1
+
+TLS_PORT=$(free_port)
+python3 "$HERE/tls_raw.py" "$TLS_PORT" "$TMP/tls" 30 "$CA_DIR/leaf.pem" "$CA_DIR/leaf.key" &
+TLS_PID=$!
+sleep 1
+python3 - "$TLS_PORT" "$CA_DIR/ca.pem" "$BODY" <<'PY'
+import socket, ssl, sys
+port, ca_pem, body = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+ctx = ssl.create_default_context(cafile=ca_pem)
+raw = socket.create_connection(("127.0.0.1", port), 5)
+c = ctx.wrap_socket(raw, server_hostname="api.anthropic.com")
+request = (
+    "POST /v1/messages?beta=true HTTP/1.1\r\n"
+    "Host: api.anthropic.com\r\n"
+    "Authorization: Bearer test\r\n"
+    "content-type: application/json\r\n"
+    f"Content-Length: {len(body)}\r\n"
+    "\r\n"
+    f"{body}"
+)
+c.sendall(request.encode())
+c.recv(4096)
+c.close()
+PY
+kill "$TLS_PID" 2>/dev/null || true
+wait "$TLS_PID" 2>/dev/null || true
+python3 - "$TMP/tls" "$BODY" <<'PY'
+import json, pathlib, sys
+out, body = pathlib.Path(sys.argv[1]), sys.argv[2]
+modes = json.loads((out / "clean_modes.json").read_text())
+assert len(modes) == 1, f"clean_modes.json holds {len(modes)} entries, want 1"
+entry = modes[0]
+assert entry["request_line"] == "POST /v1/messages?beta=true HTTP/1.1", entry["request_line"]
+assert "Authorization: REDACTED" in entry["headers"], entry["headers"]
+assert entry["body"] == body, entry["body"]
+raw = (out / "clean_body_0.json").read_bytes()
+assert raw == body.encode(), raw
+connect = json.loads((out / "connect.json").read_text())
+assert len(connect) == 1, f"connect.json holds {len(connect)} entries, want 1"
+assert connect[0].get("hello_len", 0) > 0, connect[0]
+print("smoke passed: tls_raw.py recorded the request behind TLS and redacted the credential")
+PY

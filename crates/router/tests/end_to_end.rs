@@ -74,6 +74,57 @@ fn fixture_request(
     req.header("x-claude-code-session-id", session)
 }
 
+/// Replays a fixture's head and body to the binary byte for byte: the fixture's request line, then every header
+/// line in the fixture's order and spelling, with only the credential, the session id, the host, and the framing
+/// replaced. Answers the response's status.
+async fn replay_fixture(
+    proxy_port: u16,
+    head: FixtureKind,
+    fixture: BodyFixture,
+    secret: &str,
+    session: &str,
+) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = body(fixture).to_vec();
+    let (request_line, headers) = phoebis_transport::request::parse_head(inference_head(head)).unwrap();
+    let mut wire = format!("{request_line}\r\n");
+    for (name, value) in &headers {
+        // Matched on the lowercase name, written back under the fixture's own spelling.
+        let line = match name.to_ascii_lowercase().as_str() {
+            "authorization" => format!("{name}: Bearer {secret}"),
+            "content-length" => format!("{name}: {}", body.len()),
+            "host" => format!("{name}: 127.0.0.1:{proxy_port}"),
+            "x-api-key" => format!("{name}: {secret}"),
+            "x-claude-code-session-id" => format!("{name}: {session}"),
+            _ => format!("{name}: {value}"),
+        };
+        wire.push_str(&line);
+        wire.push_str("\r\n");
+    }
+    wire.push_str("\r\n");
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", proxy_port))
+        .await
+        .unwrap();
+    socket.write_all(wire.as_bytes()).await.unwrap();
+    socket.write_all(&body).await.unwrap();
+    // Read to the end of the response head and no further: the connection is keep-alive, as the fixture's own
+    // `Connection` line says, so nothing closes it for us.
+    let mut answer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !answer.windows(4).any(|w| w == b"\r\n\r\n") {
+        match socket.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => answer.extend_from_slice(&chunk[..n]),
+        }
+    }
+    String::from_utf8_lossy(&answer)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .expect("an HTTP status line")
+}
+
 #[tokio::test]
 async fn the_binary_is_populated_through_the_admin_api_and_routes_without_a_restart() {
     let up = FakeUpstream::start(vec![
@@ -1545,6 +1596,286 @@ fn exhausted_429() -> Respond {
         body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"exhausted"}}"#
             .to_vec(),
     }
+}
+
+/// The fixture-level equality check the live session procedure runs first: the four measured client runs relayed
+/// through the binary, two under a paired oauth account and one under an api_key account, land at the fake
+/// upstream in a shape `build-fixtures.py --check --through-router` grades equal to the committed fixtures.
+#[tokio::test]
+async fn the_four_client_runs_relayed_through_the_binary_grade_equal_to_the_fixtures() {
+    use phoebis_profile::fixtures::{control_response, ControlFixture};
+    let control = |which: ControlFixture| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: control_response(which).to_vec(),
+    };
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: control(ControlFixture::Token),
+        },
+        Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: control(ControlFixture::Profile),
+        },
+        Rule {
+            path_prefix: "/api/oauth/claude_cli/roles".into(),
+            respond: control(ControlFixture::Roles),
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let proxy_port = free_port();
+    let admin_port = free_port();
+    let metrics_port = free_port();
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_ADMIN_SECRET
+  dev_loopback_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+routing:
+  max_attempts: 2
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+upstream:
+  resolve_override: {addr}
+  extra_ca_pem: {ca}
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display()
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+
+    assert_eq!(
+        client
+            .post(admin("/accounts"))
+            .json(&serde_json::json!({ "id": "sub", "kind": "oauth", "label": "Sub" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let started: serde_json::Value = client
+        .post(admin("/oauth/sessions"))
+        .json(&serde_json::json!({ "account_id": "sub" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let (id, redirect) = (
+        started["id"].as_str().unwrap().to_string(),
+        started["redirect_uri"].as_str().unwrap().to_string(),
+    );
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        client
+            .post(admin(&format!("/oauth/sessions/{id}/callback")))
+            .json(&serde_json::json!({ "url": format!("{redirect}?code=CODE123&state={state}") }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .post(admin(&format!("/oauth/sessions/{id}/confirm")))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
+    for (pool, account) in [("subs", "sub"), ("keys", "console")] {
+        assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": pool, "label": pool, "strategy": "priority_random", "members": [{ "account_id": account, "priority": 0 }] })).send().await.unwrap().status(), 201);
+    }
+    // Cloned per call rather than captured by the async block directly: `client` is used again below, and a
+    // closure invoked twice cannot move the same value out of its environment on each call.
+    let key = |pool: &'static str| {
+        let client = client.clone();
+        async move {
+            let v: serde_json::Value = client.post(admin("/keys")).json(&serde_json::json!({ "id": format!("k-{pool}"), "label": pool, "pool_id": pool })).send().await.unwrap().json().await.unwrap();
+            v["secret"].as_str().unwrap().to_string()
+        }
+    };
+    let (oauth_key, api_key) = (key("subs").await, key("keys").await);
+    // The four runs of scripts/capture-baseline.sh, in its order, each replayed from its fixture head and body.
+    let runs: [(FixtureKind, BodyFixture, &str); 4] = [
+        (
+            FixtureKind::OauthNonFirstParty,
+            BodyFixture::Oauth,
+            &oauth_key,
+        ),
+        (
+            FixtureKind::OauthFirstParty,
+            BodyFixture::FirstParty9b244,
+            &oauth_key,
+        ),
+        (FixtureKind::ApiKey, BodyFixture::ApiKey, &api_key),
+        (
+            FixtureKind::OauthFirstParty,
+            BodyFixture::FirstPartyE142e,
+            &oauth_key,
+        ),
+    ];
+    for (i, (head, fixture, secret)) in runs.into_iter().enumerate() {
+        let status =
+            replay_fixture(proxy_port, head, fixture, secret, &format!("capture-{i}")).await;
+        assert_eq!(status, 200, "run {i}");
+    }
+    let posts: Vec<_> = up
+        .requests()
+        .into_iter()
+        .filter(|r| r.line.starts_with("POST /v1/messages"))
+        .collect();
+    assert_eq!(posts.len(), 4);
+    // Every stamped body the relay re-signed verifies under this build's rules; --skip-hash-check leaves it here.
+    for r in &posts {
+        if phoebis_cch::find_cch(&r.body).is_some() {
+            assert_eq!(
+                phoebis_cch::sign(&r.body).unwrap(),
+                r.body,
+                "the restamp is valid over the edited bytes"
+            );
+        }
+    }
+    let capture = dir.path().join("capture");
+    std::fs::create_dir_all(&capture).unwrap();
+    let modes: Vec<serde_json::Value> = posts
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            std::fs::write(capture.join(format!("clean_body_{i}.json")), &r.body).unwrap();
+            serde_json::json!({ "t": 0, "request_line": r.line, "headers": r.headers.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>(), "body": String::from_utf8_lossy(&r.body) })
+        })
+        .collect();
+    std::fs::write(
+        capture.join("clean_modes.json"),
+        serde_json::to_vec(&modes).unwrap(),
+    )
+    .unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = std::process::Command::new("python3")
+        .current_dir(&root)
+        .args([
+            "scripts/build-fixtures.py",
+            "--check",
+            "--through-router",
+            "--skip-hash-check",
+        ])
+        .arg(&capture)
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the through-router check did not pass:\n{text}"
+    );
+    assert!(text.contains("fixtures match"), "{text}");
+    // The comparison has to be sensitive to the shape it claims to grade: re-casing one header name in the
+    // capture must fail it, or a relay that folded every name to lowercase would pass this check too.
+    let mutated = dir.path().join("capture-mutated");
+    std::fs::create_dir_all(&mutated).unwrap();
+    for (i, r) in posts.iter().enumerate() {
+        std::fs::write(mutated.join(format!("clean_body_{i}.json")), &r.body).unwrap();
+    }
+    let mut mutated_modes = modes.clone();
+    let lines = mutated_modes[0]["headers"].as_array_mut().unwrap();
+    let at = lines
+        .iter()
+        .position(|l| l.as_str().is_some_and(|l| l.starts_with("X-Stainless")))
+        .expect("the measured client's head carries an X-Stainless header");
+    let (name, value) = lines[at].as_str().unwrap().split_once(": ").unwrap();
+    lines[at] = serde_json::json!(format!("{}: {value}", name.to_ascii_lowercase()));
+    std::fs::write(
+        mutated.join("clean_modes.json"),
+        serde_json::to_vec(&mutated_modes).unwrap(),
+    )
+    .unwrap();
+    let out = std::process::Command::new("python3")
+        .current_dir(&root)
+        .args([
+            "scripts/build-fixtures.py",
+            "--check",
+            "--through-router",
+            "--skip-hash-check",
+        ])
+        .arg(&mutated)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "one header name re-cased still graded equal, so the check is not reading the wire shape"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
 }
 
 fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {

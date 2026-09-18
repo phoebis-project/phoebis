@@ -37,6 +37,19 @@ CONTROL_PLANE = {
     "responses/usage.json",
 }
 
+# A router capture answers its own hello and carries no CONNECT tunnel to peek a ClientHello from, on top of
+# everything the control plane itself never reaches; --check reports all of these as not captured rather than
+# as drift when --through-router is given.
+UNCAPTURED_THROUGH_ROUTER = CONTROL_PLANE | {"hello.http", "hello_inference.hex", "hello_control.hex"}
+
+# The header names a live capture must never let reach disk unredacted; scripts/capture/tls_raw.py blanks their
+# values at write time, and this mask keeps that redaction and a fixture's dummy credential comparing equal.
+CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key"}
+
+# Set from --through-router: a capture taken at the router's own upstream needs different grading than one
+# taken at the measured client, since the relay it passed through rewrote the wire shape on the way.
+THROUGH_ROUTER = False
+
 # The inference runs the capture drives, in the order it drives them, and the fixture each one's body becomes.
 INFERENCE_BODIES = ["body_oauth.json", "body_fp_9b244.json", "body_apikey.json", "body_fp_e142e.json"]
 
@@ -56,6 +69,10 @@ HEADER_PLACEHOLDERS = {
 BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
 BILLING_PROMPT_ID = re.compile(rb"cc_prompt_id=[^;\"]*;")
 BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
+
+# The relay puts the serving account's identity into the escaped metadata string; a capture taken at the router's
+# upstream carries it where the native capture, made with a dummy token, carried nothing.
+ACCOUNT_UUID = re.compile(rb'(\\"account_uuid\\":\\")[^\\]*(\\")')
 
 
 def redact(line: str) -> str:
@@ -98,18 +115,26 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
         (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
+    # A router capture answers HEAD /api/hello itself and holds no CONNECT tunnel to peek a ClientHello from;
+    # both are optional there, and the router's own ClientHello is graded by crates/transport/tests/client_hello.rs.
     hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
     if hello is None:
-        raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
-    (out / "hello.http").write_bytes(head(hello))
-    conn = json.load(open(src / "connect.json"))
-    inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
-    if inf is None:
-        raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
-    (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
-    ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
-    if ctl is not None:
-        (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
+        if not THROUGH_ROUTER:
+            raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
+    else:
+        (out / "hello.http").write_bytes(head(hello))
+    # A router capture's connect.json, if tls_raw.py wrote one, holds the ClientHello the router itself sent
+    # toward its upstream; that shape is graded by crates/transport/tests/client_hello.rs, not here, so it is
+    # never opened in this mode even when present.
+    if not THROUGH_ROUTER:
+        conn = json.load(open(src / "connect.json"))
+        inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
+        if inf is None:
+            raise SystemExit(f"{src}/connect.json holds no {INFERENCE_HELLO_LEN}-byte ClientHello")
+        (out / "hello_inference.hex").write_text(inf["raw_hex"] + "\n")
+        ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
+        if ctl is not None:
+            (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
     if not (src / "mitm").is_dir():
         return
     login = json.load(open(src / "mitm/login.json"))
@@ -244,15 +269,45 @@ def _self_test_normalize_body() -> None:
             raise AssertionError(f"masking {name} swallowed the rest of the billing block")
         print(f"self-test passed: normalize_body masks {name}")
 
+    global THROUGH_ROUTER
+    uuid_body = rb'"metadata":"{\"account_uuid\":\"00000000-0000-4000-8000-000000000001\"}"'
+    length_head = b"POST /v1/messages HTTP/1.1\r\nContent-Length: 114749\r\n\r\n{}"
+    THROUGH_ROUTER = True
+    try:
+        masked_body = normalize_body(uuid_body)
+        masked_head = normalize_head(length_head)
+    finally:
+        THROUGH_ROUTER = False
+    if b"00000000-0000-4000-8000-000000000001" in masked_body or b"ACCOUNT-UUID-PLACEHOLDER" not in masked_body:
+        raise AssertionError("THROUGH_ROUTER did not mask account_uuid in normalize_body")
+    if b"114749" in masked_head or b"Content-Length: LENGTH-PLACEHOLDER" not in masked_head:
+        raise AssertionError("THROUGH_ROUTER did not mask Content-Length in normalize_head")
+    if b"00000000-0000-4000-8000-000000000001" not in normalize_body(uuid_body):
+        raise AssertionError("normalize_body masked account_uuid with THROUGH_ROUTER off")
+    if b"114749" not in normalize_head(length_head):
+        raise AssertionError("normalize_head masked Content-Length with THROUGH_ROUTER off")
+    print("self-test passed: THROUGH_ROUTER masks account_uuid and Content-Length")
+
 
 def normalize_head(raw: bytes) -> bytes:
-    """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id."""
+    """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id.
+
+    Under THROUGH_ROUTER two more values are masked, each keeping its header's name and position: a credential,
+    which a live capture must never hold unredacted, and Content-Length, which the relay regenerates from the
+    body it edited (a change there is what the body comparison already covers).
+    """
     head_bytes, sep, rest = raw.partition(b"\r\n\r\n")
     lines = head_bytes.decode("latin1").split("\r\n")
     out_lines = []
     for line in lines:
         name, colon, value = line.partition(":")
-        placeholder = HEADER_PLACEHOLDERS.get(name.strip().lower())
+        key = name.strip().lower()
+        if THROUGH_ROUTER and key in CREDENTIAL_HEADERS:
+            placeholder = "CREDENTIAL-PLACEHOLDER"
+        elif THROUGH_ROUTER and key == "content-length":
+            placeholder = "LENGTH-PLACEHOLDER"
+        else:
+            placeholder = HEADER_PLACEHOLDERS.get(key)
         out_lines.append(f"{name}: {placeholder}" if colon and placeholder else line)
     return "\r\n".join(out_lines).encode("latin1") + sep + rest
 
@@ -267,8 +322,11 @@ def normalize_body(raw: bytes) -> bytes:
     """Replace metadata.user_id's device_id and session_id, and the billing block's cc_prompt_id and cch digits.
 
     Masking the digits is safe only because check_hashes() re-signs every stamped body; on its own it would drop
-    the hash from the comparison.
+    the hash from the comparison. Under THROUGH_ROUTER, account_uuid is masked first: the relay splices the
+    serving account's identity there, where a native capture's dummy token carries nothing.
     """
+    if THROUGH_ROUTER:
+        raw = ACCOUNT_UUID.sub(rb"\1ACCOUNT-UUID-PLACEHOLDER\2", raw)
     raw = re.sub(rb'(\\"device_id\\":\\")[^\\]*(\\")', rb"\1DEVICE-ID-PLACEHOLDER\2", raw)
     raw = re.sub(rb'(\\"session_id\\":\\")[^\\]*(\\")', rb"\1SESSION-ID-PLACEHOLDER\2", raw)
     # Every billing-header-shaped string is masked, not only system[0]: a decoy in a tool-use input carries the
@@ -341,18 +399,27 @@ def body_diff(name: str, committed: bytes, fresh: bytes) -> list:
     return lines
 
 
-def check(capture_dir: pathlib.Path) -> int:
+def check(capture_dir: pathlib.Path, baseline: pathlib.Path = None, skip_hashes: bool = False) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
         build(capture_dir, fresh_dir)
-        hashes = check_hashes(fresh_dir)
-        committed = normalize_tree(FIXTURES)
+        hashes = 0 if skip_hashes else check_hashes(fresh_dir)
+        if baseline is not None:
+            # The same two masks that apply to the router capture apply here too, so a live date or a live
+            # account_uuid in the baseline's own bodies never shows up as drift against itself.
+            baseline_dir = pathlib.Path(tmp) / "baseline"
+            build(baseline, baseline_dir)
+            committed = normalize_tree(baseline_dir)
+        else:
+            committed = normalize_tree(FIXTURES)
         fresh = normalize_tree(fresh_dir)
         names = sorted(set(committed) | set(fresh))
-        uncaptured = [name for name in names if name not in fresh and name in CONTROL_PLANE]
+        uncaptured_set = UNCAPTURED_THROUGH_ROUTER if THROUGH_ROUTER else CONTROL_PLANE
+        uncaptured = [name for name in names if name not in fresh and name in uncaptured_set]
         diffs = [name for name in names if name not in uncaptured and committed.get(name) != fresh.get(name)]
         if uncaptured:
-            print("not captured (control plane):")
+            label = "not captured (router capture):" if THROUGH_ROUTER else "not captured (control plane):"
+            print(label)
             for name in uncaptured:
                 print(f"  {name}")
         if diffs:
@@ -377,14 +444,31 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="diff the capture's fixtures against crates/profile/fixtures instead"
     )
+    parser.add_argument(
+        "--through-router",
+        action="store_true",
+        help="the capture was taken at the router's upstream, not at the measured client; grades it accordingly",
+    )
+    parser.add_argument(
+        "--baseline",
+        help="grade --check against this capture directory instead of the committed fixtures",
+    )
+    parser.add_argument(
+        "--skip-hash-check",
+        action="store_true",
+        help="leave the cch re-sign to the caller instead of running it as part of --check",
+    )
     parser.add_argument("--self-test", action="store_true", help="run mask_hello's bounds-check self-test and exit")
     args = parser.parse_args()
     if args.self_test:
         _self_test()
         return 0
+    global THROUGH_ROUTER
+    THROUGH_ROUTER = args.through_router
     src = pathlib.Path(args.capture_dir).expanduser()
     if args.check:
-        return check(src)
+        baseline = pathlib.Path(args.baseline).expanduser() if args.baseline else None
+        return check(src, baseline=baseline, skip_hashes=args.skip_hash_check)
     build(src, FIXTURES)
     print("fixtures written:", sorted(p.name for p in FIXTURES.rglob("*") if p.is_file()))
     return 0
