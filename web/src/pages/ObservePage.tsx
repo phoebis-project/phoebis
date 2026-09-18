@@ -80,6 +80,7 @@ function applyDelta(store: Store, d: LiveDelta): Store {
 export function ObservePage() {
   const storeRef = useRef<Store>(emptyStore());
   const pausedRef = useRef(false);
+  const lastTickAt = useRef(0);
   const [view, setView] = useState<Store>(emptyStore);
   const [paused, setPaused] = useState<number | null>(null);
   const [mode, setMode] = useState<'streams' | 'table'>('table');
@@ -113,6 +114,7 @@ export function ObservePage() {
     () =>
       api.subscribeLive((e: LiveEvent) => {
         storeRef.current = e.kind === 'snapshot' ? fromSnapshot(e.snapshot) : applyDelta(storeRef.current, e.delta);
+        if (e.kind === 'snapshot' || e.delta.type === 'tick') lastTickAt.current = Date.now();
         if (!pausedRef.current) setView(storeRef.current);
       }),
     [],
@@ -127,8 +129,9 @@ export function ObservePage() {
 
   // The feed ticks once a second, so a second-resolution clock is what notices it stop.
   const wallClock = useNow(1_000);
-  // A pause freezes the view on purpose, so only a live view falling quiet means the socket dropped.
-  const connected = view.tick === null ? false : paused !== null || wallClock - Date.parse(view.tick.at) < 5_000;
+  // Against the arrival stamp, never the tick's own `at`: that carries the router's clock, and the banner has
+  // to mean the feed went quiet rather than that the two clocks disagree. A pause freezes the view on purpose.
+  const connected = view.tick === null ? false : paused !== null || wallClock - lastTickAt.current < 5_000;
   const nowMs = view.tick ? Date.parse(view.tick.at) : Date.now();
   const historical = span.endS < RING_SPAN_S;
   const windowStart = (historical ? anchor ?? nowMs : nowMs) - RING_SPAN_S * 1000;

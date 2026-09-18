@@ -96,12 +96,12 @@ export function RequestsPage() {
     setStack((s) => [...s, cursor]);
     setCursor(nextCursor);
   };
-  const goPrevious = () =>
-    setStack((s) => {
-      const copy = [...s];
-      setCursor(copy.pop());
-      return copy;
-    });
+  const goPrevious = () => {
+    const copy = [...stack];
+    const previous = copy.pop();
+    setStack(copy);
+    setCursor(previous);
+  };
   const active = search || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');

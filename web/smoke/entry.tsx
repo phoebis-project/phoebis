@@ -1,12 +1,29 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
+import { api } from '@/api';
+import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { REQUESTS } from '@/mock/requests';
 
 export const requests = REQUESTS;
+
+/**
+ * Drops the feed's ticks so a check can watch the page notice the silence. Only the ticks: the deltas keep
+ * flowing, so the store a later check reads is the one it would have been without the stall.
+ */
+let stalled = false;
+export const stallLive = (on: boolean) => {
+  stalled = on;
+};
+const subscribeLive = api.subscribeLive.bind(api);
+api.subscribeLive = (handler: (event: LiveEvent) => void) =>
+  subscribeLive((e) => {
+    if (stalled && e.kind === 'delta' && e.delta.type === 'tick') return;
+    handler(e);
+  });
 
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');

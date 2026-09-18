@@ -37,7 +37,7 @@ for (const level of ['error', 'warn']) {
 window.addEventListener('error', (e) => problems.push(`[window.error] ${e.message}`));
 process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?.stack ?? e}`));
 
-const { mount, requests } = await import('./dist/entry.js');
+const { mount, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -129,7 +129,7 @@ m = await mount('/observe');
   const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
   plainRow?.click();
   await m.settle(300);
-  results.push({ name: '/observe a request the feed sent no output for says so', ok: m.text().includes('No captured output for this request'), missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
+  results.push({ name: '/observe a request the feed sent no output for says so', ok: m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
   const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
   streamsBtn?.click();
   await m.settle(300);
@@ -169,6 +169,18 @@ m = await mount('/observe');
   } else {
     results.push({ name: '/observe range handles found', ok: false, missing: [String(handles.length)] });
   }
+  // An earlier check left the feed paused, which holds the banner back on purpose.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Resume')?.click();
+  await m.settle(300);
+  // The banner waits on the tick's age, so this one has to spend the wall-clock seconds.
+  stallLive(true);
+  await m.settle(6_000);
+  const stalledBanner = m.text().includes('Reconnecting to the live feed');
+  const keptRows = m.container.querySelectorAll('.live-table tbody tr').length;
+  stallLive(false);
+  await m.settle(2_000);
+  results.push({ name: '/observe a feed that stops ticking raises the reconnecting banner', ok: stalledBanner && keptRows > 0, missing: [stalledBanner ? `rows ${keptRows}` : 'no banner'] });
+  results.push({ name: '/observe the reconnecting banner clears on the next tick', ok: !m.text().includes('Reconnecting to the live feed'), missing: [] });
 }
 m.unmount();
 
