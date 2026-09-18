@@ -86,7 +86,17 @@ fn main() {
         // made from the modules the lockfile has just replaced.
         let ok = modules && run(&["run", "build"]);
         if !ok {
-            println!("cargo:warning=the web bundle could not be built; the router will serve a placeholder page. Set PHOEBIS_SKIP_UI_BUILD=1 to silence this.");
+            // Whatever is in `dist` was built from sources this binary is no longer being built from, so it
+            // goes and the placeholder below takes its place: a release that quietly embeds the previous UI
+            // reports nothing wrong and ships the wrong console.
+            if let Err(e) = std::fs::remove_dir_all(&dist) {
+                assert!(
+                    e.kind() == std::io::ErrorKind::NotFound,
+                    "the stale web bundle in {} could not be removed after the build failed: {e}",
+                    dist.display()
+                );
+            }
+            println!("cargo:warning=the web bundle could not be built; web/dist was discarded and the router will serve the placeholder page. Set PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is.");
         }
     }
     if !dist.join("index.html").exists() {
