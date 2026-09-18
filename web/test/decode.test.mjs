@@ -145,6 +145,59 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.ok(rollups.every((r) => isIso(r.hour) && typeof r.peak['5h'] === 'number'));
 });
 
+test('request rows fold into analytics groups with the same sums the routes answer', () => {
+  const page = d.decodeRequestPage(fixture('requests'));
+  const [all] = d.foldGroups(page.requests, 'all');
+  assert.equal(all.requests, 3);
+  assert.equal(all.succeeded, 2);
+  assert.equal(all.failed, 1);
+  assert.equal(all.attempts, 4);
+  assert.equal(all.failovers, 1);
+  assert.equal(all.tokens.cacheRead, 1500);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 3);
+  assert.equal(all.cacheMissReasons.none, 3);
+  assert.equal(all.probes.ok, 0);
+  const byKey = d.foldGroups(page.requests, 'key');
+  assert.deepEqual(byKey.map((g) => g.key), ['desktop']);
+  const points = d.foldRequests(page.requests, 3_600_000, page.requests[2].at, page.requests[0].at);
+  assert.ok(points.length >= 1 && points.every((p) => p.groups.length === 1));
+});
+
+test('the fold uses the ledger formulas for failovers, throughput, and cache misses', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = base.attempts[0];
+  // One attempt pair on the same account is a retry, not a failover.
+  const retried = { ...base, attempts: [attempt, { ...attempt, index: 1 }] };
+  assert.equal(d.foldGroups([retried], 'all')[0].failovers, 0);
+  assert.equal(d.foldGroups([{ ...retried, attempts: [attempt, { ...attempt, accountId: 'other', index: 1 }] }], 'all')[0].failovers, 1);
+  // 100 tokens with first content at nine seconds of ten: 100 tokens per second over the last second.
+  const slowStart = { ...base, durationMs: 10_000, ttftMs: 9_000, usage: { ...base.usage, output: 100 } };
+  const [g] = d.foldGroups([slowStart], 'all');
+  assert.ok(g.percentiles.outputTps.p50 >= 90 && g.percentiles.outputTps.p50 <= 110, `p50 ${g.percentiles.outputTps.p50} is the bucket holding 100`);
+  assert.equal(d.foldGroups([{ ...slowStart, ttftMs: null }], 'all')[0].histograms.outputTps.reduce((a, b) => a + b, 0), 0, 'no first-content timing, no sample');
+  // An API-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
+  const apiKey = { ...base, attempts: [{ ...attempt, cacheMissReason: null }], usage: { ...base.usage, cacheRead: 0, cacheWrite5m: 300 } };
+  const [m] = d.foldGroups([apiKey], 'all');
+  assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);
+  assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
+});
+
+test('a session view folds every page the cursor names', () => {
+  const page = d.decodeRequestPage(fixture('requests'));
+  const pages = [{ nextCursor: 'c1', requests: page.requests.slice(0, 2) }, { nextCursor: null, requests: page.requests.slice(2) }];
+  let calls = 0;
+  const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
+  return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
+    assert.equal(calls, 2);
+    assert.equal(requests.length, 3, 'both pages folded');
+    assert.equal(partial, false);
+    return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
+  }).then(({ partial, requests }) => {
+    assert.equal(partial, true, 'the page bound marks the result partial');
+    assert.equal(requests.length, 6);
+  });
+});
+
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);

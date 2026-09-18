@@ -54,11 +54,12 @@ export const ACCOUNT_SLOT: Record<string, number> = {
 
 export const accountColor = (ink: ChartInk, accountId: string) => ink.series[ACCOUNT_SLOT[accountId] ?? 7];
 
+/** Ordered by how an outcome degrades rather than alphabetically, like the token and probe stacks below. */
 export const OUTCOME_SERIES = [
-  { key: 'ok', label: 'OK', slot: 0 },
-  { key: 'rate_limited', label: 'Rate limited', slot: 3 },
-  { key: 'overloaded', label: 'Overloaded', slot: 1 },
-  { key: 'upstream_error', label: 'Upstream error', slot: 7 },
+  { key: 'succeeded', label: 'OK', slot: 0 },
+  { key: 'rateLimited', label: 'Rate limited', slot: 3 },
+  { key: 'failed', label: 'Failed', slot: 7 },
+  { key: 'exhausted', label: 'Exhausted', slot: 1 },
 ] as const;
 
 export const TOKEN_SERIES = [
@@ -70,16 +71,16 @@ export const TOKEN_SERIES = [
 ] as const;
 
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
-export const PROBE_SERIES: { hint?: string; key: 'probesFailed' | 'probesMigrated' | 'probesOk' | 'probesSkipped'; label: string; slot: number }[] = [
-  { key: 'probesOk', label: 'OK', slot: 0 },
+export const PROBE_SERIES: { hint?: string; key: 'failed' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
+  { key: 'ok', label: 'OK', slot: 0 },
   {
-    key: 'probesMigrated',
+    key: 'migrated',
     label: 'Migrated',
     slot: 2,
     hint: "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.",
   },
-  { key: 'probesSkipped', label: 'Skipped', slot: 3 },
-  { key: 'probesFailed', label: 'Failed', slot: 7 },
+  { key: 'skipped', label: 'Skipped', slot: 3 },
+  { key: 'failed', label: 'Failed', slot: 7 },
 ];
 
 /** Percentile lines read from the ramp: p50 lightest, p99 darkest and emphasized. */

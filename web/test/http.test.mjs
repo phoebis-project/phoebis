@@ -53,7 +53,6 @@ test('a read the router does not serve refuses with not_wired instead of reachin
   const calls = stub(() => answer(200, {}));
   const api = new HttpApi();
   const notWired = (e) => e instanceof ApiError && e.code === 'not_wired';
-  await assert.rejects(api.listRollups('1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z'), notWired);
   await assert.rejects(api.setSessionExpiry(900), notWired);
   assert.equal(calls.length, 0);
 });

@@ -1,7 +1,8 @@
-import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, HourlyRollup, LatencyHistograms, RateLimitWindow, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
+import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, RateLimitWindow, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
+import type { HourlyRollup } from './analytics';
 import { priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';

@@ -395,47 +395,6 @@ export interface LatencyHistograms {
 /** Why a recipe stopped while probes it had already paid for were still in the air. */
 export type WastedProbeReason = 'idle_limit' | 'released' | 'replaced' | 'session_ended';
 
-export interface HourlyRollup {
-  accountId: string;
-  cacheHits: number;
-  cacheMisses: number;
-  /** Attempts that carried diagnostics, counted by what they reported. */
-  cacheMissReasons: Record<CacheMissReason, number>;
-  cost: CostSplit;
-  costUsd: number;
-  /**
-   * Requests that diagnosed no divergence yet read no cache, so the entry
-   * expired between turns. The reason counts cannot be split this way once
-   * summed, which is why the ledger carries it.
-   */
-  expiredBetweenTurns: number;
-  /** Attempts that moved to another member before the request succeeded. */
-  failovers: number;
-  histograms: LatencyHistograms;
-  hour: string;
-  /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
-  keptWarm: { requests: number; tokens: number };
-  keyId: string;
-  kind: RequestKind;
-  /** Session pins moved to another member during the hour. */
-  migrations: number;
-  model: string;
-  poolId: string;
-  /** Probes served by another account than the recipe's; they count for neither the cold streak nor the net. */
-  probeMigrated: number;
-  probes: { failed: number; ok: number; skipped: number };
-  requests: { ok: number; overloaded: number; rate_limited: number; upstream_error: number };
-  savings: { grossUsd: number; probeCostUsd: number };
-  /** The mock rolls up per session so analytics can filter by one; a real ledger filters rows instead. */
-  sessionId: string;
-  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; uncachedInput: number };
-  uncached: number;
-  /** Probes no real request ever followed, settled when the recipe stopped. */
-  wastedProbes: number;
-  wastedProbeReasons: Record<WastedProbeReason, number>;
-  wastedProbeUsd: number;
-}
-
 export interface AccountRollup {
   accountId: string;
   cooldownSeconds: number;

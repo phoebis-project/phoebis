@@ -2402,6 +2402,13 @@
   height: 10px;
 }
 
+/* "Replaced by a new registration" wraps in this column, and a centred row floats its bar and count away
+   from the label they belong to. */
+.hbars--reasons li.hbars__row--top {
+  align-items: start;
+  padding: 3px 0;
+}
+
 .num.is-negative {
   color: var(--critical-ink);
 }

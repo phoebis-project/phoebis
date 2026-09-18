@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, HourlyRollup, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo, Settings } from './types';
+import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo, Settings } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -131,11 +131,6 @@ export class HttpApi implements Api {
     d.decodeRequestPage(
       await call('GET', `/admin/requests${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined })}`),
     );
-  /**
-   * No admin route answers hourly rollup rows: the series route buckets and groups them on one dimension, so the
-   * per-key, per-pool, per-account and per-model rows the analytics page folds cannot be rebuilt from it.
-   */
-  listRollups = (): Promise<HourlyRollup[]> => Promise.reject(new ApiError(501, 'the analytics page reads the series and breakdown routes', 'not_wired'));
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string): Promise<SessionInfo> => {
     await call<void>('POST', '/admin/session', { secret });

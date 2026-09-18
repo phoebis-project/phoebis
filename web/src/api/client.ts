@@ -14,7 +14,6 @@ import type {
   CatalogModel,
   CreatedApiKey,
   Delivery,
-  HourlyRollup,
   KeepaliveOverview,
   KeepaliveRecipe,
   LiveEvent,
@@ -124,8 +123,6 @@ export interface Api {
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
-  /** Kept until the analytics page reads the series and breakdown routes instead of folding rollup rows itself. */
-  listRollups(from: string, to: string): Promise<HourlyRollup[]>;
   listSessions(): Promise<Session[]>;
   login(secret: string): Promise<SessionInfo>;
   logout(): Promise<void>;

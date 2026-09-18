@@ -390,12 +390,6 @@ export class MockApi implements Api {
     return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
   }
 
-  listRollups(from: string, to: string) {
-    const fromMs = Date.parse(from);
-    const toMs = Date.parse(to);
-    return latency(ALL_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) <= toMs));
-  }
-
   listSessions() {
     return latency(this.sessions);
   }
