@@ -1,0 +1,7 @@
+{
+  "route": "GET /admin/live/snapshot",
+  "body": {
+    "entries": [],
+    "density": []
+  }
+}

@@ -35,10 +35,11 @@ const RANGES = [
 ];
 
 const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
-  failover: 'Failed over',
-  ok: 'Succeeded',
-  overloaded: 'Overloaded',
+  auth_failed: 'Auth failed',
+  canceled: 'Canceled',
   rate_limited: 'Rate limited',
+  succeeded: 'Succeeded',
+  transport_error: 'Transport error',
   upstream_error: 'Upstream error',
 };
 

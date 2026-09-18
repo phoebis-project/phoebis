@@ -12,7 +12,8 @@ function traffic(seed: number, scale: number): TrafficBucket[] {
     // Working hours carry the traffic; overnight is a trickle.
     const daylight = hourOfDay >= 8 && hourOfDay <= 19 ? 1 : 0.18;
     const requests = Math.round(scale * daylight * rng.float(0.55, 1.35));
-    return { at: iso(at), requests, tokens: requests * rng.int(9_000, 24_000) };
+    const failed = Math.round(requests * rng.float(0, 0.04));
+    return { at: iso(at), costUsd: requests * rng.float(0.01, 0.05), failed, requests, tokens: requests * rng.int(9_000, 24_000) };
   });
 }
 
@@ -39,10 +40,10 @@ export const POOLS: Pool[] = [
     bodyCaptureHours: 24,
     defaultAllowedModels: null,
     members: [
-      { accountId: 'business', priority: 0 },
-      { accountId: 'mail', priority: 0 },
-      { accountId: 'personal', priority: 0 },
-      { accountId: 'console', priority: 1 },
+      { accountId: 'business', eligible: 'eligible', priority: 0 },
+      { accountId: 'mail', eligible: 'eligible', priority: 0 },
+      { accountId: 'personal', eligible: 'eligible', priority: 0 },
+      { accountId: 'console', eligible: 'eligible', priority: 1 },
     ],
     traffic24h: ALL_TRAFFIC,
     requests24h: ALL_TRAFFIC.reduce((s, b) => s + b.requests, 0),

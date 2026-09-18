@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '@/api';
-import type { AlertEvent, AlertEventDetail, AlertKind, AlertRule, ApiKey, Pool } from '@/api/types';
+import type { AlertEvent, AlertEventDetail, AlertKind, AlertRule, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, Dialog, Field, Input, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
@@ -10,8 +10,11 @@ import { useAsync, useNow } from '@/lib/hooks';
 const KIND_LABEL: Record<AlertKind, string> = {
   ask_user_question: 'Waiting for user input',
   client_drift: 'Client version drift',
+  funding_required: 'Funding required',
+  keepalive_cost_cap: 'Probe cost cap reached',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
+  refresh_failed: 'Credential refresh failed',
   utilization_above: 'Utilization above threshold',
 };
 const KINDS = Object.keys(KIND_LABEL).sort() as AlertKind[];
@@ -196,20 +199,25 @@ function EventRow({ event, now }: { event: AlertEvent; now: number }) {
   );
 }
 
+// The wire carries a free-form object per kind; only the two kinds below have a shape this page draws.
 function EventDetail({ detail }: { detail: AlertEventDetail }) {
+  if (detail === null) return null;
   if (detail.type === 'client_drift') {
+    const drift = detail as unknown as ClientDriftDetail;
     return (
       <span className="sub">
-        client {detail.clientVersion}, caught by {TRIGGER_LABEL[detail.trigger]}
+        client {drift.clientVersion}, caught by {TRIGGER_LABEL[drift.trigger]}
       </span>
     );
   }
+  if (detail.type !== 'ask_user_question') return null;
+  const asked = detail as unknown as AskUserQuestionDetail;
   return (
     <>
-      <span className="sub mono" title={detail.sessionId}>
-        key {detail.keyId}, session {shortId(detail.sessionId, 8)}, agent {detail.agentId}
+      <span className="sub mono" title={asked.sessionId}>
+        key {asked.keyId}, session {shortId(asked.sessionId, 8)}, agent {asked.agentId}
       </span>
-      {detail.question ? <span className="sub">asked: {detail.question}</span> : <span className="sub muted">question not captured</span>}
+      {asked.question ? <span className="sub">asked: {asked.question}</span> : <span className="sub muted">question not captured</span>}
     </>
   );
 }

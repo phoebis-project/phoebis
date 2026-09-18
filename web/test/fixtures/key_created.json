@@ -1,0 +1,32 @@
+{
+  "route": "POST /admin/keys",
+  "body": {
+    "id": "desktop",
+    "label": "Desktop",
+    "notes": null,
+    "pool_id": "main",
+    "enabled": true,
+    "revoked_at": null,
+    "expires_at": null,
+    "allowed_models": [
+      "claude-sonnet-5"
+    ],
+    "keepalive_opt_out": false,
+    "body_capture_hours": null,
+    "effective_body_capture_hours": 24,
+    "prefix": "6huMPDSo",
+    "created_at": 1000000,
+    "rotated_at": null,
+    "last_used_at": null,
+    "usage_7d": {
+      "cost_usd": 0.0,
+      "requests": 0,
+      "tokens": 0
+    },
+    "lifetime": {
+      "cost_usd": 0.0,
+      "requests": 0
+    },
+    "secret": "phoebis-fixture"
+  }
+}

@@ -29,17 +29,18 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
 }
 
 function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
-  if (q.keyIds?.length && !q.keyIds.includes(r.keyId)) return false;
-  if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
-  if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
+  // A request the router never attributed matches no filter on that field.
+  if (q.keyIds?.length && (r.keyId === null || !q.keyIds.includes(r.keyId))) return false;
+  if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
+  if (q.accountIds?.length && (r.accountId === null || !q.accountIds.includes(r.accountId))) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
-  if (q.statuses?.length && !q.statuses.includes(r.status)) return false;
+  if (q.statuses?.length && (r.status === null || !q.statuses.includes(r.status))) return false;
   if (q.kind && r.kind !== q.kind) return false;
   if (q.from && Date.parse(r.at) < Date.parse(q.from)) return false;
   if (q.to && Date.parse(r.at) > Date.parse(q.to)) return false;
   if (q.search) {
     const needle = q.search.toLowerCase();
-    const hay = [r.id, r.sessionId, r.keyId, r.accountId, r.model, r.errorCode ?? '', r.agentId].join(' ').toLowerCase();
+    const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? ''].join(' ').toLowerCase();
     if (!hay.includes(needle)) return false;
   }
   return true;
@@ -100,6 +101,7 @@ export class MockApi implements Api {
       activePins: 0,
       cost24h: 0,
       id: input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      members: input.members.map((m) => ({ ...m, eligible: 'eligible' as const })),
       requests24h: 0,
       traffic24h: [],
     };
@@ -220,7 +222,7 @@ export class MockApi implements Api {
 
   previewPriceImport(_url: string) {
     return latency(
-      { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length },
+      { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` },
       400,
     );
   }
@@ -242,7 +244,7 @@ export class MockApi implements Api {
       scope: 'org:create_api_key user:profile user:inference',
       state,
     });
-    return latency({ authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), redirectUri: PAIRING_REDIRECT_URI, state }, 200);
+    return latency({ authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id: state, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
   }
 
   subscribeLive(handler: (event: LiveEvent) => void) {
@@ -260,7 +262,7 @@ export class MockApi implements Api {
   updatePool(id: string, input: PoolInput): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
-    const next = { ...this.pools[idx], ...input };
+    const next: Pool = { ...this.pools[idx], ...input, members: input.members.map((m) => ({ ...m, eligible: 'eligible' as const })) };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(next, 250);
   }

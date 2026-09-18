@@ -1,0 +1,37 @@
+{
+  "route": "GET /admin/accounts/business/usage",
+  "body": {
+    "account_id": "business",
+    "error": null,
+    "extra_usage": {
+      "currency": null,
+      "disabled_reason": null,
+      "is_enabled": false,
+      "monthly_limit": null,
+      "used_credits": null,
+      "utilization": null
+    },
+    "fable_window": null,
+    "fetched_at": 1000000,
+    "identity_generation": 1,
+    "raw_keys": [
+      "five_hour",
+      "seven_day",
+      "seven_day_oauth_apps",
+      "seven_day_opus",
+      "extra_usage"
+    ],
+    "windows": [
+      {
+        "key": "five_hour",
+        "resets_at": 1789311600000,
+        "utilization": 12.5
+      },
+      {
+        "key": "seven_day",
+        "resets_at": 1789689600000,
+        "utilization": 40.0
+      }
+    ]
+  }
+}

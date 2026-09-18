@@ -49,7 +49,7 @@ function expect(name, text, needles) {
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
-const failoverRow = requests.find((r) => r.attempts.some((a) => a.outcome === 'failover' && a.cooldownSet));
+const failoverRow = requests.find((r) => r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet));
 {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
@@ -257,7 +257,7 @@ expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-son
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Priority, then random', 'Least utilized', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop after 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Priority, then random', 'Least utilized', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -276,14 +276,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
 
   // Sectioned dialog: a nav rail beside one scrolling body, one heading per section.
   const navLabels = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/pools dialog nav lists every section', ok: JSON.stringify(navLabels) === JSON.stringify(['General', 'Routing', 'Overage', 'Cache warming', 'Capture', 'Members', 'Keys']), missing: navLabels });
+  results.push({ name: '/pools dialog nav lists every section', ok: JSON.stringify(navLabels) === JSON.stringify(['General', 'Routing', 'Overage', 'Caching', 'Capture', 'Members', 'Keys']), missing: navLabels });
   const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
   results.push({ name: '/pools dialog body repeats the sections in order', ok: JSON.stringify(headings) === JSON.stringify(navLabels), missing: headings });
   results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__split > .dialog__body').length ?? 0) === 1, missing: [] });
   results.push({ name: '/pools dialog marks one nav entry active', ok: (dlg?.querySelectorAll('.dialog-nav__link.is-active').length ?? 0) === 1, missing: [] });
   const footButtons = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/pools dialog footer holds Cancel and Save', ok: footButtons.join(',') === 'Cancel,Save pool', missing: footButtons });
-  const keepaliveNav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Cache warming');
+  const keepaliveNav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Caching');
   keepaliveNav?.click();
   await m.settle(120);
   results.push({ name: '/pools dialog nav click moves the highlight', ok: keepaliveNav?.classList.contains('is-active') === true, missing: [...(dlg?.querySelectorAll('.dialog-nav__link.is-active') ?? [])].map((b) => b.textContent) });
@@ -356,7 +356,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
 
   {
     const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-    results.push({ name: '/pools dialog carries Capture between Cache warming and Members', ok: nav.indexOf('Capture') === nav.indexOf('Cache warming') + 1 && nav.indexOf('Members') === nav.indexOf('Capture') + 1, missing: nav });
+    results.push({ name: '/pools dialog carries Capture between Caching and Members', ok: nav.indexOf('Capture') === nav.indexOf('Caching') + 1 && nav.indexOf('Members') === nav.indexOf('Capture') + 1, missing: nav });
     expect('/pools capture section', dlg?.textContent ?? '', ['Capture request and response bodies', 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.', 'Retention (hours)']);
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     results.push({ name: '/pools capture prefills the pool retention', ok: hours?.value === '24' && hours?.getAttribute('max') === '72', missing: [hours?.value ?? 'absent', hours?.getAttribute('max') ?? 'absent'] });
@@ -553,7 +553,7 @@ await m.navigate(`/requests/${desktopRow.id}`);
 expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
 if (failoverRow) {
   await m.navigate(`/requests/${failoverRow.id}`);
-  expect('/requests/:failover drawer', m.text(), ['cooldown set', 'Failed over', 'used', 'resets']);
+  expect('/requests/:failover drawer', m.text(), ['cooldown set', 'Rate limited', 'used', 'resets']);
   const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
   // An API-key upstream reports no quota windows at all, so its attempt carries the cache row alone.
   results.push({

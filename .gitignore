@@ -2,6 +2,8 @@
 /target/
 /web/dist/
 /web/node_modules/
+/web/smoke/dist/
+/web/test/dist/
 __pycache__/
 
 # Runtime data

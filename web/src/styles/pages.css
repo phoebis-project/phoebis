@@ -1497,11 +1497,10 @@
   border-radius: var(--radius-sm);
 }
 
-.attempt--ok {
+.attempt--succeeded {
   border-left-color: var(--good);
 }
 
-.attempt--failover,
 .attempt--rate_limited {
   border-left-color: var(--warning);
 }

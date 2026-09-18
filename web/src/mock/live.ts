@@ -78,17 +78,18 @@ function finalUsageFor(model: string, kind: RequestKind, status: number): Usage 
 function fromLog(r: RequestLog): LiveRequest {
   const at = Date.parse(r.at);
   const ok = r.status === 200;
+  const durationMs = r.durationMs ?? 0;
   const phases: LivePhases = { receivedAt: r.at, selectedAt: iso(at + 60), writtenAt: iso(at + 140) };
   if (r.ttfbMs !== null) phases.headAt = iso(at + r.ttfbMs);
   if (ok && r.kind === 'inference' && r.ttftMs !== null) {
     phases.firstContentAt = iso(at + r.ttftMs);
-    phases.streamEndAt = iso(at + Math.max(r.ttftMs + 10, r.durationMs - 40));
+    phases.streamEndAt = iso(at + Math.max(r.ttftMs + 10, durationMs - 40));
   }
-  phases.finishedAt = iso(at + r.durationMs);
-  const streaming = r.ttftMs !== null ? Math.max(50, r.durationMs - r.ttftMs) : null;
+  phases.finishedAt = iso(at + durationMs);
+  const streaming = r.ttftMs !== null ? Math.max(50, durationMs - r.ttftMs) : null;
   return {
     accountId: r.accountId,
-    agentId: r.agentId,
+    agentId: r.agentId ?? 'main',
     attempts: r.attempts.map((a) => ({ accountId: a.accountId, cooldownSet: a.cooldownSet, index: a.index, outcome: a.outcome, startedAt: a.startedAt, upstreamStatus: a.upstreamStatus, windows: a.windows })),
     costUsd: r.costUsd,
     errorCode: r.errorCode,
@@ -306,14 +307,14 @@ class LiveFeed {
     const first = this.attemptFor(req, 0, s + plan.selectAt, []);
     req.attempts = [first];
     if (plan.attemptsPlanned > 1) {
-      first.outcome = 'failover';
+      first.outcome = 'rate_limited';
       first.upstreamStatus = 429;
       first.cooldownSet = { reason: '429 on 5h window', until: iso(s + rng.int(20, 75) * MINUTE) };
       req.attempts.push(this.attemptFor(req, 1, s + plan.failoverAt, [first.accountId]));
     }
     const head = req.attempts[req.attempts.length - 1];
     head.upstreamStatus = plan.finalStatus;
-    head.outcome = plan.finalStatus === 200 ? 'ok' : plan.finalStatus === 429 ? 'rate_limited' : plan.finalStatus === 529 ? 'overloaded' : 'upstream_error';
+    head.outcome = plan.finalStatus === 200 ? 'succeeded' : plan.finalStatus === 429 ? 'rate_limited' : 'upstream_error';
     req.accountId = head.accountId;
     req.status = plan.finalStatus;
     req.errorCode = plan.finalStatus === 200 ? null : plan.finalStatus === 429 ? 'rate_limit_error' : plan.finalStatus === 529 ? 'overloaded_error' : 'api_error';
@@ -359,7 +360,7 @@ class LiveFeed {
     if (req.attempts.length > 0 && !req.phases.writtenAt && elapsed >= plan.writtenAt) req.phases.writtenAt = at(plan.writtenAt);
     if (plan.attemptsPlanned > 1 && req.attempts.length === 1 && elapsed >= plan.failoverAt) {
       const first = req.attempts[0];
-      first.outcome = 'failover';
+      first.outcome = 'rate_limited';
       first.upstreamStatus = 429;
       first.cooldownSet = { reason: '429 on 5h window', until: iso(plan.startedMs + rng.int(20, 75) * MINUTE) };
       first.windows = first.windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
@@ -371,7 +372,7 @@ class LiveFeed {
     if (req.attempts.length === plan.attemptsPlanned && req.status === null && elapsed >= plan.headAt) {
       const head = req.attempts[req.attempts.length - 1];
       head.upstreamStatus = plan.finalStatus;
-      head.outcome = plan.finalStatus === 200 ? 'ok' : plan.finalStatus === 429 ? 'rate_limited' : plan.finalStatus === 529 ? 'overloaded' : 'upstream_error';
+      head.outcome = plan.finalStatus === 200 ? 'succeeded' : plan.finalStatus === 429 ? 'rate_limited' : 'upstream_error';
       req.status = plan.finalStatus;
       req.phases.headAt = at(plan.headAt);
       // The head frame carries the input side of usage; output accrues from here.

@@ -68,7 +68,7 @@ const WARMED_KINDS: { value: RequestKind; weight: number }[] = [...TRAFFIC_KINDS
  */
 const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): AttemptWindow => {
   const period = w.periodHours * HOUR;
-  const resetsAt = Date.parse(w.resetsAt);
+  const resetsAt = Date.parse(w.resetsAt ?? '');
   const shift = Math.ceil(Math.max(0, resetsAt - period - atMs) / period);
   const resetThen = resetsAt - shift * period;
   const phase = 1 - (resetThen - atMs) / period;
@@ -173,10 +173,10 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     let upstreamStatus: number;
     if (last) {
       upstreamStatus = finalStatus;
-      outcome = finalStatus === 200 ? 'ok' : finalStatus === 429 ? 'rate_limited' : finalStatus === 529 ? 'overloaded' : 'upstream_error';
+      outcome = finalStatus === 200 ? 'succeeded' : finalStatus === 429 ? 'rate_limited' : 'upstream_error';
     } else {
       upstreamStatus = rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
-      outcome = 'failover';
+      outcome = 'rate_limited';
     }
     const durationMs = last && finalStatus === 200 ? rng.int(900, 22_000) : rng.int(120, 900);
     const windows = oauthWindows(accountId, cursor);
@@ -220,7 +220,7 @@ function buildRequests(): RequestLog[] {
     // Needs the usage, so it runs once the response has been drawn rather than inside buildAttempts.
     const attempts = diagnosed(tried, kind, usage);
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
-    const durationMs = attempts.reduce((s, a) => s + a.durationMs, 0);
+    const durationMs = attempts.reduce((s, a) => s + (a.durationMs ?? 0), 0);
     const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'rate_limit_error' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
     const ttfbMs = finalStatus === 200 && kind !== 'count_tokens' ? rng.int(kind === 'probe' ? 180 : 420, kind === 'probe' ? 900 : 4_200) : null;
     // Streams open with a message_start frame, so the first content token lands a
@@ -234,6 +234,7 @@ function buildRequests(): RequestLog[] {
       accountId: head.accountId,
       model,
       kind,
+      outcome: finalStatus === 200 ? 'succeeded' : finalStatus === 429 ? 'exhausted' : 'failed',
       transport,
       status: finalStatus,
       attempts,
@@ -256,7 +257,7 @@ export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;
-  const streaming = Math.max(50, r.durationMs - r.ttftMs);
+  const streaming = Math.max(50, (r.durationMs ?? 0) - r.ttftMs);
   return (r.usage.output / streaming) * 1000;
 };
 
@@ -327,7 +328,8 @@ function rollups(): HourlyRollup[] {
         overloaded: list.filter((r) => r.status === 529).length,
         upstream_error: list.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
       },
-      failovers: list.reduce((s, r) => s + r.attempts.filter((a) => a.outcome === 'failover').length, 0),
+      // Every attempt but the last one moved the request to another member.
+      failovers: list.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
       migrations: list.filter((r) => r.attempts.length > 1 && r.status === 200).length > 0 && h.chance(0.5) ? 1 : 0,
       tokens: {
         uncachedInput: list.reduce((s, r) => s + r.usage.input, 0),

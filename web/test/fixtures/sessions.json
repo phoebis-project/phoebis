@@ -1,0 +1,45 @@
+{
+  "route": "GET /admin/sessions",
+  "body": {
+    "sessions": [
+      {
+        "key_id": "desktop",
+        "session_id": "s1",
+        "model": "claude-sonnet-5",
+        "account_id": "business",
+        "epoch": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_request_at": 940000,
+        "requests": 2,
+        "pinned": false,
+        "companion": "reporting",
+        "companion_since": null,
+        "agents": 1,
+        "keepalive": {
+          "next_probe_at": 1238289,
+          "state": "busy"
+        }
+      },
+      {
+        "key_id": "desktop",
+        "session_id": "s2",
+        "model": "claude-sonnet-5",
+        "account_id": "business",
+        "epoch": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_request_at": 880000,
+        "requests": 1,
+        "pinned": false,
+        "companion": "none",
+        "companion_since": null,
+        "agents": 0,
+        "keepalive": {
+          "next_probe_at": null,
+          "state": null
+        }
+      }
+    ]
+  }
+}

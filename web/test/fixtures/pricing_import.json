@@ -1,0 +1,28 @@
+{
+  "route": "POST /admin/pricing/import",
+  "body": {
+    "token": "imp_c1d50485a6d43eb13ccd431b34a6aa9b",
+    "format": "litellm",
+    "in_file": 1,
+    "served": 1,
+    "models": [
+      {
+        "model": "claude-sonnet-5",
+        "input_per_m": 2.0,
+        "cache_write_5m_per_m": 2.5,
+        "cache_write_1h_per_m": 4.0,
+        "cache_read_per_m": 0.2,
+        "output_per_m": 10.0
+      }
+    ],
+    "changes": [
+      {
+        "model": "claude-sonnet-5",
+        "field": "cache_read",
+        "from": 0.2,
+        "to": 0.2
+      }
+    ],
+    "expires_at": 1600000
+  }
+}

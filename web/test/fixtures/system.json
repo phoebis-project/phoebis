@@ -1,0 +1,43 @@
+{
+  "route": "GET /admin/system",
+  "body": {
+    "version": "0.1.0",
+    "profile": "claude-code-2.1.269-linux-x64",
+    "uptime_seconds": 0,
+    "storage_ok": true,
+    "ledger": {
+      "schema_version": 5,
+      "written": 5,
+      "dropped": 0,
+      "write_failures": 0,
+      "gaps": 0,
+      "last_gap_at": 0,
+      "channel_depth": 4096
+    },
+    "bus": [
+      {
+        "subscriber": "ledger",
+        "dropped": 0,
+        "panics": 0
+      },
+      {
+        "subscriber": "live",
+        "dropped": 0,
+        "panics": 0
+      }
+    ],
+    "live": {
+      "clients": 0,
+      "in_flight": 0
+    },
+    "pricing_unknown_models": 0,
+    "gaps": [],
+    "keepalive": {
+      "agents": 1,
+      "bus_gaps": 0,
+      "retained_bytes": 116,
+      "running_probes": 0,
+      "sessions": 1
+    }
+  }
+}

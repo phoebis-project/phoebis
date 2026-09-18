@@ -28,7 +28,7 @@ export function QuotaPage() {
     const list = (accounts.data ?? []).filter((a) => tab === 'all' || a.kind === tab);
     if (sort === 'soonest') {
       const nextReset = (a: Account) => {
-        const future = a.windows.map((w) => Date.parse(w.resetsAt)).filter((t) => t > now);
+        const future = a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now);
         return future.length ? Math.min(...future) : Number.POSITIVE_INFINITY;
       };
       return [...list].sort((a, b) => nextReset(a) - nextReset(b));
@@ -382,7 +382,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
 
           {lanes.map(({ account, window: w }) => {
             const period = w.periodHours * HOUR;
-            const resetAt = Date.parse(w.resetsAt);
+            const resetAt = Date.parse(w.resetsAt ?? '');
             const bars: { end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
             let start = resetAt - period;
             while (start > span.startMs) start -= period;

@@ -17,9 +17,13 @@ export const isSubscription = (account: Account) => account.kind === 'oauth';
 
 export function soonestReset(account: Account, now: number): WindowId | null {
   let best: RateLimitWindow | null = null;
+  let bestAt = Number.POSITIVE_INFINITY;
   for (const w of account.windows) {
-    if (Date.parse(w.resetsAt) <= now) continue;
-    if (!best || Date.parse(w.resetsAt) < Date.parse(best.resetsAt)) best = w;
+    // A window the sampler reported without a reset time can never be the soonest to recover.
+    const at = w.resetsAt === null ? Number.NaN : Date.parse(w.resetsAt);
+    if (!(at > now) || at >= bestAt) continue;
+    best = w;
+    bestAt = at;
   }
   return best ? best.id : null;
 }
@@ -27,9 +31,11 @@ export function soonestReset(account: Account, now: number): WindowId | null {
 export const STATUS_LABEL: Record<Account['status'], string> = {
   cooldown: 'Cooling down',
   disabled: 'Disabled',
+  funding_required: 'Needs funding',
   paused: 'Paused',
   reauth_required: 'Needs re-auth',
   ready: 'Ready',
+  unpaired: 'Not paired',
 };
 
 export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' | 'warning';
@@ -37,7 +43,9 @@ export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' |
 export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
   cooldown: 'warning',
   disabled: 'neutral',
+  funding_required: 'critical',
   paused: 'neutral',
   reauth_required: 'critical',
   ready: 'good',
+  unpaired: 'neutral',
 };

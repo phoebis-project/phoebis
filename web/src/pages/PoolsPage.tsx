@@ -14,7 +14,7 @@ import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtU
 import { useAsync, useNow } from '@/lib/hooks';
 import { KeyDialog } from './KeysPage';
 
-export const STRATEGY_LABEL: Record<PoolStrategy, string> = { least_utilized: 'Least utilized', priority_random: 'Priority, then random' };
+export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random' };
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral'> = { active: 'good', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
@@ -223,7 +223,7 @@ function PoolCard({ pool, keys, accountById, now, canMutate, onEdit }: { account
           <div className="pool__policy-wide">
             <dt>Cache TTL</dt>
             <dd>
-              {pool.cacheTtl.enabled ? (
+              {pool.cacheTtl?.enabled ? (
                 <span className="chips">
                   <Badge tone="neutral">
                     Main <span className="mono">{pool.cacheTtl.main}</span>
@@ -410,7 +410,7 @@ const blankForm = (): PoolForm => ({
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   allowed: pool.defaultAllowedModels ?? [],
-  cacheTtl: { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) },
+  cacheTtl: pool.cacheTtl ? { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) } : { ...CACHE_TTL_DEFAULTS },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
   captureHours: pool.bodyCaptureHours || 24,
@@ -438,7 +438,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     retrySeconds: pool.keepalive.retrySeconds,
     stopWhenNetNegative: pool.keepalive.stopWhenNetNegative,
   },
-  warmSubagents: pool.keepalive.warmSubagents,
+  warmSubagents: pool.keepalive.warmSubagents ?? true,
 });
 
 export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysChanged, accounts, keys, pools, models }: { accounts: Account[]; keys: ApiKey[]; models: { label: string; value: string }[]; onClose: () => void; onKeyCreated: (c: CreatedApiKey) => void; onKeysChanged: () => void; onSaved: (created: boolean) => void; open: boolean; pool: Pool | null; pools: Pool[] }) {

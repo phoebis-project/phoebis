@@ -1,0 +1,57 @@
+{
+  "route": "GET /admin/accounts/business/quota?range=7d",
+  "body": {
+    "account_id": "business",
+    "from": -603800000,
+    "to": 1000000,
+    "windows": [
+      {
+        "id": "7d",
+        "samples": [
+          {
+            "at": 900000,
+            "utilization": 0.41,
+            "resets_at": 87400000,
+            "source": "header"
+          }
+        ]
+      },
+      {
+        "id": "fable",
+        "samples": [
+          {
+            "at": 900000,
+            "utilization": 0.12,
+            "resets_at": 87400000,
+            "source": "poll"
+          }
+        ]
+      },
+      {
+        "id": "five_hour",
+        "samples": [
+          {
+            "at": 900000,
+            "utilization": 0.62,
+            "resets_at": 4600000,
+            "source": "poll"
+          }
+        ]
+      }
+    ],
+    "extra_usage": [
+      {
+        "at": 900000,
+        "is_enabled": true,
+        "in_use": false,
+        "monthly_limit": 5000,
+        "used_credits": 1234,
+        "utilization": 0.25,
+        "currency": "USD",
+        "disabled_reason": null,
+        "overage_reset": null,
+        "source": "poll"
+      }
+    ]
+  }
+}

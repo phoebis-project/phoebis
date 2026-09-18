@@ -1,0 +1,27 @@
+{
+  "route": "GET /admin/keepalive/overview",
+  "body": {
+    "agents": {
+      "busy": 1,
+      "idle": 0,
+      "parked": 0
+    },
+    "cost_today": [
+      {
+        "cap_usd": 4.0,
+        "pool_id": "main",
+        "usd": 0.0
+      }
+    ],
+    "expired_between_turns_24h": 0,
+    "net_saved_7d_usd": 0.0,
+    "probes_24h": {
+      "failed": 0,
+      "migrated": 0,
+      "ok": 0,
+      "skipped": 0
+    },
+    "sessions": 2,
+    "sessions_with_companion": 1
+  }
+}

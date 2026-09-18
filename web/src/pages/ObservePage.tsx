@@ -151,7 +151,7 @@ export function ObservePage() {
     const firstMinute = Math.floor(windowStart / MINUTE_MS) * MINUTE_MS;
     const counts = new Array(RING_SPAN_S / 60 + 1).fill(0) as number[];
     for (const r of [...view.recent, ...view.inFlight.values()]) {
-      if (sessionFilter.length && !sessionFilter.includes(r.sessionId)) continue;
+      if (sessionFilter.length && (r.sessionId === null || !sessionFilter.includes(r.sessionId))) continue;
       const bin = Math.floor((Date.parse(r.phases.receivedAt) - firstMinute) / MINUTE_MS);
       if (bin >= 0 && bin < counts.length) counts[bin] += 1;
     }
@@ -488,7 +488,7 @@ function MetricStrip({ tick }: { tick: LiveTick | null }) {
                 </span>
               )}
             </span>
-            <div className="mchip__spark">{metric ? <Sparkline values={metric.series} color={m.key === 'errorRate' ? ink.series[7] : ink.series[0]} height={26} /> : <Skeleton height={26} />}</div>
+            <div className="mchip__spark">{metric ? <Sparkline values={metric.series.map((v) => v ?? 0)} color={m.key === 'errorRate' ? ink.series[7] : ink.series[0]} height={26} /> : <Skeleton height={26} />}</div>
           </div>
         );
       })}
@@ -508,8 +508,8 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
         {fmtTime(r.phases.receivedAt)}
       </td>
       <td className="mono">{r.keyId}</td>
-      <td className="mono" title={r.sessionId}>
-        {shortId(r.sessionId, 8)}
+      <td className="mono" title={r.sessionId ?? undefined}>
+        {r.sessionId === null ? <span className="muted">none</span> : shortId(r.sessionId, 8)}
       </td>
       <td className="mono">{r.agentId}</td>
       <td className="mono">{r.model}</td>
@@ -656,7 +656,7 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
         ) : (
           <ul className="attempts">
             {r.attempts.map((a) => (
-              <li key={a.index} className={`attempt attempt--${a.outcome === 'in_flight' ? 'ok' : a.outcome}`}>
+              <li key={a.index} className={`attempt attempt--${a.outcome === 'in_flight' ? 'succeeded' : a.outcome}`}>
                 <div className="attempt__head">
                   <span className="attempt__index">{a.index + 1}</span>
                   <b>{a.accountId}</b>

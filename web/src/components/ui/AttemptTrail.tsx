@@ -12,11 +12,12 @@ export interface TrailAttempt {
 }
 
 const OUTCOME_LABEL: Record<AttemptOutcome | 'in_flight', string> = {
-  failover: 'failed over',
+  auth_failed: 'auth failed',
+  canceled: 'canceled',
   in_flight: 'in flight',
-  ok: 'succeeded',
-  overloaded: 'overloaded',
   rate_limited: 'rate limited',
+  succeeded: 'succeeded',
+  transport_error: 'transport error',
   upstream_error: 'upstream error',
 };
 

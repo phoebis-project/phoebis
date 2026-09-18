@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeReason, RecipeState, Session } from '@/api/types';
+import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtUsd, shortId } from '@/lib/format';
+import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
 
@@ -22,30 +23,6 @@ const STATE_HINT: Record<RecipeState, string> = {
   held: 'No probe is scheduled; the reason chip says why.',
   probing: 'A probe is in flight right now.',
 };
-const REASON_LABEL: Record<RecipeReason, string> = {
-  affinity_too_short: 'affinity too short',
-  awaiting_cache_evidence: 'awaiting cache evidence',
-  cap_reached: 'cap reached',
-  cooled: 'paused: cold probe',
-  idle_limit: 'idle limit',
-  net_negative: 'net negative',
-  overage: 'overage',
-  unsupported_shape: 'unsupported shape',
-};
-const REASON_HINT: Record<RecipeReason, string> = {
-  affinity_too_short: "The pool's session affinity expires before the cache this probe would warm, so the session could move away from it.",
-  awaiting_cache_evidence:
-    "The agent's request went out and its stream has not yet reported cache usage. The first stream event carries it, within seconds; the probe timer arms from that event and probes then run while the response is still streaming, so a long turn does not go cold.",
-  cap_reached: 'The pool spent its daily probe cap; probes resume at midnight UTC.',
-  cooled: "The probe read no cache for the prefix it was meant to keep warm, so that entry had already expired and the next turn writes regardless. Consecutive cold probes past the pool's cold probe limit pause the recipe until the next real request.",
-  idle_limit:
-    "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
-  net_negative:
-    "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",
-  overage: 'The upstream is on extra usage and the pool policy skips probes there.',
-  unsupported_shape: 'The last request had no cacheable prefix the probe could replay.',
-};
-const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'cap_reached', 'idle_limit', 'net_negative', 'unsupported_shape'];
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
 const KIND_LABEL: Record<Account['kind'], string> = { api_key: 'api key', oauth: 'subscription' };
 const KIND_HINT: Record<Account['kind'], string> = {
@@ -73,7 +50,7 @@ interface Row {
 /** When the pool stopped probing: the max idle time counted from the session's last activity. */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   const seconds = pool?.keepalive.maxIdleSeconds ?? 0;
-  return seconds > 0 ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
+  return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
 }
 
 function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], now: number): Row[] {
@@ -97,7 +74,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
       causes.push(ranOut ? `the idle limit ran out ${fmtRelative(ranOut, now)}` : 'the idle limit ran out');
     }
     if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
-    return { account: accountById.get(session.accountId) ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
+    return { account: (session.accountId === null ? null : accountById.get(session.accountId)) ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
   });
 }
 
@@ -140,7 +117,7 @@ export function SessionsPage() {
       sessionData && recipeData
         ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data ?? [], pools.data ?? [], now)
             .filter((r) => !released.has(r.session.sessionId))
-            .filter((r) => expireAfterSeconds === null || Date.parse(r.session.lastUsedAt) + expireAfterSeconds * 1000 > now)
+            .filter((r) => expireAfterSeconds === null || r.session.lastUsedAt === null || Date.parse(r.session.lastUsedAt) + expireAfterSeconds * 1000 > now)
         : null,
     [sessionData, recipeData, accounts.data, keys.data, pools.data, released, expireAfterSeconds, now],
   );
@@ -292,7 +269,7 @@ function SessionRows({
   // An armed agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = agents.some((a) => a.state === 'armed' && a.nextProbeAt === null);
-  const expiresAt = expireAfterSeconds === null ? null : new Date(Date.parse(session.lastUsedAt) + expireAfterSeconds * 1000).toISOString();
+  const expiresAt = expireAfterSeconds === null || session.lastUsedAt === null ? null : new Date(Date.parse(session.lastUsedAt) + expireAfterSeconds * 1000).toISOString();
   // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   return (
@@ -316,7 +293,7 @@ function SessionRows({
         <td className="mono">{session.keyId}</td>
         <td className="mono" title={session.sessionId}>
           {shortId(session.sessionId, 13)}
-          {session.epoch > 1 && (
+          {(session.epoch ?? 1) > 1 && (
             <span className="sub srow__epoch" title="How many times this session's pin was re-created">
               epoch {session.epoch}
             </span>

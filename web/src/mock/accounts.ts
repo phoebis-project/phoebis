@@ -1,4 +1,5 @@
 import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, ServedModel, WindowId } from '@/api/types';
+import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 import { CLAUDE_MODELS } from './catalog';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, hoursAgo, iso } from './time';
@@ -21,13 +22,11 @@ const claudeModels = (opts: { discovered?: string[]; syncedAgoHours: number; van
 const manualModel = (id: string): ServedModel => ({ canonicalId: id, id, inCatalog: false, isNew: false, longContext: false, manual: true, selected: true, upstreamId: id });
 
 function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000): RateLimitWindow {
-  const labels: Record<WindowId, string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
-  const periods: Record<WindowId, number> = { '5h': 5, '7d': 168, '7d_fable': 168 };
   return {
     id,
-    label: labels[id],
+    label: WINDOW_LABEL[id],
     observedAt: ago(observedAgoMs),
-    periodHours: periods[id],
+    periodHours: WINDOW_HOURS[id],
     resetsAt: ahead(resetsInMs),
     utilization,
   };
@@ -54,7 +53,7 @@ export const ACCOUNTS: Account[] = [
       lastRefreshAt: ago(1 * HOUR + 38 * MINUTE),
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', rateLimitTier: 'max_20x', since: daysAgo(412), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'max_20x', since: daysAgo(412), status: 'active', trialEndsAt: null },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     cooldowns: [],
   },
@@ -78,7 +77,7 @@ export const ACCOUNTS: Account[] = [
       lastRefreshAt: ago(4 * HOUR + 58 * MINUTE),
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', rateLimitTier: 'pro_5x', since: daysAgo(203), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'pro_5x', since: daysAgo(203), status: 'active', trialEndsAt: null },
     requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
     cooldowns: [
       {
@@ -109,7 +108,7 @@ export const ACCOUNTS: Account[] = [
       lastRefreshAt: ago(2 * HOUR + 10 * MINUTE),
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', rateLimitTier: 'max_5x', since: daysAgo(96), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'max_5x', since: daysAgo(96), status: 'active', trialEndsAt: null },
     requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
     cooldowns: [],
   },
@@ -152,7 +151,7 @@ export const ACCOUNTS: Account[] = [
       lastRefreshAt: ago(2 * DAY + 3 * HOUR),
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', rateLimitTier: 'team', since: daysAgo(280), status: 'trialing', trialEndsAt: ahead(9 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_team', rateLimitTier: 'team', since: daysAgo(280), status: 'trialing', trialEndsAt: ahead(9 * DAY) },
     requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
     cooldowns: [],
   },
@@ -213,6 +212,6 @@ export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
   [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
     accountId: account.id,
     windowId: w.id,
-    samples: sawtooth(1000 + i * 7 + HISTORY_SEED[w.id], Date.parse(w.resetsAt), w.periodHours * HOUR, w.utilization),
+    samples: sawtooth(1000 + i * 7 + HISTORY_SEED[w.id], Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization),
   })),
 );

@@ -1,0 +1,230 @@
+{
+  "route": "GET /admin/pools",
+  "body": {
+    "pools": [
+      {
+        "id": "main",
+        "label": "Main",
+        "enabled": true,
+        "strategy": "least_utilized",
+        "affinity_ttl_seconds": 600,
+        "overage_policy": "prefer_plan",
+        "migrate_above_utilization": null,
+        "select_below_utilization": null,
+        "default_allowed_models": null,
+        "keepalive": {
+          "cold_probe_limit": 2,
+          "enabled": true,
+          "jitter_seconds_1h": 30,
+          "jitter_seconds_5m": 5,
+          "lead_seconds_1h": 360,
+          "lead_seconds_5m": 60,
+          "max_idle_seconds": 3600,
+          "max_idle_ticks": 0,
+          "net_negative_grace_probes": 2,
+          "probe_cost_cap_usd_per_day": 4.0,
+          "retry_max_seconds": 300,
+          "retry_seconds": 30,
+          "stop_when_net_negative": true
+        },
+        "body_capture_hours": 24,
+        "created_at": 1789697152768,
+        "updated_at": 1789697152768,
+        "members": [
+          {
+            "account_id": "business",
+            "priority": 0,
+            "eligible": "eligible"
+          },
+          {
+            "account_id": "direct",
+            "priority": 1,
+            "eligible": "eligible"
+          }
+        ],
+        "keys": [
+          {
+            "id": "desktop",
+            "label": "Desktop",
+            "prefix": "6huMPDSo",
+            "enabled": true
+          }
+        ],
+        "status": "active",
+        "requests_24h": 3,
+        "cost_24h": 0.0144,
+        "active_pins": 0,
+        "traffic_24h": [
+          {
+            "at": -82800000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -79200000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -75600000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -72000000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -68400000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -64800000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -61200000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -57600000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -54000000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -50400000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -46800000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -43200000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -39600000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -36000000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -32400000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -28800000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -25200000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -21600000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -18000000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -14400000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -10800000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -7200000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
+          {
+            "at": -3600000,
+            "requests": 1,
+            "failed": 0,
+            "tokens": 1800,
+            "cost_usd": 0.0072
+          },
+          {
+            "at": 0,
+            "requests": 2,
+            "failed": 1,
+            "tokens": 3600,
+            "cost_usd": 0.0072
+          }
+        ]
+      }
+    ]
+  }
+}

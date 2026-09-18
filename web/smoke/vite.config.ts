@@ -7,7 +7,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
-  define: { 'process.env.NODE_ENV': JSON.stringify('development') },
+  define: { 'process.env.NODE_ENV': JSON.stringify('development'), 'import.meta.env.VITE_PHOEBIS_MOCK': '"1"' },
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,

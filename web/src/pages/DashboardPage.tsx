@@ -29,7 +29,7 @@ export function DashboardPage() {
         <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
         <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
         <StatTile label="Estimated cost, 24h" value={o ? fmtUsd(o.cost24h) : null} note={o ? `${fmtUsd(o.cost24h / 24)} per hour` : null} spark={hourly.map((h) => h.cost)} color={ink.series[1]} />
-        <StatTile label="Error rate, 24h" value={o ? fmtPct(o.errorRate24h, 1) : null} note={o ? (o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null} spark={hourly.map((h) => h.errors)} color={ink.series[7]} />
+        <StatTile label="Error rate, 24h" value={o && o.errorRate24h !== null ? fmtPct(o.errorRate24h, 1) : null} note={o ? (o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null} spark={hourly.map((h) => h.errors)} color={ink.series[7]} />
       </div>
 
       <div className="grid-2">
@@ -193,11 +193,11 @@ function RecentTable({ rows }: { rows: RequestLog[] | null }) {
   );
 }
 
-export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number }) {
-  const tone = status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical';
+export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
+  const tone = status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical';
   return (
     <Badge tone={tone} title={attempts > 1 ? `${attempts} attempts` : undefined}>
-      {status}
+      {status ?? '-'}
       {attempts > 1 && <span className="badge__extra">×{attempts}</span>}
     </Badge>
   );

@@ -35,7 +35,7 @@ export function AccountsPage() {
       const q = query.trim().toLowerCase();
       return !q || a.label.toLowerCase().includes(q) || (a.email ?? '').toLowerCase().includes(q) || (a.plan ?? '').toLowerCase().includes(q);
     });
-    const nextReset = (a: Account) => Math.min(...a.windows.map((w) => Date.parse(w.resetsAt)).filter((t) => t > now), Number.POSITIVE_INFINITY);
+    const nextReset = (a: Account) => Math.min(...a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now), Number.POSITIVE_INFINITY);
     const usage = (a: Account) => Math.max(0, ...a.windows.map((w) => w.utilization));
     return rows.sort((a, b) => {
       if (sort === 'reset') return nextReset(a) - nextReset(b);
@@ -258,7 +258,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
                     { label: 'Plan', value: account.plan ?? '-' },
                     { label: 'Rate-limit tier', value: account.subscription.rateLimitTier, mono: true },
                     { label: 'Subscription status', value: account.subscription.status.replace('_', ' ') },
-                    { label: 'Subscription since', value: fmtDate(account.subscription.since), title: fmtAbsolute(account.subscription.since) },
+                    { label: 'Subscription since', value: account.subscription.since ? fmtDate(account.subscription.since) : <span className="muted">not reported</span>, title: fmtAbsolute(account.subscription.since) },
                     { label: 'Billing type', value: account.subscription.billingType },
                     { label: 'Trial end', value: account.subscription.trialEndsAt ? fmtDate(account.subscription.trialEndsAt) : <span className="muted">none</span>, title: fmtAbsolute(account.subscription.trialEndsAt) },
                   ]

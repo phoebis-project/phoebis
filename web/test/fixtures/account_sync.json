@@ -1,0 +1,13 @@
+{
+  "route": "POST /admin/accounts/business/models/sync",
+  "body": {
+    "added": [
+      "claude-sonnet-4-5"
+    ],
+    "missing": [
+      "claude-sonnet-5"
+    ],
+    "error": null,
+    "seeded": false
+  }
+}

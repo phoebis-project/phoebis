@@ -1,0 +1,15 @@
+{
+  "route": "GET /admin/requests/r-captured/bodies",
+  "body": {
+    "request_id": "r-captured",
+    "request": {
+      "model": "claude-sonnet-5",
+      "messages": []
+    },
+    "response": {
+      "id": "msg",
+      "content": []
+    },
+    "expires_at": 87400000
+  }
+}

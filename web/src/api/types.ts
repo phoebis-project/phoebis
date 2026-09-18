@@ -2,7 +2,7 @@
 // produces these; a real client would fetch them.
 
 export type AccountKind = 'api_key' | 'oauth';
-export type AccountStatus = 'cooldown' | 'disabled' | 'paused' | 'reauth_required' | 'ready';
+export type AccountStatus = 'cooldown' | 'disabled' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
 export type WindowId = '5h' | '7d' | '7d_fable';
 
 export interface RateLimitWindow {
@@ -11,7 +11,8 @@ export interface RateLimitWindow {
   periodHours: number;
   /** Observed as of `observedAt`; may be stale for accounts that cannot refresh. */
   observedAt: string;
-  resetsAt: string;
+  /** Null while the sampler has seen a utilization but no reset time for this window. */
+  resetsAt: string | null;
   utilization: number;
 }
 
@@ -54,8 +55,9 @@ export interface Credential {
 
 export interface Subscription {
   billingType: string;
+  organizationType: string;
   rateLimitTier: string;
-  since: string;
+  since: string | null;
   status: 'active' | 'past_due' | 'trialing';
   trialEndsAt: string | null;
 }
@@ -66,7 +68,7 @@ export interface PoolMembership {
 }
 
 export interface Account {
-  catalogSyncedAt: string;
+  catalogSyncedAt: string | null;
   cooldowns: Cooldown[];
   credential: Credential;
   email: string | null;
@@ -93,6 +95,7 @@ export type PairingInput = { code: string; state: string } | { url: string };
 export interface PairingSession {
   authorizeUrl: string;
   expiresAt: string;
+  id: string;
   /** Loopback address the router registered for this pairing; nothing listens on it, so the browser only ever shows it. */
   redirectUri: string;
   state: string;
@@ -129,7 +132,7 @@ export interface QuotaSnapshot {
   status: QuotaFetchStatus;
 }
 
-export type PoolStrategy = 'least_utilized' | 'priority_random';
+export type PoolStrategy = 'earliest_refresh' | 'least_utilized' | 'priority_random';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
 export interface PoolKeepalive {
@@ -155,8 +158,8 @@ export interface PoolKeepalive {
   retrySeconds: number;
   /** Pause a recipe whose probes have cost more than the cache reads they bought. */
   stopWhenNetNegative: boolean;
-  /** Subagent recipes are probed too; off warms the main conversation only. */
-  warmSubagents: boolean;
+  /** Subagent recipes are probed too; off warms the main conversation only. Null where the router has no such rule. */
+  warmSubagents: boolean | null;
 }
 
 export type CacheTtl = '5m' | '1h';
@@ -174,9 +177,14 @@ export interface PoolCacheTtl {
 
 export interface TrafficBucket {
   at: string;
+  costUsd: number;
+  failed: number;
   requests: number;
   tokens: number;
 }
+
+/** Why routing would refuse a pool member, or `eligible` when it would not. */
+export type MemberEligibility = 'cooldown' | 'eligible' | 'overage' | 'unavailable';
 
 export interface Pool {
   activePins: number;
@@ -184,12 +192,13 @@ export interface Pool {
   affinityTtlSeconds: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
-  cacheTtl: PoolCacheTtl;
+  /** Null where the router serves no cache-TTL rules for this pool. */
+  cacheTtl: PoolCacheTtl | null;
   cost24h: number;
   defaultAllowedModels: string[] | null;
   id: string;
   keepalive: PoolKeepalive;
-  members: { accountId: string; priority: number }[];
+  members: { accountId: string; eligible: MemberEligibility; priority: number }[];
   /** Null disables utilization-driven migration. */
   migrateAboveUtilization: number | null;
   name: string;
@@ -230,11 +239,11 @@ export interface CreatedApiKey {
 
 export type RequestKind = 'count_tokens' | 'inference' | 'probe';
 export type Transport = 'json' | 'sse';
-export type AttemptOutcome = 'failover' | 'ok' | 'overloaded' | 'rate_limited' | 'upstream_error';
+export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succeeded' | 'transport_error' | 'upstream_error';
 
 export interface AttemptWindow {
   id: WindowId;
-  resetsAt: string;
+  resetsAt: string | null;
   utilization: number;
 }
 
@@ -252,11 +261,11 @@ export interface Attempt {
   /** Null when the attempt drew no response body to read diagnostics from. */
   cacheMissReason: CacheMissReason | null;
   cooldownSet: { reason: string; until: string } | null;
-  durationMs: number;
+  durationMs: number | null;
   index: number;
   outcome: AttemptOutcome;
   startedAt: string;
-  upstreamStatus: number;
+  upstreamStatus: number | null;
   windows: AttemptWindow[];
 }
 
@@ -269,21 +278,23 @@ export interface Usage {
 }
 
 export interface RequestLog {
-  accountId: string;
-  agentId: string;
+  accountId: string | null;
+  agentId: string | null;
   at: string;
   attempts: Attempt[];
   capturedBodies: boolean;
   costUsd: number;
-  durationMs: number;
+  durationMs: number | null;
   errorCode: string | null;
   id: string;
-  keyId: string;
+  keyId: string | null;
   kind: RequestKind;
   model: string;
-  poolId: string;
-  sessionId: string;
-  status: number;
+  /** How the request ended, once every attempt is in. */
+  outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
+  poolId: string | null;
+  sessionId: string | null;
+  status: number | null;
   transport: Transport;
   ttfbMs: number | null;
   /** First content token; later than `ttfbMs` on streams that open with metadata. */
@@ -299,14 +310,69 @@ export interface CapturedBodies {
 
 export interface RequestQuery {
   accountIds?: string[];
+  cursor?: string;
   from?: string;
+  includeProbes?: boolean;
   keyIds?: string[];
   kind?: RequestKind | null;
+  limit?: number;
   models?: string[];
   poolIds?: string[];
   search?: string;
   statuses?: number[];
   to?: string;
+}
+
+export interface RequestPage {
+  nextCursor: string | null;
+  requests: RequestLog[];
+}
+
+export type AnalyticsGroupBy = 'account' | 'all' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
+
+export interface AnalyticsQuery {
+  accountIds?: string[];
+  from: string;
+  groupBy: AnalyticsGroupBy;
+  includeProbes?: boolean;
+  keyIds?: string[];
+  kinds?: RequestKind[];
+  models?: string[];
+  poolIds?: string[];
+  to: string;
+}
+
+/** One group of one bucket or of the whole range, as the analytics routes sum it. */
+export interface AnalyticsGroup {
+  attempts: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheMissReasons: Record<CacheMissReason, number>;
+  cost: CostSplit;
+  costUsd: number;
+  errors: Record<string, number>;
+  exhausted: number;
+  expiredBetweenTurns: number;
+  failed: number;
+  failovers: number;
+  histograms: LatencyHistograms;
+  keptWarm: { requests: number; tokens: number };
+  key: string;
+  label: string;
+  percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
+  probes: { failed: number; migrated: number; ok: number; skipped: number };
+  rateLimited: number;
+  rejected: number;
+  requests: number;
+  savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number };
+  succeeded: number;
+  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; uncachedInput: number };
+  uncached: number;
+}
+
+export interface AnalyticsPoint {
+  at: string;
+  groups: AnalyticsGroup[];
 }
 
 export interface CostSplit {
@@ -383,31 +449,49 @@ export type KeepaliveState = 'busy' | 'idle' | 'parked';
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
 export interface Session {
-  accountId: string;
+  accountId: string | null;
   agents: number;
   companion: CompanionState;
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
-  createdAt: string;
-  epoch: number;
+  createdAt: string | null;
+  epoch: number | null;
   /** `state` is null when the session carries no cache-warming recipe at all. */
   keepalive: { nextProbeAt: string | null; state: KeepaliveState | null };
   keyId: string;
   /** Last ledgered client request; null for a session that has not been seen in the ledger. */
   lastRequestAt: string | null;
-  lastUsedAt: string;
-  model: string;
+  lastUsedAt: string | null;
+  model: string | null;
+  /** Whether the session is pinned to its account for as long as affinity holds. */
+  pinned: boolean;
   /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
   requests: number;
   sessionId: string;
 }
 
 export type RecipeState = 'armed' | 'held' | 'probing';
-export type RecipeReason = 'affinity_too_short' | 'awaiting_cache_evidence' | 'cap_reached' | 'cooled' | 'idle_limit' | 'net_negative' | 'overage' | 'unsupported_shape';
+export type RecipeReason =
+  | 'affinity_too_short'
+  | 'awaiting_cache_evidence'
+  | 'cap_reached'
+  | 'cold_probes'
+  | 'cooled'
+  | 'idle_limit'
+  | 'net_negative'
+  | 'oauth_unverified'
+  | 'overage'
+  | 'paused'
+  | 'probe_error'
+  | 'quota_exhausted'
+  | 'reauth'
+  | 'retrying'
+  | 'storage_limit'
+  | 'unsupported_shape';
 
 /** One cache-warming recipe per agent: what the next probe replays and why it may be held. */
 export interface KeepaliveRecipe {
-  accountId: string;
+  accountId: string | null;
   agentId: string;
   keyId: string;
   /** This agent's last real request; null for an agent that has not sent one yet. */
@@ -429,35 +513,77 @@ export interface KeepaliveOverview {
   netSaved7dUsd: number;
   probes24h: { failed: number; migrated: number; ok: number; skipped: number };
   sessions: number;
+  sessionsWithCompanion: number;
 }
 
-export type AlertKind = 'ask_user_question' | 'client_drift' | 'pool_exhausted' | 'reauth_required' | 'utilization_above';
+export type AlertKind =
+  | 'ask_user_question'
+  | 'client_drift'
+  | 'funding_required'
+  | 'keepalive_cost_cap'
+  | 'pool_exhausted'
+  | 'reauth_required'
+  | 'refresh_failed'
+  | 'utilization_above';
 
 /** What an event of one of the session-scoped kinds captured; null for the kinds that need no extra fields. */
-export type AlertEventDetail =
-  | { agentId: string; keyId: string; question: string | null; sessionId: string; type: 'ask_user_question' }
-  | { clientVersion: string; trigger: 'billing_hash' | 'version'; type: 'client_drift' };
+export type AlertEventDetail = Record<string, unknown> | null;
+
+export interface AskUserQuestionDetail {
+  agentId: string;
+  keyId: string;
+  question: string | null;
+  sessionId: string;
+  type: 'ask_user_question';
+}
+
+export interface ClientDriftDetail {
+  clientVersion: string;
+  trigger: 'billing_hash' | 'version';
+  type: 'client_drift';
+}
 
 export interface AlertRule {
+  createdAt: string;
   enabled: boolean;
   hasSecret: boolean;
   id: string;
   kind: AlertKind;
   scope: { id: string | null; type: 'account' | 'all' | 'any_account' | 'key' | 'pool' };
   threshold: number | null;
+  updatedAt: string;
   webhookUrl: string;
-  windowId: WindowId | null;
+  /** The window the router names on the wire, which is not the UI's own spelling of the third one. */
+  windowId: '5h' | '7d' | '7d_oi' | null;
+}
+
+export interface AlertRuleInput {
+  enabled: boolean;
+  kind: AlertKind;
+  scope: AlertRule['scope'];
+  /** Absent leaves the stored secret alone; an empty string clears it. */
+  secret?: string;
+  threshold: number | null;
+  webhookUrl: string;
+  windowId: AlertRule['windowId'];
+}
+
+export interface AlertDeliveryTest {
+  error: string | null;
+  status: number | null;
 }
 
 export interface Delivery {
   at: string;
+  attempt: number;
   error: string | null;
+  state: 'opened' | 'resolved';
   status: number | null;
 }
 
 export interface AlertEvent {
   deliveries: Delivery[];
-  detail: AlertEventDetail | null;
+  detail: AlertEventDetail;
   id: string;
   kind: AlertKind;
   openedAt: string;
@@ -485,11 +611,16 @@ export interface PriceImportPreview {
   models: ModelPrice[];
   /** How many of the models in the file the router serves. */
   served: number;
+  /** Identifies this preview to the apply call, so what is applied is what was shown. */
+  token: string;
 }
 
 export interface Settings {
-  about: { profile: string; publicUrl: string; version: string };
+  about: { profile: string; publicUrl: string | null; version: string };
+  access: { adminConfigured: boolean; viewerConfigured: boolean };
+  keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
   lastSyncAt: string;
+  listeners: { admin: string; metrics: string; proxy: string };
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number };
@@ -497,9 +628,30 @@ export interface Settings {
   sessions: { expireAfterSeconds: number };
 }
 
+export type Role = 'admin' | 'viewer';
+
+export interface SessionInfo {
+  role: Role;
+  sessionId: string;
+}
+
+export interface AccountInput {
+  id: string;
+  kind: AccountKind;
+  label: string;
+  secret: string | null;
+}
+
+export interface SyncResult {
+  added: string[];
+  error: string | null;
+  missing: string[];
+  seeded: boolean;
+}
+
 export interface Overview {
   cost24h: number;
-  errorRate24h: number;
+  errorRate24h: number | null;
   hourly: { at: string; cost: number; errors: number; requests: number; tokens: number }[];
   requests24h: number;
   tokens24h: number;
@@ -540,15 +692,15 @@ export interface LiveRequest {
   costUsd: number;
   errorCode: string | null;
   id: string;
-  keyId: string;
+  keyId: string | null;
   kind: RequestKind;
   model: string;
   outputTps: number | null;
   phases: LivePhases;
-  poolId: string;
+  poolId: string | null;
   /** Output text so far; only keys that capture bodies carry it. */
   preview: string | null;
-  sessionId: string;
+  sessionId: string | null;
   state: LiveState;
   status: number | null;
   transport: Transport;
@@ -557,8 +709,8 @@ export interface LiveRequest {
 
 export interface LiveMetric {
   quality: MetricQuality;
-  /** One value per second for the last minute, oldest first. */
-  series: number[];
+  /** One value per second for the last minute, oldest first; null for a second with nothing to measure. */
+  series: (number | null)[];
   value: number | null;
 }
 
@@ -589,7 +741,7 @@ export type LiveDelta =
   | { at: string; cursor: number; id: string; type: 'head'; attempt: LiveAttempt; status: number }
   | { at: string; cursor: number; id: string; type: 'progress'; outputTps: number | null; usage: Usage }
   | { cursor: number; id: string; type: 'preview'; chunk: string }
-  | { at: string; cursor: number; id: string; type: 'finished'; costUsd: number; errorCode: string | null; phases: LivePhases; status: number; usage: Usage }
+  | { at: string; cursor: number; id: string; type: 'finished'; costUsd: number; errorCode: string | null; phases: LivePhases; status: number | null; usage: Usage }
   | { cursor: number; request: LiveRequest; type: 'started' }
   | { cursor: number; tick: LiveTick; type: 'tick' };
 

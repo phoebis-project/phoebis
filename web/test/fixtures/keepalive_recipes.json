@@ -1,0 +1,20 @@
+{
+  "route": "GET /admin/keepalive/recipes",
+  "body": {
+    "recipes": [
+      {
+        "account_id": "direct",
+        "agent_id": "main",
+        "key_id": "desktop",
+        "last_request_at": 1000000,
+        "model": "claude-sonnet-5",
+        "next_probe_at": 1238289,
+        "pool_id": "main",
+        "reason": null,
+        "session_id": "s1",
+        "state": "armed",
+        "ttl_seconds": 300
+      }
+    ]
+  }
+}

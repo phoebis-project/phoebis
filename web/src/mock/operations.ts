@@ -48,6 +48,7 @@ const sessionSpec: {
 
 const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
+  if (r.sessionId === null) continue;
   const seen = ledgered.get(r.sessionId);
   if (!seen) ledgered.set(r.sessionId, { last: r.at, requests: 1 });
   else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
@@ -72,6 +73,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     createdAt: ago(createdAgo),
     lastUsedAt: ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
+    // A session the engine still keeps a recipe for is the one holding a pin on its account.
+    pinned: spec.state !== null,
     requests: seen ? seen.requests : 0,
     agents: spec.agents,
     companion: spec.companion,
@@ -108,7 +111,7 @@ const RECIPE_REASONS: (RecipeReason | null)[] = [
 // A held subagent under a main agent that keeps probing, which is the case the
 // state hints describe.
 const SUBAGENT_HOLDS = new Map<number, RecipeReason>([
-  [0, 'cooled'],
+  [0, 'cold_probes'],
   [7, 'affinity_too_short'],
 ]);
 
@@ -123,7 +126,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // arms from it, so that agent is armed without a time rather than held.
     const state: KeepaliveRecipe['state'] =
       reason === 'awaiting_cache_evidence' ? 'armed' : reason ? 'held' : pin.keepalive.state === 'busy' && j === 0 ? 'probing' : 'armed';
-    const model = j === 0 ? pin.model : sub?.model ?? pin.model;
+    const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     return {
@@ -176,58 +179,69 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
     { poolId: 'codex', usd: 0, capUsd: null },
   ],
   netSaved7dUsd: 41.8,
+  sessionsWithCompanion: SESSIONS.filter((pin) => pin.companion !== 'none').length,
 };
 
 export const ALERT_RULES: AlertRule[] = [
   {
+    createdAt: daysAgo(46),
     id: 'rule_question',
     kind: 'ask_user_question',
     scope: { type: 'all', id: null },
     threshold: null,
     windowId: null,
     webhookUrl: 'https://hooks.example.com/phoebis/question',
-    hasSecret: true,
     enabled: true,
+    hasSecret: true,
+    updatedAt: daysAgo(46),
   },
   {
+    createdAt: daysAgo(46),
     id: 'rule_drift',
     kind: 'client_drift',
     scope: { type: 'all', id: null },
     threshold: null,
     windowId: null,
     webhookUrl: 'https://hooks.example.com/phoebis/drift',
-    hasSecret: false,
     enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(46),
   },
   {
+    createdAt: daysAgo(46),
     id: 'rule_reauth',
     kind: 'reauth_required',
     scope: { type: 'any_account', id: null },
     threshold: null,
     windowId: null,
     webhookUrl: 'https://hooks.example.com/phoebis/reauth',
-    hasSecret: true,
     enabled: true,
+    hasSecret: true,
+    updatedAt: daysAgo(46),
   },
   {
+    createdAt: daysAgo(46),
     id: 'rule_7d',
     kind: 'utilization_above',
     scope: { type: 'pool', id: 'all' },
     threshold: 0.9,
     windowId: '7d',
     webhookUrl: 'https://hooks.example.com/phoebis/quota',
-    hasSecret: true,
     enabled: true,
+    hasSecret: true,
+    updatedAt: daysAgo(46),
   },
   {
+    createdAt: daysAgo(46),
     id: 'rule_exhausted',
     kind: 'pool_exhausted',
     scope: { type: 'pool', id: 'all' },
     threshold: null,
     windowId: null,
     webhookUrl: 'https://hooks.example.com/phoebis/pool',
-    hasSecret: false,
     enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(46),
   },
 ];
 
@@ -247,7 +261,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(18 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(18 * MINUTE), status: 200, error: null }],
+    deliveries: [{ at: ago(18 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_10',
@@ -258,7 +272,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(3 * HOUR + 40 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(3 * HOUR + 40 * MINUTE), status: 200, error: null }],
+    deliveries: [{ at: ago(3 * HOUR + 40 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_11',
@@ -275,7 +289,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: ago(9 * HOUR),
     resolvedAt: ago(8 * HOUR + 41 * MINUTE),
-    deliveries: [{ at: ago(9 * HOUR), status: 200, error: null }],
+    deliveries: [{ at: ago(9 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_01',
@@ -286,7 +300,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(2 * DAY + 2 * HOUR),
     resolvedAt: null,
-    deliveries: [{ at: ago(2 * DAY + 2 * HOUR), status: 200, error: null }],
+    deliveries: [{ at: ago(2 * DAY + 2 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_02',
@@ -298,8 +312,8 @@ export const ALERT_EVENTS: AlertEvent[] = [
     openedAt: ago(6 * HOUR + 12 * MINUTE),
     resolvedAt: null,
     deliveries: [
-      { at: ago(6 * HOUR + 12 * MINUTE), status: null, error: 'connect timeout after 10s' },
-      { at: ago(6 * HOUR + 11 * MINUTE), status: 200, error: null },
+      { at: ago(6 * HOUR + 12 * MINUTE), attempt: 1, error: 'connect timeout after 10s', state: 'opened', status: null },
+      { at: ago(6 * HOUR + 11 * MINUTE), attempt: 2, error: null, state: 'opened', status: 200 },
     ],
   },
   {
@@ -311,7 +325,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: ago(1 * DAY + 4 * HOUR),
     resolvedAt: ago(1 * DAY + 3 * HOUR + 22 * MINUTE),
-    deliveries: [{ at: ago(1 * DAY + 4 * HOUR), status: 200, error: null }],
+    deliveries: [{ at: ago(1 * DAY + 4 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_04',
@@ -322,7 +336,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(3),
     resolvedAt: daysAgo(2),
-    deliveries: [{ at: daysAgo(3), status: 200, error: null }],
+    deliveries: [{ at: daysAgo(3), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_05',
@@ -333,7 +347,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(5),
     resolvedAt: daysAgo(4),
-    deliveries: [{ at: daysAgo(5), status: 500, error: 'HTTP 500 from webhook' }, { at: daysAgo(5), status: 200, error: null }],
+    deliveries: [{ at: daysAgo(5), attempt: 1, error: 'HTTP 500 from webhook', state: 'opened', status: 500 }, { at: daysAgo(5), attempt: 2, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_06',
@@ -344,7 +358,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(9),
     resolvedAt: daysAgo(9),
-    deliveries: [{ at: daysAgo(9), status: 200, error: null }],
+    deliveries: [{ at: daysAgo(9), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_07',
@@ -355,7 +369,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(12),
     resolvedAt: daysAgo(12),
-    deliveries: [{ at: daysAgo(12), status: 200, error: null }],
+    deliveries: [{ at: daysAgo(12), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     id: 'evt_08',
@@ -366,13 +380,16 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(14),
     resolvedAt: daysAgo(13),
-    deliveries: [{ at: daysAgo(14), status: 200, error: null }],
+    deliveries: [{ at: daysAgo(14), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
 ];
 
 export const SETTINGS: Settings = {
   about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.example.com', version: '0.4.2' },
+  access: { adminConfigured: true, viewerConfigured: true },
+  keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
   lastSyncAt: ago(40 * 1000),
+  listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped table' },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30 },
   sessions: { expireAfterSeconds: 86_400 },
