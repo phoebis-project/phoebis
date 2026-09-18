@@ -753,7 +753,11 @@ impl Store {
             actor,
             "account_created",
             &row.id,
-            &serde_json::json!({ "kind": row.kind.as_str(), "label": row.label }).to_string(),
+            &serde_json::json!({
+                "kind": row.kind.as_str(),
+                "label": row.label,
+            })
+            .to_string(),
         )?;
         tx.commit()?;
         Ok(())
@@ -793,7 +797,12 @@ impl Store {
             u.actor,
             "account_updated",
             u.id,
-            &serde_json::json!({ "label": u.label, "secret": u.secret.is_some(), "state": u.state.as_str() }).to_string(),
+            &serde_json::json!({
+                "label": u.label,
+                "secret": u.secret.is_some(),
+                "state": u.state.as_str(),
+            })
+            .to_string(),
         )?;
         tx.commit()?;
         Ok(())
