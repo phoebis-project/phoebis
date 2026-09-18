@@ -11,7 +11,10 @@ statistics, and a metrics endpoint in Prometheus text format.
 cargo build --release
 ```
 
-The binary is `target/release/phoebis`.
+The binary is `target/release/phoebis`. The build embeds the web UI, which needs Node 20 or newer and npm on the path: the
+build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older than its sources.
+`PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a placeholder page in place of
+the console.
 
 ## Commands
 

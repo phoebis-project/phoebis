@@ -282,7 +282,10 @@ usage:
         .await
         .unwrap();
     assert_eq!(hello.status(), 200);
-    let unknown = client.get(admin("/nope")).send().await.unwrap();
+    // Asked without the session cookie, so the gate refuses before the route is reached and an anonymous
+    // caller learns nothing about which admin paths exist.
+    let anonymous = reqwest::Client::new();
+    let unknown = anonymous.get(admin("/nope")).send().await.unwrap();
     assert_eq!(
         (
             unknown.status().as_u16(),
@@ -1194,6 +1197,105 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
         .find(|r| r["session_id"] == "e2e-companion")
         .unwrap();
     assert_eq!(row["companion"].as_str(), Some("reporting"));
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// The admin listener carries the console as well as the API: its own routes answer JSON and everything else
+/// is the app shell, so the browser reaches both over one origin and one session cookie.
+#[tokio::test]
+async fn the_admin_listener_serves_the_ui_beside_the_api() {
+    // Nothing is relayed here; the fake exists so the configuration can name a reachable upstream and its CA.
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_ADMIN_SECRET
+  dev_loopback_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+upstream:
+  resolve_override: {addr}
+  extra_ca_pem: {ca}
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display()
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+
+    let root = client
+        .get(format!("http://127.0.0.1:{admin_port}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(root.status(), 200);
+    assert_eq!(root.headers()["cache-control"], "no-store");
+    assert!(root.text().await.unwrap().contains("<div id=\"root\">"));
+    let deep = client
+        .get(format!("http://127.0.0.1:{admin_port}/upstreams/business"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deep.status(), 200);
+    let api = client.get(admin("/session")).send().await.unwrap();
+    assert_eq!(
+        api.status(),
+        200,
+        "the session route answers JSON, not the shell"
+    );
+    assert_eq!(
+        api.json::<serde_json::Value>().await.unwrap()["role"],
+        "admin"
+    );
+    let unknown = client.get(admin("/nope")).send().await.unwrap();
+    assert_eq!(
+        unknown.status(),
+        404,
+        "an unknown admin path with a session is a JSON 404"
+    );
+
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
     up.shutdown().await;

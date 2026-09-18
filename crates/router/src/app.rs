@@ -8,9 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
@@ -302,13 +299,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         profile = profile.name,
         "listening"
     );
+    if phoebis_ui::is_placeholder() {
+        tracing::warn!(
+            "this build carries no web UI; the admin listener serves a placeholder page"
+        );
+    }
 
-    // The admin routes carry their full `/admin/...` paths, so they are merged rather than nested. The admin
-    // router has no fallback of its own, so an unknown path would otherwise reach axum's bare 404, outside
-    // the gate that answers for every admin route.
+    // The admin routes carry their full `/admin/...` paths, so they are merged rather than nested.
     let admin_app = Router::new()
         .merge(phoebis_admin::router(admin))
-        .fallback(unknown_admin_route);
+        .merge(phoebis_ui::router());
     // An exchange nobody confirms holds a credential bundle in memory, and only this sweep frees one whose
     // pairing session has run out.
     let sweeper = {
@@ -446,21 +446,6 @@ fn split_authority(authority: &str) -> Option<(&str, u16)> {
         host.trim_start_matches('[').trim_end_matches(']'),
         port.parse().ok()?,
     ))
-}
-
-/// Unauthenticated callers learn nothing about the admin surface from a path that does not exist, and no
-/// cache keeps the answer.
-async fn unknown_admin_route() -> Response {
-    let mut response = (
-        StatusCode::UNAUTHORIZED,
-        [(CONTENT_TYPE, "application/json")],
-        r#"{"error":"no admin session"}"#,
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 async fn stopped(mut stop: tokio::sync::watch::Receiver<bool>) {

@@ -28,6 +28,7 @@ phoebis-relay = { path = "../relay" }
 phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
+phoebis-ui = { path = "../ui" }
 clap = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }

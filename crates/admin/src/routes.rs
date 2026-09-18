@@ -11,7 +11,7 @@ use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE, UPGRADE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
@@ -112,6 +112,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/sessions/costs", get(sessions::costs))
         .route("/admin/settings", get(settings::show))
         .route("/admin/system", get(system))
+        .route("/admin", any(unknown_admin_route))
+        .route("/admin/{*rest}", any(unknown_admin_route))
         .layer(from_fn_with_state(state.clone(), gate))
         .with_state(state)
 }
@@ -715,6 +717,12 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
     }))
     .into_response()
+}
+
+/// An admin path nothing serves. Under the gate, so without a session it is the gate's 401 and nothing about
+/// the surface leaks; with one it is a plain 404 the console can tell from the shell.
+async fn unknown_admin_route() -> Response {
+    failure(StatusCode::NOT_FOUND, "not found")
 }
 
 /// Runs the native post-login sequence against the control plane and turns its answers into the pending
