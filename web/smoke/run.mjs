@@ -37,7 +37,7 @@ for (const level of ['error', 'warn']) {
 window.addEventListener('error', (e) => problems.push(`[window.error] ${e.message}`));
 process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?.stack ?? e}`));
 
-const { mount, requests, stallLive } = await import('./dist/entry.js');
+const { failNextCall, mount, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -223,6 +223,19 @@ expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'R
   results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '6 credentials', missing: [count] });
 }
 m.unmount();
+
+// A failed read draws the error state where the cards are, instead of leaving placeholders up for ever.
+{
+  failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable');
+  const failed = await mount('/quota');
+  const t = failed.text();
+  results.push({
+    name: '/quota a failed upstream read draws the error state',
+    ok: t.includes('Could not load the upstreams') && t.includes('the registry is unavailable') && failed.container.querySelector('.qcard') === null,
+    missing: [t.slice(0, 200)],
+  });
+  failed.unmount();
+}
 
 m = await mount('/accounts');
 results.push({
@@ -1426,6 +1439,20 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
 }
 m.unmount();
 
+// A failed read draws the error state where the rules are, and the shell's toast names the route.
+{
+  failNextCall('listAlertRules', '/admin/alerts/rules', 'the registry is unavailable');
+  const failed = await mount('/alerts');
+  const t = failed.text();
+  const toast = failed.container.querySelector('.toast')?.textContent ?? 'no toast';
+  results.push({
+    name: '/alerts a failed rules read draws the error state and toasts the route',
+    ok: t.includes('Could not load the alert rules') && t.includes('the registry is unavailable') && toast.includes('/admin/alerts/rules') && toast.includes('the registry is unavailable'),
+    missing: [toast, t.slice(0, 160)],
+  });
+  failed.unmount();
+}
+
 // A fresh installation: zero rules, zero events, and a filter that matches nothing must render, not throw.
 {
   localStorage.setItem('phoebis.mockEmpty', '1');
@@ -1524,6 +1551,27 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     ok: pricingSubtitle().includes('source: imported from models.dev') && !pricingSubtitle().includes('api.json') && !m.text().includes('s3cret'),
     missing: [pricingSubtitle()],
   });
+}
+
+// A refused preview: the import form says why instead of leaving a button that looks dead.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const urlInput = [...m.container.querySelectorAll('input')].find((i) => i.placeholder === 'Import from URL');
+  setter.call(urlInput, 'https://models.dev/nope.json');
+  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  failNextCall('previewPriceImport', '/admin/pricing/import', 'that URL answered 404');
+  [...m.container.querySelectorAll('.price-import button')].find((b) => b.textContent?.trim() === 'Import')?.click();
+  await m.settle(400);
+  const callout = m.container.querySelector('.price-import__error')?.textContent ?? 'no callout';
+  results.push({
+    name: '/settings a refused import preview names the reason and opens no dialog',
+    ok: callout.includes('that URL answered 404') && [...m.container.querySelectorAll('dialog[open]')].length === 0,
+    missing: [callout],
+  });
+  setter.call(urlInput, '');
+  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(100);
 }
 
 // Editing a price by hand: cell, Save bar, validation, Discard.

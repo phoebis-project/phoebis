@@ -6,7 +6,7 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { Badge, Card, EmptyState, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -60,7 +60,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           <SessionsSummary pins={sessions.data} />
@@ -151,7 +151,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
   );
 }
 
-function RecentTable({ rows }: { rows: RequestLog[] | null }) {
+function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[] | null }) {
   return (
     <div className="table-wrap">
       <table className="table">
@@ -169,13 +169,21 @@ function RecentTable({ rows }: { rows: RequestLog[] | null }) {
         </thead>
         <tbody>
           {rows === null
-            ? Array.from({ length: 6 }, (_, i) => (
-                <tr key={i}>
-                  <td colSpan={8}>
-                    <Skeleton />
-                  </td>
-                </tr>
-              ))
+            ? error
+              ? (
+                  <tr>
+                    <td colSpan={8}>
+                      <ErrorState title="Could not load the recent requests" body={error} />
+                    </td>
+                  </tr>
+                )
+              : Array.from({ length: 6 }, (_, i) => (
+                  <tr key={i}>
+                    <td colSpan={8}>
+                      <Skeleton />
+                    </td>
+                  </tr>
+                ))
             : rows.map((r) => (
                 <tr key={r.id}>
                   <td className="num" title={fmtAbsolute(r.at)}>

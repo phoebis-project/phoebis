@@ -40,7 +40,7 @@ export const PAGE_TITLES: Record<string, string> = {
 export function Shell() {
   const { pathname } = useLocation();
   const { theme, setTheme } = useAppSettings();
-  const { clearForbidden, forbidden, logout, role } = useSession();
+  const { clearToast, logout, role, toast } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(15_000);
   const [navOpen, setNavOpen] = useState(false);
@@ -70,9 +70,9 @@ export function Shell() {
           ))}
         </nav>
         <div className="sidebar__status">
-          <div className="sidebar__row" title={settings.data ? fmtAbsolute(settings.data.lastSyncAt) : undefined}>
-            <span className="status-dot status-dot--good" aria-hidden />
-            <span>Synced {settings.data ? fmtRelative(settings.data.lastSyncAt, now) : '…'}</span>
+          <div className="sidebar__row" title={settings.data?.lastSyncAt ? fmtAbsolute(settings.data.lastSyncAt) : undefined}>
+            <span className={`status-dot ${settings.data && settings.data.lastSyncAt === null ? '' : 'status-dot--good'}`} aria-hidden />
+            <span>{!settings.data ? 'Synced …' : settings.data.lastSyncAt ? `Synced ${fmtRelative(settings.data.lastSyncAt, now)}` : 'never synced'}</span>
           </div>
           <div className="sidebar__row muted mono">v{settings.data?.about.version ?? '…'}</div>
         </div>
@@ -107,7 +107,7 @@ export function Shell() {
         </main>
       </div>
       {navOpen && <button type="button" className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-      <Toast message={forbidden} onDone={clearForbidden} />
+      <Toast message={toast} onDone={clearToast} />
     </div>
   );
 }

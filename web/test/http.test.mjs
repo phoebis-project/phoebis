@@ -79,3 +79,38 @@ test('getSession answers null on 401 without running the hook', async () => {
   stub(() => answer(200, { role: 'viewer', session_id: 's' }));
   assert.deepEqual(await new HttpApi().getSession(), { role: 'viewer', sessionId: 's' });
 });
+
+test('the live feed reconnects behind a live session and stops once it is gone', async () => {
+  const sockets = [];
+  globalThis.WebSocket = class {
+    constructor(url) {
+      this.url = url;
+      sockets.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+  };
+  globalThis.location = { host: 'router.test', protocol: 'http:' };
+  let unauthorized = 0;
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
+  const settle = () => new Promise((r) => setTimeout(r, 1_200));
+
+  stub(() => answer(200, { role: 'admin', session_id: 's' }));
+  const live = new HttpApi().subscribeLive(() => undefined);
+  assert.equal(sockets[0].url, 'ws://router.test/admin/live');
+  sockets[0].onclose();
+  await settle();
+  assert.equal(sockets.length, 2, 'a dropped socket reopens while the session holds');
+  assert.equal(unauthorized, 0);
+  live();
+
+  stub(() => answer(401, { error: 'no admin session' }));
+  const expired = new HttpApi().subscribeLive(() => undefined);
+  const opened = sockets.length;
+  sockets[opened - 1].onclose();
+  await settle();
+  assert.equal(sockets.length, opened, 'an upgrade refused behind an expired session is not retried for ever');
+  assert.equal(unauthorized, 1, 'the page reaches the login screen the way every other read does');
+  expired();
+});

@@ -5,7 +5,7 @@ import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 
@@ -131,13 +131,21 @@ export function KeysPage() {
               </thead>
               <tbody>
                 {!keys.data
-                  ? [0, 1, 2].map((i) => (
-                      <tr key={i}>
-                        <td colSpan={8}>
-                          <Skeleton />
-                        </td>
-                      </tr>
-                    ))
+                  ? keys.error
+                    ? (
+                        <tr>
+                          <td colSpan={8}>
+                            <ErrorState title="Could not load the API keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />
+                          </td>
+                        </tr>
+                      )
+                    : [0, 1, 2].map((i) => (
+                        <tr key={i}>
+                          <td colSpan={8}>
+                            <Skeleton />
+                          </td>
+                        </tr>
+                      ))
                   : rows.map((k) => (
                       <tr key={k.id}>
                         <td>

@@ -10,7 +10,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STRATEGY_RULE } from '@/lib/selection';
@@ -171,7 +171,9 @@ export function PoolsPage() {
                 onDelete={() => setDeleting(p)}
               />
             ))
-          : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
+          : pools.error
+            ? <ErrorState title="Could not load the pools" body={pools.error} action={<Button size="sm" onClick={pools.reload}>Try again</Button>} />
+            : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
       </div>
       <PoolDialog
         open={dialog !== null}

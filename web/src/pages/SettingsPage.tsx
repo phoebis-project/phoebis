@@ -4,7 +4,7 @@ import type { ModelPrice, PriceImportPreview, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { fmtDate, fmtInt } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -222,7 +222,7 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <PricingCard canMutate={canMutate} pricing={s ? s.pricing : null} onToast={setToast} />
+      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={setToast} />
 
       <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an upstream afresh.">
         {s ? (
@@ -345,8 +345,9 @@ export function SettingsPage() {
   );
 }
 
-function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boolean; onToast: (message: string) => void; pricing: Pricing | null }) {
+function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { canMutate: boolean; error: string | null; onToast: (message: string) => void; pricing: Pricing | null }) {
   const [applied, setApplied] = useState<Pricing | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [draft, setDraft] = useState<PriceDraft[] | null>(null);
   const [editing, setEditing] = useState<{ field: PriceField; id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -499,7 +500,7 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
             ) : (
               <tr>
                 <td colSpan={6}>
-                  <Skeleton />
+                  {failed ? <ErrorState title="Could not load the price table" body={failed} /> : <Skeleton />}
                 </td>
               </tr>
             )}
@@ -528,7 +529,14 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
             className="row"
             onSubmit={(e) => {
               e.preventDefault();
-              void api.previewPriceImport(url).then((preview) => setReview({ preview, rows: diffRows(pricing?.models ?? [], preview.models) }));
+              void api.previewPriceImport(url).then(
+                (preview) => {
+                  setImportError(null);
+                  setReview({ preview, rows: diffRows(pricing?.models ?? [], preview.models) });
+                },
+                // A mistyped URL is the common way this fails, and the button looked dead without this.
+                (failure: unknown) => setImportError(failure instanceof Error ? failure.message : String(failure)),
+              );
             }}
           >
             <Input placeholder="Import from URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 320 }} />
@@ -537,6 +545,11 @@ function PricingCard({ canMutate, onToast, pricing: served }: { canMutate: boole
             </Button>
           </form>
           <p className="muted price-import__hint">{IMPORT_HINT}</p>
+          {importError && (
+            <p className="price-import__error" role="alert">
+              {importError}
+            </p>
+          )}
         </div>
       )}
 

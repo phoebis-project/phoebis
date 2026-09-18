@@ -145,6 +145,44 @@ async function remainingCards(theme) {
   }
 }
 
+/**
+ * The error state is the empty state's twin: the same box in a different ink, so a list that swaps one for
+ * the other keeps its layout. Measured against a real empty state on the page, once per theme.
+ */
+async function errorStateBox(theme) {
+  const measured = await page.evaluate(() => {
+    const empty = document.querySelector('.empty');
+    if (!empty) return null;
+    const twin = empty.cloneNode(true);
+    twin.classList.add('empty--error');
+    empty.parentElement.appendChild(twin);
+    const read = (el) => {
+      const style = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return {
+        border: `${style.borderStyle} ${style.borderWidth}`,
+        height: box.height,
+        ink: getComputedStyle(el.querySelector('.empty__title')).color,
+        padding: `${style.paddingTop} ${style.paddingLeft}`,
+        radius: style.borderRadius,
+        width: box.width,
+      };
+    };
+    const pair = { empty: read(empty), error: read(twin) };
+    twin.remove();
+    return pair;
+  });
+  if (!measured) {
+    failures.push(`${theme} /: no empty state to measure the error state against`);
+    return;
+  }
+  measurements.push(`${theme} / empty ${JSON.stringify(measured.empty)}`);
+  measurements.push(`${theme} / error ${JSON.stringify(measured.error)}`);
+  const differs = ['border', 'height', 'padding', 'radius', 'width'].filter((key) => String(measured.empty[key]) !== String(measured.error[key]));
+  if (differs.length) failures.push(`${theme} /: the error state's ${differs.join(', ')} differs from the empty state's`);
+  if (measured.empty.ink === measured.error.ink) failures.push(`${theme} /: the error state's title reads in the empty state's ink (${measured.error.ink})`);
+}
+
 /** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
 async function costCapRows(theme) {
   const rows = await page.evaluate(() =>
@@ -238,7 +276,10 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
-      if (view.path === '/') await remainingCards(theme);
+      if (view.path === '/') {
+        await remainingCards(theme);
+        await errorStateBox(theme);
+      }
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') await costCapRows(theme);
       if (view.path === '/pools') await poolChips(theme);

@@ -4,7 +4,7 @@ import type { Account, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer } from '@/components/ui/icons';
-import { Badge, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
+import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtPct, fmtRelative, fmtShortTime } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
@@ -88,11 +88,15 @@ export function QuotaPage() {
         </Select>
       </div>
 
-      <div className="quota-grid">
-        {!accounts.data
-          ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-          : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} onRefreshed={reload} />)}
-      </div>
+      {accounts.error && !accounts.data ? (
+        <ErrorState title="Could not load the upstreams" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} />
+      ) : (
+        <div className="quota-grid">
+          {!accounts.data
+            ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
+            : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} onRefreshed={reload} />)}
+        </div>
+      )}
 
       {accounts.data && <ResetTimeline accounts={accounts.data.filter((a) => a.kind === 'oauth' && a.windows.length > 0)} now={now} />}
     </div>

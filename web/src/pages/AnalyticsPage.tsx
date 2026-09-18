@@ -10,7 +10,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
-import { Card, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
@@ -297,6 +297,7 @@ export function AnalyticsPage() {
         </div>
         <BreakdownTable
           title={`Traffic by ${groupLabel.toLowerCase()}`}
+          error={breakdown.error}
           groupLabel={groupLabel}
           columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers']}
           rows={groups.map((g) => ({
@@ -647,7 +648,7 @@ function PctLabel({ text }: { text: string }) {
   );
 }
 
-function BreakdownTable({ title, groupLabel, columns, rows }: { columns: ReactNode[]; groupLabel: string; rows: { cells: ReactNode[]; key: string; label: string }[]; title: string }) {
+function BreakdownTable({ title, groupLabel, columns, rows, error = null }: { columns: ReactNode[]; error?: string | null; groupLabel: string; rows: { cells: ReactNode[]; key: string; label: string }[]; title: string }) {
   return (
     <Card title={title} subtitle="Totals for the selected range and filters" padded={false} className="card--table">
       <div className="table-wrap">
@@ -675,8 +676,8 @@ function BreakdownTable({ title, groupLabel, columns, rows }: { columns: ReactNo
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={columns.length + 1} className="muted">
-                  No rows.
+                <td colSpan={columns.length + 1} className={error ? '' : 'muted'}>
+                  {error ? <ErrorState title="Could not load this breakdown" body={error} /> : 'No rows.'}
                 </td>
               </tr>
             )}

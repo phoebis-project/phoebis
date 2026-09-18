@@ -7,7 +7,7 @@ import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { IconPencil, IconPlus, IconRefresh, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -77,12 +77,18 @@ export function AccountsPage() {
         )}
         <ul className="account-rows">
           {!accounts.data
-            ? [0, 1, 2].map((i) => (
-                <li key={i} className="account-row">
-                  <Skeleton width="70%" />
-                  <Skeleton height={4} />
-                </li>
-              ))
+            ? accounts.error
+              ? (
+                  <li>
+                    <ErrorState title="Could not load the upstreams" body={accounts.error} action={<Button size="sm" onClick={accounts.reload}>Try again</Button>} />
+                  </li>
+                )
+              : [0, 1, 2].map((i) => (
+                  <li key={i} className="account-row">
+                    <Skeleton width="70%" />
+                    <Skeleton height={4} />
+                  </li>
+                ))
             : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
           {accounts.data && list.length === 0 && (
             <li>

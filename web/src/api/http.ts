@@ -12,18 +12,41 @@ export class ApiError extends Error {
   }
 }
 
+/** What a failed call reports: the route it was, and the server's own message where there was one. */
+export interface Failure {
+  message: string | null;
+  path: string;
+  /** 0 when the router never answered, so a caller can word a transport error differently. */
+  status: number;
+}
+
 interface Hooks {
-  onForbidden: () => void;
+  onFailure: (failure: Failure) => void;
+  onForbidden: (message: string) => void;
   onUnauthorized: () => void;
 }
-let hooks: Hooks = { onForbidden: () => undefined, onUnauthorized: () => undefined };
-/** The session provider installs these once; a 401 anywhere returns the app to the login, a 403 names the role. */
+let hooks: Hooks = { onFailure: () => undefined, onForbidden: () => undefined, onUnauthorized: () => undefined };
+/**
+ * The session provider installs these once; a 401 anywhere returns the app to the login, a 403 names the
+ * refusal, and everything else reaches the shell's toast from here rather than from each page.
+ */
 export const setHooks = (next: Hooks) => {
   hooks = next;
 };
 
+/** The one place a failed call is reported from, so the mock build can stand in for the transport too. */
+export const reportFailure = (failure: Failure) => hooks.onFailure(failure);
+
 export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
-  const response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method });
+  let response: Response;
+  try {
+    response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method });
+  } catch (e) {
+    // A router that never answered: the page below draws its error state, and the hook says which route.
+    const message = e instanceof Error ? e.message : String(e);
+    reportFailure({ message, path, status: 0 });
+    throw new ApiError(0, message, null);
+  }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   let parsed: unknown = null;
@@ -33,10 +56,14 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     parsed = null;
   }
   if (!response.ok) {
-    const message = (parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string' ? (parsed as { error: string }).error : null) ?? `${method} ${path} answered ${response.status}`;
+    const answered = parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string' ? (parsed as { error: string }).error : null;
+    const message = answered ?? `${method} ${path} answered ${response.status}`;
     // The login route's own 401 is the wrong secret, not a lost session.
     if (response.status === 401 && !(method === 'POST' && path === '/admin/session')) hooks.onUnauthorized();
-    if (response.status === 403) hooks.onForbidden();
+    else if (response.status === 403) hooks.onForbidden(message);
+    // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
+    // it draws as a state of its own; everything else is a failure the operator has to be told about.
+    else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
   }
   return (raw ? text : parsed) as T;
@@ -175,10 +202,29 @@ export class HttpApi implements Api {
       // A dropped socket (the feed disconnects a slow client) reconnects to a fresh snapshot with a growing wait.
       socket.onclose = () => {
         if (!closed) {
-          setTimeout(open, retry);
+          setTimeout(() => void reopen(), retry);
           retry = Math.min(retry * 2, 30_000);
         }
       };
+    };
+    /**
+     * A refused upgrade never passes through `call`, so an expired session would reconnect for ever behind a
+     * page that never learns it has to log in again: the session is read before each retry, and only a
+     * router that answers "no session" stops the feed. A probe that fails to answer at all is treated as the
+     * outage it probably is, and the retry goes ahead.
+     */
+    const reopen = async () => {
+      if (closed) return;
+      const session = await this.getSession().then(
+        (s) => s,
+        () => 'unknown' as const,
+      );
+      if (closed) return;
+      if (session === null) {
+        hooks.onUnauthorized();
+        return;
+      }
+      open();
     };
     open();
     return () => {

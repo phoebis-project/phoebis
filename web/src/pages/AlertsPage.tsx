@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, Pool, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { Badge, Button, Card, ConfirmDialog, Dialog, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
 import { fmtAbsolute, fmtPct, fmtRelative, shortId, urlHost } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -178,13 +178,21 @@ export function AlertsPage() {
                       }
                     />
                   ))
-                : [0, 1, 2].map((i) => (
-                    <tr key={i}>
-                      <td colSpan={canMutate ? 7 : 6}>
-                        <Skeleton />
-                      </td>
-                    </tr>
-                  ))}
+                : rules.error
+                  ? (
+                      <tr>
+                        <td colSpan={canMutate ? 7 : 6}>
+                          <ErrorState title="Could not load the alert rules" body={rules.error} action={<Button size="sm" onClick={rules.reload}>Try again</Button>} />
+                        </td>
+                      </tr>
+                    )
+                  : [0, 1, 2].map((i) => (
+                      <tr key={i}>
+                        <td colSpan={canMutate ? 7 : 6}>
+                          <Skeleton />
+                        </td>
+                      </tr>
+                    ))}
             </tbody>
           </table>
         </div>

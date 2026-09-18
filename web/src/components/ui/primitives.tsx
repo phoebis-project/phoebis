@@ -88,6 +88,20 @@ export function EmptyState({ title, body, action }: { action?: ReactNode; body?:
   );
 }
 
+/**
+ * The failed twin of `EmptyState`, in the same box so a list swaps one for the other without the page moving.
+ * The body carries the reason the call gave; the route it came from is in the shell's toast.
+ */
+export function ErrorState({ title = 'Could not load', body, action }: { action?: ReactNode; body?: ReactNode; title?: string }) {
+  return (
+    <div className="empty empty--error" role="alert">
+      <p className="empty__title">{title}</p>
+      {body && <p className="empty__body">{body}</p>}
+      {action}
+    </div>
+  );
+}
+
 /** The hint is a block outside the label, so label and hint never share a line. */
 export function Field({ label, hint, children, inline = false }: { children: ReactNode; hint?: ReactNode; inline?: boolean; label: ReactNode }) {
   return (

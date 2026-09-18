@@ -17,14 +17,15 @@ const storedPreview = (): Role | null => {
 };
 
 interface SessionState {
-  clearForbidden: () => void;
-  forbidden: string | null;
+  clearToast: () => void;
   logout: () => Promise<void>;
   /** Mock builds may preview the viewer role; the served app reads the role from the session alone. */
   previewRole: Role | null;
   role: Role;
   sessionId: string;
   setPreviewRole: (role: Role | null) => void;
+  /** What the transport reported last: a refusal, or a call that failed. The shell shows it once. */
+  toast: string | null;
 }
 
 const Ctx = createContext<SessionState | null>(null);
@@ -32,12 +33,16 @@ const Ctx = createContext<SessionState | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
-  const [forbidden, setForbidden] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [previewRole, setStoredPreviewRole] = useState<Role | null>(storedPreview);
 
   useEffect(() => {
     setHooks({
-      onForbidden: () => setForbidden('The viewer secret cannot change anything.'),
+      // The route is named because a page draws several lists, and the operator has to know which one is gone.
+      onFailure: ({ message, path, status }) => setToast(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`),
+      // The server's own wording: the gate refuses a viewer's write and a request from an unconfigured
+      // origin with the same status, and only it knows which one this was.
+      onForbidden: (message) => setToast(message),
       onUnauthorized: () => {
         setNotice('Your session ended; log in again.');
         setSession(null);
@@ -67,8 +72,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<SessionState | null>(
-    () => (session ? { clearForbidden: () => setForbidden(null), forbidden, logout, previewRole, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole } : null),
-    [session, forbidden, logout, previewRole, setPreviewRole],
+    () => (session ? { clearToast: () => setToast(null), logout, previewRole, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole, toast } : null),
+    [session, toast, logout, previewRole, setPreviewRole],
   );
 
   if (session === undefined) return null;

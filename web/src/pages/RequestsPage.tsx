@@ -6,7 +6,7 @@ import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, EmptyState, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -254,7 +254,11 @@ export function RequestsPage() {
                 {!requests.loading && rows.length === 0 && (
                   <tr>
                     <td colSpan={visible.size + 1}>
-                      <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                      {requests.error ? (
+                        <ErrorState title="Could not load the request log" body={requests.error} action={<Button onClick={requests.reload}>Try again</Button>} />
+                      ) : (
+                        <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                      )}
                     </td>
                   </tr>
                 )}

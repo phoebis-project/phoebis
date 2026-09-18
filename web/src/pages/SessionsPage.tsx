@@ -5,7 +5,7 @@ import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecip
 import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtUsd, shortId } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -182,7 +182,11 @@ export function SessionsPage() {
           ) : undefined
         }
       >
-        {rows === null ? (
+        {rows === null && sessions.error ? (
+          <div style={{ padding: 20 }}>
+            <ErrorState title="Could not load the sessions" body={sessions.error} action={<Button size="sm" onClick={sessions.reload}>Try again</Button>} />
+          </div>
+        ) : rows === null ? (
           <div style={{ padding: 20 }}>
             <Skeleton height={14} />
           </div>
