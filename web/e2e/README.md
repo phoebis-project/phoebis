@@ -31,9 +31,10 @@ still runs the rest of that suite.
 ```sh
 docker run --rm --network host -v "$PWD":/work -w /work \
   -e PHOEBIS_E2E_BASE -e PHOEBIS_E2E_SECRET -e PHOEBIS_SCREENSHOT_DIR=/shots -v /tmp/phoebis-shots:/shots \
-  mcr.microsoft.com/playwright:v1.49.0-noble npm run e2e
+  mcr.microsoft.com/playwright:v1.63.0-noble npm run e2e
 ```
 
-The image's bundled Playwright is older than the lockfile's, so `npm ci` inside the container installs the pinned one
-over it: the image is a Chromium host and nothing more. The test suite uses the host's own Chromium instead, because
-Chromium runs headless here and the image would add 3.5 GB to the test path for no gain.
+The image tag has to match the pinned version: Playwright looks its browser up under a revision directory that only
+the matching image ships, and a mismatched one fails the launch with "Executable doesn't exist". The test suite uses
+the host's own Chromium instead, because Chromium runs headless here and the image would add 3.5 GB to the test path
+for no gain.

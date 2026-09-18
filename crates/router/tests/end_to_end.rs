@@ -1404,6 +1404,20 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .unwrap();
     assert_eq!(relayed.status(), 200);
     let _ = relayed.text().await.unwrap();
+    // Asserted before the probe is waited for: the body rewrite above depends on the fixture spelling its
+    // thinking block exactly as written, and a fixture that moves on would otherwise show up here as a probe
+    // that never arrives, which names the wrong culprit.
+    let recipes = wait_json(&client, &admin("/keepalive/recipes"), |v| {
+        !v["recipes"].as_array().unwrap().is_empty()
+    })
+    .await;
+    assert_eq!(
+        (
+            recipes["recipes"][0]["session_id"].as_str(),
+            recipes["recipes"][0]["state"].as_str()
+        ),
+        (Some("e2e-ui"), Some("armed"))
+    );
     let probes = wait_json(
         &client,
         &admin("/requests?include_probes=true&kinds=probe"),

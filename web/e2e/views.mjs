@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
@@ -30,14 +30,44 @@ function repositoryRoots() {
   } catch {
     // No git on the path, or nothing it recognises here.
   }
-  let root = resolve(process.cwd());
+  let root = here;
   while (!existsSync(join(root, 'Cargo.toml')) && dirname(root) !== root) root = dirname(root);
   return [root];
 }
 
+/**
+ * The path with its symlinks resolved. A directory that does not exist yet resolves as far as its nearest
+ * existing ancestor, so a screenshot directory the run is about to create is compared as the place it will
+ * really land rather than as the name that points there. A link to a directory that does not exist yet is
+ * followed by hand, since it is the target that `mkdir` would create and write into.
+ */
+function real(path) {
+  const target = resolve(path);
+  const tail = [];
+  let at = target;
+  // The kernel's own limit on how many links one lookup may follow, so a cycle of links ends here too.
+  for (let hops = 0; hops < 40; hops += 1) {
+    try {
+      return join(realpathSync(at), ...tail);
+    } catch {
+      try {
+        at = resolve(dirname(at), readlinkSync(at));
+        continue;
+      } catch {
+        // Not a link either: this component simply does not exist.
+      }
+      const up = dirname(at);
+      if (up === at) break;
+      tail.unshift(basename(at));
+      at = up;
+    }
+  }
+  return target;
+}
+
 // Screenshots are review artifacts, never source: refuse a directory inside the repository.
-const shots = resolve(dir);
-const inside = repositoryRoots().find((root) => shots === root || shots.startsWith(root + sep));
+const shots = real(dir);
+const inside = repositoryRoots().map(real).find((root) => shots === root || shots.startsWith(root + sep));
 if (inside) {
   console.error(`PHOEBIS_SCREENSHOT_DIR must lie outside the repository (${inside})`);
   process.exit(2);
@@ -64,10 +94,14 @@ const context = await browser.newContext({ viewport: { height: 800, width: 1280 
 const page = await context.newPage();
 // The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
 // logs that answer as a failed resource, and it is the one console error the pass expects. Chromium puts the
-// path in the message or in the location depending on how it reports the failure, so both are searched.
+// path in the message or in the location depending on how it reports the failure, so both are searched. Only
+// the first such line is excused: a session lost mid-pass would log the same one, and that is a failure.
+let anonymous = 0;
 const expectedAnonymous = (message) => {
   const reported = `${message.text()} ${message.location()?.url ?? ''}`;
-  return /\/admin\/session\b/.test(reported) && /\b401\b/.test(reported);
+  if (!/\/admin\/session\b/.test(reported) || !/\b401\b/.test(reported)) return false;
+  anonymous += 1;
+  return anonymous === 1;
 };
 page.on('console', (m) => {
   if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${page.url()}: ${m.text()}`);
@@ -105,14 +139,28 @@ async function wastedProbeRows(theme) {
   const rows = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
     return [...card.querySelectorAll('.hbars--reasons li')].map((li) => {
-      const row = li.getBoundingClientRect();
-      const label = li.children[0].getBoundingClientRect();
-      return { clear: label.top >= row.top && label.bottom <= row.bottom, label: li.children[0].textContent };
+      const label = li.children[0];
+      const track = [...li.children].find((el) => /__track$/.test(el.className ?? '')) ?? li.children[1];
+      // A range over the label's text, not the label's own box: the label is the tallest item in the grid
+      // row, so its box spans every line it wrapped to and would swallow a bar that floated off the first.
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const line = range.getClientRects()[0];
+      const bar = track.getBoundingClientRect();
+      return { label: label.textContent, line: { bottom: line.bottom, top: line.top }, middle: (bar.top + bar.bottom) / 2, offset: label.getBoundingClientRect().top - li.getBoundingClientRect().top };
     });
   });
-  for (const row of rows.filter((r) => !r.clear)) failures.push(`${theme} /analytics: the "${row.label}" label overflows its row`);
+  for (const row of rows) {
+    // The row's own 3 px of padding, and a pixel for rounding.
+    if (row.offset > 4) failures.push(`${theme} /analytics: the "${row.label}" label starts ${row.offset.toFixed(1)}px below its row`);
+    if (row.middle < row.line.top || row.middle > row.line.bottom) {
+      failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
+    }
+  }
 }
 
+// Where a throw below came from, so the failure it becomes names a view rather than a stack.
+let at = 'the login';
 try {
   await page.goto(`${base}/`);
   await page.getByLabel('Admin or viewer secret').fill(secret);
@@ -123,6 +171,7 @@ try {
     mkdirSync(join(shots, theme), { recursive: true });
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     for (const view of VIEWS) {
+      at = `${theme} ${view.path}`;
       await page.goto(`${base}${view.path}`);
       try {
         await page.waitForSelector(view.wait, { timeout: 15_000 });
@@ -142,9 +191,12 @@ try {
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
     }
   }
-} finally {
-  await browser.close();
+} catch (error) {
+  // Reported, never re-raised: the console errors collected so far are the point of the run, and a rethrow
+  // here would replace the whole list with one stack trace.
+  failures.push(`${at}: ${error instanceof Error ? error.message : String(error)}`);
 }
+await browser.close().catch((error) => failures.push(`closing the browser: ${error.message}`));
 
 if (failures.length) {
   console.error(`${failures.length} failures:\n  ${failures.join('\n  ')}`);
