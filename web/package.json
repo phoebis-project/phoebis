@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite",
+    "e2e": "node e2e/views.mjs",
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && node smoke/run.mjs",
     "test": "vite build -c test/vite.config.ts && node --test test/"
@@ -21,6 +22,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "25.0.1",
+    "playwright": "1.63.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.21"
   }

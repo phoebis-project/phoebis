@@ -16,6 +16,11 @@ build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is 
 `PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a placeholder page in place of
 the console.
 
+A headless browser pass over every view in both themes runs with `PHOEBIS_E2E_BROWSER=1 cargo test -p phoebis-router --test
+end_to_end the_ui_passes`, after `cd web && npx playwright install chromium`; without the variable the test prints a
+skip line. Its screenshots land under `PHOEBIS_SCREENSHOT_DIR`, or under the temp directory when that is unset, and never
+inside the repository. See `web/e2e/README.md` to run the pass by hand against a router of your own.
+
 ## Commands
 
 | Command | Effect |
