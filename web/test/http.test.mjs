@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { ApiError, HttpApi, call, setHooks, slug } from './dist/api.js';
 
@@ -47,6 +48,13 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(calls[1].url, '/admin/accounts/acc/cooldowns/model%3Aclaude-sonnet-5');
   assert.equal(slug('My Pool!'), 'my-pool');
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
+});
+
+test('createAccount sends the id, kind, label, and secret in snake_case', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  await new HttpApi().createAccount({ id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' });
+  assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
 test('listRequests passes the client filter as user_agent', async () => {
