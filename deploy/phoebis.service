@@ -1,0 +1,26 @@
+[Unit]
+Description=Phoebis Router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=phoebis
+Group=phoebis
+WorkingDirectory=/var/lib/phoebis
+EnvironmentFile=/etc/phoebis/phoebis.env
+ExecStart=/usr/local/bin/phoebis --config /etc/phoebis/config.yaml
+# The router drains in-flight requests for up to 30 seconds after SIGTERM; the stop timeout leaves it that long.
+KillSignal=SIGTERM
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=phoebis
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
