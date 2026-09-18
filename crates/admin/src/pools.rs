@@ -378,6 +378,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         })
         .unwrap_or_default();
     let cooldowns = state.router.cooldowns().await.unwrap_or_default();
+    let overages = state.router.overages().await.unwrap_or_default();
     let pins = state.router.pins().await.unwrap_or_default();
     let key_ids: Vec<String> = keys
         .iter()
@@ -385,10 +386,10 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = state.store.accounts()?;
-    // A member is eligible when routing would consider it: enabled, ready or mid-refresh (the selector's `obstacle`
-    // admits both), and not under an account-wide cooldown.
-    let eligible = |m: &PoolMember| {
-        accounts
+    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready/mid-refresh,
+    // an account-wide cooldown, or overage the pool's policy admits no substitute for. `None` is eligible.
+    let ineligible = |m: &PoolMember| -> Option<&'static str> {
+        let ready = accounts
             .iter()
             .find(|a| a.id == m.account_id)
             .is_some_and(|a| {
@@ -397,11 +398,26 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
                         a.state,
                         phoebis_store::AccountState::Ready | phoebis_store::AccountState::Refreshing
                     )
-            })
-            && !cooldowns
+            });
+        if !ready {
+            return Some("unavailable");
+        }
+        if cooldowns
+            .iter()
+            .any(|c| c.account_id == m.account_id && c.scope == "account" && c.until > now)
+        {
+            return Some("cooldown");
+        }
+        if row.overage_policy == OveragePolicy::Never
+            && overages
                 .iter()
-                .any(|c| c.account_id == m.account_id && c.scope == "account" && c.until > now)
+                .any(|(id, e)| *id == m.account_id && e.in_use)
+        {
+            return Some("overage");
+        }
+        None
     };
+    let eligible = |m: &PoolMember| ineligible(m).is_none();
     let status = if !row.enabled {
         "disabled"
     } else if members.is_empty() || !members.iter().any(eligible) {
@@ -418,7 +434,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "default_allowed_models": row.default_allowed_models,
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
-        "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority })).collect::<Vec<_>>(),
+        "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority, "eligible": ineligible(m).unwrap_or("eligible") })).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,
         "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),

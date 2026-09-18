@@ -651,3 +651,41 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         "disabled"
     );
 }
+
+#[tokio::test]
+async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "direct".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(common::NOW),
+            reset: None,
+            observed_at: common::NOW,
+            source: phoebis_routing::EvidenceSource::Head,
+        },
+    });
+    let pools = common::wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["status"] == "exhausted"
+    })
+    .await;
+    assert_eq!(pools["pools"][0]["members"][0]["eligible"], "overage");
+    assert_eq!(
+        patch(
+            &parts.app,
+            "/admin/pools/main",
+            r#"{"overage_policy":"allow"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(
+        json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
+        "active",
+        "the same overage is not an obstacle once the policy allows it"
+    );
+}
