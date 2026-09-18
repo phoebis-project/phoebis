@@ -25,6 +25,14 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
 });
 
+test('an account carries extra headers only when the route answers an object of strings', () => {
+  const base = fixture('account');
+  assert.equal(d.decodeAccount(base).headers, null, 'a route that reports no headers answers none');
+  assert.equal(d.decodeAccount({ ...base, headers: {} }).headers, null, 'an empty object is no headers rather than an empty list');
+  assert.equal(d.decodeAccount({ ...base, headers: { 'x-retries': 3, 'x-team': 'core' } }).headers, null, 'one non-string value refuses the map instead of dropping that entry');
+  assert.deepEqual(d.decodeAccount({ ...base, headers: { 'x-team': 'core' } }).headers, { 'x-team': 'core' });
+});
+
 test('the account list folds state, enabled, and cooldowns onto one status', () => {
   const list = fixture('accounts').accounts.map(d.decodeAccount);
   assert.deepEqual(list.map((a) => a.id), ['business', 'direct'], 'sorted by label');

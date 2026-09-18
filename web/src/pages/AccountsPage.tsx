@@ -162,6 +162,8 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
   }, [account.id, account.label]);
 
   const isOauth = account.kind === 'oauth';
+  // A flagged upstream reports its flag as the status, so routing is the only honest read of whether it takes requests.
+  const paused = !account.routingEnabled;
   const cooldown = account.cooldowns[0] ?? null;
   const extra = account.extraUsage;
   const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {
@@ -255,15 +257,15 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
               disabled={busy}
               onClick={() =>
                 act(
-                  account.status === 'paused' ? 'Resume upstream' : 'Pause upstream',
+                  paused ? 'Resume upstream' : 'Pause upstream',
                   'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
-                  account.status === 'paused' ? 'Resume' : 'Pause',
-                  account.status === 'paused' ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
-                  account.status === 'paused' ? 'Resumed' : 'Paused',
+                  paused ? 'Resume' : 'Pause',
+                  paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
+                  paused ? 'Resumed' : 'Paused',
                 )
               }
             >
-              {account.status === 'paused' ? 'Resume' : 'Pause'}
+              {paused ? 'Resume' : 'Pause'}
             </Button>
             {cooldown && (
               <Button

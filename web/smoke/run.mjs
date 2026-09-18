@@ -231,7 +231,8 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pause')?.click();
   await m.settle(600);
-  results.push({ name: '/upstreams Pause calls the API and the row reads paused', ok: m.text().includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
+  const pauseToast = m.container.querySelector('.toast')?.textContent ?? '';
+  results.push({ name: '/upstreams Pause calls the API and the row reads paused', ok: pauseToast.includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [pauseToast || 'no toast'] });
   const resume = [...m.container.querySelectorAll('.detail__head button')].find((b) => b.textContent?.trim() === 'Resume');
   resume?.click();
   await m.settle(250);
@@ -262,6 +263,7 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   add?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  results.push({ name: '/upstreams Add upstream opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
   const kinds = [...(dlg?.querySelectorAll('[aria-label="Upstream type"] button') ?? [])];
   kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
@@ -338,6 +340,25 @@ expect('/upstreams/mail', m.text(), ['Cooling down', 'Clear cooldown', 'rate_lim
 }
 await m.navigate('/upstreams/personal');
 expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-sonnet-4-5-20250929', 'Clear funding flag', 'Payment method declined']);
+{
+  // A funding-flagged upstream never reads 'paused', so the header has to take the pause state off routing instead.
+  const headButton = (name) => [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
+  const confirmAction = async (name) => {
+    headButton(name)?.click();
+    await m.settle(250);
+    [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name)?.click();
+    await m.settle(600);
+  };
+  await confirmAction('Pause');
+  const offersResume = headButton('Resume') !== undefined && m.text().includes('Needs funding');
+  // Back to routing, since the pools and the later upstream checks read this account as the fixture left it.
+  await confirmAction('Resume');
+  results.push({
+    name: '/upstreams a flagged upstream pauses and resumes from the header',
+    ok: offersResume && headButton('Pause') !== undefined,
+    missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
+  });
+}
 m.unmount();
 
 m = await mount('/pools');
@@ -1370,7 +1391,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
 await m.navigate('/accounts/business');
 {
   const t = m.text();
-  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add account') && !t.includes('Re-sync'), missing: [] });
+  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add upstream') && !t.includes('Re-sync'), missing: [] });
 }
 await m.navigate('/alerts');
 {

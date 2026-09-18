@@ -89,7 +89,7 @@ export function QuotaPage() {
       </div>
 
       <div className="quota-grid">
-        {accounts.loading || !accounts.data
+        {!accounts.data
           ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
           : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} onRefreshed={reload} />)}
       </div>

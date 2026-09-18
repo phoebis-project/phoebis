@@ -70,6 +70,14 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
 const redactForViewer = (e: AlertEvent): AlertEvent =>
   e.detail !== null && 'question' in e.detail ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
 
+/** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
+const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
+const statusOf = (a: Account, enabled: boolean): Account['status'] => {
+  if (FLAGGED.includes(a.status)) return a.status;
+  if (!enabled) return 'paused';
+  return a.cooldowns.length ? 'cooldown' : 'ready';
+};
+
 function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
   // A request the router never attributed matches no filter on that field.
   if (q.keyIds?.length && (r.keyId === null || !q.keyIds.includes(r.keyId))) return false;
@@ -393,7 +401,7 @@ export class MockApi implements Api {
 
   async pauseAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: false, status: 'paused' });
+    this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
     return latency(undefined, 250);
   }
 
@@ -427,7 +435,7 @@ export class MockApi implements Api {
 
   async resumeAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: true, status: a.cooldowns.length ? 'cooldown' : 'ready' });
+    this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
     return latency(undefined, 250);
   }
 
