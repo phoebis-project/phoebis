@@ -26,8 +26,9 @@ export function KeysPage() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | KeyStatus>('all');
   const [dialog, setDialog] = useState<{ key: ApiKey | null } | null>(null);
-  const [created, setCreated] = useState<CreatedApiKey | null>(null);
-  const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; title: string } | null>(null);
+  // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
+  const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
@@ -51,6 +52,17 @@ export function KeysPage() {
       }
     : null;
   const maxCost = Math.max(1, ...(keys.data ?? []).map((k) => k.lifetime.cost));
+
+  /** Runs one key mutation and reloads the table behind it; a rejection only toasts, leaving the list alone. */
+  const run = async (action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    keys.reload();
+  };
 
   return (
     <div className="stack">
@@ -160,9 +172,51 @@ export function KeysPage() {
                             <Menu
                               items={[
                                 { label: 'Edit', onClick: () => setDialog({ key: k }) },
-                                { label: 'Rotate', onClick: () => setConfirm({ title: `Rotate ${k.name}`, body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.', label: 'Rotate' }) },
-                                { label: 'Revoke', disabled: k.status !== 'active', onClick: () => setConfirm({ title: `Revoke ${k.name}`, body: 'Requests with this key are rejected immediately. Its history stays in the ledger.', label: 'Revoke', danger: true }) },
-                                { label: 'Delete', danger: true, onClick: () => setConfirm({ title: `Delete ${k.name}`, body: 'Removes the key and detaches its request history from the key name. This cannot be undone.', label: 'Delete', danger: true }) },
+                                {
+                                  label: 'Rotate',
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Rotate ${k.name}`,
+                                      body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
+                                      label: 'Rotate',
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          setCreated({ key: await api.rotateKey(k.id), title: 'API key rotated' });
+                                        }),
+                                    }),
+                                },
+                                {
+                                  label: 'Revoke',
+                                  disabled: k.status !== 'active',
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Revoke ${k.name}`,
+                                      body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
+                                      label: 'Revoke',
+                                      danger: true,
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          await api.revokeKey(k.id);
+                                          setToast('Key revoked');
+                                        }),
+                                    }),
+                                },
+                                {
+                                  label: 'Delete',
+                                  danger: true,
+                                  onClick: () =>
+                                    setConfirm({
+                                      title: `Delete ${k.name}`,
+                                      body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
+                                      label: 'Delete',
+                                      danger: true,
+                                      onConfirm: () =>
+                                        void run(async () => {
+                                          await api.deleteKey(k.id);
+                                          setToast('Key deleted');
+                                        }),
+                                    }),
+                                },
                               ]}
                             />
                           </td>
@@ -183,7 +237,7 @@ export function KeysPage() {
         models={(catalog.data ?? []).map((m) => m.id)}
         onCreated={(c) => {
           setDialog(null);
-          setCreated(c);
+          setCreated({ key: c, title: 'API key created' });
           keys.reload();
         }}
         onUpdated={() => {
@@ -195,7 +249,7 @@ export function KeysPage() {
       <Dialog
         open={created !== null}
         onClose={() => setCreated(null)}
-        title="API key created"
+        title={created?.title ?? 'API key created'}
         subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
         footer={
           <Button variant="primary" onClick={() => setCreated(null)}>
@@ -206,8 +260,8 @@ export function KeysPage() {
         {created && (
           <>
             <div className="secret">
-              <code>{created.secret}</code>
-              <CopyButton text={created.secret} size="md" />
+              <code>{created.key.secret}</code>
+              <CopyButton text={created.key.secret} size="md" />
             </div>
             <p className="secondary">
               Set it as <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the client. The Settings page has the full snippet.
@@ -215,7 +269,7 @@ export function KeysPage() {
           </>
         )}
       </Dialog>
-      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => setToast(`${confirm?.label}: done`)} />
+      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
       <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
@@ -246,6 +300,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
   const [captureHours, setCaptureHours] = useState(6);
   const [optOut, setOptOut] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const settings = useAsync(() => api.getSettings(), []);
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
@@ -266,12 +321,14 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
     setCaptureHours(existing?.bodyCaptureHours || 6);
     setOptOut(existing?.keepaliveOptOut ?? false);
     setBusy(false);
+    setError(null);
   }, [open, existing, initialPoolId, pools]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
   const submit = async () => {
     setBusy(true);
+    setError(null);
     const input: KeyInput = {
       name: name.trim(),
       poolId,
@@ -280,15 +337,21 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
       bodyCaptureHours: captureMode === 'inherit' ? null : captureMode === 'off' ? 0 : captureHours,
       keepaliveOptOut: optOut,
     };
-    if (existing) {
-      const updated = await api.updateKey(existing.id, input);
+    try {
+      if (existing) {
+        const updated = await api.updateKey(existing.id, input);
+        setBusy(false);
+        onUpdated?.(updated);
+        return;
+      }
+      const created = await api.createKey({ ...input, expiresInDays: expiry === 'never' ? null : Number(expiry) });
       setBusy(false);
-      onUpdated?.(updated);
-      return;
+      onCreated(created);
+    } catch (e) {
+      // Stated in the dialog rather than a toast, so the form the operator filled in is still on screen beside it.
+      setBusy(false);
+      setError(e instanceof Error ? e.message : String(e));
     }
-    const created = await api.createKey({ ...input, expiresInDays: expiry === 'never' ? null : Number(expiry) });
-    setBusy(false);
-    onCreated(created);
   };
 
   const sections: DialogSection[] = [
@@ -297,6 +360,12 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
       label: 'General',
       body: (
         <>
+          {error && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{error}</div>
+            </div>
+          )}
           <div className="form-row">
             <Field label="Name">
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="workstation" autoFocus />

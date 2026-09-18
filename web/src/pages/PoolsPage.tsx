@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy } from '@/api/types';
+import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, MOCK, type PoolInput } from '@/api';
+import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { MultiSelect } from '@/components/ui/MultiSelect';
+import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
+import { STRATEGY_RULE } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random' };
@@ -92,9 +94,11 @@ export function PoolsPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
+  const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
   const { canMutate } = useAppSettings();
   const [dialog, setDialog] = useState<{ pool: Pool | null } | null>(null);
+  const [deleting, setDeleting] = useState<Pool | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
@@ -103,6 +107,27 @@ export function PoolsPage() {
     for (const k of keys.data ?? []) m.set(k.poolId, [...(m.get(k.poolId) ?? []), k]);
     return m;
   }, [keys.data]);
+  // A session reaches a pool through its key, which is the only link the sessions route carries.
+  const sessionsByPool = useMemo(() => {
+    const poolOf = new Map((keys.data ?? []).map((k) => [k.id, k.poolId]));
+    const m = new Map<string, Session[]>();
+    for (const s of sessions.data ?? []) {
+      const poolId = poolOf.get(s.keyId);
+      if (poolId !== undefined) m.set(poolId, [...(m.get(poolId) ?? []), s]);
+    }
+    return m;
+  }, [keys.data, sessions.data]);
+
+  const removePool = async (p: Pool) => {
+    try {
+      await api.deletePool(p.id);
+      setToast('Pool deleted');
+    } catch (e) {
+      setToast(e instanceof ApiError && e.status === 409 ? 'Move or revoke its keys first' : e instanceof Error ? e.message : String(e));
+    }
+    pools.reload();
+    keys.reload();
+  };
   const totals = pools.data
     ? {
         pools: pools.data.length,
@@ -131,7 +156,22 @@ export function PoolsPage() {
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
       <div className="pool-grid">
-        {pools.data ? pools.data.map((p) => <PoolCard key={p.id} pool={p} keys={keysByPool.get(p.id) ?? []} accountById={accountById} now={now} canMutate={canMutate} onEdit={() => setDialog({ pool: p })} />) : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
+        {pools.data
+          ? pools.data.map((p) => (
+              <PoolCard
+                key={p.id}
+                pool={p}
+                keys={keysByPool.get(p.id) ?? []}
+                accounts={accounts.data ?? []}
+                accountById={accountById}
+                sessions={sessionsByPool.get(p.id) ?? []}
+                now={now}
+                canMutate={canMutate}
+                onEdit={() => setDialog({ pool: p })}
+                onDelete={() => setDeleting(p)}
+              />
+            ))
+          : [0, 1].map((i) => <Skeleton key={i} height={360} />)}
       </div>
       <PoolDialog
         open={dialog !== null}
@@ -149,6 +189,18 @@ export function PoolsPage() {
         }}
         onKeyCreated={() => keys.reload()}
         onKeysChanged={() => keys.reload()}
+        onError={setToast}
+      />
+      <ConfirmDialog
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title={deleting ? `Delete pool ${deleting.name}` : 'Delete pool'}
+        confirmLabel="Delete"
+        danger
+        body="Deletes the pool and its memberships. Its keys must be moved or revoked first."
+        onConfirm={() => {
+          if (deleting) void removePool(deleting);
+        }}
       />
       <Toast message={toast} onDone={() => setToast(null)} />
     </div>
@@ -164,7 +216,27 @@ function Tile({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function PoolCard({ pool, keys, accountById, now, canMutate, onEdit }: { accountById: Map<string, Account>; canMutate: boolean; keys: ApiKey[]; now: number; onEdit: () => void; pool: Pool }) {
+function PoolCard({
+  pool,
+  keys,
+  accounts,
+  accountById,
+  sessions,
+  now,
+  canMutate,
+  onEdit,
+  onDelete,
+}: {
+  accountById: Map<string, Account>;
+  accounts: Account[];
+  canMutate: boolean;
+  keys: ApiKey[];
+  now: number;
+  onDelete: () => void;
+  onEdit: () => void;
+  pool: Pool;
+  sessions: Session[];
+}) {
   const ink = useChartInk();
   const data = pool.traffic24h.map((b, i, all) => {
     const window = all.slice(Math.max(0, i - 2), i + 1);
@@ -180,9 +252,14 @@ function PoolCard({ pool, keys, accountById, now, canMutate, onEdit }: { account
             {pool.status}
           </Badge>
           {canMutate && (
-            <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
-              Edit
-            </Button>
+            <>
+              <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
+                Edit
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete pool ${pool.name}`}>
+                Delete
+              </Button>
+            </>
           )}
         </div>
         <dl className="pool__policy">
@@ -331,6 +408,10 @@ function PoolCard({ pool, keys, accountById, now, canMutate, onEdit }: { account
             })}
         </ul>
         <h3 className="section-title" style={{ marginTop: 12 }}>
+          Selection order
+        </h3>
+        <SelectionOrder pool={pool} accounts={accounts} sessions={sessions} now={now} />
+        <h3 className="section-title" style={{ marginTop: 12 }}>
           Keys
         </h3>
         <div className="row">
@@ -441,7 +522,31 @@ const formFrom = (pool: Pool): PoolForm => ({
   warmSubagents: pool.keepalive.warmSubagents ?? true,
 });
 
-export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysChanged, accounts, keys, pools, models }: { accounts: Account[]; keys: ApiKey[]; models: { label: string; value: string }[]; onClose: () => void; onKeyCreated: (c: CreatedApiKey) => void; onKeysChanged: () => void; onSaved: (created: boolean) => void; open: boolean; pool: Pool | null; pools: Pool[] }) {
+export function PoolDialog({
+  open,
+  pool,
+  onClose,
+  onSaved,
+  onKeyCreated,
+  onKeysChanged,
+  onError,
+  accounts,
+  keys,
+  pools,
+  models,
+}: {
+  accounts: Account[];
+  keys: ApiKey[];
+  models: { label: string; value: string }[];
+  onClose: () => void;
+  onError: (message: string) => void;
+  onKeyCreated: (c: CreatedApiKey) => void;
+  onKeysChanged: () => void;
+  onSaved: (created: boolean) => void;
+  open: boolean;
+  pool: Pool | null;
+  pools: Pool[];
+}) {
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
   const settings = useAsync(() => api.getSettings(), []);
@@ -486,6 +591,10 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
     () => (pool || pools.some((p) => p.id === draftPoolId) ? pools : [...pools, { bodyCaptureHours: draftCaptureHours, id: draftPoolId, name: draftName }]),
     [pool, pools, draftCaptureHours, draftPoolId, draftName],
   );
+  // A pool the router serves without these fields cannot take them back either, and on create no served pool
+  // has said yet whether it carries them, so only the mock preview offers them there.
+  const showCacheTtl = pool ? pool.cacheTtl !== null : MOCK;
+  const showWarmSubagents = pool ? pool.keepalive.warmSubagents !== null : MOCK;
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
@@ -519,6 +628,16 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
     onKeysChanged();
   };
 
+  const revokeKey = async (k: ApiKey) => {
+    try {
+      await api.revokeKey(k.id);
+      setRevoked((prev) => new Set(prev).add(k.id));
+      onKeysChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const submit = async () => {
     setBusy(true);
     const input: PoolInput = {
@@ -534,8 +653,15 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
       status: form.status,
       strategy: form.strategy,
     };
-    if (pool) await api.updatePool(pool.id, input);
-    else await api.createPool(input);
+    try {
+      if (pool) await api.updatePool(pool.id, input);
+      else await api.createPool(input);
+    } catch (e) {
+      // The dialog stays open so the edit is not lost to a rejected save.
+      setBusy(false);
+      onError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     setBusy(false);
     onSaved(pool === null);
   };
@@ -563,7 +689,7 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
       label: 'Routing',
       body: (
         <>
-          <Field label="Strategy">
+          <Field label="Strategy" hint={STRATEGY_RULE[form.strategy]}>
             <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)}>
               {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
                 <option key={v} value={v}>
@@ -627,106 +753,110 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
       label: 'Caching',
       body: (
         <>
-          <h3 className="section-title">Cache TTL</h3>
-          <div className="capture">
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Set the cache TTL for this pool</span>
-                <p className="field__hint">
-                  Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
-                  A request that carries no breakpoints is left alone.
-                </p>
-              </span>
-              <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
-            </div>
-            {form.cacheTtl.enabled && (
-              <>
-                <div className="form-row">
-                  <Field label="Main conversation">
-                    <Select value={form.cacheTtl.main} onChange={(e) => setCacheTtl('main', e.target.value as CacheTtl)}>
-                      <option value="5m">5 minutes</option>
-                      <option value="1h">1 hour</option>
-                    </Select>
-                  </Field>
-                  <Field label="Subagents">
-                    <Select value={form.cacheTtl.subagent} onChange={(e) => setCacheTtl('subagent', e.target.value as CacheTtl)}>
-                      <option value="5m">5 minutes</option>
-                      <option value="1h">1 hour</option>
-                    </Select>
-                  </Field>
+          {showCacheTtl && (
+            <>
+              <h3 className="section-title">Cache TTL</h3>
+              <div className="capture">
+                <div className="field--inline field">
+                  <span className="field__text">
+                    <span className="field__label">Set the cache TTL for this pool</span>
+                    <p className="field__hint">
+                      Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
+                      A request that carries no breakpoints is left alone.
+                    </p>
+                  </span>
+                  <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
                 </div>
-                <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <span className="field__label">Write cost</span>
-                  <CostReferenceLink />
-                </div>
-                <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
-                <Field label="In overage" hint="Applies while the upstream serving the request is in overage, where writes cost money rather than plan quota.">
-                  <Select value={form.cacheTtl.inOverage ?? ''} onChange={(e) => setCacheTtl('inOverage', (e.target.value || null) as CacheTtl | null)}>
-                    <option value="">Keep the rules above</option>
-                    <option value="5m">5 minutes</option>
-                    <option value="1h">1 hour</option>
-                  </Select>
-                </Field>
-                <div className="field">
-                  <span className="field__label">Per-model overrides</span>
-                  <p className="field__hint">A model absent here takes the pool rule above.</p>
-                  {form.cacheTtl.models.length > 0 && (
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Model</th>
-                            <th>Main conversation</th>
-                            <th>Subagents</th>
-                            <th />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {form.cacheTtl.models.map((m) => (
-                            <tr key={m.model}>
-                              <td className="mono">{m.model}</td>
-                              <td>
-                                <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`Main conversation TTL for ${m.model}`}>
-                                  <option value="5m">5 minutes</option>
-                                  <option value="1h">1 hour</option>
-                                </Select>
-                              </td>
-                              <td>
-                                <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`Subagent TTL for ${m.model}`}>
-                                  <option value="5m">5 minutes</option>
-                                  <option value="1h">1 hour</option>
-                                </Select>
-                              </td>
-                              <td>
-                                <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
-                                  Remove
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                {form.cacheTtl.enabled && (
+                  <>
+                    <div className="form-row">
+                      <Field label="Main conversation">
+                        <Select value={form.cacheTtl.main} onChange={(e) => setCacheTtl('main', e.target.value as CacheTtl)}>
+                          <option value="5m">5 minutes</option>
+                          <option value="1h">1 hour</option>
+                        </Select>
+                      </Field>
+                      <Field label="Subagents">
+                        <Select value={form.cacheTtl.subagent} onChange={(e) => setCacheTtl('subagent', e.target.value as CacheTtl)}>
+                          <option value="5m">5 minutes</option>
+                          <option value="1h">1 hour</option>
+                        </Select>
+                      </Field>
                     </div>
-                  )}
-                  <div className="row">
-                    <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label="Model to add a cache TTL override for" style={{ maxWidth: 260 }}>
-                      <option value="">Choose a model…</option>
-                      {models
-                        .filter((m) => !form.cacheTtl.models.some((x) => x.model === m.value))
-                        .map((m) => (
-                          <option key={m.value} value={m.value}>
-                            {m.label}
-                          </option>
-                        ))}
-                    </Select>
-                    <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
-                      Add
-                    </Button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+                    <div className="row" style={{ justifyContent: 'space-between' }}>
+                      <span className="field__label">Write cost</span>
+                      <CostReferenceLink />
+                    </div>
+                    <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
+                    <Field label="In overage" hint="Applies while the upstream serving the request is in overage, where writes cost money rather than plan quota.">
+                      <Select value={form.cacheTtl.inOverage ?? ''} onChange={(e) => setCacheTtl('inOverage', (e.target.value || null) as CacheTtl | null)}>
+                        <option value="">Keep the rules above</option>
+                        <option value="5m">5 minutes</option>
+                        <option value="1h">1 hour</option>
+                      </Select>
+                    </Field>
+                    <div className="field">
+                      <span className="field__label">Per-model overrides</span>
+                      <p className="field__hint">A model absent here takes the pool rule above.</p>
+                      {form.cacheTtl.models.length > 0 && (
+                        <div className="table-wrap">
+                          <table className="table">
+                            <thead>
+                              <tr>
+                                <th>Model</th>
+                                <th>Main conversation</th>
+                                <th>Subagents</th>
+                                <th />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {form.cacheTtl.models.map((m) => (
+                                <tr key={m.model}>
+                                  <td className="mono">{m.model}</td>
+                                  <td>
+                                    <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`Main conversation TTL for ${m.model}`}>
+                                      <option value="5m">5 minutes</option>
+                                      <option value="1h">1 hour</option>
+                                    </Select>
+                                  </td>
+                                  <td>
+                                    <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`Subagent TTL for ${m.model}`}>
+                                      <option value="5m">5 minutes</option>
+                                      <option value="1h">1 hour</option>
+                                    </Select>
+                                  </td>
+                                  <td>
+                                    <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
+                                      Remove
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      <div className="row">
+                        <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label="Model to add a cache TTL override for" style={{ maxWidth: 260 }}>
+                          <option value="">Choose a model…</option>
+                          {models
+                            .filter((m) => !form.cacheTtl.models.some((x) => x.model === m.value))
+                            .map((m) => (
+                              <option key={m.value} value={m.value}>
+                                {m.label}
+                              </option>
+                            ))}
+                        </Select>
+                        <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
+                          Add
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
           <h3 className="section-title" style={{ marginTop: 12 }}>
             Keep prompt caches warm
           </h3>
@@ -748,15 +878,17 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
           </div>
           {!keepaliveBlocked && form.keepalive && (
             <>
-              <div className="capture">
-                <div className="field--inline field">
-                  <span className="field__text">
-                    <span className="field__label">Also warm subagent caches</span>
-                    <p className="field__hint">Off probes the main conversation only; subagent recipes end with the subagent either way.</p>
-                  </span>
-                  <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" />
+              {showWarmSubagents && (
+                <div className="capture">
+                  <div className="field--inline field">
+                    <span className="field__text">
+                      <span className="field__label">Also warm subagent caches</span>
+                      <p className="field__hint">Off probes the main conversation only; subagent recipes end with the subagent either way.</p>
+                    </span>
+                    <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" />
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="capture">
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <label className="row">
@@ -984,7 +1116,7 @@ export function PoolDialog({ open, pool, onClose, onSaved, onKeyCreated, onKeysC
         danger
         body={revoking ? `Requests with ${revoking.name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` : ''}
         onConfirm={() => {
-          if (revoking) setRevoked((prev) => new Set(prev).add(revoking.id));
+          if (revoking) void revokeKey(revoking);
         }}
       />
       <Dialog

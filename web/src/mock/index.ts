@@ -239,6 +239,8 @@ export class MockApi implements Api {
   }
 
   deletePool(id: string) {
+    // A key reaches only its own pool's members, so a pool cannot leave while keys still point at it.
+    if (this.keys.some((k) => k.poolId === id)) return Promise.reject(new ApiError(409, 'pool still has keys', null));
     this.pools = this.pools.filter((p) => p.id !== id);
     return latency(undefined, 200);
   }

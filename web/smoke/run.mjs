@@ -368,6 +368,30 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
 }
 {
+  const order = m.container.querySelector('.pool .selection-order');
+  const tiers = [...(order?.querySelectorAll('.selection-order__tier') ?? [])].map((t) => t.children[0]?.textContent?.trim());
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['P0', 'P1']), missing: tiers });
+  const next = [...(order?.querySelectorAll('.badge--accent') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/pools the next upstream is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
+  const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
+  results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
+  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream']);
+}
+{
+  const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
+  del?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/pools Delete confirms and names the key rule', confirm?.textContent ?? '', ['Delete pool', 'keys must be moved or revoked first']);
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
+  await m.settle(500);
+  results.push({
+    name: '/pools a pool with keys refuses to delete and says so',
+    ok: m.text().includes('Move or revoke its keys first') && [...m.container.querySelectorAll('.pool .card__title')].some((h) => h.textContent?.trim() === 'all'),
+    missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'],
+  });
+}
+{
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
   edit?.click();
   await m.settle(300);
@@ -531,7 +555,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
   const confirmDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/pools revoke asks first', confirmDlg?.textContent ?? '', ['Revoke desktop', 'rejected immediately']);
   [...(confirmDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Revoke')?.click();
-  await m.settle(250);
+  // The row waits for the API to accept the revocation, so this covers the call and the reload behind it.
+  await m.settle(600);
   const revokedBadge = keyRows()[rowNames.indexOf('desktop')]?.querySelector('.badge')?.textContent?.trim();
   results.push({ name: '/pools revoked key row shows a revoked badge', ok: revokedBadge === 'revoked', missing: [revokedBadge] });
 
@@ -547,6 +572,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: !keyRows().some((li) => li.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((li) => li.children[0]?.textContent?.trim()) });
+
+  // Cache TTL is served per pool, so the block only stands where the pool carries rules.
+  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Main conversation', 'Subagents', 'In overage', 'Per-model overrides', 'Also warm subagent caches']);
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
+  const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex');
+  edit?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  results.push({ name: '/pools a pool without cache TTL rules hides the block', ok: !(dlg?.textContent ?? '').includes('Cache TTL'), missing: [(dlg?.textContent ?? '').includes('Cache TTL') ? 'still drawn' : ''] });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
 }
 m.unmount();
 
@@ -627,6 +666,31 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(100);
     expect('/keys moving pool shows note', editDlg?.textContent ?? '', ['Moving this key ends its current session pins.']);
   }
+  [...(editDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
+  const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
+  const laptop = rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
+  laptop?.querySelector('.menu__trigger')?.click();
+  await m.settle(120);
+  [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Rotate')?.click();
+  await m.settle(250);
+  [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Rotate')?.click();
+  await m.settle(600);
+  const secret = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/keys Rotate shows the new secret once', secret?.textContent ?? '', ['API key rotated', 'phoebis-', 'Copy']);
+  [...(secret?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Done')?.click();
+  await m.settle(200);
+  // The key this run created, so the fixture keys the later pages read about stay where they are.
+  const created = rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'smoke');
+  created?.querySelector('.menu__trigger')?.click();
+  await m.settle(120);
+  [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Delete')?.click();
+  await m.settle(250);
+  [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
+  await m.settle(600);
+  results.push({ name: '/keys Delete removes the row through the API', ok: !rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'smoke') && m.text().includes('Key deleted'), missing: [] });
 }
 m.unmount();
 

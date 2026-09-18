@@ -1,4 +1,4 @@
-import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
+import { KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
 import type { ApiKey, Pool, TrafficBucket } from '@/api/types';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
@@ -24,7 +24,7 @@ export const POOLS: Pool[] = [
   {
     id: 'all',
     name: 'all',
-    status: 'active',
+    status: 'degraded',
     strategy: 'priority_random',
     overagePolicy: 'prefer_plan',
     migrateAboveUtilization: null,
@@ -41,8 +41,8 @@ export const POOLS: Pool[] = [
     defaultAllowedModels: null,
     members: [
       { accountId: 'business', eligible: 'eligible', priority: 0 },
-      { accountId: 'mail', eligible: 'eligible', priority: 0 },
-      { accountId: 'personal', eligible: 'eligible', priority: 0 },
+      { accountId: 'mail', eligible: 'cooldown', priority: 0 },
+      { accountId: 'personal', eligible: 'unavailable', priority: 0 },
       { accountId: 'console', eligible: 'eligible', priority: 1 },
     ],
     traffic24h: ALL_TRAFFIC,
@@ -58,8 +58,8 @@ export const POOLS: Pool[] = [
     overagePolicy: 'allow',
     migrateAboveUtilization: null,
     affinityTtlSeconds: 0,
-    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null, warmSubagents: false },
-    cacheTtl: { ...CACHE_TTL_DEFAULTS, enabled: true, inOverage: null },
+    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null, warmSubagents: null },
+    cacheTtl: null,
     bodyCaptureHours: 0,
     defaultAllowedModels: ['claude-haiku-4-5-20251001'],
     traffic24h: CODEX_TRAFFIC,

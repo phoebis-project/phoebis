@@ -1208,6 +1208,24 @@
   color: var(--ink-3);
 }
 
+.selection-order {
+  display: grid;
+  gap: 6px;
+}
+
+/* The same 30px lead column as a member row, so a tier's badges line up under the member above it. */
+.selection-order__tier {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.selection-order__rule {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
 .member-picker {
   display: flex;
   flex-direction: column;
