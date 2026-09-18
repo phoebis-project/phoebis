@@ -51,6 +51,10 @@ struct PoolInput {
     body_capture_hours: Option<u32>,
     #[serde(default)]
     members: Option<Vec<MemberInput>>,
+    #[serde(default)]
+    prefer_subscription: Option<bool>,
+    #[serde(default)]
+    api_key_sub_strategy: Option<String>,
 }
 
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
@@ -102,13 +106,32 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             "earliest_refresh" => Strategy::EarliestRefresh,
             "least_utilized" => Strategy::LeastUtilized,
             "priority_random" => Strategy::PriorityRandom,
+            "round_robin" => Strategy::RoundRobin,
             _ => {
                 return Err(failure(
                     StatusCode::BAD_REQUEST,
-                    "strategy must be earliest_refresh, least_utilized, or priority_random",
+                    "strategy must be earliest_refresh, least_utilized, priority_random, or round_robin",
                 ))
             }
         };
+    }
+    if let Some(sub) = &input.api_key_sub_strategy {
+        row.api_key_sub_strategy = match sub.as_str() {
+            "priority_random" => SubStrategy::PriorityRandom,
+            "round_robin" => SubStrategy::RoundRobin,
+            _ => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "api_key_sub_strategy must be priority_random or round_robin",
+                ))
+            }
+        };
+    }
+    // The flag is the operator's answer and nothing else writes it: a sample-driven strategy orders by kind
+    // whatever it holds, and the pool answers both values so a strategy the operator tries out and takes back
+    // leaves the preference where they left it.
+    if let Some(prefer) = input.prefer_subscription {
+        row.prefer_subscription = prefer;
     }
     if let Some(ttl) = input.affinity_ttl_seconds {
         if ttl != 0 && ttl < 60 {
@@ -202,11 +225,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     let Ok(input) = serde_json::from_slice::<PoolInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
-    let (Some(id), Some(_), Some(_)) = (&input.id, &input.label, &input.strategy) else {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "id, label, and strategy are required",
-        );
+    let (Some(id), Some(_)) = (&input.id, &input.label) else {
+        return failure(StatusCode::BAD_REQUEST, "id and label are required");
     };
     if !valid_slug(id) {
         return failure(
@@ -222,7 +242,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         id: id.clone(),
         label: String::new(),
         enabled: true,
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::LeastUtilized,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
@@ -431,7 +451,9 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     };
     Ok(json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
-        "strategy": row.strategy.as_str(), "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
+        "strategy": row.strategy.as_str(), "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
+        "prefer_subscription": row.prefer_subscription, "prefer_subscription_effective": row.kind_ordered(),
+        "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "default_allowed_models": row.default_allowed_models,
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),

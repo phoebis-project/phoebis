@@ -35,12 +35,12 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"round_robin"}"#,
+            r#"{"id":"rr","label":"x","strategy":"round_robin"}"#,
             Some(&cookie)
         )
         .await
         .status(),
-        400
+        201
     );
     assert_eq!(
         post(
@@ -692,5 +692,121 @@ async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage()
         json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
         "active",
         "the same overage is not an obstacle once the policy allows it"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_through_a_strategy_change(
+) {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"dflt","label":"Default"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let body = json(created).await;
+    let flags = |v: &serde_json::Value| {
+        (
+            v["prefer_subscription"].as_bool(),
+            v["prefer_subscription_effective"].as_bool(),
+        )
+    };
+    assert_eq!(
+        (
+            body["strategy"].as_str(),
+            body["api_key_sub_strategy"].as_str(),
+            flags(&body)
+        ),
+        (
+            Some("least_utilized"),
+            Some("priority_random"),
+            (Some(false), Some(true))
+        ),
+        "nobody asked for the kind order; the sample-driven default runs under it anyway"
+    );
+    let on = json(
+        patch(
+            &app,
+            "/admin/pools/dflt",
+            r#"{"prefer_subscription":true}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(flags(&on), (Some(true), Some(true)));
+    let edited = json(
+        patch(
+            &app,
+            "/admin/pools/dflt",
+            r#"{"strategy":"round_robin","api_key_sub_strategy":"round_robin"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            edited["strategy"].as_str(),
+            edited["api_key_sub_strategy"].as_str(),
+            flags(&edited)
+        ),
+        (
+            Some("round_robin"),
+            Some("round_robin"),
+            (Some(true), Some(true))
+        ),
+        "the strategy patch leaves the operator's own answer standing, and the sub-strategy is stored whatever the strategy"
+    );
+    let off = json(
+        patch(
+            &app,
+            "/admin/pools/dflt",
+            r#"{"prefer_subscription":false}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        flags(&off),
+        (Some(false), Some(false)),
+        "under round_robin the flag is the operator's to clear"
+    );
+    let back = json(
+        patch(
+            &app,
+            "/admin/pools/dflt",
+            r#"{"strategy":"least_utilized"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        flags(&back),
+        (Some(false), Some(true)),
+        "and back: the stored false survives, the effective order is forced"
+    );
+    assert_eq!(
+        patch(
+            &app,
+            "/admin/pools/dflt",
+            r#"{"api_key_sub_strategy":"earliest_refresh"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(
+        post(&app, "/admin/pools", r#"{"id":"nolabel"}"#, Some(&cookie))
+            .await
+            .status(),
+        400
     );
 }
