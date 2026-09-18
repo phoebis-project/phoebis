@@ -92,15 +92,16 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy): AnalyticsG
   return [...groups.values()].sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }
 
-export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string): AnalyticsPoint[] {
+export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all'): AnalyticsPoint[] {
   const end = Date.parse(to);
   const points: AnalyticsPoint[] = [];
-  for (let at = Math.floor(Date.parse(from) / bucketMs) * bucketMs; at <= end; at += bucketMs) {
+  // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too.
+  for (let at = Math.floor(Date.parse(from) / bucketMs) * bucketMs; at < end; at += bucketMs) {
     const inBucket = rows.filter((r) => {
       const t = Date.parse(r.at);
       return t >= at && t < at + bucketMs;
     });
-    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, 'all') });
+    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by) });
   }
   return points;
 }

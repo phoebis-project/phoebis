@@ -20,17 +20,19 @@ import { scrollToSection, useScrollSpy } from '@/lib/scroll';
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
+/** The four dimensions both the analytics query and the request log filter on. */
+type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 /** No route groups on a session, so it filters the page from the side rather than joining the group-by. */
-type Dim = 'accountId' | 'keyId' | 'model' | 'poolId' | 'sessionId';
+type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', key: 'Key', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'Client' };
-const DIM_LABEL: Record<Dim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool', sessionId: 'Session' };
+const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the upstream.
-const DIMS: Dim[] = ['keyId', 'poolId', 'accountId', 'model', 'sessionId'];
+const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
-const DIM_GROUP: Record<Exclude<Dim, 'sessionId'>, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
+const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
 /** The log has no session filter, so a session view pages through it; both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
@@ -97,17 +99,21 @@ export function AnalyticsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionParam = searchParams.get('session');
   const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
+  const [sessionText, setSessionText] = useState(sessionParam ?? '');
   const ink = useChartInk();
 
   // Arriving from a session row carries the session in the query; dropping the
-  // chip clears the parameter too so this does not put the filter straight back.
+  // filter clears the parameter too so this does not put it straight back.
   useEffect(() => {
     if (sessionParam === null) return;
     setFilters((f) => (f.sessionId.includes(sessionParam) ? f : { ...f, sessionId: [sessionParam] }));
+    setSessionText(sessionParam);
   }, [sessionParam]);
-  const dropSession = (id: string) => {
-    setFilters((f) => ({ ...f, sessionId: f.sessionId.filter((v) => v !== id) }));
-    if (sessionParam !== id) return;
+  /** The one writer for the session filter, so the field, the chip, and the query parameter cannot disagree. */
+  const selectSession = (id: string) => {
+    setFilters((f) => ((f.sessionId[0] ?? '') === id ? f : { ...f, sessionId: id ? [id] : [] }));
+    setSessionText(id);
+    if (sessionParam === null || sessionParam === id) return;
     const next = new URLSearchParams(searchParams);
     next.delete('session');
     setSearchParams(next, { replace: true });
@@ -142,28 +148,26 @@ export function AnalyticsPage() {
         : loadSessionRequests(
             (cursor) =>
               api
-                .listRequests({ cursor, from: fromIso, includeProbes, limit: SESSION_PAGE_SIZE, search: sessionId, to: toIso })
+                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso })
                 // The search matches an id across several fields, so the page keeps only the exact session.
                 .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId) })),
             SESSION_PAGE_LIMIT,
           ),
-    [fromIso, includeProbes, sessionId, toIso],
+    [filters, fromIso, includeProbes, sessionId, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model);
   const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId);
-  const options = useMemo<Record<Dim, Option[]>>(
-    // A session reaches the page from the sessions list as a chip: the breakdown route groups on no session,
-    // so there is no list of them to offer here.
-    () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data), poolId: optionsOf(poolKeys.data), sessionId: [] }),
+  const options = useMemo<Record<QueryDim, Option[]>>(
+    () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data), poolId: optionsOf(poolKeys.data) }),
     [accountKeys.data, keyKeys.data, modelKeys.data, poolKeys.data],
   );
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
   const rows = log.data?.requests ?? [];
-  const points = useMemo(() => (sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso)), [sessionId, series.data, rows, rangeBucketMs, fromIso, toIso]);
+  const points = useMemo(() => (sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy)), [sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy]);
   const buckets = useMemo<Bucket[]>(() => points.map((p) => ({ at: Date.parse(p.at), ...sumGroups(p.groups) })), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
@@ -220,11 +224,26 @@ export function AnalyticsPage() {
             ))}
           </Select>
         </label>
-        {/* A chosen session already shows as a removable chip further along this
-            bar, so its dropdown would be a second control over one filter. */}
-        {DIMS.filter((dim) => dim !== 'sessionId' || filters.sessionId.length === 0).map((dim) => (
+        {DIMS.map((dim) => (
           <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => setFilters({ ...filters, [dim]: v })} mono />
         ))}
+        {/* No route enumerates sessions, so this one is typed or pasted rather than picked; the chip beside it
+            is how a session arriving from the sessions list shows itself. */}
+        <label className="row">
+          <span className="muted">Session</span>
+          <Input
+            type="search"
+            placeholder="Session id"
+            aria-label="Session id"
+            className="filters__session"
+            value={sessionText}
+            onChange={(e) => setSessionText(e.target.value)}
+            onBlur={() => selectSession(sessionText.trim())}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') selectSession(sessionText.trim());
+            }}
+          />
+        </label>
         <label className="row">
           <Toggle checked={includeProbes} onChange={setIncludeProbes} label="Include probes" />
           <span className="secondary">Include cache probes</span>
@@ -234,7 +253,7 @@ export function AnalyticsPage() {
             {filters.sessionId.map((id) => (
               <span key={id} className="chip chip--removable mono" title={id}>
                 Session {shortId(id, 13)}
-                <button type="button" aria-label={`Remove session filter ${id}`} onClick={() => dropSession(id)}>
+                <button type="button" aria-label={`Remove session filter ${id}`} onClick={() => selectSession('')}>
                   <IconX size={12} />
                 </button>
               </span>

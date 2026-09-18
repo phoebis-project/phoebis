@@ -911,6 +911,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     // largest bar moves with the hour the runner starts at; a week is where the mock's split is the shape it
     // claims to be.
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
+    results.push({ name: '/analytics the week the wasted-probe checks read is reachable', ok: range('7d') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
     range('7d')?.click();
     await m.settle(700);
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
@@ -925,6 +926,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     results.push({ name: '/analytics wasted probes reports a count, a cost and a share', ok: JSON.stringify(tiles) === JSON.stringify(['Wasted probes', 'Wasted cost', 'Share of probe cost']), missing: tiles });
     const share = [...(weekCard?.querySelectorAll('.stat--compact .stat__value') ?? [])][2]?.textContent?.trim() ?? '';
     results.push({ name: '/analytics wasted share reads as a percentage of probe cost', ok: /^\d+\.\d%$/.test(share), missing: [share] });
+    results.push({ name: '/analytics the day the later checks read is reachable', ok: range('24h') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
     range('24h')?.click();
     await m.settle(700);
   }
@@ -959,6 +961,21 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   cost?.click();
   await m.settle(150);
   results.push({ name: '/analytics clicking a bar entry moves the highlight', ok: cost?.classList.contains('is-active') === true, missing: [...m.container.querySelectorAll('.section-bar__link.is-active')].map((b) => b.textContent) });
+  {
+    const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const commit = async (value) => {
+      const input = field();
+      setter.call(input, value);
+      input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      await m.settle(900);
+    };
+    await commit(requests.find((r) => r.sessionId !== null).sessionId);
+    const entered = m.text().includes('From the request log');
+    await commit('');
+    results.push({ name: '/analytics the session field enters and leaves the session view', ok: entered && !m.text().includes('From the request log'), missing: [`entered ${entered}`, `left ${!m.text().includes('From the request log')}`] });
+  }
 }
 m.unmount();
 
@@ -1244,6 +1261,37 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   await m.settle(900);
   results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
+  {
+    // The request log takes the same four filters the rollup query does, so a model the session never used
+    // empties the page instead of leaving every number where it was.
+    const requestsInMeta = () => Number(/^([\d,]+) requests/.exec(m.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
+    const groupSelect = m.container.querySelector('.filters select');
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const group = async (value) => {
+      setSelect.call(groupSelect, value);
+      groupSelect?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(600);
+    };
+    await group('model');
+    const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by model'));
+    const used = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
+    const before = requestsInMeta();
+    const modelFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Model'));
+    modelFilter?.querySelector('.mselect__trigger')?.click();
+    await m.settle(150);
+    const unused = [...(modelFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => !used.includes(o.textContent?.trim()));
+    unused?.click();
+    await m.settle(900);
+    results.push({
+      name: '/analytics a session view filters the request log by the other dimensions',
+      ok: before > 0 && used.length > 0 && unused !== undefined && requestsInMeta() === 0,
+      missing: [`before ${before}`, `after ${requestsInMeta()}`, `used ${used.join(',')}`, `picked ${unused?.textContent?.trim() ?? 'none'}`],
+    });
+    modelFilter?.querySelector('.mselect__clear')?.click();
+    await m.settle(600);
+    modelFilter?.querySelector('.mselect__trigger')?.click();
+    await group('key');
+  }
   {
     const chip = m.container.querySelector('.chip--removable');
     results.push({ name: '/analytics session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });

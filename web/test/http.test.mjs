@@ -49,6 +49,27 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
 
+test('the analytics reads encode the range, the dimension, and every id list', async () => {
+  const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
+  const api = new HttpApi();
+  const q = { accountIds: ['business', 'direct'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z' };
+  assert.deepEqual(await api.getAnalyticsSeries(q), []);
+  const series = new URL(calls[0].url, 'http://x');
+  assert.equal(series.pathname, '/admin/analytics/series');
+  assert.equal(series.searchParams.get('range'), '0,86400000');
+  assert.equal(series.searchParams.get('group_by'), 'key');
+  assert.equal(series.searchParams.get('include_probes'), 'true');
+  assert.equal(series.searchParams.get('accounts'), 'business,direct');
+  assert.equal(series.searchParams.get('keys'), 'desktop');
+  assert.equal(series.searchParams.get('models'), 'claude-sonnet-5');
+  assert.equal(series.searchParams.get('pools'), 'all');
+  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [] }), []);
+  const breakdown = new URL(calls[1].url, 'http://x');
+  assert.equal(breakdown.pathname, '/admin/analytics/breakdown');
+  assert.equal(breakdown.searchParams.get('group_by'), 'all');
+  assert.deepEqual([...breakdown.searchParams.keys()], ['group_by', 'range'], 'an empty list and an unset flag are left off the query');
+});
+
 test('a read the router does not serve refuses with not_wired instead of reaching the network', async () => {
   const calls = stub(() => answer(200, {}));
   const api = new HttpApi();

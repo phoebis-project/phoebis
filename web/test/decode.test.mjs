@@ -182,6 +182,15 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
 });
 
+test('a folded bucket carries one group per key the page groups on', () => {
+  const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
+  const rows = [captured, { ...failed, keyId: 'laptop' }];
+  const [bucket] = d.foldRequests(rows, 3_600_000, failed.at, captured.at, 'key');
+  assert.deepEqual(bucket.groups.map((g) => g.key).sort(), ['desktop', 'laptop']);
+  assert.deepEqual(d.foldRequests(rows, 3_600_000, failed.at, captured.at)[0].groups.map((g) => g.key), ['all'], 'the ungrouped default is unchanged');
+  assert.equal(d.foldRequests(rows, 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T01:00:00.000Z').length, 1, 'a range ending on a bucket start adds no empty trailing bucket');
+});
+
 test('a session view folds every page the cursor names', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const pages = [{ nextCursor: 'c1', requests: page.requests.slice(0, 2) }, { nextCursor: null, requests: page.requests.slice(2) }];
