@@ -96,6 +96,19 @@ function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
   return true;
 }
 
+/**
+ * The route encodes a cursor as `<received_at>:<id>` and resumes strictly past that row in
+ * `received_at DESC, id DESC` order; the id breaks the tie so rows sharing a millisecond are neither
+ * repeated nor skipped.
+ */
+function isAfterCursor(r: RequestLog, cursor: string): boolean {
+  const sep = cursor.indexOf(':');
+  const at = Number(cursor.slice(0, sep));
+  const id = cursor.slice(sep + 1);
+  const rowAt = Date.parse(r.at);
+  return rowAt < at || (rowAt === at && r.id < id);
+}
+
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
@@ -367,17 +380,14 @@ export class MockApi implements Api {
     return latency(QUOTA_SNAPSHOTS);
   }
 
-  listRequestPage(query: RequestQuery = {}): Promise<RequestPage> {
-    const matched = REQUESTS.filter((r) => matchesQuery(r, query));
-    const start = query.cursor ? matched.findIndex((r) => r.id === query.cursor) + 1 : 0;
-    const limit = query.limit ?? matched.length;
-    const page = matched.slice(start, start + limit);
+  listRequests(query: RequestQuery = {}): Promise<RequestPage> {
+    const matched = REQUESTS.filter((r) => matchesQuery(r, query)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
+    const limit = query.limit ?? 50;
+    const page = after.slice(0, limit);
+    const last = page[page.length - 1];
     // A cursor only rides along while rows are left, which is how the route signals the end of the list.
-    return latency({ nextCursor: start + limit < matched.length ? (page[page.length - 1]?.id ?? null) : null, requests: page });
-  }
-
-  listRequests(query: RequestQuery = {}) {
-    return latency(REQUESTS.filter((r) => matchesQuery(r, query)));
+    return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
   }
 
   listRollups(from: string, to: string) {

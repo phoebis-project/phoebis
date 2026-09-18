@@ -15,7 +15,7 @@ import { STATUS_LABEL, STATUS_TONE, isSubscription, remainingOf, windowOf } from
 export function DashboardPage() {
   const overview = useAsync(() => api.getOverview(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
-  const requests = useAsync(() => api.listRequestPage({ limit: 10 }), []);
+  const requests = useAsync(() => api.listRequests({ limit: 10 }), []);
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
   const ink = useChartInk();

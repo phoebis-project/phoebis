@@ -5,7 +5,7 @@ import type { Attempt, CapturedBodies, RequestKind, RequestLog, RequestQuery, Us
 import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconChevronsRight, IconColumns, IconX } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
@@ -71,21 +71,37 @@ export function RequestsPage() {
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id)));
   const [colsOpen, setColsOpen] = useState(false);
   const [pageSize, setPageSize] = useState(25);
-  const [page, setPage] = useState(0);
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [stack, setStack] = useState<(string | undefined)[]>([]);
 
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
-    return { search, keyIds, poolIds, accountIds, models, statuses: statuses.map(Number), kind: kind || null, from: new Date(now - r.ms).toISOString() };
+    // Probes are off the log unless they are what the filter asks for.
+    return { accountIds, cursor, from: new Date(now - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(now).toISOString() };
     // now changes every tick; refetching each tick would flash the list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, keyIds, poolIds, accountIds, models, statuses, kind, range]);
+  }, [search, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
-  useEffect(() => setPage(0), [query, pageSize]);
+  const resetPaging = () => {
+    setCursor(undefined);
+    setStack([]);
+  };
+  useEffect(resetPaging, [search, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
-  const rows = requests.data ?? [];
-  const pageRows = rows.slice(page * pageSize, (page + 1) * pageSize);
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const rows = requests.data?.requests ?? [];
+  const nextCursor = requests.data?.nextCursor ?? null;
+  const goNext = () => {
+    if (!nextCursor) return;
+    setStack((s) => [...s, cursor]);
+    setCursor(nextCursor);
+  };
+  const goPrevious = () =>
+    setStack((s) => {
+      const copy = [...s];
+      setCursor(copy.pop());
+      return copy;
+    });
   const active = search || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');
@@ -192,7 +208,7 @@ export function RequestsPage() {
                         </td>
                       </tr>
                     ))
-                  : pageRows.map((r) => (
+                  : rows.map((r) => (
                       <tr key={r.id} className={r.id === requestId ? 'is-selected' : ''} onClick={() => navigate(`/requests/${r.id}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && navigate(`/requests/${r.id}`)}>
                         {visible.has('time') && (
                           <td className="num" title={fmtAbsolute(r.at)}>
@@ -200,9 +216,9 @@ export function RequestsPage() {
                             <span className="sub mono">{shortId(r.id, 12)}</span>
                           </td>
                         )}
-                        {visible.has('key') && <td className="mono">{r.keyId}</td>}
-                        {visible.has('pool') && <td className="mono">{r.poolId}</td>}
-                        {visible.has('account') && <td>{r.accountId}</td>}
+                        {visible.has('key') && <td className="mono">{r.keyId ?? '-'}</td>}
+                        {visible.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
+                        {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && <td className="mono">{r.model}</td>}
                         {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
                         {visible.has('transport') && (
@@ -257,20 +273,18 @@ export function RequestsPage() {
               </Select>
             </label>
             <span className="muted num">
-              {rows.length === 0 ? '0' : `${page * pageSize + 1} to ${Math.min(rows.length, (page + 1) * pageSize)}`} of {fmtInt(rows.length)}
+              {rows.length === 0 ? 'No rows' : `${fmtInt(rows.length)} shown`}
+              {nextCursor ? ', more available' : ''}
             </span>
             <div className="pager__nav">
-              <button type="button" onClick={() => setPage(0)} disabled={page === 0} aria-label="First page">
+              <button type="button" onClick={resetPaging} disabled={stack.length === 0} aria-label="First page">
                 <IconChevronsLeft size={15} />
               </button>
-              <button type="button" onClick={() => setPage((p) => p - 1)} disabled={page === 0} aria-label="Previous page">
+              <button type="button" onClick={goPrevious} disabled={stack.length === 0} aria-label="Previous page">
                 <IconChevronLeft size={15} />
               </button>
-              <button type="button" onClick={() => setPage((p) => p + 1)} disabled={page >= pageCount - 1} aria-label="Next page">
+              <button type="button" onClick={goNext} disabled={nextCursor === null} aria-label="Next page">
                 <IconChevronRight size={15} />
-              </button>
-              <button type="button" onClick={() => setPage(pageCount - 1)} disabled={page >= pageCount - 1} aria-label="Last page">
-                <IconChevronsRight size={15} />
               </button>
             </div>
           </footer>
@@ -320,11 +334,11 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
             <h3 className="section-title">Summary</h3>
             <KeyValue
               rows={[
-                { label: 'Session', value: r.sessionId, mono: true },
-                { label: 'Agent', value: r.agentId, mono: true },
-                { label: 'Key', value: r.keyId, mono: true },
-                { label: 'Pool', value: r.poolId, mono: true },
-                { label: 'Upstream', value: <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
+                { label: 'Session', value: r.sessionId ?? '-', mono: true },
+                { label: 'Agent', value: r.agentId ?? '-', mono: true },
+                { label: 'Key', value: r.keyId ?? '-', mono: true },
+                { label: 'Pool', value: r.poolId ?? '-', mono: true },
+                { label: 'Upstream', value: r.accountId === null ? '-' : <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
                 { label: 'Model', value: r.model, mono: true },
                 { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
                 { label: 'Status', value: <StatusBadge status={r.status} /> },

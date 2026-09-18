@@ -121,6 +121,15 @@ m = await mount('/observe');
   firstRow?.click();
   await m.settle(300);
   expect('/observe detail pane', m.text(), ['Phases', 'Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished', 'Attempts', 'Usage', 'Cache write, 5m', 'Cache write, 1h']);
+  // A finished 200 inference is the shape the feed carries output for; an in-flight row may not have reached its first content token yet.
+  const previewRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[6]?.textContent === 'inference' && tr.children[8]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
+  previewRow?.click();
+  await m.settle(300);
+  results.push({ name: '/observe an admin sees the preview of a captured request', ok: m.container.querySelector('.observe__detail .preview') !== null, missing: [previewRow ? 'no preview' : 'no finished laptop inference row'] });
+  const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
+  plainRow?.click();
+  await m.settle(300);
+  results.push({ name: '/observe a request the feed sent no output for says so', ok: m.text().includes('No captured output for this request'), missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
   const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
   streamsBtn?.click();
   await m.settle(300);
@@ -720,7 +729,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 m.unmount();
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude-fable-5-1', 'desktop', 'laptop', 'of ']);
+expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
 {
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
@@ -734,6 +743,26 @@ expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude
   results.push({ name: '/requests trail badges name account and status', ok: trailText.every((x) => /\w+ \d{3}/.test(x)), missing: trailText.slice(0, 3) });
   const tip = multi[0]?.getAttribute('title') ?? '';
   results.push({ name: '/requests trail tooltip lists outcome and cooldown per attempt', ok: /1\..*(failed over|rate limited|succeeded)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
+}
+{
+  const rowsSelect = [...m.container.querySelectorAll('.pager select')].pop();
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue.call(rowsSelect, '10');
+  rowsSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(500);
+  const firstPage = [...m.container.querySelectorAll('tbody tr')].map((r) => r.querySelector('.sub.mono')?.textContent);
+  results.push({ name: '/requests the limit bounds the page', ok: firstPage.length === 10, missing: [String(firstPage.length)] });
+  const next = m.container.querySelector('button[aria-label="Next page"]');
+  results.push({ name: '/requests Next is enabled while a cursor exists', ok: next?.disabled === false, missing: [String(next?.disabled)] });
+  next?.click();
+  await m.settle(500);
+  const secondPage = [...m.container.querySelectorAll('tbody tr')].map((r) => r.querySelector('.sub.mono')?.textContent);
+  results.push({ name: '/requests Next loads the page after the cursor', ok: secondPage.length === 10 && secondPage[0] !== firstPage[0] && !firstPage.includes(secondPage[0]), missing: [String(secondPage[0])] });
+  m.container.querySelector('button[aria-label="Previous page"]')?.click();
+  await m.settle(500);
+  const back = [...m.container.querySelectorAll('tbody tr')].map((r) => r.querySelector('.sub.mono')?.textContent);
+  results.push({ name: '/requests Previous returns to the earlier page', ok: back[0] === firstPage[0], missing: [String(back[0])] });
+  results.push({ name: '/requests the pager says more rows are available', ok: m.text().includes('more available'), missing: [] });
 }
 {
   const trail429 = requests.filter((r) => r.attempts.length > 1 && r.attempts[0].upstreamStatus === 429 && r.attempts[r.attempts.length - 1].upstreamStatus === 200);

@@ -123,9 +123,7 @@ export interface Api {
   listKeys(): Promise<ApiKey[]>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
-  listRequestPage(query?: RequestQuery): Promise<RequestPage>;
-  /** Kept beside the paged read until the request and dashboard views take a cursor. */
-  listRequests(query?: RequestQuery): Promise<RequestLog[]>;
+  listRequests(query?: RequestQuery): Promise<RequestPage>;
   /** Kept until the analytics page reads the series and breakdown routes instead of folding rollup rows itself. */
   listRollups(from: string, to: string): Promise<HourlyRollup[]>;
   listSessions(): Promise<Session[]>;

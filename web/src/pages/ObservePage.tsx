@@ -11,6 +11,7 @@ import { IconExpand, IconPause, IconPlay, IconWarning, IconX } from '@/component
 import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
+import { useNow } from '@/lib/hooks';
 
 const RING_SPAN_S = 30 * 60;
 const MINUTE_MS = 60_000;
@@ -124,7 +125,10 @@ export function ObservePage() {
     if (!next) setView(storeRef.current);
   };
 
-  const connected = view.tick !== null;
+  // The feed ticks once a second, so a second-resolution clock is what notices it stop.
+  const wallClock = useNow(1_000);
+  // A pause freezes the view on purpose, so only a live view falling quiet means the socket dropped.
+  const connected = view.tick === null ? false : paused !== null || wallClock - Date.parse(view.tick.at) < 5_000;
   const nowMs = view.tick ? Date.parse(view.tick.at) : Date.now();
   const historical = span.endS < RING_SPAN_S;
   const windowStart = (historical ? anchor ?? nowMs : nowMs) - RING_SPAN_S * 1000;
@@ -270,10 +274,16 @@ export function ObservePage() {
             <span>Paused. Updates keep accumulating; Resume catches up.</span>
           </div>
         )}
+        {!connected && view.tick !== null && (
+          <div className="observe__banner" role="status">
+            <IconWarning size={14} />
+            <span>Reconnecting to the live feed…</span>
+          </div>
+        )}
 
         {mode === 'table' ? (
           <Card padded={false} className="card--table">
-            {!connected ? (
+            {view.tick === null ? (
               <div style={{ padding: 20 }}>
                 <Skeleton height={14} />
               </div>
@@ -604,7 +614,7 @@ const StreamTile = memo(function StreamTile({ r, canPreview, frozenAt }: { canPr
         <Meter value={Math.min(1, tps / 150)} tone="accent" thin label="Output tokens per second" />
         <span className="num">{r.outputTps === null ? '-' : `${tps.toFixed(0)} tok/s`}</span>
       </div>
-      {r.keyId === 'laptop' && canPreview && r.preview !== null && (
+      {canPreview && r.preview !== null && (
         <div className="preview">
           {r.preview}
           {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
@@ -702,23 +712,21 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
         />
       </section>
 
-      {r.keyId === 'laptop' && (
-        <section>
-          <h3 className="section-title">Preview</h3>
-          {canPreview ? (
-            r.preview === null ? (
-              <p className="muted">{r.state === 'in_flight' ? 'Waiting for the first content token.' : 'No captured output for this request.'}</p>
-            ) : (
-              <div className="preview">
-                {r.preview}
-                {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
-              </div>
-            )
+      <section>
+        <h3 className="section-title">Preview</h3>
+        {canPreview ? (
+          r.preview === null ? (
+            <p className="muted">{r.state === 'in_flight' ? 'Waiting for the first content token.' : 'No captured output for this request.'}</p>
           ) : (
-            <p className="muted">Preview is available to admin sessions.</p>
-          )}
-        </section>
-      )}
+            <div className="preview">
+              {r.preview}
+              {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
+            </div>
+          )
+        ) : (
+          <p className="muted">Preview is available to admin sessions.</p>
+        )}
+      </section>
     </aside>
   );
 }
