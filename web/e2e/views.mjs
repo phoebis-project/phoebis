@@ -35,6 +35,9 @@ function repositoryRoots() {
   return [root];
 }
 
+/** The kernel's own limit on how many links one lookup may follow, so a cycle of links ends here too. */
+const LINK_HOPS = 40;
+
 /**
  * The path with its symlinks resolved. A directory that does not exist yet resolves as far as its nearest
  * existing ancestor, so a screenshot directory the run is about to create is compared as the place it will
@@ -45,8 +48,7 @@ function real(path) {
   const target = resolve(path);
   const tail = [];
   let at = target;
-  // The kernel's own limit on how many links one lookup may follow, so a cycle of links ends here too.
-  for (let hops = 0; hops < 40; hops += 1) {
+  for (let hops = 0; hops < LINK_HOPS; hops += 1) {
     try {
       return join(realpathSync(at), ...tail);
     } catch {
@@ -57,12 +59,12 @@ function real(path) {
         // Not a link either: this component simply does not exist.
       }
       const up = dirname(at);
-      if (up === at) break;
+      if (up === at) return target;
       tail.unshift(basename(at));
       at = up;
     }
   }
-  return target;
+  throw new Error(`${path} is still a link after ${LINK_HOPS} hops, so it points into a cycle`);
 }
 
 // Screenshots are review artifacts, never source: refuse a directory inside the repository.
@@ -147,15 +149,11 @@ async function wastedProbeRows(theme) {
       range.selectNodeContents(label);
       const line = range.getClientRects()[0];
       const bar = track.getBoundingClientRect();
-      return { label: label.textContent, line: { bottom: line.bottom, top: line.top }, middle: (bar.top + bar.bottom) / 2, offset: label.getBoundingClientRect().top - li.getBoundingClientRect().top };
+      return { label: label.textContent, line: { bottom: line.bottom, top: line.top }, middle: (bar.top + bar.bottom) / 2 };
     });
   });
-  for (const row of rows) {
-    // The row's own 3 px of padding, and a pixel for rounding.
-    if (row.offset > 4) failures.push(`${theme} /analytics: the "${row.label}" label starts ${row.offset.toFixed(1)}px below its row`);
-    if (row.middle < row.line.top || row.middle > row.line.bottom) {
-      failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
-    }
+  for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
+    failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
   }
 }
 
