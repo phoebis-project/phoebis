@@ -7,6 +7,15 @@ use axum::Router;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+/// Pinned here rather than read from the crate, so a loosened policy fails instead of following along.
+const CSP: &str = "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
+
+fn assert_security_headers(headers: &axum::http::HeaderMap, what: &str) {
+    assert_eq!(headers["content-security-policy"], CSP, "{what}");
+    assert_eq!(headers["referrer-policy"], "no-referrer", "{what}");
+    assert_eq!(headers["x-content-type-options"], "nosniff", "{what}");
+}
+
 fn app() -> Router {
     Router::new()
         .route("/admin/session", get(|| async { "admin" }))
@@ -52,16 +61,15 @@ async fn the_shell_is_served_for_every_app_path_and_never_cached() {
                 .starts_with("text/html"),
             "{path}"
         );
-        assert!(headers["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .contains("script-src 'self'"));
-        assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert_security_headers(&headers, path);
     }
     let (status, _, _) = send("HEAD", "/pools").await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _, _) = send("POST", "/pools").await;
+    let (status, headers, _) = send("POST", "/pools").await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["allow"], "GET, HEAD");
+    assert_security_headers(&headers, "POST /pools");
 }
 
 #[tokio::test]
@@ -70,7 +78,7 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
         .into_iter()
         .find(|p| p.starts_with("assets/") && p.ends_with(".js"));
     if let Some(asset) = asset {
-        let (status, headers, _) = send("GET", &format!("/{asset}")).await;
+        let (status, headers, body) = send("GET", &format!("/{asset}")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             headers["cache-control"],
@@ -80,6 +88,15 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
             .to_str()
             .unwrap()
             .contains("javascript"));
+        assert!(!body.is_empty());
+        // A HEAD tells a caller what it would get without sending it: the same headers, the length, no body.
+        let (head_status, head_headers, head_body) = send("HEAD", &format!("/{asset}")).await;
+        let (bytes, _) = phoebis_ui::lookup(&asset).unwrap();
+        assert_eq!(head_status, StatusCode::OK);
+        assert_eq!(head_headers["cache-control"], headers["cache-control"]);
+        assert_eq!(head_headers["content-type"], headers["content-type"]);
+        assert_eq!(head_headers["content-length"], bytes.len().to_string());
+        assert!(head_body.is_empty(), "a HEAD answer carries no body");
     } else {
         assert!(
             phoebis_ui::is_placeholder(),
@@ -105,8 +122,10 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
 async fn the_admin_and_metrics_routes_are_never_shadowed() {
     assert_eq!(send("GET", "/admin/session").await.2, "admin");
     assert_eq!(send("GET", "/metrics").await.2, "metrics");
-    let (status, _, body) = send("GET", "/admin/definitely-not-a-route").await;
+    let (status, headers, body) = send("GET", "/admin/definitely-not-a-route").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers["cache-control"], "no-store");
+    assert_security_headers(&headers, "/admin/definitely-not-a-route");
     assert!(
         body.contains("not found") && !body.contains("<div"),
         "an unknown admin path is JSON, never the shell"

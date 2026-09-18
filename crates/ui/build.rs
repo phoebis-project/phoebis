@@ -8,6 +8,9 @@ use std::time::SystemTime;
 
 const PLACEHOLDER_MARKER: &str = "<!-- phoebis-ui placeholder -->";
 
+/// Written inside `node_modules`, so wiping the directory takes the stamp with it.
+const CI_STAMP: &str = ".phoebis-npm-ci-stamp";
+
 fn newest(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
     if meta.is_file() {
@@ -64,9 +67,24 @@ fn main() {
                 .map(|s| s.success())
                 .unwrap_or(false)
         };
+        // Judged against a stamp written only after `npm ci` succeeds, rather than against node_modules' own
+        // mtime, which a half-finished install bumps just as well.
+        let stamp = web.join("node_modules").join(CI_STAMP);
+        let from_this_lockfile = match (newest(&stamp), newest(&web.join("package-lock.json"))) {
+            (Some(stamped), Some(lock)) => stamped >= lock,
+            _ => false,
+        };
         // `npm ci` needs the network only when the lockfile's packages are not in the npm cache.
-        let ok = (web.join("node_modules").exists() || run(&["ci", "--no-audit", "--no-fund"]))
-            && run(&["run", "build"]);
+        let modules = from_this_lockfile || {
+            let installed = run(&["ci", "--no-audit", "--no-fund"]);
+            if installed {
+                let _ = std::fs::write(&stamp, "");
+            }
+            installed
+        };
+        // A lockfile bump makes the bundle stale, so building without the install behind it would embed a bundle
+        // made from the modules the lockfile has just replaced.
+        let ok = modules && run(&["run", "build"]);
         if !ok {
             println!("cargo:warning=the web bundle could not be built; the router will serve a placeholder page. Set PHOEBIS_SKIP_UI_BUILD=1 to silence this.");
         }
