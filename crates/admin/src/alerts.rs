@@ -2,7 +2,6 @@
 //! A rule's secret goes in and never comes out; `has_secret` is all a route says about it.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -10,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use phoebis_alerts::{allowed_scopes, Kind, ScopeType};
+use phoebis_alerts::{allowed_scopes, ipv4_refusal, ipv6_refusal, Kind, ScopeType};
 use phoebis_store::{AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -21,10 +20,6 @@ use crate::{AdminState, Role};
 
 const ACTOR: &str = "admin";
 const EVENT_LIMIT: usize = 500;
-
-const LINK_LOCAL: &str = "webhook_url must not point at a link-local address";
-const LOOPBACK: &str = "webhook_url must not point at loopback";
-const UNSPECIFIED: &str = "webhook_url must not point at the unspecified address";
 
 /// `kind` is read as free text rather than a `ScopeType`, so an unknown or absent scope reaches `validate` and
 /// is refused by name instead of failing the body parse with nothing to go on.
@@ -110,49 +105,19 @@ fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value
     }))
 }
 
-/// The reason a destination is refused, or `None` for one a rule may name. The deliverer posts wherever a rule
-/// points and follows no redirect, so a rule aimed at an address only this host can reach would turn the
-/// router into a probe of its own network.
+/// The reason a destination is refused, or `None` for one a rule may name. This covers the address a rule
+/// spells out; a name is the deliverer's to check, since the record behind it can move afterwards.
 fn destination_refusal(url: &Url) -> Option<&'static str> {
     match url.host()? {
         // RFC 6761 reserves the name and everything under it for loopback, so no lookup is needed. A single
         // trailing dot spells the same name, so trim it before comparing.
         Host::Domain(name) => {
             let name = name.strip_suffix('.').unwrap_or(name);
-            (name == "localhost" || name.ends_with(".localhost")).then_some(LOOPBACK)
+            (name == "localhost" || name.ends_with(".localhost")).then_some(phoebis_alerts::LOOPBACK)
         }
         Host::Ipv4(ip) => ipv4_refusal(ip),
         Host::Ipv6(ip) => ipv6_refusal(ip),
     }
-}
-
-fn ipv4_refusal(ip: Ipv4Addr) -> Option<&'static str> {
-    if ip.is_loopback() {
-        Some(LOOPBACK)
-    } else if ip.is_link_local() {
-        Some(LINK_LOCAL)
-    } else if ip.is_unspecified() {
-        Some(UNSPECIFIED)
-    } else {
-        None
-    }
-}
-
-fn ipv6_refusal(ip: Ipv6Addr) -> Option<&'static str> {
-    // `::1` and `::` first: the fold below reads them as 0.0.0.1 and 0.0.0.0, which loses the loopback class.
-    if ip.is_loopback() {
-        return Some(LOOPBACK);
-    }
-    if ip.is_unspecified() {
-        return Some(UNSPECIFIED);
-    }
-    // An IPv4-mapped address, and the deprecated IPv4-compatible form `to_ipv4` also covers, connects straight
-    // to the embedded IPv4 host, so classify that host instead.
-    if let Some(embedded) = ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
-        return ipv4_refusal(embedded);
-    }
-    // Matching fe80::/10 by hand: `Ipv6Addr::is_unicast_link_local` is still unstable.
-    (ip.segments()[0] & 0xffc0 == 0xfe80).then_some(LINK_LOCAL)
 }
 
 /// Every rule the spec's table rules out, over the whole row, so create and patch refuse the same things.
@@ -209,7 +174,9 @@ fn validate(state: &AdminState, row: &AlertRuleRow) -> Result<(), Response> {
         _ => return bad("webhook_url must be an absolute http or https URL"),
     };
     match destination_refusal(&url) {
-        Some(reason) if !state.allow_local_webhooks => bad(reason),
+        Some(reason) if !state.allow_local_webhooks => {
+            bad(&format!("webhook_url must not point at {reason}"))
+        }
         _ => Ok(()),
     }
 }

@@ -3,12 +3,14 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_store::{AlertDeliveryRow, AlertEventRow, Secret};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+use crate::destination::{refusal_of, GuardedResolver};
 use crate::engine::{AlertParts, DeliveryResult};
 use crate::rule::Rule;
 
@@ -29,21 +31,19 @@ pub struct ReqwestWebhook {
 }
 
 impl ReqwestWebhook {
-    pub fn new() -> ReqwestWebhook {
+    /// `allow_local` is the operator's policy on destinations only this host can reach, the same one the
+    /// admin routes read: off, the resolver drops those addresses out of every answer a name gives, so a
+    /// host whose record moves after the rule was written is still refused.
+    pub fn new(allow_local: bool) -> ReqwestWebhook {
         // No redirects: a signature is over this body toward this URL, and a redirect would resend it elsewhere.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(Arc::new(GuardedResolver::new(allow_local)))
             .user_agent(format!("phoebis/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("a reqwest client");
         ReqwestWebhook { client }
-    }
-}
-
-impl Default for ReqwestWebhook {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -63,13 +63,16 @@ impl Webhook for ReqwestWebhook {
             if let Some(signature) = signature {
                 request = request.header("x-router-signature", signature);
             }
-            // The error's Display names the URL, which may carry a token in its path; only the kind is kept.
+            // The error's Display names the URL, which may carry a token in its path; only the kind is kept,
+            // and the refusal of a destination the policy rules out, which says nothing about the URL.
             request
                 .send()
                 .await
                 .map(|r| r.status().as_u16())
                 .map_err(|e| {
-                    if e.is_timeout() {
+                    if let Some(refusal) = refusal_of(&e) {
+                        refusal
+                    } else if e.is_timeout() {
                         "timeout".into()
                     } else if e.is_connect() {
                         "connect failed".into()

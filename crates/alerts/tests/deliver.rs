@@ -3,7 +3,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_alerts::{body, signature, Kind, ReqwestWebhook, ScopeType, Webhook, BACKOFF};
+use phoebis_alerts::{
+    admitted, body, signature, Kind, ReqwestWebhook, ScopeType, Webhook, BACKOFF, LINK_LOCAL,
+    LOOPBACK, UNSPECIFIED,
+};
 use phoebis_store::{Secret, StorageKey, Store};
 use common::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -249,6 +252,64 @@ async fn a_resolve_that_commits_mid_transition_still_reaches_the_receiver_second
 }
 
 #[test]
+fn the_destination_filter_keeps_what_the_policy_allows_out_of_an_answer() {
+    let at = |a: &str| a.parse::<SocketAddr>().unwrap();
+    // A name that answers only with addresses of the refused classes leaves nothing to connect to.
+    assert_eq!(admitted([at("127.0.0.1:443")], false), Err(LOOPBACK));
+    assert_eq!(admitted([at("[::1]:443")], false), Err(LOOPBACK));
+    assert_eq!(
+        admitted([at("[::ffff:127.0.0.1]:443")], false),
+        Err(LOOPBACK),
+        "an IPv4-mapped answer reaches the IPv4 host"
+    );
+    assert_eq!(admitted([at("[::127.0.0.1]:443")], false), Err(LOOPBACK));
+    assert_eq!(admitted([at("169.254.169.254:80")], false), Err(LINK_LOCAL));
+    assert_eq!(admitted([at("[fe80::1]:80")], false), Err(LINK_LOCAL));
+    assert_eq!(admitted([at("0.0.0.0:80")], false), Err(UNSPECIFIED));
+    assert_eq!(admitted([at("[::]:80")], false), Err(UNSPECIFIED));
+    // A mixed answer is reached at the address the policy allows, without the one it does not.
+    assert_eq!(
+        admitted([at("198.51.100.7:443"), at("127.0.0.1:443")], false),
+        Ok(vec![at("198.51.100.7:443")])
+    );
+    // A name rebinding between attempts: the second answer is refused however the first went.
+    assert_eq!(
+        admitted([at("198.51.100.7:443")], false),
+        Ok(vec![at("198.51.100.7:443")])
+    );
+    assert_eq!(admitted([at("127.0.0.1:443")], false), Err(LOOPBACK));
+    // With local destinations allowed, the answer is passed through as it came.
+    assert_eq!(
+        admitted([at("127.0.0.1:443")], true),
+        Ok(vec![at("127.0.0.1:443")])
+    );
+}
+
+#[tokio::test]
+async fn a_webhook_whose_name_resolves_locally_is_refused_before_it_connects() {
+    // `localhost` is resolved out of the host's own configuration and reaches no network; every address it
+    // can answer with is loopback, which is what the deliverer refuses.
+    let webhook = ReqwestWebhook::new(false);
+    let (addr, seen) = loopback("202 Accepted", false).await;
+    let refused = webhook
+        .post(
+            format!("http://localhost:{}/hook", addr.port()),
+            br#"{"state":"opened"}"#.to_vec(),
+            None,
+        )
+        .await
+        .expect_err("the destination is refused");
+    assert!(
+        refused.contains("loopback"),
+        "the attempt records why it failed: {refused}"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "and the receiver was never reached"
+    );
+}
+
+#[test]
 fn the_body_is_the_spec_shape_and_the_signature_is_hmac_sha256_hex() {
     use phoebis_alerts::{Rule, Scope};
     let rule = Rule {
@@ -440,7 +501,7 @@ async fn loopback(status_line: &str, redirect: bool) -> (SocketAddr, Arc<Mutex<V
 #[tokio::test]
 async fn the_reqwest_webhook_posts_the_signed_bytes_and_reports_a_redirect_rather_than_following_it(
 ) {
-    let webhook = ReqwestWebhook::new();
+    let webhook = ReqwestWebhook::new(true);
     let raw = br#"{"state":"opened","subject":"business"}"#.to_vec();
     let signed = signature(&Secret::new("s3cret"), &raw);
 

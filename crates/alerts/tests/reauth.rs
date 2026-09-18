@@ -21,7 +21,7 @@ async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpo
         },
     }])
     .await;
-    let rig = rig_with(Arc::new(ReqwestWebhook::new())).await;
+    let rig = rig_with(Arc::new(ReqwestWebhook::new(true))).await;
     let live = phoebis_store::AlertRuleRow {
         webhook_url: format!("http://127.0.0.1:{}/hook", hook.addr().port()),
         ..rule("live", Kind::ReauthRequired, ScopeType::AnyAccount, None)

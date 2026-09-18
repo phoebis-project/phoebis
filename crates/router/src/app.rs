@@ -23,6 +23,11 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
 use crate::config::{Config, UpstreamConfig};
 
+/// Whether an alert rule may aim its webhook at an address only this host can reach. Off in the binary; the
+/// routes refuse such a destination when a rule is written and the deliverer drops it out of every answer a
+/// name resolves to, so both read it from here.
+const ALLOW_LOCAL_WEBHOOKS: bool = false;
+
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -220,7 +225,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             .clone()
             .unwrap_or_else(|| config.admin.listen.to_string()),
         store: store.clone(),
-        webhook: Arc::new(phoebis_alerts::ReqwestWebhook::new()),
+        webhook: Arc::new(phoebis_alerts::ReqwestWebhook::new(ALLOW_LOCAL_WEBHOOKS)),
     });
     let alert_inputs = phoebis_alerts::spawn_inputs(
         alerts.clone(),
@@ -302,7 +307,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         // sequence below.
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),
-        allow_local_webhooks: false,
+        allow_local_webhooks: ALLOW_LOCAL_WEBHOOKS,
         pending_imports: Mutex::new(HashMap::new()),
         confirming: tokio::sync::Mutex::new(()),
     });
