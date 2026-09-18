@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { api } from '@/api';
 import type { Account, QuotaSnapshot, RateLimitWindow } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer } from '@/components/ui/icons';
@@ -17,7 +16,6 @@ export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const snapshots = useAsync(() => api.listQuotaSnapshots(), []);
   const now = useNow();
-  const { canMutate } = useAppSettings();
   const [tab, setTab] = useState<Tab>('all');
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
@@ -41,12 +39,16 @@ export function QuotaPage() {
   const attention = (snapshots.data ?? []).filter((s) => s.status === 'error').length;
   const counts = { all: total, api_key: (accounts.data ?? []).filter((a) => a.kind === 'api_key').length, oauth: (accounts.data ?? []).filter((a) => a.kind === 'oauth').length };
 
-  const refreshAll = () => {
+  const reload = () => {
+    accounts.reload();
+    snapshots.reload();
+  };
+  const refreshAll = async () => {
     setRefreshing(true);
-    window.setTimeout(() => {
-      setRefreshing(false);
-      snapshots.reload();
-    }, 900);
+    // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
+    await Promise.all((accounts.data ?? []).filter((a) => a.kind === 'oauth').map((a) => api.refreshUsage(a.id).catch(() => undefined)));
+    reload();
+    setRefreshing(false);
   };
 
   return (
@@ -65,11 +67,9 @@ export function QuotaPage() {
             )}
           </p>
         </div>
-        {canMutate && (
-          <Pill onClick={refreshAll} disabled={refreshing} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
-            Refresh all
-          </Pill>
-        )}
+        <Pill onClick={() => void refreshAll()} disabled={refreshing} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
+          Refresh all
+        </Pill>
       </div>
 
       <div className="quota-toolbar">
@@ -91,7 +91,7 @@ export function QuotaPage() {
       <div className="quota-grid">
         {accounts.loading || !accounts.data
           ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-          : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} canMutate={canMutate} />)}
+          : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} onRefreshed={reload} />)}
       </div>
 
       {accounts.data && <ResetTimeline accounts={accounts.data.filter((a) => a.kind === 'oauth' && a.windows.length > 0)} now={now} />}
@@ -120,14 +120,17 @@ function QuotaCardSkeleton() {
   );
 }
 
-function QuotaCard({ account, snapshot, now, refreshing, canMutate }: { account: Account; canMutate: boolean; now: number; refreshing: boolean; snapshot?: QuotaSnapshot }) {
+function QuotaCard({ account, snapshot, now, refreshing, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshing: boolean; snapshot?: QuotaSnapshot }) {
   const status = snapshot?.status ?? 'success';
   const soonest = soonestReset(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setLocalRefreshing(true);
-    window.setTimeout(() => setLocalRefreshing(false), 800);
+    // A refusal is worth reloading for too: the fresh snapshot carries the error this card draws in its place.
+    await api.refreshUsage(account.id).catch(() => undefined);
+    setLocalRefreshing(false);
+    onRefreshed();
   };
   const w5 = windowOf(account, '5h');
   const w7 = windowOf(account, '7d');
@@ -162,11 +165,9 @@ function QuotaCard({ account, snapshot, now, refreshing, canMutate }: { account:
         ) : status === 'error' ? (
           <div className="qcard__error" role="alert">
             <p>{snapshot?.error}</p>
-            {canMutate && (
-              <Pill onClick={onRefresh} icon={<IconRefresh size={13} />}>
-                Retry
-              </Pill>
-            )}
+            <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
+              Retry
+            </Pill>
           </div>
         ) : !w5 && !w7 && !account.fableWindow ? (
           <p className="qcard__note muted">No quota windows. API-key upstreams bill per token and are limited only by the workspace tier.</p>
@@ -197,12 +198,12 @@ function QuotaCard({ account, snapshot, now, refreshing, canMutate }: { account:
         </div>
       )}
 
-      {status !== 'loading' && canMutate && (
+      {status !== 'loading' && (
         <footer className="qcard__foot">
           <span className="muted" title={snapshot?.fetchedAt ? fmtAbsolute(snapshot.fetchedAt) : undefined}>
             {snapshot?.fetchedAt ? `checked ${fmtRelative(snapshot.fetchedAt, now)}` : ''}
           </span>
-          <Pill onClick={onRefresh} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
+          <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
             Refresh
           </Pill>
         </footer>

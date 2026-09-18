@@ -26,7 +26,7 @@ export function AccountsPage() {
   const [status, setStatus] = useState<'all' | AccountStatus>('all');
   const [sort, setSort] = useState<SortKey>('name');
   const [addOpen, setAddOpen] = useState(false);
-  const [pairing, setPairing] = useState<{ accountId: string | null; label: string } | null>(null);
+  const [pairing, setPairing] = useState<{ accountId: string; label: string; repair: boolean } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const list = useMemo(() => {
@@ -93,7 +93,7 @@ export function AccountsPage() {
       </aside>
       <section className="accounts__detail">
         {selected ? (
-          <AccountDetail account={selected} catalog={catalog.data ?? []} now={now} onToast={setToast} onPair={() => setPairing({ accountId: selected.id, label: selected.label })} onChanged={accounts.reload} />
+          <AccountDetail account={selected} catalog={catalog.data ?? []} now={now} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
         ) : (
           <Skeleton height={400} />
         )}
@@ -101,19 +101,22 @@ export function AccountsPage() {
       <AddAccountDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onDone={(kind, label) => {
+        onDone={(kind, created) => {
           setAddOpen(false);
-          if (kind === 'oauth') setPairing({ accountId: null, label });
+          accounts.reload();
+          if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
           else setToast('API key upstream added');
         }}
       />
       <PairingDialog
         open={pairing !== null}
-        accountId={pairing?.accountId ?? null}
+        accountId={pairing?.accountId ?? ''}
         label={pairing?.label ?? ''}
+        repair={pairing?.repair ?? false}
         onClose={() => setPairing(null)}
         onPaired={(preview) => {
           setPairing(null);
+          accounts.reload();
           setToast(`Paired ${preview.email}`);
         }}
       />
@@ -146,10 +149,11 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { account: Account; catalog: CatalogModel[]; now: number; onChanged: () => void; onPair: () => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { account: Account; catalog: CatalogModel[]; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const { canMutate } = useAppSettings();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
-  const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; title: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(account.label);
   useEffect(() => {
@@ -160,7 +164,19 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
   const isOauth = account.kind === 'oauth';
   const cooldown = account.cooldowns[0] ?? null;
   const extra = account.extraUsage;
-  const act = (title: string, body: string, label: string, danger = false) => setConfirm({ title, body, label, danger });
+  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {
+    setBusy(true);
+    try {
+      const result = await action();
+      onToast(typeof done === 'string' ? done : done(result));
+      onChanged();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const act = (title: string, body: string, label: string, action: () => Promise<unknown>, done: string, danger = false) => setConfirm({ title, body, label, danger, onConfirm: () => void run(action, done) });
 
   return (
     <div className="detail">
@@ -173,9 +189,10 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
                 <Button
                   size="sm"
                   variant="primary"
+                  disabled={busy}
                   onClick={() => {
                     setEditing(false);
-                    onToast('Label saved');
+                    void run(() => api.renameAccount(account.id, label.trim()), 'Label saved');
                   }}
                 >
                   Save
@@ -211,20 +228,76 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
         {canMutate && (
           <div className="detail__actions">
             {isOauth ? (
-              <Button variant="primary" onClick={onPair}>
+              <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
                 {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
               </Button>
             ) : (
-              <Button variant="primary" onClick={() => act('Verify upstream', `Sends a count_tokens probe to the upstream and records the round trip.`, 'Verify')}>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={() =>
+                  act(
+                    'Verify upstream',
+                    'Sends a models request to the upstream with the stored key and reports the status.',
+                    'Verify',
+                    async () => {
+                      const r = await api.verifyAccount(account.id);
+                      if (!r.ok) throw new Error(`Upstream answered ${r.status}`);
+                    },
+                    'Verify: upstream answered 200',
+                  )
+                }
+              >
                 Verify
               </Button>
             )}
-            <Button onClick={() => act(account.status === 'paused' ? 'Resume upstream' : 'Pause upstream', 'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.', account.status === 'paused' ? 'Resume' : 'Pause')}>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                act(
+                  account.status === 'paused' ? 'Resume upstream' : 'Pause upstream',
+                  'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                  account.status === 'paused' ? 'Resume' : 'Pause',
+                  account.status === 'paused' ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
+                  account.status === 'paused' ? 'Resumed' : 'Paused',
+                )
+              }
+            >
               {account.status === 'paused' ? 'Resume' : 'Pause'}
             </Button>
-            {account.cooldowns.length > 0 && <Button onClick={() => act('Clear cooldown', 'The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown.', 'Clear')}>Clear cooldown</Button>}
-            {extra?.disabledReason && <Button onClick={() => act('Clear funding flag', 'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.', 'Clear')}>Clear funding flag</Button>}
-            <Button variant="danger" onClick={() => act('Disconnect upstream', `Removes ${account.label} from every pool and deletes its credential. Request history stays in the ledger.`, 'Disconnect', true)}>
+            {cooldown && (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  act('Clear cooldown', 'The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown.', 'Clear', () => api.clearCooldown(account.id, cooldown.scope), 'Cooldown cleared')
+                }
+              >
+                Clear cooldown
+              </Button>
+            )}
+            {account.status === 'funding_required' && (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  act(
+                    'Clear funding flag',
+                    'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.',
+                    'Clear',
+                    () => api.clearFunding(account.id),
+                    'Funding flag cleared',
+                  )
+                }
+              >
+                Clear funding flag
+              </Button>
+            )}
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() =>
+                act('Disconnect upstream', `Removes ${account.label} from every pool and deletes its credential. Request history stays in the ledger.`, 'Disconnect', () => api.disconnectAccount(account.id), 'Disconnected', true)
+              }
+            >
               Disconnect
             </Button>
           </div>
@@ -257,10 +330,10 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
                 ? [
                     { label: 'Plan', value: account.plan ?? '-' },
                     { label: 'Rate-limit tier', value: account.subscription.rateLimitTier, mono: true },
-                    { label: 'Subscription status', value: account.subscription.status.replace('_', ' ') },
-                    { label: 'Subscription since', value: account.subscription.since ? fmtDate(account.subscription.since) : <span className="muted">not reported</span>, title: fmtAbsolute(account.subscription.since) },
+                    { label: 'Organization', value: account.subscription.organizationType },
                     { label: 'Billing type', value: account.subscription.billingType },
-                    { label: 'Trial end', value: account.subscription.trialEndsAt ? fmtDate(account.subscription.trialEndsAt) : <span className="muted">none</span>, title: fmtAbsolute(account.subscription.trialEndsAt) },
+                    ...(account.subscription.since ? [{ label: 'Subscription since', value: fmtDate(account.subscription.since), title: fmtAbsolute(account.subscription.since) }] : []),
+                    ...(account.subscription.trialEndsAt ? [{ label: 'Trial end', value: fmtDate(account.subscription.trialEndsAt), title: fmtAbsolute(account.subscription.trialEndsAt) }] : []),
                   ]
                 : [
                     { label: 'Type', value: 'API key' },
@@ -315,11 +388,25 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
           title="Served models"
           subtitle={
             <span title={fmtAbsolute(account.catalogSyncedAt)}>
-              Catalog synced {fmtRelative(account.catalogSyncedAt, now)}
+              Catalog synced {account.catalogSyncedAt ? fmtRelative(account.catalogSyncedAt, now) : 'never'}
             </span>
           }
           actions={canMutate && (
-            <Button size="sm" icon={<IconRefresh size={13} />} onClick={() => onToast('Catalog re-synced')}>
+            <Button
+              size="sm"
+              disabled={busy}
+              icon={<IconRefresh size={13} />}
+              onClick={() =>
+                void run(
+                  async () => {
+                    const r = await api.syncCatalog(account.id);
+                    if (r.error) throw new Error(r.error);
+                    return r;
+                  },
+                  (r) => `Catalog re-synced: ${r.added.length} added, ${r.missing.length} missing`,
+                )
+              }
+            >
               Re-sync
             </Button>
           )}
@@ -380,7 +467,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
         </div>
       </div>
 
-      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => onToast(`${confirm?.label ?? 'Done'}: queued`)} />
+      <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
     </div>
   );
 }
@@ -507,10 +594,41 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
   );
 }
 
-function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDone: (kind: 'api_key' | 'oauth', label: string) => void; open: boolean }) {
+function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDone: (kind: 'api_key' | 'oauth', created: Account) => void; open: boolean }) {
   const [kind, setKind] = useState<'api_key' | 'oauth'>('oauth');
+  const [id, setId] = useState('');
   const [label, setLabel] = useState('');
   const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // A reopened dialog starts blank: the id it last created is taken, and the router refuses a second upstream under it.
+  useEffect(() => {
+    if (!open) return;
+    setKind('oauth');
+    setId('');
+    setLabel('');
+    setSecret('');
+    setError(null);
+  }, [open]);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.createAccount({
+        id: id.trim(),
+        kind,
+        label: label.trim(),
+        secret: kind === 'api_key' ? secret : null,
+      });
+      onDone(kind, created);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Dialog
       open={open}
@@ -522,7 +640,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!label.trim() || (kind === 'api_key' && !secret)} onClick={() => onDone(kind, label.trim())}>
+          <Button variant="primary" disabled={busy || !id.trim() || !label.trim() || (kind === 'api_key' && !secret)} onClick={() => void create()}>
             {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
           </Button>
         </>
@@ -537,6 +655,9 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
           { value: 'api_key', label: 'API key' },
         ]}
       />
+      <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the upstream in every log and URL">
+        <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="work" className="mono" />
+      </Field>
       <Field label="Label" hint="Short name used in pools and logs.">
         <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'work' : 'Console workspace'} />
       </Field>
@@ -548,6 +669,12 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         </>
       )}
       {kind === 'oauth' && <p className="secondary">Pairing opens the Claude.ai login in your browser and asks you to paste the address it lands on. The router stores the refresh token encrypted and renews the access token on its own.</p>}
+      {error && (
+        <div className="callout callout--critical" role="alert">
+          <IconWarning size={16} />
+          <div>{error}</div>
+        </div>
+      )}
     </Dialog>
   );
 }
@@ -560,7 +687,7 @@ const PAIR_STEPS: { label: string; step: PairStep }[] = [
   { step: 3, label: 'Confirm' },
 ];
 
-function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountId: string | null; label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean }) {
+function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { accountId: string; label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean }) {
   const [session, setSession] = useState<PairingSession | null>(null);
   const [step, setStep] = useState<PairStep>(1);
   const [callback, setCallback] = useState('');
@@ -577,13 +704,26 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
     setCallback('');
     setError(null);
     setPreview(null);
-    api.startPairing(accountId).then((s) => {
-      if (alive) setSession(s);
-    });
+    api.startPairing(accountId).then(
+      (s) => {
+        // A pairing that lands after the dialog closed would hold the upstream until its own deadline.
+        if (alive) setSession(s);
+        else void api.cancelPairing(s.id).catch(() => undefined);
+      },
+      (e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      },
+    );
     return () => {
       alive = false;
     };
   }, [open, accountId]);
+
+  const dismiss = () => {
+    // The router keeps the upstream busy until the pairing expires, so leaving unconfirmed gives the session back.
+    if (session) void api.cancelPairing(session.id).catch(() => undefined);
+    onClose();
+  };
 
   const expired = session ? Date.parse(session.expiresAt) <= now : false;
   const remaining = session ? Math.max(0, Date.parse(session.expiresAt) - now) : 0;
@@ -595,7 +735,7 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
     try {
       const pasted = callback.trim();
       // A pasted callback URL carries its own state; a bare code borrows the one this pairing started under.
-      const p = await api.completePairing(/^https?:\/\//i.test(pasted) ? { url: pasted } : { code: pasted, state: session.state });
+      const p = await api.completePairing(session.id, /^https?:\/\//i.test(pasted) ? { url: pasted } : { code: pasted, state: session.state });
       setPreview(p);
       setStep(3);
     } catch (e) {
@@ -608,22 +748,28 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
   const confirm = async () => {
     if (!session || !preview) return;
     setBusy(true);
-    await api.confirmPairing(session.state);
-    setBusy(false);
-    onPaired(preview);
+    setError(null);
+    try {
+      await api.confirmPairing(session.id);
+      onPaired(preview);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const title = accountId ? `Re-pair ${label}` : `Pair ${label || 'new upstream'}`;
+  const title = repair ? `Re-pair ${label}` : `Pair ${label || 'new upstream'}`;
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={dismiss}
       title={title}
       width={600}
       footer={
         step === 1 ? (
           <>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" onClick={dismiss}>
               Cancel
             </Button>
             <Button variant="primary" disabled={!session || expired} onClick={() => setStep(2)}>
@@ -641,7 +787,7 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
           </>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" onClick={dismiss}>
               Cancel
             </Button>
             <Button variant="primary" disabled={busy} onClick={confirm}>
@@ -659,6 +805,13 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
           </li>
         ))}
       </ol>
+
+      {error && (
+        <div className="callout callout--critical" role="alert">
+          <IconWarning size={16} />
+          <div>{error}</div>
+        </div>
+      )}
 
       {step === 1 && (
         <div className="stack">
@@ -691,12 +844,6 @@ function PairingDialog({ open, accountId, label, onClose, onPaired }: { accountI
             </p>
           )}
           <p className="muted">The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.</p>
-          {error && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{error}</div>
-            </div>
-          )}
           <PairingExpiry remaining={remaining} expired={expired} ready={session !== null} />
         </div>
       )}

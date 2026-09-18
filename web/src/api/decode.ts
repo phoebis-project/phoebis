@@ -73,7 +73,7 @@ export function decodeAccount(v: unknown): Account {
   const credential = rec(a.credential);
   return {
     catalogSyncedAt: isoOrNull(a.catalog_synced_at),
-    cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
+    cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
     extraUsage: extra && bool(extra.is_enabled) ? { disabledReason: strOrNull(extra.disabled_reason), enabled: true, inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,

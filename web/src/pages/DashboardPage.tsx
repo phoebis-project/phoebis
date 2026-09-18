@@ -15,7 +15,7 @@ import { STATUS_LABEL, STATUS_TONE, isSubscription, remainingOf, windowOf } from
 export function DashboardPage() {
   const overview = useAsync(() => api.getOverview(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
-  const requests = useAsync(() => api.listRequests(), []);
+  const requests = useAsync(() => api.listRequestPage({ limit: 10 }), []);
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
   const ink = useChartInk();
@@ -29,7 +29,13 @@ export function DashboardPage() {
         <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
         <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
         <StatTile label="Estimated cost, 24h" value={o ? fmtUsd(o.cost24h) : null} note={o ? `${fmtUsd(o.cost24h / 24)} per hour` : null} spark={hourly.map((h) => h.cost)} color={ink.series[1]} />
-        <StatTile label="Error rate, 24h" value={o && o.errorRate24h !== null ? fmtPct(o.errorRate24h, 1) : null} note={o ? (o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null} spark={hourly.map((h) => h.errors)} color={ink.series[7]} />
+        <StatTile
+          label="Error rate, 24h"
+          value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
+          note={o ? (o.errorRate24h === null ? 'No requests' : o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null}
+          spark={hourly.map((h) => h.errors)}
+          color={ink.series[7]}
+        />
       </div>
 
       <div className="grid-2">
@@ -54,7 +60,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.slice(0, 10) ?? null} />
+          <RecentTable rows={requests.data?.requests ?? null} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           <SessionsSummary pins={sessions.data} />

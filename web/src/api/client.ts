@@ -92,8 +92,7 @@ export interface Api {
   cancelPairing(pairingId: string): Promise<void>;
   clearCooldown(accountId: string, scope: string): Promise<void>;
   clearFunding(accountId: string): Promise<void>;
-  /** One argument until the pairing dialog passes the router's pairing id; the implementation supplies the id it started under. */
-  completePairing(input: PairingInput): Promise<PairingPreview>;
+  completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview>;
   confirmPairing(pairingId: string): Promise<void>;
   confirmPriceImport(token: string): Promise<Settings['pricing']>;
   createAccount(input: AccountInput): Promise<Account>;
@@ -144,8 +143,7 @@ export interface Api {
   rotateKey(id: string): Promise<CreatedApiKey>;
   /** Idle time after which the router forgets a session; the sessions list honours it. Kept until the settings page reads the router's own setting. */
   setSessionExpiry(seconds: number): Promise<Settings>;
-  /** Null pairs a new account until the pairing dialog creates the account first. */
-  startPairing(accountId: string | null): Promise<PairingSession>;
+  startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
   syncCatalog(accountId: string): Promise<SyncResult>;

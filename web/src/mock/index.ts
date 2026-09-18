@@ -92,7 +92,7 @@ export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
-  private pairings = new Map<string, string | null>();
+  private pairings = new Map<string, { accountId: string; state: string }>();
   private pools: Pool[] = POOLS.map((p) => ({ ...p }));
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(Date.now() % 100_000);
@@ -122,7 +122,7 @@ export class MockApi implements Api {
 
   async clearCooldown(accountId: string, scope: string) {
     const a = this.account(accountId);
-    const cooldowns = a.cooldowns.filter((c) => c.windowId !== scope && c.reason !== scope);
+    const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
     this.putAccount({ ...a, cooldowns, status: cooldowns.length ? a.status : 'ready' });
     return latency(undefined, 200);
   }
@@ -133,12 +133,13 @@ export class MockApi implements Api {
     return latency(undefined, 200);
   }
 
-  async completePairing(input: PairingInput): Promise<PairingPreview> {
+  async completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview> {
     const submitted = 'url' in input ? fromCallbackUrl(input.url) : input;
     if (!submitted) throw new Error('That URL carries no authorization code and state. Paste the whole address the browser landed on, or the code on its own.');
-    if (!this.pairings.has(submitted.state)) throw new Error('Pairing expired. Start again.');
-    const accountId = this.pairings.get(submitted.state);
-    const existing = accountId ? this.accounts.find((a) => a.id === accountId) : null;
+    // The router refuses a callback whose state does not belong to the pairing the id names.
+    const pairing = this.pairings.get(pairingId);
+    if (!pairing || pairing.state !== submitted.state) throw new Error('Pairing expired. Start again.');
+    const existing = this.accounts.find((a) => a.id === pairing.accountId);
     return latency({ email: existing?.email ?? 'new.login@example.com', organization: existing ? `${existing.label} workspace` : 'Personal', state: submitted.state }, 500);
   }
 
@@ -449,9 +450,11 @@ export class MockApi implements Api {
     return latency(this.settings, 250);
   }
 
-  startPairing(accountId: string | null): Promise<PairingSession> {
+  startPairing(accountId: string): Promise<PairingSession> {
     const state = this.token(24);
-    this.pairings.set(state, accountId);
+    // The router names the pairing with an id of its own; the state only ever travels through the browser.
+    const id = `pair_${this.token(10)}`;
+    this.pairings.set(id, { accountId, state });
     const params = new URLSearchParams({
       client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
       code_challenge: this.token(43),
@@ -461,7 +464,7 @@ export class MockApi implements Api {
       scope: 'org:create_api_key user:profile user:inference',
       state,
     });
-    return latency({ authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id: state, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
+    return latency({ authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
   }
 
   subscribeLive(handler: (event: LiveEvent) => void) {

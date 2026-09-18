@@ -82,6 +82,7 @@ export const ACCOUNTS: Account[] = [
     cooldowns: [
       {
         reason: 'rate_limited (5h window exhausted)',
+        scope: 'account',
         setAt: ago(28 * MINUTE),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
@@ -94,7 +95,7 @@ export const ACCOUNTS: Account[] = [
     label: 'personal',
     email: 'personal@example.com',
     plan: 'Max 5x',
-    status: 'ready',
+    status: 'funding_required',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],

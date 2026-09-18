@@ -55,15 +55,12 @@ const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to
 const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to) });
 
 export class HttpApi implements Api {
-  /** The callback and the confirmation address the pairing the dialog started, which it does not carry yet. */
-  private pairingId = '';
-
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);
   clearCooldown = (accountId: string, scope: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/cooldowns/${enc(scope)}`);
   clearFunding = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/clear-funding`);
-  completePairing = async (input: PairingInput): Promise<PairingPreview> => {
-    const r = await call<{ pending: { email: string; organization_name: string | null } }>('POST', `/admin/oauth/sessions/${enc(this.pairingId)}/callback`, input);
-    return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: this.pairingId };
+  completePairing = async (pairingId: string, input: PairingInput): Promise<PairingPreview> => {
+    const r = await call<{ pending: { email: string; organization_name: string | null } }>('POST', `/admin/oauth/sessions/${enc(pairingId)}/callback`, input);
+    return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
   confirmPriceImport = async (token: string) => d.decodePricing(await call('POST', '/admin/pricing/import/confirm', { token }));
@@ -165,11 +162,7 @@ export class HttpApi implements Api {
   };
   /** Keeps the settings page compiling; `/admin/settings` is read-only, so the expiry comes from the router's config. */
   setSessionExpiry = (): Promise<Settings> => Promise.reject(new ApiError(501, 'session expiry is set in the router configuration', 'not_wired'));
-  startPairing = async (accountId: string | null) => {
-    const session = d.decodePairingSession(await call('POST', '/admin/oauth/sessions', { account_id: accountId, login: 'claude_ai' }));
-    this.pairingId = session.id;
-    return session;
-  };
+  startPairing = async (accountId: string) => d.decodePairingSession(await call('POST', '/admin/oauth/sessions', { account_id: accountId, login: 'claude_ai' }));
   subscribeLive = (handler: (event: LiveEvent) => void): (() => void) => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     let socket: WebSocket | null = null;

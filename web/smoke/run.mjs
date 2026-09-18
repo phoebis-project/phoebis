@@ -191,6 +191,11 @@ expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'R
   results.push({ name: '/quota timeline labels the current window with used share and reset', ok: live.length >= 3 && live.every((l) => / used · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
 }
+{
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh all')?.click();
+  await m.settle(1_200);
+  results.push({ name: '/quota Refresh all reloads every card', ok: m.text().includes('5 loaded'), missing: [m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'] });
+}
 m.unmount();
 
 m = await mount('/accounts');
@@ -200,7 +205,7 @@ results.push({
   missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'Max 20x', 'max_20x', 'Subscription status', 'Subscription since', 'Billing type', 'Trial end', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Extra usage this month', 'Add upstream']);
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'Max 20x', 'max_20x', 'Subscription since', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Extra usage this month', 'Add upstream']);
 {
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
@@ -217,6 +222,54 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   results.push({ name: '/upstreams served models shows new tag', ok: newTag, missing: [] });
   const unchecked = [...m.container.querySelectorAll('.served__list input[type=checkbox]')].filter((c) => !c.checked).length;
   results.push({ name: '/upstreams new model is unchecked', ok: unchecked === 1, missing: [String(unchecked)] });
+}
+{
+  const head = m.container.querySelector('.detail__head');
+  const pause = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pause');
+  pause?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pause')?.click();
+  await m.settle(600);
+  results.push({ name: '/upstreams Pause calls the API and the row reads paused', ok: m.text().includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
+  const resume = [...m.container.querySelectorAll('.detail__head button')].find((b) => b.textContent?.trim() === 'Resume');
+  resume?.click();
+  await m.settle(250);
+  [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resume')?.click();
+  await m.settle(600);
+  results.push({ name: '/upstreams Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
+  const resync = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Re-sync');
+  resync?.click();
+  await m.settle(600);
+  results.push({ name: '/upstreams Re-sync toasts the sync result', ok: /Catalog re-synced: \d+ added, \d+ missing/.test(m.text()), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
+  const rename = async (to) => {
+    m.container.querySelector('button[aria-label="Edit label"]')?.click();
+    await m.settle(150);
+    const label = m.container.querySelector('.detail__title input');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(label, to);
+    label?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    [...m.container.querySelectorAll('.detail__title button')].find((b) => b.textContent?.trim() === 'Save')?.click();
+    await m.settle(600);
+  };
+  await rename('business renamed');
+  results.push({ name: '/upstreams the label edit renames through the API', ok: m.container.querySelector('.detail__title')?.textContent?.includes('business renamed') && m.text().includes('Label saved'), missing: [] });
+  // One mock instance backs every mount, so the label goes back before the pairing and pools checks read it.
+  await rename('business');
+}
+{
+  const add = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add upstream');
+  add?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const kinds = [...(dlg?.querySelectorAll('[aria-label="Upstream type"] button') ?? [])];
+  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
+  await m.settle(150);
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
+  const head = m.container.querySelector('.detail__head');
   // Pairing dialog: step 1 link, step 2 paste, step 3 preview.
   const repair = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
   repair?.click();
@@ -272,7 +325,7 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   }
 }
 await m.navigate('/accounts/team');
-expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'trialing', 'n/a']);
+expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'Trial end', 'n/a']);
 {
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/upstreams/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
@@ -1358,6 +1411,8 @@ await m.navigate('/sessions');
   results.push({ name: 'viewer: /sessions hides Release', ok: !items.includes('Release'), missing: items });
   results.push({ name: 'viewer: /sessions keeps both read-only jumps', ok: items.includes('View in analytics') && items.includes('View in observe'), missing: items });
 }
+await m.navigate('/quota');
+results.push({ name: 'viewer: /quota keeps Refresh all', ok: m.text().includes('Refresh all'), missing: [] });
 await m.navigate('/observe');
 {
   const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop');

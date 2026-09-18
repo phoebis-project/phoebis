@@ -41,6 +41,8 @@ export interface ServedModel {
 
 export interface Cooldown {
   reason: string;
+  /** What the cooldown covers, as the router spells it: `account`, or `model:<id>`. Clearing one names this. */
+  scope: string;
   setAt: string;
   until: string;
   windowId: WindowId | null;
