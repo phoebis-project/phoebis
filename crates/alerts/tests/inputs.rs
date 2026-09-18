@@ -1,10 +1,12 @@
 mod common;
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-use phoebis_alerts::{BusArm, Kind, Poller, ScopeType};
+use phoebis_alerts::{question_subject, BusArm, Kind, Poller, ScopeType};
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
 use phoebis_routing::{Report, UtilizationSample};
-use phoebis_store::AccountState;
+use phoebis_store::{AccountState, AlertEventRow};
 use common::*;
 
 /// A `RequestObserved` of another origin or kind on the session, which must not count as the user's answer.
@@ -55,7 +57,7 @@ async fn the_bus_arm_opens_pool_exhausted_client_drift_and_ask_user_question_and
         )
         .unwrap();
     rig.alerts.reload().unwrap();
-    let mut arm = BusArm::new(rig.alerts.clone());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(observed("r1", "desktop", "main", "s1", 0));
     arm.observe(complete("r1", Outcome::Exhausted, 429, None, None));
     arm.observe(observed("r2", "desktop", "main", "s1", 0));
@@ -198,7 +200,7 @@ async fn a_captured_body_gives_the_question_its_text() {
         )
         .unwrap();
     rig.alerts.reload().unwrap();
-    let mut arm = BusArm::new(rig.alerts.clone());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(observed("r7", "desktop", "main", "s4", 24));
     arm.observe(chunk("r7", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
     arm.observe(complete("r7", Outcome::Succeeded, 200, None, None));
@@ -265,7 +267,7 @@ async fn a_question_answered_while_its_body_was_being_read_opens_nothing() {
         )
         .unwrap();
     rig.alerts.reload().unwrap();
-    let mut arm = BusArm::new(rig.alerts.clone());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(observed("r9", "desktop", "main", "s6", 24));
     arm.observe(chunk("r9", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
     arm.observe(complete("r9", Outcome::Succeeded, 200, None, None));
@@ -559,5 +561,242 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     assert_eq!(
         rig.store.alert_event("old").unwrap().unwrap().state,
         "resolved"
+    );
+}
+
+/// A sub-agent's turn: the same key and session as its parent's, with a parent above it.
+fn sub_agent(id: &str, session: &str) -> Event {
+    match observed(id, "desktop", "main", session, 0) {
+        Event::RequestObserved(o) => Event::RequestObserved(RequestObserved {
+            agent_id: Some("sub".into()),
+            parent_agent_id: Some("main".into()),
+            ..o
+        }),
+        other => other,
+    }
+}
+
+fn ask_event(id: &str, session: &str, detail: Option<&str>) -> AlertEventRow {
+    AlertEventRow {
+        id: id.into(),
+        rule_id: "ask".into(),
+        kind: "ask_user_question".into(),
+        subject: question_subject("desktop", session),
+        state: "open".into(),
+        opened_at: NOW,
+        resolved_at: None,
+        detail_json: detail.map(String::from),
+    }
+}
+
+#[tokio::test]
+async fn a_session_is_tracked_only_for_a_client_turn_and_only_until_the_expiry() {
+    let rig = rig().await;
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("r1", "desktop", "main", "s1", 0));
+    assert_eq!(arm.tracked_sessions(), 1);
+    arm.observe(observed_as(
+        "p1",
+        "s2",
+        Origin::Keepalive,
+        RequestKind::Probe,
+    ));
+    arm.observe(observed_as(
+        "c1",
+        "s2",
+        Origin::Client,
+        RequestKind::CountTokens,
+    ));
+    assert_eq!(
+        arm.tracked_sessions(),
+        1,
+        "a probe and a count_tokens track no session of their own"
+    );
+    rig.clock.store(NOW + 3_600_001, Ordering::SeqCst);
+    arm.observe(observed("r2", "desktop", "main", "s3", 0));
+    assert_eq!(
+        arm.tracked_sessions(),
+        1,
+        "the session past the expiry is swept, leaving the one just seen"
+    );
+}
+
+#[tokio::test]
+async fn an_event_left_open_for_a_healthy_account_resolves_on_the_next_tick() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("reauth", Kind::ReauthRequired, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    poller.tick().await;
+    settled(&rig).await;
+    // What a clear that failed against the store leaves behind: the account is healthy and the event is open.
+    rig.store
+        .insert_alert_event(&AlertEventRow {
+            id: "left-open".into(),
+            rule_id: "reauth".into(),
+            kind: "reauth_required".into(),
+            subject: "business".into(),
+            state: "open".into(),
+            opened_at: NOW,
+            resolved_at: None,
+            detail_json: None,
+        })
+        .unwrap();
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("left-open").unwrap().unwrap().state,
+        "resolved",
+        "the clear is level-triggered, so a later tick still catches it"
+    );
+}
+
+#[tokio::test]
+async fn a_question_open_before_the_arm_existed_resolves_on_the_next_client_turn() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    // One event with the detail the arm writes and one with none, so both ways of naming the parties are read.
+    assert!(rig
+        .store
+        .insert_alert_event(&ask_event(
+            "detailed",
+            "s1",
+            Some(r#"{"agent":"main","key":"desktop","question":null,"session":"s1"}"#)
+        ))
+        .unwrap());
+    assert!(rig
+        .store
+        .insert_alert_event(&ask_event("bare", "s2", None))
+        .unwrap());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("r1", "desktop", "main", "s1", 0));
+    arm.observe(observed("r2", "desktop", "main", "s2", 0));
+    settled(&rig).await;
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "a restarted arm still knows both sessions hold a question"
+    );
+}
+
+#[tokio::test]
+async fn a_sub_agent_turn_neither_answers_a_question_nor_invalidates_one_being_read() {
+    use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("q1", "desktop", "main", "s7", 24));
+    arm.observe(chunk("q1", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+    arm.observe(complete("q1", Outcome::Succeeded, 200, None, None));
+    // The sub-agent's turn arrives while the enrichment worker is still polling for the body.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    arm.observe(sub_agent("sub1", "s7"));
+    rig.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "q1".into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 100),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s7".into()),
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            bodies_captured: true,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "q1".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: NOW,
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        bodies: Some(BodyRecord {
+            request_id: "q1".into(),
+            request_body: b"{}".to_vec(),
+            response_body: Some(
+                br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Which one?"}}]}"#
+                    .to_vec(),
+            ),
+            expires_at: NOW + 86_400_000,
+        }),
+    });
+    let ask = fake_upstream::wait_for(Duration::from_secs(10), || {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "ask_user_question")
+    })
+    .await;
+    assert_eq!(ask.subject, question_subject("desktop", "s7"));
+    // A second sub-agent turn is not the answer the event waits for either.
+    arm.observe(sub_agent("sub2", "s7"));
+    fake_upstream::stays_for(Duration::from_secs(1), || {
+        !rig.store.open_alert_events().unwrap().is_empty()
+    })
+    .await;
+    arm.observe(observed("q2", "desktop", "main", "s7", 0));
+    settled(&rig).await;
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "the top-level turn is what answers it"
+    );
+}
+
+#[tokio::test]
+async fn a_stream_still_sending_chunks_keeps_its_entry_past_the_idle_window() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("pool", Kind::PoolExhausted, ScopeType::Pool, Some("main")),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("long", "desktop", "main", "s1", 0));
+    for minute in [5, 10, 15, 20] {
+        rig.clock.store(NOW + minute * 60_000, Ordering::SeqCst);
+        arm.observe(chunk("long", b"data: {}\n\n"));
+    }
+    arm.observe(complete("long", Outcome::Exhausted, 429, None, None));
+    settled(&rig).await;
+    assert_eq!(
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .map(|e| e.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["pool_exhausted"],
+        "twenty minutes of chunks is not an idle request"
     );
 }

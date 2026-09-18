@@ -2,12 +2,12 @@
 //! other parts of the process already keep.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_routing::RouterHandle;
-use phoebis_store::AccountState;
+use phoebis_store::{AccountState, AlertEventRow};
 use serde_json::json;
 
 use crate::engine::Alerts;
@@ -17,10 +17,6 @@ use crate::question::{
 use crate::rule::{Kind, ScopeType, Signal};
 
 pub type SpendSource = Arc<dyn Fn() -> BTreeMap<String, f64> + Send + Sync>;
-
-/// Reads a key and session's current generation, so an enrichment worker outliving its arm can still tell
-/// whether the session moved on while it waited for the body.
-type GenerationReader = Arc<dyn Fn(&(String, String)) -> u64 + Send + Sync>;
 
 pub struct AlertInputs {
     pub bus: Bus,
@@ -46,7 +42,31 @@ const PURGE_EVERY: u64 = 3_600;
 /// Resolved events are read for the delivery view; ninety days matches the ledger's default retention.
 const EVENT_RETENTION_MS: i64 = 90 * 86_400_000;
 
-const GENERATIONS_POISONED: &str = "alert session generations mutex poisoned by a prior panic";
+const SESSIONS_POISONED: &str = "alert session mutex poisoned by a prior panic";
+
+/// What the arm keeps about one key and session between that session's requests.
+struct SessionState {
+    /// Turns the session's top-level agent has taken, so a question whose captured body is still being read
+    /// can tell whether the user answered while it waited.
+    generation: u64,
+    last_seen: i64,
+    /// Whether an `ask_user_question` event is open for the pair, so the next turn reads the store only when
+    /// there is something there to resolve.
+    question_open: bool,
+}
+
+impl SessionState {
+    fn new(now: i64) -> SessionState {
+        SessionState {
+            generation: 0,
+            last_seen: now,
+            question_open: false,
+        }
+    }
+}
+
+/// Shared with the enrichment workers, which outlive the request that spawned them.
+type Sessions = Arc<Mutex<HashMap<(String, String), SessionState>>>;
 
 struct InFlight {
     agent: Option<String>,
@@ -54,7 +74,7 @@ struct InFlight {
     /// buffered response past the cap, which can no longer be parsed whole.
     body: Option<Vec<u8>>,
     capture: bool,
-    /// The session's generation when the request was admitted; a later client request moves it.
+    /// The session's generation when the request was admitted; the session's next top-level turn moves it.
     generation: u64,
     key: Option<String>,
     pool: Option<String>,
@@ -65,47 +85,110 @@ struct InFlight {
     stream: Option<SseCutter>,
 }
 
+/// The bus half of the inputs: three of the eight conditions are facts about a request going by. Public so a
+/// test drives it event by event without a bus.
 pub struct BusArm {
     alerts: Arc<Alerts>,
-    /// Client-origin inference requests seen per key and session, so a delayed question can tell whether the
-    /// session moved on while its body was being read; behind a mutex because the enrichment workers read it.
-    generations: Arc<std::sync::Mutex<HashMap<(String, String), u64>>>,
     in_flight: HashMap<String, InFlight>,
+    /// How long a session may go unseen before the arm forgets it. The poller retires that session's open
+    /// question at the same age, so nothing the entry is kept for outlives it.
+    session_expiry_ms: i64,
+    sessions: Sessions,
 }
 
+const SUBJECT_SEPARATOR: &str = ", session ";
+
 pub fn question_subject(key: &str, session: &str) -> String {
-    format!("{key}, session {session}")
+    format!("{key}{SUBJECT_SEPARATOR}{session}")
+}
+
+/// The key and session a question event names, out of the detail the arm wrote or, when that is gone, out of
+/// the subject built from the same two.
+fn question_parties(event: &AlertEventRow) -> Option<(String, String)> {
+    let detail = event
+        .detail_json
+        .as_deref()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok());
+    if let Some(detail) = &detail {
+        if let (Some(key), Some(session)) = (detail["key"].as_str(), detail["session"].as_str()) {
+            return Some((key.into(), session.into()));
+        }
+    }
+    let (key, session) = event.subject.split_once(SUBJECT_SEPARATOR)?;
+    Some((key.into(), session.into()))
 }
 
 impl BusArm {
-    pub fn new(alerts: Arc<Alerts>) -> BusArm {
+    pub fn new(alerts: Arc<Alerts>, inputs: &AlertInputs) -> BusArm {
+        let now = (alerts.parts().clock)();
+        // A question opened before this arm existed is still waiting for the user, so the sessions holding one
+        // are read back: without them the next turn on such a session would look for nothing to resolve.
+        let mut sessions = HashMap::new();
+        if let Ok(open) = alerts.parts().store.open_alert_events() {
+            for event in open
+                .iter()
+                .filter(|e| e.kind == Kind::AskUserQuestion.as_str())
+            {
+                if let Some(pair) = question_parties(event) {
+                    sessions.insert(
+                        pair,
+                        SessionState {
+                            question_open: true,
+                            ..SessionState::new(now)
+                        },
+                    );
+                }
+            }
+        }
         BusArm {
             alerts,
-            generations: Arc::default(),
             in_flight: HashMap::new(),
+            session_expiry_ms: inputs.session_expiry.as_millis() as i64,
+            sessions: Arc::new(Mutex::new(sessions)),
         }
+    }
+
+    /// How many key-and-session pairs the arm still holds, which is how a test watches the sweep.
+    pub fn tracked_sessions(&self) -> usize {
+        self.sessions.lock().expect(SESSIONS_POISONED).len()
     }
 
     pub fn observe(&mut self, event: Event) {
         let now = (self.alerts.parts().clock)();
         self.in_flight
             .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+        self.sessions
+            .lock()
+            .expect(SESSIONS_POISONED)
+            .retain(|_, s| now - s.last_seen < self.session_expiry_ms);
         match event {
             Event::RequestObserved(o) => {
                 let mut generation = 0;
                 if let (Some(key), Some(session)) = (&o.key_id, &o.session_id) {
-                    let mut generations = self.generations.lock().expect(GENERATIONS_POISONED);
-                    let counter = generations
-                        .entry((key.clone(), session.clone()))
-                        .or_insert(0);
-                    // Only the client's own next model turn says the user answered: a keepalive probe replays
-                    // the session and a token count precedes a turn, and neither proves anything about the user.
-                    if o.origin == Origin::Client && o.kind == RequestKind::Inference {
-                        *counter += 1;
-                        self.alerts
-                            .clear(Kind::AskUserQuestion, &question_subject(key, session));
+                    // Only the top-level agent's own next turn says the user answered: a keepalive probe
+                    // replays the session, a token count precedes a turn, and a sub-agent's turn is the
+                    // assistant still working, so none of the three is the answer the question waits for.
+                    let answered = o.origin == Origin::Client
+                        && o.kind == RequestKind::Inference
+                        && o.parent_agent_id.is_none();
+                    let pair = (key.clone(), session.clone());
+                    let mut sessions = self.sessions.lock().expect(SESSIONS_POISONED);
+                    if answered {
+                        let state = sessions
+                            .entry(pair)
+                            .or_insert_with(|| SessionState::new(now));
+                        state.generation += 1;
+                        state.last_seen = now;
+                        generation = state.generation;
+                        let open = std::mem::take(&mut state.question_open);
+                        drop(sessions);
+                        if open {
+                            self.alerts
+                                .clear(Kind::AskUserQuestion, &question_subject(key, session));
+                        }
+                    } else {
+                        generation = sessions.get(&pair).map_or(0, |s| s.generation);
                     }
-                    generation = *counter;
                 }
                 self.in_flight.insert(
                     o.request_id.clone(),
@@ -125,6 +208,8 @@ impl BusArm {
             }
             Event::ResponseChunk(c) => {
                 if let Some(e) = self.in_flight.get_mut(&c.request_id) {
+                    // The TTL asks whether a request went silent, so a stream still sending is not idle.
+                    e.seen_at = now;
                     if let Some(cutter) = e.stream.as_mut() {
                         for data in cutter.push(&c.body) {
                             e.question = e.question || question_in_event(&data);
@@ -187,13 +272,18 @@ impl BusArm {
                             // signal could open it and it must not open a stale event.
                             let alerts = self.alerts.clone();
                             let id = c.request_id.clone();
-                            let generations = self.generation_reader();
-                            let (session_key, admitted) =
-                                ((key.clone(), session.clone()), e.generation);
+                            let sessions = self.sessions.clone();
+                            let (pair, admitted) = ((key.clone(), session.clone()), e.generation);
                             tokio::spawn(async move {
                                 let mut signal = base;
                                 for _ in 0..10 {
-                                    if let Ok(Some(b)) = alerts.parts().ledger.db().bodies(&id) {
+                                    let db = alerts.parts().ledger.db().clone();
+                                    let request = id.clone();
+                                    // The read holds the ledger's reader lock, so it goes off the runtime's
+                                    // workers rather than parking one for its duration.
+                                    let read =
+                                        tokio::task::spawn_blocking(move || db.bodies(&request));
+                                    if let Ok(Ok(Some(b))) = read.await {
                                         signal.detail["question"] = json!(b
                                             .response_body
                                             .as_deref()
@@ -202,12 +292,26 @@ impl BusArm {
                                     }
                                     tokio::time::sleep(Duration::from_millis(500)).await;
                                 }
-                                if generations(&session_key) != admitted {
-                                    return;
+                                let now = (alerts.parts().clock)();
+                                {
+                                    let mut sessions = sessions.lock().expect(SESSIONS_POISONED);
+                                    let state = sessions
+                                        .entry(pair)
+                                        .or_insert_with(|| SessionState::new(now));
+                                    if state.generation != admitted {
+                                        return;
+                                    }
+                                    state.question_open = true;
                                 }
                                 alerts.signal(&signal);
                             });
                         } else {
+                            self.sessions
+                                .lock()
+                                .expect(SESSIONS_POISONED)
+                                .entry((key.clone(), session.clone()))
+                                .or_insert_with(|| SessionState::new(now))
+                                .question_open = true;
                             self.alerts.signal(&base);
                         }
                     }
@@ -216,20 +320,10 @@ impl BusArm {
             Event::AccountSelected(_) | Event::ResponseHead(_) => {}
         }
     }
-
-    fn generation_reader(&self) -> GenerationReader {
-        let generations = self.generations.clone();
-        Arc::new(move |key| {
-            generations
-                .lock()
-                .expect(GENERATIONS_POISONED)
-                .get(key)
-                .copied()
-                .unwrap_or(0)
-        })
-    }
 }
 
+/// The polled half of the inputs: five of the eight conditions are state another part of the process already
+/// keeps. Public so a test drives one evaluation without waiting for the ticker.
 pub struct Poller {
     alerts: Arc<Alerts>,
     failures: BTreeMap<String, u32>,
@@ -237,7 +331,6 @@ pub struct Poller {
     router: RouterHandle,
     session_expiry_ms: i64,
     spent_today: SpendSource,
-    states: BTreeMap<String, AccountState>,
     ticks: u64,
 }
 
@@ -274,7 +367,6 @@ impl Poller {
             router: inputs.router.clone(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
             spent_today: inputs.spent_today.clone(),
-            states: BTreeMap::new(),
             ticks: 0,
         }
     }
@@ -284,8 +376,11 @@ impl Poller {
         let now = (parts.clock)();
         self.ticks += 1;
         if let Ok(accounts) = parts.store.accounts() {
+            // One read for the whole sweep, because the clear below runs on every tick the account is out of
+            // the state rather than on the tick it leaves: a clear the store refused once is retried, and a
+            // `clear` per account and kind would read the open events again each time.
+            let open = parts.store.open_alert_events().unwrap_or_default();
             for account in &accounts {
-                let before = self.states.insert(account.id.clone(), account.state);
                 for (kind, state) in [
                     (Kind::ReauthRequired, AccountState::ReauthRequired),
                     (Kind::FundingRequired, AccountState::FundingRequired),
@@ -299,9 +394,10 @@ impl Poller {
                             subject: account.id.clone(),
                             detail: json!({ "account": account.id, "label": account.label }),
                         });
-                    } else if before == Some(state) || before.is_none() {
-                        // The first tick also clears an event left open by a previous run whose account has
-                        // since left the state.
+                    } else if open
+                        .iter()
+                        .any(|e| e.kind == kind.as_str() && e.subject == account.id)
+                    {
                         self.alerts.clear(kind, &account.id);
                     }
                 }
@@ -337,6 +433,30 @@ impl Poller {
         }
         if let Ok(samples) = self.router.samples().await {
             let snapshot = self.router.snapshot();
+            // The pools an account belongs to and the keys on them are what a pool or key scope matches
+            // against. Both come off the one snapshot, so they are built once per sampled account rather than
+            // again for every rule.
+            let membership: BTreeMap<&str, (Vec<String>, Vec<String>)> = samples
+                .iter()
+                .map(|(account_id, _)| {
+                    let pools: Vec<String> = snapshot
+                        .pools()
+                        .filter(|p| {
+                            snapshot
+                                .members(&p.id)
+                                .iter()
+                                .any(|m| &m.account_id == account_id)
+                        })
+                        .map(|p| p.id.clone())
+                        .collect();
+                    let keys: Vec<String> = snapshot
+                        .keys()
+                        .filter(|k| pools.contains(&k.pool_id))
+                        .map(|k| k.id.clone())
+                        .collect();
+                    (account_id.as_str(), (pools, keys))
+                })
+                .collect();
             for rule in self
                 .alerts
                 .rules()
@@ -354,23 +474,9 @@ impl Poller {
                         _ => None,
                     };
                     let Some(value) = value else { continue };
-                    // The pools the account belongs to and the keys on them are what a pool or key scope
-                    // matches against.
-                    let pools: Vec<String> = snapshot
-                        .pools()
-                        .filter(|p| {
-                            snapshot
-                                .members(&p.id)
-                                .iter()
-                                .any(|m| &m.account_id == account_id)
-                        })
-                        .map(|p| p.id.clone())
-                        .collect();
-                    let keys: Vec<String> = snapshot
-                        .keys()
-                        .filter(|k| pools.contains(&k.pool_id))
-                        .map(|k| k.id.clone())
-                        .collect();
+                    let Some((pools, keys)) = membership.get(account_id.as_str()) else {
+                        continue;
+                    };
                     // The signal names the scope that admitted it, so the rule's own `matches` inside
                     // `signal_rule` admits it the same way; an account or any_account scope needs no id.
                     let (key_id, pool_id) = match (rule.scope.kind, rule.scope.id.as_deref()) {
@@ -439,9 +545,10 @@ impl Poller {
     }
 }
 
+/// The bus arm and the ticker. Both stop when the bus closes or the handles are aborted.
 pub fn spawn_inputs(alerts: Arc<Alerts>, inputs: AlertInputs) -> Vec<tokio::task::JoinHandle<()>> {
     let subscriber = inputs.bus.subscribe("alerts");
-    let mut arm = BusArm::new(alerts.clone());
+    let mut arm = BusArm::new(alerts.clone(), &inputs);
     let bus_task = spawn_subscriber(subscriber, move |mut subscriber| async move {
         while let Some(event) = subscriber.events.recv().await {
             arm.observe(event);
