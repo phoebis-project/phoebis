@@ -5,7 +5,7 @@ use phoebis_store::{
 };
 use rand::{Rng, RngExt};
 
-use crate::state::{PinRef, RoutingState, StateWrite};
+use crate::state::{PinRef, RoutingState, StateWrite, Tier};
 use crate::{Candidate, RegistrySnapshot, ResolveError};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -229,9 +229,11 @@ pub fn select(
             reason = Some(MigrateReason::Overage);
         }
         if let Some(threshold) = pool.migrate_above_utilization {
+            // A negative difference (a `migrated_at` ahead of the clock, from a backwards step) must not read
+            // as dwelling forever, so the range excludes it rather than only bounding the top.
             let dwelling = current
                 .migrated_at
-                .is_some_and(|at| request.now - at < MIGRATE_DWELL_MS);
+                .is_some_and(|at| (0..MIGRATE_DWELL_MS).contains(&(request.now - at)));
             let hot = !dwelling
                 && state.sample(&current.account_id).is_some_and(|s| {
                     s.five_hour.unwrap_or(0.0) >= threshold
@@ -469,11 +471,13 @@ fn choose<'a>(
     rng: &mut impl Rng,
 ) -> Option<&'a Candidate> {
     let kind_ordered = pool.kind_ordered();
-    // Group one: oauth with plan quota; two: oauth in overage; three: api_key. Without the kind order every
-    // candidate is group 0 and the overage flag still splits a priority tier under prefer_plan, as before.
-    let group_of = |c: &Candidate| -> u8 {
+    // Group one: oauth with plan quota; two: oauth in overage; three: api_key. The split holds under any
+    // overage_policy, because it orders by cost, not eligibility: `allow` still demotes an overage oauth
+    // account behind a plan-quota one. `overage_policy` governs eligibility everywhere and orders the tier
+    // itself only when the kind order is off, in the `false` arm below.
+    let group_of = |c: &Candidate, in_overage: bool| -> u8 {
         let kind = snapshot.account(&c.account_id).map(|a| a.kind);
-        match (kind_ordered, kind, state.in_overage(&c.account_id)) {
+        match (kind_ordered, kind, in_overage) {
             (true, Some(AccountKind::ApiKey), _) => 2,
             (true, _, true) => 1,
             (true, _, false) => 0,
@@ -482,11 +486,14 @@ fn choose<'a>(
             }
         }
     };
-    // The kind order puts the group ahead of the priority; the priority order keeps the overage split inside a tier.
-    let key_of = |c: &Candidate| -> (u8, u32, u8) {
-        let group = group_of(c);
+    // The kind order puts the group ahead of the priority; within a group, `prefer_plan` still orders an
+    // overage account behind a plan-quota one, group three (api_key) included.
+    let key_of = |c: &Candidate| -> Tier {
+        let in_overage = state.in_overage(&c.account_id);
+        let overage_bit = u8::from(pool.overage_policy == OveragePolicy::PreferPlan && in_overage);
+        let group = group_of(c, in_overage);
         if kind_ordered {
-            (group, c.priority, 0)
+            (group, c.priority, overage_bit)
         } else {
             (0, c.priority, group)
         }
@@ -500,7 +507,7 @@ fn choose<'a>(
         pool.strategy,
         Strategy::EarliestRefresh | Strategy::LeastUtilized
     );
-    let strategy = if first.0 == 2 && sample_driven {
+    let strategy = if kind_ordered && first.0 == 2 && sample_driven {
         match pool.api_key_sub_strategy {
             SubStrategy::PriorityRandom => Strategy::PriorityRandom,
             SubStrategy::RoundRobin => Strategy::RoundRobin,

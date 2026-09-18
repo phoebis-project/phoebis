@@ -147,6 +147,19 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// `s` rebuilt with `id` entirely missing from `accounts`, the way a deleted account leaves the registry.
+fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
+    let load = RegistryLoad {
+        accounts: s.accounts().filter(|a| a.id != id).cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s.keys().cloned().collect(),
+        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
+        models: Vec::new(),
+        pools: s.pools().cloned().collect(),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
 fn request(
     s: &RegistrySnapshot,
     session: Option<&str>,
@@ -1807,5 +1820,103 @@ fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() 
         (sel.account.id.as_str(), sel.migrated),
         ("a", Some(MigrateReason::Utilization)),
         "the dwell ends and the rule moves it back"
+    );
+    // A fresh, dwell-free pin isolates the two inequalities the band applies to each window: `a` sits at
+    // exactly the threshold throughout, so every call below also proves the pinned side of `>=` is inclusive.
+    let mut edges = RoutingState::from_load(RoutingLoad::default());
+    let mut r2 = rng();
+    assert_eq!(
+        picked(
+            &select(
+                &mut edges,
+                &s,
+                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 10_000),
+                &mut r2
+            )
+            .0
+        ),
+        "a"
+    );
+    edges.record_sample("a", sample(0.8, 0.1, 10_500));
+    edges.record_sample("b", sample(0.1, 0.76, 10_500));
+    assert_eq!(
+        picked(
+            &select(
+                &mut edges,
+                &s,
+                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 11_000),
+                &mut r2
+            )
+            .0
+        ),
+        "a",
+        "b's seven-day sample sits inside the band, so the seven-day conjunct alone keeps it out"
+    );
+    edges.record_sample("b", sample(0.75, 0.1, 11_500));
+    assert_eq!(
+        picked(
+            &select(
+                &mut edges,
+                &s,
+                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 12_000),
+                &mut r2
+            )
+            .0
+        ),
+        "a",
+        "exactly threshold minus the band is still inside it: the comparison is strict"
+    );
+    edges.record_sample("b", sample(0.1, 0.1, 12_500));
+    let (result, _) = select(
+        &mut edges,
+        &s,
+        &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 13_000),
+        &mut r2,
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Utilization)),
+        "clearly under the band, b finally qualifies"
+    );
+}
+
+#[test]
+fn purge_drops_a_round_robin_cursor_once_its_cohort_account_is_gone() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut r
+            )
+            .0
+        ),
+        "a",
+        "the cursor advances past a"
+    );
+    st.purge(&without_account(&s, "b"), 2_000);
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 3_000),
+                &mut r
+            )
+            .0
+        ),
+        "a",
+        "the purged cursor restarted at index 0 instead of resuming on b"
     );
 }

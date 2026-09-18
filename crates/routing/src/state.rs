@@ -79,14 +79,16 @@ pub struct Purged {
     pub pins: Vec<(String, String, String)>,
 }
 
+/// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; 0, priority,
+/// and the overage bit otherwise.
+pub type Tier = (u8, u32, u8);
+
 pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
-    // The nested tuple mirrors `round_robin_next`'s key; a type alias would only rename the same shape.
-    #[allow(clippy::type_complexity)]
-    round_robin: HashMap<(String, (u8, u32, u8), String), usize>,
+    round_robin: HashMap<(String, Tier, String), usize>,
     sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
 }
@@ -172,14 +174,10 @@ impl RoutingState {
 
     /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
     /// `resolve` builds a candidate list per model: a singleton model and a three-account model share a pool and
-    /// a tier but rotate apart, and a cohort whose membership changed is a key of its own that starts at 0. In
-    /// memory, so a restart starts every round again.
-    pub(crate) fn round_robin_next(
-        &mut self,
-        pool_id: &str,
-        tier: (u8, u32, u8),
-        cohort: &[&str],
-    ) -> usize {
+    /// a tier but rotate apart, and a cohort whose membership changed is a key of its own that starts at 0. An
+    /// account id is a slug, so joining the sorted ids names one cohort and no other; the caller sorts, and an
+    /// unsorted cohort would split one rotation into several. In memory, so a restart starts every round again.
+    pub(crate) fn round_robin_next(&mut self, pool_id: &str, tier: Tier, cohort: &[&str]) -> usize {
         let key = (pool_id.to_string(), tier, cohort.join(","));
         let slot = self.round_robin.entry(key).or_insert(0);
         let index = *slot % cohort.len();
@@ -446,10 +444,13 @@ impl RoutingState {
         for key in &pins {
             self.pins.remove(key);
         }
-        // Neither needs a deletion written: the overage row cascades with the account, and samples are held
-        // in memory only.
+        // None of the three needs a deletion written: the overage row cascades with the account, and samples
+        // and round-robin cursors are held in memory only.
         self.overage.retain(|account_id, _| !gone(account_id));
         self.samples.retain(|account_id, _| !gone(account_id));
+        self.round_robin.retain(|(pool_id, _, cohort), _| {
+            snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !gone(id))
+        });
         Purged { cooldowns, pins }
     }
 }
