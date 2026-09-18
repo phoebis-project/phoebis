@@ -120,7 +120,6 @@ fn question_parties(event: &AlertEventRow) -> Option<(String, String)> {
 
 impl BusArm {
     pub fn new(alerts: Arc<Alerts>, inputs: &AlertInputs) -> BusArm {
-        let now = (alerts.parts().clock)();
         // A question opened before this arm existed is still waiting for the user, so the sessions holding one
         // are read back: without them the next turn on such a session would look for nothing to resolve.
         let mut sessions = HashMap::new();
@@ -133,8 +132,9 @@ impl BusArm {
                     sessions.insert(
                         pair,
                         SessionState {
+                            generation: 0,
+                            last_seen: event.opened_at,
                             question_open: true,
-                            ..SessionState::new(now)
                         },
                     );
                 }
@@ -157,6 +157,8 @@ impl BusArm {
         let now = (self.alerts.parts().clock)();
         self.in_flight
             .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+        // An entry must outlive the question event it tracks, so a claim below ages it from when that event
+        // opened rather than from the turn that asked, and the poller retires both at the same expiry.
         self.sessions
             .lock()
             .expect(SESSIONS_POISONED)
@@ -301,17 +303,20 @@ impl BusArm {
                                     if state.generation != admitted {
                                         return;
                                     }
+                                    state.last_seen = now;
                                     state.question_open = true;
                                 }
                                 alerts.signal(&signal);
                             });
                         } else {
-                            self.sessions
-                                .lock()
-                                .expect(SESSIONS_POISONED)
-                                .entry((key.clone(), session.clone()))
-                                .or_insert_with(|| SessionState::new(now))
-                                .question_open = true;
+                            {
+                                let mut sessions = self.sessions.lock().expect(SESSIONS_POISONED);
+                                let state = sessions
+                                    .entry((key.clone(), session.clone()))
+                                    .or_insert_with(|| SessionState::new(now));
+                                state.last_seen = now;
+                                state.question_open = true;
+                            }
                             self.alerts.signal(&base);
                         }
                     }

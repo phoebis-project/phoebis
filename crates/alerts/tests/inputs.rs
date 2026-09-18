@@ -800,3 +800,91 @@ async fn a_stream_still_sending_chunks_keeps_its_entry_past_the_idle_window() {
         "twenty minutes of chunks is not an idle request"
     );
 }
+
+#[tokio::test]
+async fn a_question_signalled_long_after_admission_is_tracked_from_the_signal() {
+    use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("q1", "desktop", "main", "s1", 24));
+    arm.observe(chunk("q1", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+    // The answer streams for half an hour, so the event opens that much later than the turn that asked for it.
+    for minute in [10, 20, 30] {
+        rig.clock.store(NOW + minute * 60_000, Ordering::SeqCst);
+        arm.observe(chunk("q1", b"data: {}\n\n"));
+    }
+    arm.observe(complete("q1", Outcome::Succeeded, 200, None, None));
+    rig.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "q1".into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 30 * 60_000),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            bodies_captured: true,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "q1".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: NOW,
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        bodies: Some(BodyRecord {
+            request_id: "q1".into(),
+            request_body: b"{}".to_vec(),
+            response_body: Some(
+                br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Still there?"}}]}"#
+                    .to_vec(),
+            ),
+            expires_at: NOW + 86_400_000,
+        }),
+    });
+    let ask = fake_upstream::wait_for(Duration::from_secs(10), || {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "ask_user_question")
+    })
+    .await;
+    assert_eq!(ask.opened_at, NOW + 30 * 60_000);
+    // Just under the expiry measured from the signal, which is an hour and a half past the admission.
+    rig.clock.store(NOW + 89 * 60_000, Ordering::SeqCst);
+    arm.observe(observed_as(
+        "p1",
+        "s2",
+        Origin::Keepalive,
+        RequestKind::Probe,
+    ));
+    assert_eq!(
+        arm.tracked_sessions(),
+        1,
+        "the entry outlives the event it tracks"
+    );
+    arm.observe(observed("q2", "desktop", "main", "s1", 0));
+    settled(&rig).await;
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "the next turn still answers the question"
+    );
+}
