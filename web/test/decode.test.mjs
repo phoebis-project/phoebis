@@ -39,6 +39,38 @@ test('the account list folds state, enabled, and cooldowns onto one status', () 
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 }] }).status, 'cooldown');
 });
 
+test('a window both samplers wrote folds to one entry carrying the newer reading', () => {
+  const base = fixture('account');
+  const older = { id: '5h', observed_at: 1_000_000, resets_at: 4_600_000, utilization: 0.11 };
+  const newer = { id: 'five_hour', observed_at: 1_900_000, resets_at: 4_600_000, utilization: 0.77 };
+  for (const windows of [[older, newer], [newer, older]]) {
+    const a = d.decodeAccount({ ...base, windows });
+    assert.deepEqual(a.windows.map((w) => w.id), ['5h'], 'the header and the poll spelling are one window');
+    assert.equal(a.windows[0].utilization, 0.77, 'the newer reading wins, whichever order the route sent the two in');
+    assert.equal(a.windows[0].observedAt, new Date(1_900_000).toISOString());
+  }
+  const all = d.decodeAccount({
+    ...base,
+    windows: [{ id: 'fable', observed_at: 1_000_000, resets_at: 9, utilization: 0.1 }, newer, { id: 'seven_day', observed_at: 1_000_000, resets_at: 9, utilization: 0.4 }],
+  });
+  assert.deepEqual(all.windows.map((w) => w.id), ['5h', '7d'], 'the fold draws in page order, not in the order the route sent');
+  assert.equal(all.fableWindow.id, '7d_fable');
+});
+
+test('a quota history both samplers wrote merges into one series in time order', () => {
+  const history = d.decodeQuotaHistory({
+    account_id: 'business',
+    windows: [
+      { id: '5h', samples: [{ at: 2_000_000, utilization: 0.5 }] },
+      { id: 'seven_day', samples: [{ at: 1_000_000, utilization: 0.2 }] },
+      { id: 'five_hour', samples: [{ at: 1_000_000, utilization: 0.3 }] },
+    ],
+  });
+  assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d'], 'merged, and in the order the pages draw them');
+  assert.deepEqual(history[0].samples.map((s) => s.utilization), [0.3, 0.5], 'both samplers land in one series, oldest first');
+  assert.equal(history[0].accountId, 'business');
+});
+
 test('plan labels read the tier', () => {
   assert.equal(d.planLabel('default_claude_max_20x'), 'Max 20x');
   assert.equal(d.planLabel('claude_pro'), 'Pro');
@@ -132,7 +164,13 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const preview = d.decodePriceImport(fixture('pricing_import'));
-  assert.ok(preview.token.startsWith('imp_') && preview.inFile === 1 && preview.changes === 1);
+  // The imported file carries the one model the router serves, at the five prices the shipped table already
+  // holds, so an exact diff would count no change. `diff_against` compares the five fields with `!=`, and the
+  // file's 2e-07 per token reads back as 0.19999999999999998 per million against a stored 0.2, so the route
+  // answers one. This pins the route's answer, artefact and all; the tolerance belongs to the import, not here.
+  assert.equal(preview.inFile, 1);
+  assert.equal(preview.changes, 1);
+  assert.ok(preview.token.startsWith('imp_'));
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));

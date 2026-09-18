@@ -29,20 +29,33 @@ fn shape(v: &Value) -> Value {
     }
 }
 
+/// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
+/// grows a new one has to name it here as well. The three literals are the harness's own configuration.
+fn planted(access_token: &str, refresh_token: &str, key_secret: &str) -> Vec<String> {
+    let mut needles: Vec<String> = ["admin-secret", "viewer-secret", "sk-ant-"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    needles.push(access_token.into());
+    needles.push(refresh_token.into());
+    needles.push(key_secret.into());
+    needles
+}
+
 /// These files are committed, so a capture that picked a credential up would publish it.
-fn assert_no_secret(name: &str, body: &Value) {
+fn assert_no_secret(planted: &[String], name: &str, body: &Value) {
     let text = body.to_string();
-    for secret in ["admin-secret", "viewer-secret", "sk-ant-"] {
+    for secret in planted {
         assert!(
-            !text.contains(secret),
+            !text.contains(secret.as_str()),
             "{name}: the captured body carries a secret"
         );
     }
 }
 
-fn hold(name: &str, route: &str, body: Value) {
+fn hold(planted: &[String], name: &str, route: &str, body: Value) {
     let path = dir().join(format!("{name}.json"));
-    assert_no_secret(name, &body);
+    assert_no_secret(planted, name, &body);
     let captured = j!({ "route": route, "body": body });
     if std::env::var_os("PHOEBIS_WRITE_FIXTURES").is_some() {
         std::fs::create_dir_all(dir()).unwrap();
@@ -141,7 +154,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .store
         .set_state("business", AccountState::Ready)
         .unwrap();
-    // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
+    // Far from expiry, so reading usage never triggers a refresh of its own against the fake. Both tokens are
+    // bound rather than written inline, so the no-secret guard reads the exact values this seed plants.
+    let access_token = "oat-fixture";
+    let refresh_token = "ort-fixture";
     parts
         .store
         .commit_credentials(
@@ -151,8 +167,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             None,
             None,
             &NewBundle {
-                access_token: Secret::new("oat-fixture"),
-                refresh_token: Some(Secret::new("ort-fixture")),
+                access_token: Secret::new(access_token),
+                refresh_token: Some(Secret::new(refresh_token)),
                 issued_at: now,
                 expires_at: now + 3_600_000,
                 refresh_expires_at: None,
@@ -163,9 +179,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.store.set_profile_json("business", r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x"}}"#).unwrap();
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"least_utilized","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","allowed_models":["claude-sonnet-5"]}"#, Some(&cookie)).await).await;
+    let key_secret = created["secret"]
+        .as_str()
+        .expect("a created key answers its secret once")
+        .to_string();
+    let planted = planted(access_token, refresh_token, &key_secret);
     let mut key_created = created.clone();
+    // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
     key_created["secret"] = j!("phoebis-fixture");
-    hold("key_created", "POST /admin/keys", key_created);
+    hold(&planted, "key_created", "POST /admin/keys", key_created);
     let bucket = phoebis_ledger::bucket_of(now - 60_000);
     parts
         .db
@@ -334,7 +356,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         v["requests"].as_array().unwrap().len() == 3
     })
     .await;
-    hold("requests", "GET /admin/requests", ready);
+    hold(&planted, "requests", "GET /admin/requests", ready);
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_models", "/admin/accounts/business/models"),
@@ -368,7 +390,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
     ] {
         let response = get(app, route, Some(&cookie)).await;
         assert_eq!(response.status(), 200, "{route}");
-        hold(name, &format!("GET {route}"), json(response).await);
+        hold(
+            &planted,
+            name,
+            &format!("GET {route}"),
+            json(response).await,
+        );
     }
     let preview = json(
         post(
@@ -383,8 +410,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .await,
     )
     .await;
-    hold("pricing_import", "POST /admin/pricing/import", preview);
     hold(
+        &planted,
+        "pricing_import",
+        "POST /admin/pricing/import",
+        preview,
+    );
+    hold(
+        &planted,
         "account_sync",
         "POST /admin/accounts/business/models/sync",
         json(
@@ -399,6 +432,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .await,
     );
     hold(
+        &planted,
         "pairing_started",
         "POST /admin/oauth/sessions",
         json(
@@ -505,6 +539,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .map(|delta| j!({ "kind": "delta", "delta": delta }))
         .collect();
     hold(
+        &planted,
         "live_messages",
         "GET /admin/live",
         j!({ "snapshot": snapshot, "deltas": deltas }),
