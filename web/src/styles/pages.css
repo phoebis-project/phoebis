@@ -1380,6 +1380,14 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
+/* A client names itself far wider than the column it gets, and a wrapped cell would set the height of every row. */
+.requests__client {
+  max-width: 150px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

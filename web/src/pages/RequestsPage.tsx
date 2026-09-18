@@ -227,7 +227,7 @@ export function RequestsPage() {
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && <td className="mono">{r.model}</td>}
                         {visible.has('client') && (
-                          <td className="mono" title={r.userAgent ?? undefined}>
+                          <td className="mono requests__client" title={r.userAgent ?? undefined}>
                             {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
                           </td>
                         )}

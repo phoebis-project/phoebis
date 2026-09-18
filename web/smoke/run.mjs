@@ -122,10 +122,11 @@ m = await mount('/observe');
   await m.settle(300);
   expect('/observe detail pane', m.text(), ['Phases', 'Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished', 'Attempts', 'Usage', 'Cache write, 5m', 'Cache write, 1h']);
   // A finished 200 inference is the shape the feed carries output for; an in-flight row may not have reached its first content token yet.
-  const previewRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[6]?.textContent === 'inference' && tr.children[8]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
+  const previewRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
   previewRow?.click();
   await m.settle(300);
-  results.push({ name: '/observe an admin sees the preview of a captured request', ok: m.container.querySelector('.observe__detail .preview') !== null, missing: [previewRow ? 'no preview' : 'no finished laptop inference row'] });
+  // The pane keeps the row clicked before this one, so the preview has to be asserted on a row this check found.
+  results.push({ name: '/observe an admin sees the preview of a captured request', ok: previewRow !== undefined && m.container.querySelector('.observe__detail .preview') !== null, missing: [previewRow ? 'no preview' : 'no finished laptop inference row'] });
   const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
   plainRow?.click();
   await m.settle(300);
