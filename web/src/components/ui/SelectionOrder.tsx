@@ -3,8 +3,8 @@ import { INELIGIBLE_LABEL, RULE_NOTE, STRATEGY_RULE, selectionOrder } from '@/li
 import { Badge } from './primitives';
 
 /** The tiers the router walks for a fresh session, with the upstream the next one lands on marked. */
-export function SelectionOrder({ pool, accounts, sessions, now }: { accounts: Account[]; now: number; pool: Pool; sessions: Session[] }) {
-  const tiers = selectionOrder(pool, accounts, sessions, now);
+export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account[]; pool: Pool; sessions: Session[] }) {
+  const tiers = selectionOrder(pool, accounts, sessions);
   return (
     <div className="selection-order">
       {tiers.map((tier) => (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, MOCK, type PoolInput } from '@/api';
@@ -189,7 +189,6 @@ export function PoolsPage() {
         }}
         onKeyCreated={() => keys.reload()}
         onKeysChanged={() => keys.reload()}
-        onError={setToast}
       />
       <ConfirmDialog
         open={deleting !== null}
@@ -410,7 +409,7 @@ function PoolCard({
         <h3 className="section-title" style={{ marginTop: 12 }}>
           Selection order
         </h3>
-        <SelectionOrder pool={pool} accounts={accounts} sessions={sessions} now={now} />
+        <SelectionOrder pool={pool} accounts={accounts} sessions={sessions} />
         <h3 className="section-title" style={{ marginTop: 12 }}>
           Keys
         </h3>
@@ -529,7 +528,6 @@ export function PoolDialog({
   onSaved,
   onKeyCreated,
   onKeysChanged,
-  onError,
   accounts,
   keys,
   pools,
@@ -539,7 +537,6 @@ export function PoolDialog({
   keys: ApiKey[];
   models: { label: string; value: string }[];
   onClose: () => void;
-  onError: (message: string) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
   onSaved: (created: boolean) => void;
@@ -549,6 +546,8 @@ export function PoolDialog({
 }) {
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const [keyOpen, setKeyOpen] = useState(false);
@@ -574,10 +573,17 @@ export function PoolDialog({
     setRevoked(new Set());
     setAddModelId('');
     setBusy(false);
+    setError(null);
     // `accounts` is read but not tracked: the parent hands down a fresh array on
     // every render, and reacting to that would wipe the form mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pool]);
+
+  // A save is refused from whichever section the operator is reading, and the callout leads the first one, so
+  // the body is brought back to it. jsdom leaves scrollIntoView undefined, as it does Element.scrollTo.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [error]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
@@ -634,12 +640,13 @@ export function PoolDialog({
       setRevoked((prev) => new Set(prev).add(k.id));
       onKeysChanged();
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
   const submit = async () => {
     setBusy(true);
+    setError(null);
     const input: PoolInput = {
       affinityTtlSeconds: form.affinity,
       bodyCaptureHours: form.capture ? form.captureHours : 0,
@@ -657,9 +664,10 @@ export function PoolDialog({
       if (pool) await api.updatePool(pool.id, input);
       else await api.createPool(input);
     } catch (e) {
-      // The dialog stays open so the edit is not lost to a rejected save.
+      // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
+      // behind its backdrop would never be seen, and the edit that was refused is still on screen.
       setBusy(false);
-      onError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
       return;
     }
     setBusy(false);
@@ -672,6 +680,12 @@ export function PoolDialog({
       label: 'General',
       body: (
         <>
+          {error && (
+            <div ref={errorRef} className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{error}</div>
+            </div>
+          )}
           <Field label="Name">
             <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" />
           </Field>

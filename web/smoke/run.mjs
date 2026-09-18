@@ -575,6 +575,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Prior
 
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
   expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Main conversation', 'Subagents', 'In overage', 'Per-model overrides', 'Also warm subagent caches']);
+
+  // A retention over the router's cap is refused, and the refusal has to reach the operator inside the dialog:
+  // the dialog sits in the browser's top layer, where a toast behind its backdrop would never be seen.
+  {
+    const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(hours, '999');
+    hours?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
+    await m.settle(600);
+    const open = [...m.container.querySelectorAll('dialog[open]')].pop();
+    const callout = open?.querySelector('.callout--critical');
+    results.push({
+      name: '/pools a refused save keeps the dialog open and states why inside it',
+      ok: (open?.textContent ?? '').includes('Edit pool all') && (callout?.textContent ?? '').includes('body_capture_hours exceeds'),
+      missing: [callout?.textContent ?? 'no callout in the dialog'],
+    });
+  }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
@@ -684,13 +703,19 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
   // The key this run created, so the fixture keys the later pages read about stay where they are.
   const created = rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'smoke');
+  // Held, so the absence asserted below cannot pass on a row that was never drawn.
+  const hadRow = created !== undefined;
   created?.querySelector('.menu__trigger')?.click();
   await m.settle(120);
   [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(250);
   [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(600);
-  results.push({ name: '/keys Delete removes the row through the API', ok: !rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'smoke') && m.text().includes('Key deleted'), missing: [] });
+  results.push({
+    name: '/keys Delete removes the row through the API',
+    ok: hadRow && !rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'smoke') && m.text().includes('Key deleted'),
+    missing: [hadRow ? '' : 'no smoke row to delete'].filter(Boolean),
+  });
 }
 m.unmount();
 

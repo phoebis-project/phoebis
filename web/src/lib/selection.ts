@@ -38,7 +38,7 @@ function keyOf(account: Account, strategy: PoolStrategy): number {
 }
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
-export function selectionOrder(pool: Pool, accounts: Account[], sessions: Session[], _now: number): Tier[] {
+export function selectionOrder(pool: Pool, accounts: Account[], sessions: Session[]): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
   const priorities = [...new Set(pool.members.map((m) => m.priority))].sort((a, b) => a - b);

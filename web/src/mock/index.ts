@@ -514,7 +514,20 @@ export class MockApi implements Api {
   updatePool(id: string, input: PoolInput): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
-    const next: Pool = { ...this.pools[idx], ...input, members: input.members.map((m) => ({ ...m, eligible: 'eligible' as const })) };
+    if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
+      return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
+    }
+    const current = this.pools[idx];
+    const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
+    const next: Pool = {
+      ...current,
+      ...input,
+      // The encoder sends neither field, so a save leaves the router's own answer for them alone.
+      cacheTtl: current.cacheTtl,
+      keepalive: { ...input.keepalive, warmSubagents: current.keepalive.warmSubagents },
+      // Eligibility is the router's reading of live cooldowns and overages, not something a save can set.
+      members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) ?? 'eligible' })),
+    };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(next, 250);
   }
