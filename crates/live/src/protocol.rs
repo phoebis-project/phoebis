@@ -65,6 +65,10 @@ pub enum Delta {
         at: i64,
         cursor: u64,
         id: String,
+        /// The attempts as the request ended with them: a connection that failed before a head, and a stream
+        /// that failed after one, both settle an attempt's outcome here. The snapshot carries the same rows,
+        /// so a client that applies this delta and one that reconnects show the same request.
+        attempts: Vec<LiveAttempt>,
         cost_usd: f64,
         error_code: Option<String>,
         phases: LivePhases,

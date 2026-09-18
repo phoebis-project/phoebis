@@ -652,6 +652,17 @@
           "at": 1000900,
           "cursor": 7,
           "id": "live-1",
+          "attempts": [
+            {
+              "account_id": "business",
+              "cooldown_set": null,
+              "index": 1,
+              "outcome": "succeeded",
+              "started_at": 1000005,
+              "upstream_status": 200,
+              "windows": []
+            }
+          ],
           "cost_usd": 0.00004,
           "error_code": null,
           "phases": {

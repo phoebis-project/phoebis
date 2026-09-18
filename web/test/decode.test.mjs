@@ -266,6 +266,9 @@ test('the live snapshot and every delta decode with ISO times and null-safe fiel
   const finished = d.decodeLiveDelta(deltas.find((m) => m.delta.type === 'finished').delta);
   assert.equal(finished.status, 200);
   assert.ok(isIso(finished.phases.finishedAt) && isIso(finished.phases.firstContentAt));
+  assert.deepEqual(finished.attempts.map((a) => [a.index, a.outcome]), [[0, 'succeeded']], 'the request ends with the attempts the feed settled, so a row leaves in flight behind');
+  const failed = d.decodeLiveDelta({ ...deltas.find((m) => m.delta.type === 'finished').delta, attempts: [{ account_id: 'business', cooldown_set: null, index: 1, outcome: 'transport_error', started_at: 1000005, upstream_status: null, windows: [] }] });
+  assert.deepEqual(failed.attempts.map((a) => a.outcome), ['transport_error']);
   assert.equal(d.decodeLiveDelta({ type: 'nope', cursor: 1 }), null);
 });
 

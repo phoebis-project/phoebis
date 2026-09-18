@@ -491,6 +491,7 @@ impl LiveState {
             at: c.finished_at,
             cursor,
             id: entry.id,
+            attempts: entry.attempts,
             cost_usd: entry.cost_usd,
             error_code: entry.error_code,
             phases: entry.phases,
@@ -556,6 +557,7 @@ impl LiveState {
                 at: now,
                 cursor,
                 id,
+                attempts: e.attempts,
                 cost_usd: e.cost_usd,
                 error_code: Some("lost".into()),
                 phases: e.phases,
@@ -839,6 +841,35 @@ mod tests {
         assert_eq!(
             (outcome("a"), outcome("b")),
             (Some("failed"), Some("canceled"))
+        );
+    }
+
+    /// A client that applies deltas and one that reconnects to the snapshot must show the same request, so
+    /// the outcome a completion settles on an attempt travels with the finished delta as well.
+    #[test]
+    fn the_finished_delta_carries_the_attempts_the_request_ended_with() {
+        let mut state = state();
+        // "a" loses its connection before a head, "b" after one.
+        state.apply(observed("a"));
+        state.apply(selected("a"));
+        state.apply(observed("b"));
+        state.apply(selected("b"));
+        state.apply(head("b"));
+        let settled = |deltas: Vec<Delta>| {
+            deltas.into_iter().find_map(|d| match d {
+                Delta::Finished { attempts, .. } => Some(attempts[0].outcome.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            settled(state.apply(complete("a", Outcome::Failed, Some("overloaded_error"))))
+                .as_deref(),
+            Some("transport_error")
+        );
+        assert_eq!(
+            settled(state.apply(complete("b", Outcome::Failed, Some("overloaded_error"))))
+                .as_deref(),
+            Some("failed")
         );
     }
 

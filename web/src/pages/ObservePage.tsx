@@ -66,7 +66,9 @@ function applyDelta(store: Store, d: LiveDelta): Store {
       updated = { ...cur, preview: (cur.preview ?? '') + d.chunk };
       break;
     case 'finished': {
-      updated = { ...cur, state: 'finished', status: d.status, costUsd: d.costUsd, errorCode: d.errorCode, phases: d.phases, usage: d.usage };
+      // The attempts come with the delta: a connection that failed before a head, and a stream that failed
+      // after one, both settle an outcome here, and the row must not keep the one it was drawn with.
+      updated = { ...cur, state: 'finished', attempts: d.attempts, status: d.status, costUsd: d.costUsd, errorCode: d.errorCode, phases: d.phases, usage: d.usage };
       const inFlight = new Map(store.inFlight);
       inFlight.delete(d.id);
       const cutoff = Date.parse(d.at) - RING_SPAN_S * 1000;

@@ -326,7 +326,7 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
     case 'head': return { at: isoOr(d.at, epoch), attempt: liveAttempt(d.attempt), cursor, id, status: num(d.status), type: 'head' };
     case 'progress': return { at: isoOr(d.at, epoch), cursor, id, outputTps: numOrNull(d.output_tps), type: 'progress', usage: usageOf(d.usage) };
     case 'preview': return { chunk: str(d.chunk), cursor, id, type: 'preview' };
-    case 'finished': return { at: isoOr(d.at, epoch), costUsd: num(d.cost_usd), cursor, errorCode: strOrNull(d.error_code), id, phases: livePhases(d.phases), status: numOrNull(d.status), type: 'finished', usage: usageOf(d.usage) };
+    case 'finished': return { at: isoOr(d.at, epoch), attempts: list(d.attempts).map(liveAttempt), costUsd: num(d.cost_usd), cursor, errorCode: strOrNull(d.error_code), id, phases: livePhases(d.phases), status: numOrNull(d.status), type: 'finished', usage: usageOf(d.usage) };
     case 'tick': return { cursor, tick: decodeLiveTick(d.tick), type: 'tick' };
     default: return null;
   }

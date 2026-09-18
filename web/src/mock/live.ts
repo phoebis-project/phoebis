@@ -416,7 +416,7 @@ class LiveFeed {
     this.recent.unshift(req);
     const cutoff = finishedMs - RING_SPAN;
     this.recent = this.recent.filter((r) => Date.parse(r.phases.receivedAt) >= cutoff).slice(0, RING_CAP);
-    this.emit({ at: req.phases.finishedAt, costUsd: req.costUsd, cursor: this.next(), errorCode: req.errorCode, id: req.id, phases: { ...req.phases }, status: req.status ?? plan.finalStatus, type: 'finished', usage: { ...req.usage } });
+    this.emit({ at: req.phases.finishedAt, attempts: req.attempts.map((a) => ({ ...a })), costUsd: req.costUsd, cursor: this.next(), errorCode: req.errorCode, id: req.id, phases: { ...req.phases }, status: req.status ?? plan.finalStatus, type: 'finished', usage: { ...req.usage } });
   }
 }
 

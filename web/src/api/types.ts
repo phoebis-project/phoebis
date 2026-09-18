@@ -710,7 +710,7 @@ export type LiveDelta =
   | { at: string; cursor: number; id: string; type: 'head'; attempt: LiveAttempt; status: number }
   | { at: string; cursor: number; id: string; type: 'progress'; outputTps: number | null; usage: Usage }
   | { cursor: number; id: string; type: 'preview'; chunk: string }
-  | { at: string; cursor: number; id: string; type: 'finished'; costUsd: number; errorCode: string | null; phases: LivePhases; status: number | null; usage: Usage }
+  | { at: string; cursor: number; id: string; type: 'finished'; attempts: LiveAttempt[]; costUsd: number; errorCode: string | null; phases: LivePhases; status: number | null; usage: Usage }
   | { cursor: number; request: LiveRequest; type: 'started' }
   | { cursor: number; tick: LiveTick; type: 'tick' };
 
