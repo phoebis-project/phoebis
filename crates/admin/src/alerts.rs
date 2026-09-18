@@ -2,6 +2,7 @@
 //! A rule's secret goes in and never comes out; `has_secret` is all a route says about it.
 
 use std::collections::HashMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -25,10 +26,12 @@ const LINK_LOCAL: &str = "webhook_url must not point at a link-local address";
 const LOOPBACK: &str = "webhook_url must not point at loopback";
 const UNSPECIFIED: &str = "webhook_url must not point at the unspecified address";
 
+/// `kind` is read as free text rather than a `ScopeType`, so an unknown or absent scope reaches `validate` and
+/// is refused by name instead of failing the body parse with nothing to go on.
 #[derive(Deserialize)]
 struct ScopeInput {
-    #[serde(rename = "type")]
-    kind: ScopeType,
+    #[serde(rename = "type", default)]
+    kind: String,
     #[serde(default)]
     id: Option<String>,
 }
@@ -112,35 +115,44 @@ fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value
 /// router into a probe of its own network.
 fn destination_refusal(url: &Url) -> Option<&'static str> {
     match url.host()? {
-        // RFC 6761 reserves the name and everything under it for loopback, so no lookup is needed.
+        // RFC 6761 reserves the name and everything under it for loopback, so no lookup is needed. A single
+        // trailing dot spells the same name, so trim it before comparing.
         Host::Domain(name) => {
+            let name = name.strip_suffix('.').unwrap_or(name);
             (name == "localhost" || name.ends_with(".localhost")).then_some(LOOPBACK)
         }
-        Host::Ipv4(ip) => {
-            if ip.is_loopback() {
-                Some(LOOPBACK)
-            } else if ip.is_link_local() {
-                Some(LINK_LOCAL)
-            } else if ip.is_unspecified() {
-                Some(UNSPECIFIED)
-            } else {
-                None
-            }
-        }
-        Host::Ipv6(ip) => {
-            // Matching fe80::/10 by hand: `Ipv6Addr::is_unicast_link_local` is still unstable.
-            let link_local = ip.segments()[0] & 0xffc0 == 0xfe80;
-            if ip.is_loopback() {
-                Some(LOOPBACK)
-            } else if link_local {
-                Some(LINK_LOCAL)
-            } else if ip.is_unspecified() {
-                Some(UNSPECIFIED)
-            } else {
-                None
-            }
-        }
+        Host::Ipv4(ip) => ipv4_refusal(ip),
+        Host::Ipv6(ip) => ipv6_refusal(ip),
     }
+}
+
+fn ipv4_refusal(ip: Ipv4Addr) -> Option<&'static str> {
+    if ip.is_loopback() {
+        Some(LOOPBACK)
+    } else if ip.is_link_local() {
+        Some(LINK_LOCAL)
+    } else if ip.is_unspecified() {
+        Some(UNSPECIFIED)
+    } else {
+        None
+    }
+}
+
+fn ipv6_refusal(ip: Ipv6Addr) -> Option<&'static str> {
+    // `::1` and `::` first: the fold below reads them as 0.0.0.1 and 0.0.0.0, which loses the loopback class.
+    if ip.is_loopback() {
+        return Some(LOOPBACK);
+    }
+    if ip.is_unspecified() {
+        return Some(UNSPECIFIED);
+    }
+    // An IPv4-mapped address, and the deprecated IPv4-compatible form `to_ipv4` also covers, connects straight
+    // to the embedded IPv4 host, so classify that host instead.
+    if let Some(embedded) = ip.to_ipv4_mapped().or_else(|| ip.to_ipv4()) {
+        return ipv4_refusal(embedded);
+    }
+    // Matching fe80::/10 by hand: `Ipv6Addr::is_unicast_link_local` is still unstable.
+    (ip.segments()[0] & 0xffc0 == 0xfe80).then_some(LINK_LOCAL)
 }
 
 /// Every rule the spec's table rules out, over the whole row, so create and patch refuse the same things.
@@ -207,10 +219,7 @@ fn apply(row: &mut AlertRuleRow, input: &RuleInput, now: i64) {
         row.kind = kind.clone();
     }
     if let Some(scope) = &input.scope {
-        row.scope_type = serde_json::to_value(scope.kind)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_default();
+        row.scope_type = scope.kind.clone();
         row.scope_id = scope.id.clone();
     }
     if let Some(t) = input.threshold {

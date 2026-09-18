@@ -41,6 +41,14 @@ async fn rules_are_created_validated_edited_tested_and_deleted_without_leaking_t
     );
     assert!(!rule.to_string().contains("s3cret"));
     let id = rule["id"].as_str().unwrap().to_string();
+    assert!(
+        id.len() == 21
+            && id.starts_with("rule_")
+            && id[5..]
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "the id is rule_ and 16 lowercase hex characters, not {id}"
+    );
     for (body, why) in [
         (
             r#"{"kind":"nope","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/h"}"#,
@@ -87,6 +95,21 @@ async fn rules_are_created_validated_edited_tested_and_deleted_without_leaking_t
             "{why}"
         );
     }
+    let unknown_scope = post(
+        &parts.app,
+        "/admin/alerts/rules",
+        r#"{"kind":"client_drift","scope":{"type":"nope"},"webhook_url":"http://127.0.0.1:1/h"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(unknown_scope.status(), 400);
+    assert!(
+        json(unknown_scope).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("scope.type is"),
+        "an unknown scope type is refused by name rather than as a malformed body"
+    );
     let edited = patch(
         &parts.app,
         &format!("/admin/alerts/rules/{id}"),
@@ -472,9 +495,19 @@ async fn a_rule_may_not_aim_its_webhook_at_an_address_only_the_router_can_reach(
     for (url, reason) in [
         ("http://127.0.0.1:9000/hook", "loopback"),
         ("http://localhost/hook", "loopback"),
+        ("http://localhost./hook", "loopback"),
+        ("http://hook.localhost./hook", "loopback"),
         ("http://[::1]/hook", "loopback"),
+        // An IPv4-mapped or IPv4-compatible address reaches the IPv4 host, so it is refused as that host.
+        ("http://[::ffff:127.0.0.1]/hook", "loopback"),
+        ("http://[0:0:0:0:0:ffff:7f00:1]/hook", "loopback"),
+        ("http://[::127.0.0.1]/hook", "loopback"),
         ("http://169.254.169.254/latest/meta-data", "link-local"),
         ("http://[fe80::1]/hook", "link-local"),
+        (
+            "http://[::ffff:169.254.169.254]/latest/meta-data",
+            "link-local",
+        ),
         ("http://0.0.0.0/hook", "the unspecified address"),
         ("http://[::]/hook", "the unspecified address"),
     ] {
