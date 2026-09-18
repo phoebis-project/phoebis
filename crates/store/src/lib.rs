@@ -1,6 +1,7 @@
 //! SQLite registry and encrypted credentials.
 
 mod accounts;
+mod alerts;
 mod credentials;
 mod lock;
 mod pricing;
@@ -21,6 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 
 pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
+pub use alerts::{AlertDeliveryRow, AlertEventRow, AlertRuleRow};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
     Secret,
@@ -45,6 +47,8 @@ const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
 pub enum StoreError {
     #[error("account {0} not found")]
     AccountNotFound(String),
+    #[error("alert rule {0} not found")]
+    AlertRuleNotFound(String),
     #[error("refresh attempt {0} not found")]
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]

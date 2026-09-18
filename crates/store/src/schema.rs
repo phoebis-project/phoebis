@@ -39,6 +39,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (7, V7),
     (8, V8),
     (9, V9),
+    (10, V10),
 ];
 
 const V2: &str = r#"
@@ -134,4 +135,25 @@ ALTER TABLE pools ADD COLUMN select_below_utilization REAL;
 
 const V9: &str = r#"
 ALTER TABLE cooldowns ADD COLUMN set_at INTEGER NOT NULL DEFAULT 0;
+"#;
+
+// Alert rules are registry rows edited in the UI, so they live beside pools and keys; events and deliveries
+// cascade with their rule because an event without its rule has no subject to show.
+const V10: &str = r#"
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id TEXT,
+  threshold REAL, window TEXT, webhook_url TEXT NOT NULL, secret_sealed BLOB, secret_nonce BLOB,
+  enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_events (
+  id TEXT PRIMARY KEY, rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, subject TEXT NOT NULL, state TEXT NOT NULL, opened_at INTEGER NOT NULL,
+  resolved_at INTEGER, detail_json TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS alert_events_open ON alert_events (rule_id, subject) WHERE state = 'open';
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES alert_events(id) ON DELETE CASCADE,
+  state TEXT NOT NULL, attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT
+);
+CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id, id);
 "#;

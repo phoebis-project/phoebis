@@ -183,6 +183,14 @@ impl Metrics {
         );
     }
 
+    pub fn observe_alert_delivery(&self, rule: &str, outcome: &str) {
+        self.add(
+            "phoebis_alert_deliveries_total",
+            vec![("outcome", outcome.into()), ("rule", rule.into())],
+            1.0,
+        );
+    }
+
     pub fn render(
         &self,
         gauges: &RoutingGauges,
@@ -194,7 +202,8 @@ impl Metrics {
         for (name, kind) in FAMILIES.iter().copied() {
             out.push_str(&format!("# TYPE {name} {kind}\n"));
             match name {
-                "phoebis_attempts_total"
+                "phoebis_alert_deliveries_total"
+                | "phoebis_attempts_total"
                 | "phoebis_keepalive_probes_total"
                 | "phoebis_keepalive_saved_usd_total"
                 | "phoebis_ledger_dropped_total"
@@ -357,6 +366,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_account_cooldown_seconds", "gauge"),
     ("phoebis_account_overage_in_use", "gauge"),
     ("phoebis_account_ratelimit_utilization", "gauge"),
+    ("phoebis_alert_deliveries_total", "counter"),
     ("phoebis_attempts_total", "counter"),
     ("phoebis_bus_dropped_total", "counter"),
     ("phoebis_bus_subscriber_panics_total", "counter"),

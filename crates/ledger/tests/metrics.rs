@@ -354,3 +354,21 @@ fn every_registered_family_renders_and_nothing_else_does() {
     sorted.sort();
     assert_eq!(order, sorted, "families render in name order");
 }
+
+#[test]
+fn alert_deliveries_are_counted_per_rule_and_outcome() {
+    let metrics = Metrics::new();
+    metrics.observe_alert_delivery("rule_reauth", "delivered");
+    metrics.observe_alert_delivery("rule_reauth", "failed");
+    metrics.observe_alert_delivery("rule_reauth", "failed");
+    let text = metrics.render(&RoutingGauges::default(), &[], 0);
+    assert!(text.contains("# TYPE phoebis_alert_deliveries_total counter"));
+    assert!(
+        text.contains(r#"phoebis_alert_deliveries_total{outcome="delivered",rule="rule_reauth"} 1"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"phoebis_alert_deliveries_total{outcome="failed",rule="rule_reauth"} 2"#),
+        "{text}"
+    );
+}

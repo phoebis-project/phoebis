@@ -320,6 +320,17 @@ impl RoutingState {
         self.samples.get(account_id)
     }
 
+    /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
+    pub fn samples(&self) -> Vec<(String, UtilizationSample)> {
+        let mut out: Vec<_> = self
+            .samples
+            .iter()
+            .map(|(id, s)| (id.clone(), s.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// How long a reading stands when it dates no refund of its own: the interval the router pulls samples
     /// on, so a window read full is re-read rather than believed for ever.
     pub(crate) fn sample_ttl_ms(&self) -> i64 {

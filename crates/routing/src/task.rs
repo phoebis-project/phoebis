@@ -183,6 +183,9 @@ enum Command {
         reply: oneshot::Sender<Result<(), String>>,
     },
     Report(Report),
+    Samples {
+        reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
     Select {
         request: SelectRequest,
         reply: oneshot::Sender<SelectAnswer>,
@@ -284,6 +287,11 @@ impl RouterHandle {
             reply,
         })
         .await
+    }
+    /// One ask for every account's latest utilization sample, so a rule sweep never queues one command per
+    /// account in front of selection.
+    pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
+        self.ask(|reply| Command::Samples { reply }).await
     }
     pub fn touch_key(&self, key_id: &str) {
         let _ = self.tx.try_send(Command::Touch {
@@ -669,6 +677,9 @@ impl Task {
             }
             Command::Overage { account_id, reply } => {
                 let _ = reply.send(self.state.overage(&account_id).cloned());
+            }
+            Command::Samples { reply } => {
+                let _ = reply.send(self.state.samples());
             }
             Command::Touch { key_id } => {
                 let now = (self.clock)();

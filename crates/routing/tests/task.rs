@@ -908,6 +908,37 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, .. } if session_id == "s2"),
         "and the idle pin went with it"
     );
+    // Last, because a fresh reading below the limit releases the rate-limit cooldown the assertions above
+    // need still standing.
+    handle.report(Report::Sample {
+        account_id: a.clone(),
+        sample: UtilizationSample {
+            five_hour: Some(0.7),
+            five_hour_reset: Some(9_000),
+            seven_day: Some(0.2),
+            seven_day_reset: None,
+            fable: None,
+            fable_reset: None,
+            observed_at: 1_500,
+        },
+    });
+    // The report lands on the task's next turn; a short async poll reads it without blocking a worker.
+    let mut samples = handle.samples().await.unwrap();
+    for _ in 0..100 {
+        if !samples.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        samples = handle.samples().await.unwrap();
+    }
+    assert_eq!(
+        samples
+            .iter()
+            .map(|(id, s)| (id.as_str(), s.five_hour))
+            .collect::<Vec<_>>(),
+        vec![(a.as_str(), Some(0.7))],
+        "one ask answers every account's latest sample, by id"
+    );
 }
 
 /// A rejection as the relay reports it, with the clock deciding the row's set time.
