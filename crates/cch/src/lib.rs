@@ -170,7 +170,8 @@ pub fn number_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
 
 /// Raw span of element `index` inside the array at `path`, walked as `string_member_span` walks:
 /// `walk_to_last_segment` positions at the array's `[`, then this skips to `index` the way an array-index path
-/// segment already does, and `Scanner::value(false)` reads the element's own span.
+/// segment already does, and `Scanner::value(false)` reads the element's own span. A caller deletes the span
+/// itself and its trailing comma.
 pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(usize, usize)> {
     let mut s = Scanner {
         body,
