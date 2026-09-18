@@ -217,6 +217,11 @@ expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'R
   await m.settle(1_200);
   results.push({ name: '/quota Refresh all reloads every card', ok: m.text().includes('5 loaded'), missing: [m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'] });
 }
+{
+  // The mock registry holds six, so the plural is what this can read; the singular is asserted by its absence.
+  const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
+  results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '6 credentials', missing: [count] });
+}
 m.unmount();
 
 m = await mount('/accounts');
@@ -890,13 +895,12 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
     const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns', 'Wasted probes']), missing: heads });
+    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns']), missing: heads });
     const panel = Object.fromEntries([...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
     results.push({ name: '/analytics an API-key upstream only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
-    results.push({ name: '/analytics a key that opts out of cache warming wastes no probes', ok: ci[10] === '0', missing: [ci[10] ?? 'no ci row'] });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });

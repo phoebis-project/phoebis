@@ -782,11 +782,11 @@ function MissReasonsByGroup({ groups, groupLabel }: { groupLabel: string; groups
     <BreakdownTable
       title={`Misses by reason by ${groupLabel.toLowerCase()}`}
       groupLabel={groupLabel}
-      columns={[...CACHE_MISS_REASONS.map((reason) => CACHE_MISS_LABEL[reason]), 'Expired between turns', 'Wasted probes']}
+      columns={[...CACHE_MISS_REASONS.map((reason) => CACHE_MISS_LABEL[reason]), 'Expired between turns']}
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
-        cells: [...CACHE_MISS_REASONS.map((reason) => fmtInt(g.cacheMissReasons[reason])), fmtInt(g.expiredBetweenTurns), fmtInt(g.savings.wastedProbes)],
+        cells: [...CACHE_MISS_REASONS.map((reason) => fmtInt(g.cacheMissReasons[reason])), fmtInt(g.expiredBetweenTurns)],
       }))}
     />
   );

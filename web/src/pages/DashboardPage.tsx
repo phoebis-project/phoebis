@@ -6,7 +6,7 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { Badge, Card, Skeleton } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -99,7 +99,10 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
   const shareOfPool = (remaining: number) => (rows.length ? remaining / rows.length : 0);
   return (
     <Card title={title} subtitle={subtitle}>
-      {accounts ? (
+      {accounts && rows.length === 0 ? (
+        // A registry of API-key upstreams alone has no window to draw, and an empty ring reads as exhausted.
+        <EmptyState title="No subscription upstreams" body="A subscription upstream reports the window this card draws." />
+      ) : accounts ? (
         <div className="remaining">
           <Donut
             slices={rows.map((r) => ({ id: r.id, label: r.label, value: r.remaining, color: r.color, title: `${r.label}: ${fmtPct(r.remaining)} of its window remaining (${fmtPct(shareOfPool(r.remaining))} of pooled capacity)` }))}

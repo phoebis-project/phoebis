@@ -91,6 +91,8 @@ const VIEWS = [
 ];
 
 const failures = [];
+/** Printed at the end: the numbers behind the geometry checks, so a run can be read as a measurement. */
+const measurements = [];
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { height: 800, width: 1280 } });
 const page = await context.newPage();
@@ -121,6 +123,46 @@ async function poolChips(theme) {
   });
   if (chips.sizes.length !== 1 || chips.sizes[0] !== chips.reference) {
     failures.push(`${theme} /pools: chip sizes ${chips.sizes.join(', ') || 'none'} against the reference ${chips.reference}`);
+  }
+}
+
+/**
+ * Both quota donuts against a registry with no subscription upstream: the seed has one API-key upstream, so
+ * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
+ */
+async function remainingCards(theme) {
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.card')]
+      .filter((c) => /remaining$/.test(c.querySelector('.card__title')?.textContent ?? ''))
+      .map((c) => ({ text: c.textContent ?? '', title: c.querySelector('.card__title')?.textContent ?? '' })),
+  );
+  if (cards.length !== 2) {
+    failures.push(`${theme} /: ${cards.length} remaining cards, expected 5h and 7d`);
+    return;
+  }
+  for (const card of cards.filter((c) => !c.text.includes('No subscription upstreams'))) {
+    failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription upstream (${card.text.slice(0, 80)})`);
+  }
+}
+
+/** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
+async function costCapRows(theme) {
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('.cost-caps__head')].flatMap((head) => {
+      const [left, right] = [...head.children];
+      if (!left || !right) return [];
+      const a = left.getBoundingClientRect();
+      const b = right.getBoundingClientRect();
+      return [{ gap: b.left - a.right, text: `${left.textContent} ${right.textContent}` }];
+    }),
+  );
+  if (!rows.length) {
+    failures.push(`${theme} /sessions: the probe cost tile drew no row to measure`);
+    return;
+  }
+  measurements.push(`${theme} /sessions cost caps ${JSON.stringify(rows)}`);
+  for (const row of rows.filter((r) => r.gap < 6)) {
+    failures.push(`${theme} /sessions: "${row.text}" leaves ${row.gap.toFixed(1)}px between the pool and the amount`);
   }
 }
 
@@ -196,7 +238,9 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
+      if (view.path === '/') await remainingCards(theme);
       if (view.path === '/observe') await liveFeed(theme);
+      if (view.path === '/sessions') await costCapRows(theme);
       if (view.path === '/pools') await poolChips(theme);
       if (view.path === '/analytics') await wastedProbeRows(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
@@ -217,3 +261,4 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(`browser pass: ${VIEWS.length} views in 2 themes, screenshots under ${shots}`);
+for (const line of measurements) console.log(`  ${line}`);

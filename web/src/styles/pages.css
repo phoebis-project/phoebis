@@ -2046,6 +2046,8 @@
 .cost-caps__head {
   display: flex;
   justify-content: space-between;
+  /* The pool id and the amount are the two ends of one row: without this a narrow tile runs them together. */
+  gap: 10px;
   margin-bottom: 4px;
   font-size: 12.5px;
 }

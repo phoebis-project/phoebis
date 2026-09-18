@@ -56,7 +56,7 @@ export function QuotaPage() {
       <div className="page-head">
         <div>
           <p className="page-head__meta quota-meta">
-            <span>{total} credentials</span>
+            <span>{total} {total === 1 ? 'credential' : 'credentials'}</span>
             <span className="quota-meta__sep" aria-hidden />
             <span className={loaded ? '' : 'muted'}>{loaded} loaded</span>
             {attention > 0 && (
