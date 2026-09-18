@@ -15,7 +15,9 @@ const usd4 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD'
 export const fmtInt = (n: number) => plain.format(Math.round(n));
 export const fmtCompact = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact.format(n));
 export const fmtCompact2 = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact2.format(n));
-export const fmtUsd = (n: number) => (Math.abs(n) > 0 && Math.abs(n) < 0.01 ? usd4.format(n) : usd.format(n));
+// `n + 0` folds a negative zero onto a positive one: an empty sum of f64 costs reaches the wire as -0.0 and
+// Intl would print its sign as "-$0.00".
+export const fmtUsd = (n: number, v = n + 0) => (Math.abs(v) > 0 && Math.abs(v) < 0.01 ? usd4.format(v) : usd.format(v));
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);

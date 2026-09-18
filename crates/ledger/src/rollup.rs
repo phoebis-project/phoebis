@@ -311,7 +311,12 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             }
         }
     }
-    d.estimated_usd = attempts.iter().filter_map(|a| a.estimated_usd).sum();
+    // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so an hour of unpriced
+    // requests would carry a signed zero into the rollups and out to the wire.
+    d.estimated_usd = attempts
+        .iter()
+        .filter_map(|a| a.estimated_usd)
+        .fold(0.0, |a, b| a + b);
     d.input_usd = costs.input_usd;
     d.cache_read_usd = costs.cache_read_usd;
     d.cache_write_usd = costs.cache_write_usd;
@@ -1258,6 +1263,16 @@ mod tests {
                 && rows[0].cache_write_usd >= 0.0
                 && rows[0].output_usd >= 0.0,
             "a replace never drives a stored split column negative"
+        );
+    }
+
+    #[test]
+    fn an_hour_of_unpriced_requests_rolls_up_an_unsigned_zero() {
+        let delta = delta_of(&RequestRecord::default(), &[]);
+        assert_eq!(
+            serde_json::to_string(&delta.estimated_usd).unwrap(),
+            "0.0",
+            "a signed zero on the wire is read back as -$0.00"
         );
     }
 }

@@ -31,7 +31,9 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
         "user_agent": r.user_agent,
         "usage": { "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens), "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens), "output": tokens(|a| a.output_tokens) },
-        "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).sum::<f64>(),
+        // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
+        // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
+        "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
     })
 }
@@ -186,5 +188,21 @@ pub(crate) async fn bodies(
         Ok(Some(b)) => Json(json!({ "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text), "expires_at": b.expires_at })).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => ledger_failure(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use phoebis_ledger::RequestRecord;
+
+    #[test]
+    fn a_request_with_no_priced_attempt_costs_an_unsigned_zero() {
+        let summary = request_summary(&RequestRecord::default(), &[]);
+        assert_eq!(
+            summary["cost_usd"].to_string(),
+            "0.0",
+            "a signed zero on the wire is read back as -$0.00"
+        );
     }
 }
