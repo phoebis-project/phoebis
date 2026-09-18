@@ -40,6 +40,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (8, V8),
     (9, V9),
     (10, V10),
+    (11, V11),
 ];
 
 const V2: &str = r#"
@@ -162,4 +163,13 @@ CREATE TABLE IF NOT EXISTS alert_deliveries (
   attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT
 );
 CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id, id);
+"#;
+
+// Round robin and the kind-ordered selection are per-pool choices; a pool written before them keeps the
+// priority-then-strategy order it had. A pin's migration time is what the dwell reads, null for a pin that
+// never moved for utilization.
+const V11: &str = r#"
+ALTER TABLE pools ADD COLUMN prefer_subscription INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pools ADD COLUMN api_key_sub_strategy TEXT NOT NULL DEFAULT 'priority_random';
+ALTER TABLE pins ADD COLUMN migrated_at INTEGER;
 "#;

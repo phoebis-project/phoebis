@@ -30,7 +30,8 @@ pub use credentials::{
 pub use pricing::PricingVersion;
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
-    PoolRow, RegistryChange, RegistryLoad, ServedModel, ServedModelWrite, Strategy, SyncDelta,
+    PoolRow, RegistryChange, RegistryLoad, ServedModel, ServedModelWrite, Strategy, SubStrategy,
+    SyncDelta,
 };
 pub use routing::{CooldownRow, OverageRow, PinRow, RoutingLoad};
 

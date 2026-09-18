@@ -19,7 +19,7 @@ use phoebis_oauth::Clock;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, OveragePolicy, PoolRow, Secret,
-    StorageKey, Store, Strategy,
+    StorageKey, Store, Strategy, SubStrategy,
 };
 
 pub const NOW: i64 = 1_700_000_000_000;
@@ -185,6 +185,8 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 default_allowed_models: None,
                 keepalive_json: r#"{"enabled":true,"probe_cost_cap_usd_per_day":1.0}"#.into(),
                 body_capture_hours: 0,
+                prefer_subscription: false,
+                api_key_sub_strategy: SubStrategy::PriorityRandom,
                 created_at: NOW,
                 updated_at: NOW,
             },

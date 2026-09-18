@@ -341,6 +341,7 @@ pub fn select(
             epoch,
             created_at: request.now,
             last_used_at: request.now,
+            migrated_at: None,
         };
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
@@ -514,6 +515,9 @@ fn choose<'a>(
             Some(ties[rng.random_range(0..ties.len())])
         }
         Strategy::PriorityRandom => Some(tier[rng.random_range(0..tier.len())]),
+        // The rotation lands with the selection changes; until then the new variant serves the tier the way
+        // priority_random does rather than leaving the match non-exhaustive.
+        Strategy::RoundRobin => Some(tier[rng.random_range(0..tier.len())]),
     }
 }
 

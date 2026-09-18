@@ -1152,7 +1152,7 @@ pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoebis_store::{OveragePolicy, PoolRow, RoutingLoad, Strategy};
+    use phoebis_store::{OveragePolicy, PoolRow, RoutingLoad, Strategy, SubStrategy};
 
     /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, and an
     /// overage policy that never keeps an account out.
@@ -1169,6 +1169,8 @@ mod tests {
             default_allowed_models: None,
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
+            prefer_subscription: false,
+            api_key_sub_strategy: SubStrategy::PriorityRandom,
             created_at: 0,
             updated_at: 0,
         }

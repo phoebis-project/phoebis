@@ -14,6 +14,7 @@ pub enum Strategy {
     EarliestRefresh,
     LeastUtilized,
     PriorityRandom,
+    RoundRobin,
 }
 
 impl Strategy {
@@ -22,6 +23,7 @@ impl Strategy {
             Strategy::EarliestRefresh => "earliest_refresh",
             Strategy::LeastUtilized => "least_utilized",
             Strategy::PriorityRandom => "priority_random",
+            Strategy::RoundRobin => "round_robin",
         }
     }
 }
@@ -32,12 +34,45 @@ impl FromSql for Strategy {
             "earliest_refresh" => Ok(Strategy::EarliestRefresh),
             "least_utilized" => Ok(Strategy::LeastUtilized),
             "priority_random" => Ok(Strategy::PriorityRandom),
+            "round_robin" => Ok(Strategy::RoundRobin),
             _ => Err(FromSqlError::InvalidType),
         }
     }
 }
 
 impl ToSql for Strategy {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// How the api_key group orders under a sample-driven strategy, which has no sample to order an API key by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubStrategy {
+    PriorityRandom,
+    RoundRobin,
+}
+
+impl SubStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubStrategy::PriorityRandom => "priority_random",
+            SubStrategy::RoundRobin => "round_robin",
+        }
+    }
+}
+
+impl FromSql for SubStrategy {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "priority_random" => Ok(SubStrategy::PriorityRandom),
+            "round_robin" => Ok(SubStrategy::RoundRobin),
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for SubStrategy {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(self.as_str().into())
     }
@@ -121,8 +156,24 @@ pub struct PoolRow {
     pub default_allowed_models: Option<Vec<String>>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
+    /// Order the selection set by account kind before priority; forced on under the sample-driven strategies.
+    pub prefer_subscription: bool,
+    pub api_key_sub_strategy: SubStrategy,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl PoolRow {
+    /// The operator's stored preference, or the strategies that force it: a sample-driven strategy has no
+    /// sample to order an api_key account by. One function, so the selector, the pool route, and the console
+    /// cannot answer differently about the same pool.
+    pub fn kind_ordered(&self) -> bool {
+        self.prefer_subscription
+            || matches!(
+                self.strategy,
+                Strategy::EarliestRefresh | Strategy::LeastUtilized
+            )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -327,8 +378,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
             params![
                 row.id,
                 row.label,
@@ -341,6 +392,8 @@ impl Store {
                 list_json(&row.default_allowed_models)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
+                row.prefer_subscription,
+                row.api_key_sub_strategy,
                 now
             ],
         )?;
@@ -354,7 +407,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, updated_at = ?12 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, updated_at = ?14 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -367,6 +420,8 @@ impl Store {
                 list_json(&row.default_allowed_models)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
+                row.prefer_subscription,
+                row.api_key_sub_strategy,
                 now
             ],
         )?;
@@ -963,7 +1018,7 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at FROM pools";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy FROM pools";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
@@ -998,6 +1053,8 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         body_capture_hours: r.get::<_, i64>(10)? as u32,
         created_at: r.get(11)?,
         updated_at: r.get(12)?,
+        prefer_subscription: r.get(13)?,
+        api_key_sub_strategy: r.get(14)?,
     })
 }
 
@@ -1048,6 +1105,8 @@ fn pool_diff(row: &PoolRow) -> String {
         "select_below_utilization": row.select_below_utilization,
         "default_allowed_models": row.default_allowed_models,
         "body_capture_hours": row.body_capture_hours,
+        "prefer_subscription": row.prefer_subscription,
+        "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
     })
     .to_string()
 }

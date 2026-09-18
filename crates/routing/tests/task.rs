@@ -9,7 +9,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolRow,
-    ServedModelWrite, StorageKey, Store, Strategy,
+    ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
 };
 use fake_upstream::{stays_for, wait_for};
 
@@ -58,6 +58,8 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 default_allowed_models: None,
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
+                prefer_subscription: false,
+                api_key_sub_strategy: SubStrategy::PriorityRandom,
                 created_at: 0,
                 updated_at: 0,
             },

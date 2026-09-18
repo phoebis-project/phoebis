@@ -403,6 +403,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
                 epoch,
                 created_at: common::NOW - 10_000,
                 last_used_at,
+                migrated_at: None,
             })
             .unwrap();
     }
@@ -443,6 +444,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 default_allowed_models: None,
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
+                prefer_subscription: false,
+                api_key_sub_strategy: phoebis_store::SubStrategy::PriorityRandom,
                 created_at: common::NOW,
                 updated_at: common::NOW,
             },
@@ -480,6 +483,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             epoch: 3,
             created_at: common::NOW - 10,
             last_used_at: common::NOW - 5,
+            migrated_at: None,
         })
         .unwrap();
     store
@@ -491,6 +495,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             epoch: 2,
             created_at: 0,
             last_used_at: common::NOW - 90_000_000,
+            migrated_at: None,
         })
         .unwrap();
     // A second app over the same store: its router task loads the pins the first one never saw.

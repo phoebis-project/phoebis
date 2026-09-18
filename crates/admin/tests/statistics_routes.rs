@@ -484,6 +484,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 epoch: 1,
                 created_at: now - 10,
                 last_used_at: now - 5,
+                migrated_at: None,
             })
             .unwrap();
     }

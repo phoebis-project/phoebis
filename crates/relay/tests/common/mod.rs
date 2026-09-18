@@ -20,7 +20,7 @@ use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOu
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    Secret, StorageKey, Store, Strategy,
+    Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::{FakeUpstream, Respond};
@@ -308,6 +308,8 @@ async fn build(
                         .map(|l| l.into_iter().map(String::from).collect()),
                     keepalive_json: "{}".into(),
                     body_capture_hours: 0,
+                    prefer_subscription: false,
+                    api_key_sub_strategy: SubStrategy::PriorityRandom,
                     created_at: NOW,
                     updated_at: NOW,
                 },

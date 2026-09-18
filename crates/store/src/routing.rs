@@ -13,6 +13,8 @@ pub struct PinRow {
     pub epoch: u64,
     pub created_at: i64,
     pub last_used_at: i64,
+    /// When the migrate rule last moved this pin for utilization; the dwell reads it.
+    pub migrated_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,8 +58,8 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at FROM pins ORDER BY key_id, session_id, model")?
-                .query_map([], |r| Ok(PinRow { key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?, epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)? }))?
+            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at FROM pins ORDER BY key_id, session_id, model")?
+                .query_map([], |r| Ok(PinRow { key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?, epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?, migrated_at: r.get(7)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -66,9 +68,9 @@ impl Store {
 
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.execute("INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-             ON CONFLICT(key_id, session_id, model) DO UPDATE SET account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, last_used_at = excluded.last_used_at",
-            params![pin.key_id, pin.session_id, pin.model, pin.account_id, pin.epoch as i64, pin.created_at, pin.last_used_at])?;
+        conn.execute("INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(key_id, session_id, model) DO UPDATE SET account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, last_used_at = excluded.last_used_at, migrated_at = excluded.migrated_at",
+            params![pin.key_id, pin.session_id, pin.model, pin.account_id, pin.epoch as i64, pin.created_at, pin.last_used_at, pin.migrated_at])?;
         Ok(())
     }
 

@@ -4,7 +4,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelSource, OveragePolicy,
-    PoolMember, PoolRow, RegistryLoad, RoutingLoad, ServedModel, Strategy,
+    PoolMember, PoolRow, RegistryLoad, RoutingLoad, ServedModel, Strategy, SubStrategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -118,6 +118,8 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             default_allowed_models: None,
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
+            prefer_subscription: false,
+            api_key_sub_strategy: SubStrategy::PriorityRandom,
             created_at: 0,
             updated_at: 0,
         }],
@@ -529,7 +531,7 @@ fn the_depletion_threshold_drops_a_depleted_account_and_falls_back_when_every_ac
         let expected = match strategy {
             Strategy::EarliestRefresh => Some("a"),
             Strategy::LeastUtilized => Some("b"),
-            Strategy::PriorityRandom => None,
+            Strategy::PriorityRandom | Strategy::RoundRobin => None,
         };
         for seed in 0..8u64 {
             let result = select(&mut st, &all, &req, &mut StdRng::seed_from_u64(seed)).0;

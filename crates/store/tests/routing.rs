@@ -114,6 +114,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         epoch: 1,
         created_at: 1,
         last_used_at: 1,
+        migrated_at: None,
     };
     store.upsert_pin(&pin).unwrap();
     store
@@ -163,4 +164,41 @@ fn overage_evidence_only_moves_forward_in_time() {
         "a late head cannot roll the state back"
     );
     assert!(store.load_routing().unwrap().overage[0].in_use);
+}
+
+#[test]
+fn a_pin_carries_when_it_last_migrated_for_utilization() {
+    let store = store_with(&["a", "b"]);
+    let pin = PinRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        migrated_at: None,
+    };
+    store.upsert_pin(&pin).unwrap();
+    store
+        .upsert_pin(&PinRow {
+            account_id: "b".into(),
+            epoch: 2,
+            migrated_at: Some(7),
+            ..pin.clone()
+        })
+        .unwrap();
+    assert_eq!(store.load_routing().unwrap().pins[0].migrated_at, Some(7));
+    store
+        .upsert_pin(&PinRow {
+            epoch: 3,
+            migrated_at: None,
+            ..pin
+        })
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins[0].migrated_at,
+        None,
+        "a fresh pin clears the dwell"
+    );
 }

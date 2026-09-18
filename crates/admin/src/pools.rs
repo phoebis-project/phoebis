@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
-use phoebis_store::{OveragePolicy, PoolMember, PoolRow, StoreError, Strategy};
+use phoebis_store::{OveragePolicy, PoolMember, PoolRow, StoreError, Strategy, SubStrategy};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -230,6 +230,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         default_allowed_models: None,
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
+        prefer_subscription: false,
+        api_key_sub_strategy: SubStrategy::PriorityRandom,
         created_at: now,
         updated_at: now,
     };

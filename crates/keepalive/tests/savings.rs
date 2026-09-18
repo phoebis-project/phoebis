@@ -839,6 +839,8 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 })
                 .unwrap(),
                 body_capture_hours: 0,
+                prefer_subscription: false,
+                api_key_sub_strategy: phoebis_store::SubStrategy::PriorityRandom,
                 created_at: NOW,
                 updated_at: NOW,
             },

@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
-    PoolRow, RegistryLoad, ServedModel, Strategy,
+    PoolRow, RegistryLoad, ServedModel, Strategy, SubStrategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -38,6 +38,8 @@ fn pool(
         default_allowed_models: default_allowed.map(|l| l.into_iter().map(String::from).collect()),
         keepalive_json: "{}".into(),
         body_capture_hours,
+        prefer_subscription: false,
+        api_key_sub_strategy: SubStrategy::PriorityRandom,
         created_at: 0,
         updated_at: 0,
     }
