@@ -84,6 +84,9 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
+    // The nested tuple mirrors `round_robin_next`'s key; a type alias would only rename the same shape.
+    #[allow(clippy::type_complexity)]
+    round_robin: HashMap<(String, (u8, u32, u8), String), usize>,
     sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
 }
@@ -123,6 +126,7 @@ impl RoutingState {
                 .into_iter()
                 .map(|p| ((p.key_id.clone(), p.session_id.clone(), p.model.clone()), p))
                 .collect(),
+            round_robin: HashMap::new(),
             sample_ttl_ms: DEFAULT_SAMPLE_TTL_MS,
             samples: HashMap::new(),
         }
@@ -164,6 +168,23 @@ impl RoutingState {
             session_id.to_string(),
             model.to_string(),
         ))
+    }
+
+    /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
+    /// `resolve` builds a candidate list per model: a singleton model and a three-account model share a pool and
+    /// a tier but rotate apart, and a cohort whose membership changed is a key of its own that starts at 0. In
+    /// memory, so a restart starts every round again.
+    pub(crate) fn round_robin_next(
+        &mut self,
+        pool_id: &str,
+        tier: (u8, u32, u8),
+        cohort: &[&str],
+    ) -> usize {
+        let key = (pool_id.to_string(), tier, cohort.join(","));
+        let slot = self.round_robin.entry(key).or_insert(0);
+        let index = *slot % cohort.len();
+        *slot = index + 1;
+        index
     }
 
     /// The later deadline always wins, as in the store, and `set_at` advances on its own whenever the

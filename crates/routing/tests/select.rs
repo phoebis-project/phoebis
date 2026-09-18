@@ -1,6 +1,7 @@
 use phoebis_routing::{
     resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence, PinRef,
     RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample,
+    MIGRATE_DWELL_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelSource, OveragePolicy,
@@ -18,6 +19,10 @@ struct Pool {
     migrate: Option<f64>,
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
+    prefer_subscription: bool,
+    sub_strategy: SubStrategy,
+    kinds: Vec<(&'static str, AccountKind)>,
+    only: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for Pool {
@@ -29,6 +34,10 @@ impl Default for Pool {
             migrate: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
+            prefer_subscription: false,
+            sub_strategy: SubStrategy::PriorityRandom,
+            kinds: vec![],
+            only: vec![],
         }
     }
 }
@@ -45,9 +54,15 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             .find(|(u, _, _)| *u == id)
             .map(|(_, e, s)| (*e, *s))
             .unwrap_or((true, AccountState::Ready));
+        let kind = pool
+            .kinds
+            .iter()
+            .find(|(a, _)| *a == id)
+            .map(|(_, k)| *k)
+            .unwrap_or(AccountKind::Oauth);
         AccountRow {
             id: id.into(),
-            kind: AccountKind::Oauth,
+            kind,
             label: id.into(),
             enabled,
             identity: None,
@@ -105,6 +120,11 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
                     served(a, "claude-sonnet-5"),
                 ]
             })
+            .filter(|m| {
+                pool.only
+                    .iter()
+                    .all(|(model, owner)| m.canonical_id != *model || m.account_id == *owner)
+            })
             .collect(),
         pools: vec![PoolRow {
             id: "p".into(),
@@ -118,8 +138,8 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             default_allowed_models: None,
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
-            prefer_subscription: false,
-            api_key_sub_strategy: SubStrategy::PriorityRandom,
+            prefer_subscription: pool.prefer_subscription,
+            api_key_sub_strategy: pool.sub_strategy,
             created_at: 0,
             updated_at: 0,
         }],
@@ -318,6 +338,42 @@ fn least_utilized_picks_the_lowest_five_hour_sample_and_random_without_samples()
         seen.len(),
         3,
         "without samples every account is a 0 and the tie is random"
+    );
+    let mixed = snapshot(Pool {
+        strategy: Strategy::LeastUtilized,
+        kinds: vec![("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut oauth_first = RoutingState::from_load(RoutingLoad::default());
+    oauth_first.record_sample("a", sample(0.9, 0.1, 1));
+    oauth_first.record_sample("b", sample(0.2, 0.1, 1));
+    assert_eq!(
+        picked(
+            &select(
+                &mut oauth_first,
+                &mixed,
+                &request(&mixed, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "b",
+        "the oauth group orders under least_utilized ahead of the api_key group"
+    );
+    oauth_first.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    oauth_first.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    assert_eq!(
+        picked(
+            &select(
+                &mut oauth_first,
+                &mixed,
+                &request(&mixed, None, "claude-sonnet-5", true, &[], 2_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "c",
+        "the api_key sibling serves once no oauth account is eligible"
     );
 }
 
@@ -1392,5 +1448,364 @@ fn the_first_overage_evidence_normalizes_since_like_every_later_one() {
         entering.overage("a").unwrap().since,
         Some(100),
         "evidence with no start of its own takes the observation time"
+    );
+}
+
+#[test]
+fn round_robin_serves_the_first_tier_in_turn_and_a_tier_change_starts_its_own_round() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0), ("c", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let pick = |st: &mut RoutingState, r: &mut StdRng, i: i64| {
+        picked(
+            &select(
+                st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], i),
+                r,
+            )
+            .0,
+        )
+        .to_string()
+    };
+    assert_eq!(
+        [
+            pick(&mut st, &mut r, 1),
+            pick(&mut st, &mut r, 2),
+            pick(&mut st, &mut r, 3)
+        ],
+        ["a", "b", "a"]
+    );
+    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    assert_eq!(
+        pick(&mut st, &mut r, 4),
+        "c",
+        "the pointer of tier 0 does not reach tier 1"
+    );
+    st.clear_cooldown("a", "account");
+    st.clear_cooldown("b", "account");
+    assert_eq!(
+        pick(&mut st, &mut r, 5),
+        "b",
+        "tier 0 resumes where its own pointer left off"
+    );
+}
+
+#[test]
+fn a_singleton_models_round_does_not_move_a_three_account_models_round() {
+    // `resolve` builds a candidate list per model, so one pool and one tier hold two cohorts. A cursor
+    // shared by both would be reset to 1 by every opus request and `c` would never serve a sonnet one.
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        only: vec![("claude-opus-5", "a")],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let pick = |st: &mut RoutingState, r: &mut StdRng, model: &str, i: i64| {
+        picked(&select(st, &s, &request(&s, None, model, true, &[], i), r).0).to_string()
+    };
+    let mut served = std::collections::HashSet::new();
+    for i in 0..6 {
+        assert_eq!(
+            pick(&mut st, &mut r, "claude-opus-5", 2 * i + 1),
+            "a",
+            "the singleton model has one candidate"
+        );
+        served.insert(pick(&mut st, &mut r, "claude-sonnet-5", 2 * i + 2));
+    }
+    assert_eq!(
+        served.len(),
+        3,
+        "every eligible account of the three-account model serves inside six interleaved rounds: {served:?}"
+    );
+}
+
+#[test]
+fn prefer_subscription_orders_plan_oauth_then_overage_oauth_then_api_keys_across_priorities() {
+    let s = snapshot(Pool {
+        strategy: Strategy::PriorityRandom,
+        prefer_subscription: true,
+        members: vec![("a", 1), ("b", 0), ("c", 0)],
+        kinds: vec![("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    // `b` is oauth in overage under prefer_plan, `c` an api_key at priority 0, `a` oauth with plan quota at priority 1.
+    st.record_overage("b", overage(true, 1, None));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut r
+            )
+            .0
+        ),
+        "a",
+        "plan quota wins across the priority tiers"
+    );
+    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 2_000),
+                &mut r
+            )
+            .0
+        ),
+        "b",
+        "overage oauth before any api_key"
+    );
+    st.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 3_000),
+                &mut r
+            )
+            .0
+        ),
+        "c",
+        "the api_key group serves last"
+    );
+}
+
+#[test]
+fn the_sample_driven_strategies_force_the_kind_order_and_the_api_key_group_takes_the_sub_strategy()
+{
+    let s = snapshot(Pool {
+        strategy: Strategy::LeastUtilized,
+        sub_strategy: SubStrategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        kinds: vec![("b", AccountKind::ApiKey), ("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    st.record_sample("a", sample(0.9, 0.1, 1));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut r
+            )
+            .0
+        ),
+        "a",
+        "an oauth account at 0.9 still beats the unsampled api keys"
+    );
+    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    let two = [
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 2_000),
+                &mut r,
+            )
+            .0,
+        )
+        .to_string(),
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], 3_000),
+                &mut r,
+            )
+            .0,
+        )
+        .to_string(),
+    ];
+    assert_eq!(
+        two,
+        ["b", "c"],
+        "group three rotates under the round_robin sub-strategy"
+    );
+}
+
+#[test]
+fn priority_random_orders_the_api_key_group_itself_whatever_the_sub_strategy_holds() {
+    let s = snapshot(Pool {
+        strategy: Strategy::PriorityRandom,
+        prefer_subscription: true,
+        sub_strategy: SubStrategy::RoundRobin,
+        kinds: vec![
+            ("a", AccountKind::ApiKey),
+            ("b", AccountKind::ApiKey),
+            ("c", AccountKind::ApiKey),
+        ],
+        ..Pool::default()
+    });
+    let mut seen = std::collections::HashSet::new();
+    for seed in 0..40u64 {
+        // A fresh state each round: the sub-strategy reaching this pool would answer `a` every time.
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        seen.insert(
+            picked(
+                &select(
+                    &mut st,
+                    &s,
+                    &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+                    &mut StdRng::seed_from_u64(seed),
+                )
+                .0,
+            )
+            .to_string(),
+        );
+    }
+    assert_eq!(
+        seen.len(),
+        3,
+        "an explicitly chosen strategy orders group three, not api_key_sub_strategy"
+    );
+}
+
+#[test]
+fn round_robin_orders_the_api_key_group_itself_whatever_the_sub_strategy_holds() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        prefer_subscription: true,
+        sub_strategy: SubStrategy::PriorityRandom,
+        kinds: vec![
+            ("a", AccountKind::ApiKey),
+            ("b", AccountKind::ApiKey),
+            ("c", AccountKind::ApiKey),
+        ],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let three: Vec<String> = (1..=3)
+        .map(|i| {
+            picked(
+                &select(
+                    &mut st,
+                    &s,
+                    &request(&s, None, "claude-sonnet-5", true, &[], i * 1_000),
+                    &mut r,
+                )
+                .0,
+            )
+            .to_string()
+        })
+        .collect();
+    assert_eq!(
+        three,
+        ["a", "b", "c"],
+        "the pool's own round robin serves the api_key tier in turn"
+    );
+}
+
+#[test]
+fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut r
+            )
+            .0
+        ),
+        "a"
+    );
+    st.record_sample("a", sample(0.85, 0.3, 1_500));
+    st.record_sample("b", sample(0.77, 0.3, 1_500));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+                &mut r
+            )
+            .0
+        ),
+        "a",
+        "0.77 is inside the band under 0.8, so b is no destination"
+    );
+    st.record_sample("b", sample(0.70, 0.3, 2_500));
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
+        &mut r,
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Utilization))
+    );
+    assert!(writes.iter().any(
+        |w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at == Some(3_000))
+    ));
+    st.record_sample("b", sample(0.9, 0.3, 3_500));
+    st.record_sample("a", sample(0.1, 0.3, 3_500));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(
+                    &s,
+                    Some("s1"),
+                    "claude-sonnet-5",
+                    true,
+                    &[],
+                    3_000 + MIGRATE_DWELL_MS - 1
+                ),
+                &mut r
+            )
+            .0
+        ),
+        "b",
+        "inside the dwell the hot pin stays"
+    );
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(
+            &s,
+            Some("s1"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            3_000 + MIGRATE_DWELL_MS,
+        ),
+        &mut r,
+    );
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", Some(MigrateReason::Utilization)),
+        "the dwell ends and the rule moves it back"
     );
 }

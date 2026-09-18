@@ -1,6 +1,8 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
-use phoebis_store::{AccountRow, AccountState, OveragePolicy, PinRow, Strategy};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy, SubStrategy,
+};
 use rand::{Rng, RngExt};
 
 use crate::state::{PinRef, RoutingState, StateWrite};
@@ -24,6 +26,11 @@ pub enum MigrateReason {
     Overage,
     Utilization,
 }
+
+/// The hysteresis band under the migrate threshold: a destination counts only below `threshold - MIGRATE_BAND`.
+pub const MIGRATE_BAND: f64 = 0.05;
+/// How long the migrate rule leaves a pin alone after it moved for utilization.
+pub const MIGRATE_DWELL_MS: i64 = 300_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
@@ -222,17 +229,22 @@ pub fn select(
             reason = Some(MigrateReason::Overage);
         }
         if let Some(threshold) = pool.migrate_above_utilization {
-            let hot = state.sample(&current.account_id).is_some_and(|s| {
-                s.five_hour.unwrap_or(0.0) >= threshold || s.seven_day.unwrap_or(0.0) >= threshold
-            });
+            let dwelling = current
+                .migrated_at
+                .is_some_and(|at| request.now - at < MIGRATE_DWELL_MS);
+            let hot = !dwelling
+                && state.sample(&current.account_id).is_some_and(|s| {
+                    s.five_hour.unwrap_or(0.0) >= threshold
+                        || s.seven_day.unwrap_or(0.0) >= threshold
+                });
             if hot {
                 let cool: Vec<&Candidate> = eligible
                     .iter()
                     .copied()
                     .filter(|c| {
                         state.sample(&c.account_id).is_none_or(|s| {
-                            s.five_hour.unwrap_or(0.0) < threshold
-                                && s.seven_day.unwrap_or(0.0) < threshold
+                            s.five_hour.unwrap_or(0.0) < threshold - MIGRATE_BAND
+                                && s.seven_day.unwrap_or(0.0) < threshold - MIGRATE_BAND
                         })
                     })
                     .collect();
@@ -319,14 +331,7 @@ pub fn select(
             selection_set = below;
         }
     }
-    let Some(chosen) = choose(
-        state,
-        pool.strategy,
-        pool.overage_policy,
-        window,
-        &selection_set,
-        rng,
-    ) else {
+    let Some(chosen) = choose(state, snapshot, pool, window, &selection_set, rng) else {
         return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
     };
 
@@ -341,7 +346,7 @@ pub fn select(
             epoch,
             created_at: request.now,
             last_used_at: request.now,
-            migrated_at: None,
+            migrated_at: (migrated == Some(MigrateReason::Utilization)).then_some(request.now),
         };
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
@@ -456,25 +461,53 @@ fn selected_row(snapshot: &RegistrySnapshot, account_id: &str) -> AccountRow {
 }
 
 fn choose<'a>(
-    state: &RoutingState,
-    strategy: Strategy,
-    policy: OveragePolicy,
+    state: &mut RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
     window: Window,
     set: &[&'a Candidate],
     rng: &mut impl Rng,
 ) -> Option<&'a Candidate> {
-    let tier_of = |c: &Candidate| {
-        (
-            c.priority,
-            u8::from(policy == OveragePolicy::PreferPlan && state.in_overage(&c.account_id)),
-        )
+    let kind_ordered = pool.kind_ordered();
+    // Group one: oauth with plan quota; two: oauth in overage; three: api_key. Without the kind order every
+    // candidate is group 0 and the overage flag still splits a priority tier under prefer_plan, as before.
+    let group_of = |c: &Candidate| -> u8 {
+        let kind = snapshot.account(&c.account_id).map(|a| a.kind);
+        match (kind_ordered, kind, state.in_overage(&c.account_id)) {
+            (true, Some(AccountKind::ApiKey), _) => 2,
+            (true, _, true) => 1,
+            (true, _, false) => 0,
+            (false, _, in_overage) => {
+                u8::from(pool.overage_policy == OveragePolicy::PreferPlan && in_overage)
+            }
+        }
     };
-    let first = set.iter().map(|c| tier_of(c)).min()?;
-    let tier: Vec<&Candidate> = set
-        .iter()
-        .copied()
-        .filter(|c| tier_of(c) == first)
-        .collect();
+    // The kind order puts the group ahead of the priority; the priority order keeps the overage split inside a tier.
+    let key_of = |c: &Candidate| -> (u8, u32, u8) {
+        let group = group_of(c);
+        if kind_ordered {
+            (group, c.priority, 0)
+        } else {
+            (0, c.priority, group)
+        }
+    };
+    let first = set.iter().map(|c| key_of(c)).min()?;
+    let tier: Vec<&Candidate> = set.iter().copied().filter(|c| key_of(c) == first).collect();
+    // The sub-strategy exists because a sample-driven strategy has no sample to order an api_key account by. An
+    // operator who chose round_robin or priority_random chose it for the whole pool, so group three takes that
+    // strategy and the stored sub-strategy waits for the day the pool goes sample-driven.
+    let sample_driven = matches!(
+        pool.strategy,
+        Strategy::EarliestRefresh | Strategy::LeastUtilized
+    );
+    let strategy = if first.0 == 2 && sample_driven {
+        match pool.api_key_sub_strategy {
+            SubStrategy::PriorityRandom => Strategy::PriorityRandom,
+            SubStrategy::RoundRobin => Strategy::RoundRobin,
+        }
+    } else {
+        pool.strategy
+    };
     match strategy {
         Strategy::EarliestRefresh => {
             let reset = |c: &Candidate| {
@@ -515,9 +548,14 @@ fn choose<'a>(
             Some(ties[rng.random_range(0..ties.len())])
         }
         Strategy::PriorityRandom => Some(tier[rng.random_range(0..tier.len())]),
-        // The rotation lands with the selection changes; until then the new variant serves the tier the way
-        // priority_random does rather than leaving the match non-exhaustive.
-        Strategy::RoundRobin => Some(tier[rng.random_range(0..tier.len())]),
+        Strategy::RoundRobin => {
+            // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
+            // `resolve` happened to build the candidate list in.
+            let mut cohort: Vec<&str> = tier.iter().map(|c| c.account_id.as_str()).collect();
+            cohort.sort_unstable();
+            let i = state.round_robin_next(&pool.id, first, &cohort);
+            tier.iter().copied().find(|c| c.account_id == cohort[i])
+        }
     }
 }
 
