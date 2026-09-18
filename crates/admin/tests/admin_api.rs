@@ -605,3 +605,54 @@ async fn an_abandoned_exchange_is_swept_at_its_deadline() {
     assert_eq!(vault.sweep(common::NOW + 600_001), 1);
     assert!(vault.take_exchange(&id).is_none(), "the bundle is gone");
 }
+
+#[tokio::test]
+async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_configured() {
+    use common::{cookie_of, delete, get, json, post};
+    let (app, _up) = common::admin_app().await;
+    let anonymous = get(&app, "/admin/session", None).await;
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(anonymous.headers()["cache-control"], "no-store");
+    let admin = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    let cookie = cookie_of(&admin);
+    let me = json(get(&app, "/admin/session", Some(&cookie)).await).await;
+    assert_eq!(me["role"], "admin");
+    assert!(
+        me["session_id"].as_str().is_some_and(|id| id != cookie),
+        "the cookie value stays in the store"
+    );
+    let viewer = post(
+        &app,
+        "/admin/session",
+        r#"{"secret":"viewer-secret"}"#,
+        None,
+    )
+    .await;
+    let vcookie = cookie_of(&viewer);
+    assert_eq!(
+        json(get(&app, "/admin/session", Some(&vcookie)).await).await["role"],
+        "viewer"
+    );
+    let settings = json(get(&app, "/admin/settings", Some(&vcookie)).await).await;
+    assert_eq!(
+        (
+            settings["access"]["admin_configured"].as_bool(),
+            settings["access"]["viewer_configured"].as_bool()
+        ),
+        (Some(true), Some(true))
+    );
+    assert!(
+        !settings.to_string().contains("secret"),
+        "no secret and no variable name in the settings answer"
+    );
+    assert_eq!(
+        delete(&app, "/admin/session", Some(&vcookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        get(&app, "/admin/session", Some(&vcookie)).await.status(),
+        401
+    );
+}

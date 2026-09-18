@@ -102,7 +102,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))
-        .route("/admin/session", post(login).delete(logout))
+        .route("/admin/session", get(whoami).post(login).delete(logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
             "/admin/sessions/{key}/{session}/release",
@@ -239,6 +239,16 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
         StatusCode::NO_CONTENT,
         &format!("{COOKIE_NAME}=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0"),
     )
+}
+
+/// The console's first call: whether the cookie it holds still names a session, and which role that session
+/// carries. The body names the session by the id pairing ownership uses, never by the cookie value.
+async fn whoami(Extension(caller): Extension<Caller>) -> Response {
+    Json(json!({
+        "role": match caller.role { Role::Admin => "admin", Role::Viewer => "viewer" },
+        "session_id": caller.session_id,
+    }))
+    .into_response()
 }
 
 async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {

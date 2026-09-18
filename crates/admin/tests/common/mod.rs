@@ -570,6 +570,7 @@ async fn app_with(
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,
         usage_refresh_concurrency: 4,
+        viewer_configured: true,
     });
     let vault = Arc::new(PairingVault::new());
     let state = Arc::new(AdminState {

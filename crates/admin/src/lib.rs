@@ -105,6 +105,7 @@ pub struct SettingsView {
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,
     pub usage_refresh_concurrency: usize,
+    pub viewer_configured: bool,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.
