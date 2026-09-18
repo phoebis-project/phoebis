@@ -93,6 +93,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
     const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? ''].join(' ').toLowerCase();
     if (!hay.includes(needle)) return false;
   }
+  if (q.userAgent && !(r.userAgent ?? '').toLowerCase().includes(q.userAgent.toLowerCase())) return false;
   return true;
 }
 

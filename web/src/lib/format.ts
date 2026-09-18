@@ -88,6 +88,8 @@ export function fmtHourTick(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hour12: timeFormat === '12h', minute: '2-digit' });
 }
 
+/** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */
+export const shortAgent = (ua: string) => (ua.length > 28 ? `${ua.slice(0, 28)}…` : ua);
 export const shortId = (id: string, n = 8) => (id.length > n ? `${id.slice(0, n)}…` : id);
 export const tokensTotal = (u: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }) =>
   u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h + u.output;

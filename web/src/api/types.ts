@@ -333,6 +333,8 @@ export interface RequestQuery {
   search?: string;
   statuses?: number[];
   to?: string;
+  /** Matched anywhere in the client's own name; an empty string is no filter at all. */
+  userAgent?: string;
 }
 
 export interface RequestPage {
@@ -683,6 +685,8 @@ export interface LiveRequest {
   status: number | null;
   transport: Transport;
   usage: Usage;
+  /** The client that sent the request, as it named itself; `null` when it named nothing. */
+  userAgent: string | null;
 }
 
 export interface LiveMetric {

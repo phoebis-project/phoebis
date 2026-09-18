@@ -6,9 +6,9 @@ import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { StatusBadge } from './DashboardPage';
 
@@ -18,6 +18,7 @@ const COLUMNS = [
   { id: 'pool', label: 'Pool' },
   { id: 'account', label: 'Upstream' },
   { id: 'model', label: 'Model' },
+  { id: 'client', label: 'Client' },
   { id: 'kind', label: 'Kind' },
   { id: 'transport', label: 'Transport' },
   { id: 'status', label: 'Status' },
@@ -61,6 +62,7 @@ export function RequestsPage() {
   const catalog = useAsync(() => api.listCatalog(), []);
 
   const [search, setSearch] = useState('');
+  const [client, setClient] = useState('');
   const [keyIds, setKeyIds] = useState<string[]>([]);
   const [poolIds, setPoolIds] = useState<string[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
@@ -77,17 +79,17 @@ export function RequestsPage() {
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, cursor, from: new Date(now - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(now).toISOString() };
+    return { accountIds, cursor, from: new Date(now - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(now).toISOString(), userAgent: client };
     // now changes every tick; refetching each tick would flash the list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor]);
+  }, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => {
     setCursor(undefined);
     setStack([]);
   };
-  useEffect(resetPaging, [search, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
+  useEffect(resetPaging, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
   const nextCursor = requests.data?.nextCursor ?? null;
@@ -102,9 +104,10 @@ export function RequestsPage() {
     setStack(copy);
     setCursor(previous);
   };
-  const active = search || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
+  const active = search || client || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');
+    setClient('');
     setKeyIds([]);
     setPoolIds([]);
     setAccountIds([]);
@@ -131,6 +134,8 @@ export function RequestsPage() {
           <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
           <MultiSelect label="Upstreams" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
           <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
+          {/* `.mono` shrinks the text to 0.92em, which would leave this control shorter than the rest of the bar. */}
+          <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Client contains" aria-label="Client contains" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
           <MultiSelect
             label="Status"
             options={[
@@ -189,6 +194,7 @@ export function RequestsPage() {
                   {visible.has('pool') && <th>Pool</th>}
                   {visible.has('account') && <th>Upstream</th>}
                   {visible.has('model') && <th>Model</th>}
+                  {visible.has('client') && <th>Client</th>}
                   {visible.has('kind') && <th>Kind</th>}
                   {visible.has('transport') && <th>Transport</th>}
                   {visible.has('status') && <th>Status</th>}
@@ -220,6 +226,11 @@ export function RequestsPage() {
                         {visible.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && <td className="mono">{r.model}</td>}
+                        {visible.has('client') && (
+                          <td className="mono" title={r.userAgent ?? undefined}>
+                            {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
+                          </td>
+                        )}
                         {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
                         {visible.has('transport') && (
                           <td>
@@ -343,6 +354,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               rows={[
                 { label: 'Session', value: r.sessionId ?? '-', mono: true },
                 { label: 'Agent', value: r.agentId ?? '-', mono: true },
+                { label: 'Client', value: r.userAgent ?? '-', mono: true },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
                 { label: 'Upstream', value: r.accountId === null ? '-' : <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },

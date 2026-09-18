@@ -305,6 +305,12 @@ test('the live snapshot and every delta decode with ISO times and null-safe fiel
   assert.equal(d.decodeLiveDelta({ type: 'nope', cursor: 1 }), null);
 });
 
+test('a live request carries the client that sent it', () => {
+  const started = fixture('live_messages').deltas.find((m) => m.delta?.type === 'started').delta.request;
+  assert.equal(d.decodeLiveRequest({ ...started, user_agent: 'claude-cli/2.1.269 (external, cli)' }).userAgent, 'claude-cli/2.1.269 (external, cli)');
+  assert.equal(d.decodeLiveRequest({ ...started, user_agent: null }).userAgent, null);
+});
+
 test('alert rules, events, and deliveries decode with the secret reduced to has_secret', () => {
   const rules = fixture('alert_rules').rules.map(d.decodeAlertRule);
   const util = rules.find((r) => r.kind === 'utilization_above');

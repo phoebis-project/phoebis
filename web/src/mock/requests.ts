@@ -14,7 +14,7 @@ export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
 
 /** One client per key, the way a machine runs one build of Claude Code and a runner runs its own script. */
-const USER_AGENTS: Record<string, string> = {
+export const USER_AGENTS: Record<string, string> = {
   ci: 'phoebis-batch/0.9 (external, ci)',
   desktop: 'claude-cli/2.1.269 (external, cli)',
   laptop: 'claude-cli/2.0.44 (external, cli)',

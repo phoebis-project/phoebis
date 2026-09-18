@@ -10,7 +10,7 @@ import { WINDOW_LABEL } from '@/lib/windows';
 
 const KIND_LABEL: Record<AlertKind, string> = {
   ask_user_question: 'Waiting for user input',
-  client_drift: 'Client version drift',
+  client_drift: 'Client drift',
   funding_required: 'Funding required',
   keepalive_cost_cap: 'Probe cost cap reached',
   pool_exhausted: 'Pool exhausted',
@@ -23,7 +23,7 @@ const KIND_HINT: Record<AlertKind, string> = {
   ask_user_question:
     "Fires when a response relayed to a client carries an AskUserQuestion tool call, so the agent is blocked on an answer. It resolves on the session's next request, which is the first sign the user replied, or when the session expires.",
   client_drift:
-    'Fires when the billing-hash self-check fails for a client request: the client stamps a hash this build cannot reproduce. Re-pin the router to that client version, then resolve the event here.',
+    'Fires when the billing-hash self-check fails for a client request: the client stamps a hash this build cannot reproduce. Re-pin the router to that client build, then resolve the event here.',
   funding_required: 'Fires when an API-key upstream is refused for billing reasons. It resolves when an operator clears the funding flag.',
   keepalive_cost_cap: "Fires when a pool's daily probe cost cap is reached; probes pause until the next UTC day, which resolves it.",
   pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
@@ -264,7 +264,7 @@ export function AlertsPage() {
                     onResolve={() =>
                       setConfirm({
                         title: 'Resolve event',
-                        body: `Marks "${e.subject}" resolved and posts the resolve delivery.${e.kind === 'client_drift' ? ' Use this after re-pinning the router to the client version the event names.' : ''}`,
+                        body: `Marks "${e.subject}" resolved and posts the resolve delivery.${e.kind === 'client_drift' ? ' Use this after re-pinning the router to the client build the event names.' : ''}`,
                         label: 'Resolve',
                         onConfirm: () => void run(() => api.resolveAlertEvent(e.id), 'Event resolved', events.reload),
                       })

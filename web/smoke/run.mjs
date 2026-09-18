@@ -105,7 +105,7 @@ m = await mount('/observe');
   expect('/observe metric strip', t, ['Requests per second', 'Active streams', 'Error rate', 'TTFB p50', 'TTFB p95', 'TTFB p99', 'Output tokens per second', 'Estimated cost per minute', 'measured', 'derived', 'estimated']);
   const inflight = m.container.querySelectorAll('.live-table .ldot--inflight').length;
   results.push({ name: '/observe has in-flight rows', ok: inflight >= 1, missing: [String(inflight)] });
-  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Upstream', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
+  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Upstream', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
   const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
   results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
   const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
@@ -811,7 +811,19 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 m.unmount();
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (12)', 'Rows', 'SSE', 'Details', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-cli/2.1.269 (external', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+{
+  const client = m.container.querySelector('input[aria-label="Client contains"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(client, 'phoebis-batch');
+  client.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+  const keys = [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
+  results.push({ name: '/requests the client filter is a substring match', ok: keys.length > 0 && keys.every((k) => k === 'ci'), missing: keys.slice(0, 3) });
+  setter.call(client, '');
+  client.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+}
 {
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
@@ -1430,7 +1442,7 @@ m.unmount();
 
 
 m = await mount('/alerts');
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client version drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve']);
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
   const row = [...[...m.container.querySelectorAll('table')].pop().querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
@@ -1535,7 +1547,7 @@ m.unmount();
   setValue.call(filter, 'client_drift');
   filter.dispatchEvent(new window.Event('change', { bubbles: true }));
   await empty.settle(250);
-  expect('/alerts an empty filtered result names the condition', empty.text(), ['No client version drift events.']);
+  expect('/alerts an empty filtered result names the condition', empty.text(), ['No client drift events.']);
   empty.unmount();
   localStorage.removeItem('phoebis.mockEmpty');
 }

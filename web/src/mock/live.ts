@@ -2,7 +2,7 @@ import type { AttemptWindow, LiveAttempt, LiveDelta, LiveEvent, LiveMetric, Live
 import { histogramOf, percentileFromHistogram } from '@/lib/histogram';
 import { ACCOUNTS } from './accounts';
 import { createRng } from './rng';
-import { LANES, REQUESTS, SESSION_IDS, costOf, warmsCaches, type Lane } from './requests';
+import { LANES, REQUESTS, SESSION_IDS, USER_AGENTS, costOf, warmsCaches, type Lane } from './requests';
 import { MINUTE, iso } from './time';
 
 const TRAFFIC_KINDS: { value: RequestKind; weight: number }[] = [
@@ -106,6 +106,7 @@ function fromLog(r: RequestLog): LiveRequest {
     status: r.status,
     transport: r.transport,
     usage: r.usage,
+    userAgent: r.userAgent,
   };
 }
 
@@ -291,6 +292,7 @@ class LiveFeed {
       status: null,
       transport,
       usage: emptyUsage(),
+      userAgent: USER_AGENTS[lane.keyId] ?? null,
     };
   }
 

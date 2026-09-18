@@ -49,6 +49,12 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
 
+test('listRequests passes the client filter as user_agent', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ userAgent: '2.1.269' });
+  assert.ok(String(calls[0].url).includes('user_agent=2.1.269'));
+});
+
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();

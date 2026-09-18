@@ -9,7 +9,7 @@ import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconExpand, IconPause, IconPlay, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
 import { useNow } from '@/lib/hooks';
 
@@ -306,6 +306,7 @@ export function ObservePage() {
                       <th>Session</th>
                       <th>Agent</th>
                       <th>Model</th>
+                      <th>Client</th>
                       <th>Upstream</th>
                       <th>Kind</th>
                       <th>Transport</th>
@@ -528,6 +529,9 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
       </td>
       <td className="mono">{r.agentId}</td>
       <td className="mono">{r.model}</td>
+      <td className="mono" title={r.userAgent ?? undefined}>
+        {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
+      </td>
       <td>{r.accountId ?? <span className="muted">selecting</span>}</td>
       <td>{r.kind}</td>
       <td>{r.transport === 'sse' ? 'SSE' : 'JSON'}</td>
