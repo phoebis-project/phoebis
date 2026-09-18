@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api, MOCK } from '@/api';
+import { api, ApiError, MOCK } from '@/api';
 import type { ModelPrice, PriceImportPreview, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
@@ -233,10 +233,18 @@ export function SettingsPage() {
               value={String(expirySeconds)}
               onChange={(v) => {
                 const seconds = Number(v);
+                const previous = expiry;
                 setExpiry(seconds);
                 // The Sessions view drops rows idle past this, so the mock has to
                 // hold the choice rather than leave it in this page's state.
-                void api.setSessionExpiry(seconds).then(() => setToast('Session expiry saved'));
+                void api
+                  .setSessionExpiry(seconds)
+                  .then(() => setToast('Session expiry saved'))
+                  .catch((e: unknown) => {
+                    // A refusal must not leave the control showing a value the router never took.
+                    setExpiry(previous);
+                    setToast(e instanceof ApiError && e.code === 'not_wired' ? 'Session expiry is set in the bootstrap file' : e instanceof Error ? e.message : String(e));
+                  });
               }}
               options={EXPIRY_PRESETS.map((p) => ({ value: String(p.seconds), label: p.label }))}
             />

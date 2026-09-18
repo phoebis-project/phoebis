@@ -46,6 +46,16 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   await api.clearCooldown('acc', 'model:claude-sonnet-5');
   assert.equal(calls[1].url, '/admin/accounts/acc/cooldowns/model%3Aclaude-sonnet-5');
   assert.equal(slug('My Pool!'), 'my-pool');
+  assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
+});
+
+test('a read the router does not serve refuses with not_wired instead of reaching the network', async () => {
+  const calls = stub(() => answer(200, {}));
+  const api = new HttpApi();
+  const notWired = (e) => e instanceof ApiError && e.code === 'not_wired';
+  await assert.rejects(api.listRollups('1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z'), notWired);
+  await assert.rejects(api.setSessionExpiry(900), notWired);
+  assert.equal(calls.length, 0);
 });
 
 test('getSession answers null on 401 without running the hook', async () => {

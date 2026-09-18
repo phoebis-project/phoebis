@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import type { Role } from '@/api';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 import { useSession } from './session';
 
 export type ThemeChoice = 'dark' | 'light' | 'system';
-export type Role = 'admin' | 'viewer';
+export type { Role };
 
 interface AppSettings {
   canMutate: boolean;
