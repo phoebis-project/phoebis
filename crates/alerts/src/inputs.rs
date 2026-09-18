@@ -19,8 +19,9 @@ use crate::rule::{Kind, ScopeType, Signal};
 pub type SpendSource = Arc<dyn Fn() -> BTreeMap<String, f64> + Send + Sync>;
 
 pub struct AlertInputs {
-    /// How long a captured body is kept, which the question an event detail carries follows: the text came
-    /// out of that body and outliving it would keep prompt content the operator asked to be rid of.
+    /// The ceiling on a captured body's life, which a question detail that carries no deadline of its own
+    /// falls back to: the text came out of a body, and outliving it would keep prompt content the operator
+    /// asked to be rid of.
     pub body_capture_max_hours: u32,
     pub bus: Bus,
     pub router: RouterHandle,
@@ -156,6 +157,17 @@ impl BusArm {
         self.sessions.lock().expect(SESSIONS_POISONED).len()
     }
 
+    /// Whether the pair's question is claimed, counting the moment the claiming section holds the map and
+    /// nobody can read it. Public so a test can act from inside that section.
+    pub fn question_claimed(&self, key: &str, session: &str) -> bool {
+        match self.sessions.try_lock() {
+            Ok(sessions) => sessions
+                .get(&(key.to_string(), session.to_string()))
+                .is_some_and(|s| s.question_open),
+            Err(_) => true,
+        }
+    }
+
     pub fn observe(&mut self, event: Event) {
         let now = (self.alerts.parts().clock)();
         self.in_flight
@@ -185,9 +197,10 @@ impl BusArm {
                         state.generation += 1;
                         state.last_seen = now;
                         generation = state.generation;
-                        let open = std::mem::take(&mut state.question_open);
-                        drop(sessions);
-                        if open {
+                        // The lock is held across the clear, as it is across the opening signal on the other
+                        // side: a turn that takes the flag between an opener's claim and its insert would
+                        // clear an event that is not in the store yet and leave it open until the expiry.
+                        if std::mem::take(&mut state.question_open) {
                             self.alerts
                                 .clear(Kind::AskUserQuestion, &question_subject(key, session));
                         }
@@ -293,34 +306,41 @@ impl BusArm {
                                             .response_body
                                             .as_deref()
                                             .and_then(question_text));
+                                        // The text is a copy of that body, so it may not outlive it: the
+                                        // key's capture window can be far shorter than the global ceiling
+                                        // the purge would otherwise hold the question to.
+                                        signal.detail["question_expires_at"] = json!(b.expires_at);
                                         break;
                                     }
                                     tokio::time::sleep(Duration::from_millis(500)).await;
                                 }
                                 let now = (alerts.parts().clock)();
-                                {
-                                    let mut sessions = sessions.lock().expect(SESSIONS_POISONED);
-                                    let state = sessions
-                                        .entry(pair)
-                                        .or_insert_with(|| SessionState::new(now));
-                                    if state.generation != admitted {
-                                        return;
-                                    }
-                                    state.last_seen = now;
-                                    state.question_open = true;
+                                // The claim and the signal are one critical section: with the lock released
+                                // between them the session's next turn could take the flag and clear a
+                                // question whose event has not reached the store yet.
+                                let mut sessions = sessions.lock().expect(SESSIONS_POISONED);
+                                let state = sessions
+                                    .entry(pair)
+                                    .or_insert_with(|| SessionState::new(now));
+                                if state.generation != admitted {
+                                    return;
                                 }
+                                state.last_seen = now;
+                                state.question_open = true;
                                 alerts.signal(&signal);
                             });
                         } else {
-                            {
-                                let mut sessions = self.sessions.lock().expect(SESSIONS_POISONED);
-                                let state = sessions
-                                    .entry((key.clone(), session.clone()))
-                                    .or_insert_with(|| SessionState::new(now));
+                            let mut sessions = self.sessions.lock().expect(SESSIONS_POISONED);
+                            let state = sessions
+                                .entry((key.clone(), session.clone()))
+                                .or_insert_with(|| SessionState::new(now));
+                            // The same window the captured path checks: a response completing after the
+                            // session's next top-level turn is answering a question that turn already closed.
+                            if state.generation == e.generation {
                                 state.last_seen = now;
                                 state.question_open = true;
+                                self.alerts.signal(&base);
                             }
-                            self.alerts.signal(&base);
                         }
                     }
                 }
@@ -551,6 +571,7 @@ impl Poller {
             let _ = parts.store.purge_alert_events_before(
                 now - EVENT_RETENTION_MS,
                 now - self.question_retention_ms,
+                now,
             );
         }
     }

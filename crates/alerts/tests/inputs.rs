@@ -253,6 +253,11 @@ async fn a_captured_body_gives_the_question_its_text() {
     let detail: serde_json::Value =
         serde_json::from_str(ask.detail_json.as_deref().unwrap()).unwrap();
     assert_eq!(detail["question"].as_str(), Some("Ship it?"));
+    assert_eq!(
+        detail["question_expires_at"].as_i64(),
+        Some(NOW + 86_400_000),
+        "the text is held to the deadline of the body it was read out of"
+    );
 }
 
 #[tokio::test]
@@ -323,6 +328,172 @@ async fn a_question_answered_while_its_body_was_being_read_opens_nothing() {
     assert!(
         rig.webhook.posts().is_empty(),
         "no stale question was opened or posted"
+    );
+}
+
+#[tokio::test]
+async fn a_question_that_completes_after_the_next_turn_opens_nothing_without_a_capture() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(observed("r13", "desktop", "main", "s8", 0));
+    arm.observe(chunk("r13", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+    // The user answered on the next turn while the asking response was still finishing.
+    arm.observe(observed("r14", "desktop", "main", "s8", 0));
+    arm.observe(complete("r13", Outcome::Succeeded, 200, None, None));
+    settled(&rig).await;
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "the question was answered before it could open"
+    );
+    assert!(rig.webhook.posts().is_empty(), "and nothing was posted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answering_turn_cannot_land_between_a_questions_claim_and_its_event() {
+    use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+    use phoebis_store::{StorageKey, Store};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let held: Arc<OnceLock<Arc<Mutex<BusArm>>>> = Arc::new(OnceLock::new());
+    let armed = Arc::new(AtomicBool::new(false));
+    let fired = Arc::new(AtomicBool::new(false));
+    let turn: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    let runtime = tokio::runtime::Handle::current();
+    let hook: ClockHook = {
+        let (held, store, armed, fired, turn) = (
+            held.clone(),
+            store.clone(),
+            armed.clone(),
+            fired.clone(),
+            turn.clone(),
+        );
+        Arc::new(move || {
+            if !armed.load(Ordering::SeqCst) {
+                return;
+            }
+            let Some(arm) = held.get() else { return };
+            let Ok(arm) = arm.try_lock() else { return };
+            // The claim on the session is made and its event is not in the store yet: the interval in which
+            // a turn that consumed the flag would clear a question nobody has written. The opening signal
+            // reads the clock from inside it, so this fires there.
+            let claimed = arm.question_claimed("desktop", "s7");
+            drop(arm);
+            let written = store
+                .open_alert_events()
+                .is_ok_and(|o| o.iter().any(|e| e.kind == Kind::AskUserQuestion.as_str()));
+            if !claimed || written {
+                return;
+            }
+            armed.store(false, Ordering::SeqCst);
+            fired.store(true, Ordering::SeqCst);
+            let arm = held.get().expect("the arm is built").clone();
+            let runtime = runtime.clone();
+            let thread = std::thread::spawn(move || {
+                let _entered = runtime.enter();
+                arm.lock()
+                    .unwrap()
+                    .observe(observed("r12", "desktop", "main", "s7", 24));
+            });
+            // Long enough for that turn to run to its end if nothing holds it back.
+            std::thread::sleep(Duration::from_millis(200));
+            *turn.lock().unwrap() = Some(thread);
+        })
+    };
+    let rig = rig_with_hook(store, hook).await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let arm = Arc::new(Mutex::new(BusArm::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+    )));
+    held.set(arm.clone()).ok();
+    {
+        let mut arm = arm.lock().unwrap();
+        arm.observe(observed("r11", "desktop", "main", "s7", 24));
+        arm.observe(chunk("r11", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+        arm.observe(complete("r11", Outcome::Succeeded, 200, None, None));
+    }
+    armed.store(true, Ordering::SeqCst);
+    // The body lands the way the ledger lands it, which is what releases the worker's poll.
+    rig.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r11".into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 100),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s7".into()),
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            bodies_captured: true,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r11".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: NOW,
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        bodies: Some(BodyRecord {
+            request_id: "r11".into(),
+            request_body: b"{}".to_vec(),
+            response_body: Some(
+                br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Ship it?"}}]}"#
+                    .to_vec(),
+            ),
+            expires_at: NOW + 86_400_000,
+        }),
+    });
+    let thread =
+        fake_upstream::wait_for(Duration::from_secs(10), || turn.lock().unwrap().take()).await;
+    thread.join().unwrap();
+    settled(&rig).await;
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the hook never found its window, so this test proved nothing"
+    );
+    assert!(
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != Kind::AskUserQuestion.as_str()),
+        "the answering turn resolved the question it answered"
+    );
+    let states: Vec<String> = rig
+        .webhook
+        .posts()
+        .iter()
+        .map(|p| p.body["state"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        states,
+        ["opened", "resolved"],
+        "no notification leaves a receiver holding a question nobody will close"
     );
 }
 

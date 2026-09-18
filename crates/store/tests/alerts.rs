@@ -219,7 +219,7 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
         "newest first"
     );
     assert_eq!(
-        store.purge_alert_events_before(4_500, 0).unwrap(),
+        store.purge_alert_events_before(4_500, 0, 0).unwrap(),
         1,
         "the resolved one is purged, the open one stays"
     );
@@ -311,7 +311,7 @@ fn a_rule_change_records_the_webhook_host_and_never_the_token_in_its_path() {
 fn a_question_is_purged_on_the_body_retention_while_its_event_stays() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.upsert_alert_rule(&rule("r1"), None, "admin").unwrap();
-    let asked = |id: &str, subject: &str, opened_at: i64| AlertEventRow {
+    let asked = |id: &str, subject: &str, opened_at: i64, expires_at: Option<i64>| AlertEventRow {
         id: id.into(),
         rule_id: "r1".into(),
         kind: "ask_user_question".into(),
@@ -320,18 +320,30 @@ fn a_question_is_purged_on_the_body_retention_while_its_event_stays() {
         opened_at,
         resolved_at: None,
         detail_json: Some(
-            serde_json::json!({ "key": "desktop", "question": "Which branch should I push to?" })
-                .to_string(),
+            serde_json::json!({
+                "key": "desktop",
+                "question": "Which branch should I push to?",
+                "question_expires_at": expires_at,
+            })
+            .to_string(),
         ),
     };
     assert!(store
-        .insert_alert_event(&asked("old", "desktop:s1", 1_000))
+        .insert_alert_event(&asked("old", "desktop:s1", 1_000, None))
         .unwrap());
     assert!(store
-        .insert_alert_event(&asked("fresh", "desktop:s2", 9_000))
+        .insert_alert_event(&asked("fresh", "desktop:s2", 9_000, None))
+        .unwrap());
+    // The key that captures for an hour under a longer global cap: the event is young enough for the cap and
+    // the body it quoted is already gone.
+    assert!(store
+        .insert_alert_event(&asked("short", "desktop:s3", 9_000, Some(9_500)))
+        .unwrap());
+    assert!(store
+        .insert_alert_event(&asked("long", "desktop:s4", 9_000, Some(90_000)))
         .unwrap());
     assert_eq!(
-        store.purge_alert_events_before(0, 5_000).unwrap(),
+        store.purge_alert_events_before(0, 5_000, 10_000).unwrap(),
         0,
         "the question purge deletes no event of its own"
     );
@@ -350,6 +362,16 @@ fn a_question_is_purged_on_the_body_retention_while_its_event_stays() {
     assert_eq!(
         detail("fresh")["question"],
         "Which branch should I push to?"
+    );
+    assert_eq!(
+        detail("short")["question"],
+        serde_json::Value::Null,
+        "the question goes with the body it came out of, not with the global cap"
+    );
+    assert_eq!(
+        detail("long")["question"],
+        "Which branch should I push to?",
+        "a body still in retention keeps its question"
     );
     assert!(
         store.alert_event("old").unwrap().is_some(),

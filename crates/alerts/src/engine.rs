@@ -62,8 +62,14 @@ pub struct Alerts {
     /// One sender per event whose worker is still running; an entry goes when its queue has drained.
     queues: Mutex<HashMap<String, mpsc::Sender<Transition>>>,
     sleeper: Box<Sleeper>,
+    /// Held from a transition's store write through its enqueue, so the queue's order is the order the
+    /// transitions committed in: an opener that lost its thread between the two would otherwise let the
+    /// resolve of the row it just wrote go out first, and the receiver would end on the wrong state.
+    transitions: Mutex<()>,
     workers: TaskTracker,
 }
+
+const TRANSITIONS_POISONED: &str = "alert transition mutex poisoned by a prior panic";
 
 fn event_id() -> String {
     format!("evt_{:016x}", rand::rng().random::<u64>())
@@ -84,6 +90,7 @@ impl Alerts {
             deliveries_failed: AtomicU64::new(0),
             queues: Mutex::new(HashMap::new()),
             sleeper,
+            transitions: Mutex::new(()),
             workers: TaskTracker::new(),
         });
         if let Err(e) = alerts.reload() {
@@ -147,6 +154,7 @@ impl Alerts {
             resolved_at: None,
             detail_json: Some(signal.detail.to_string()),
         };
+        let transitions = self.transitions.lock().expect(TRANSITIONS_POISONED);
         match self.parts.store.insert_alert_event(&event) {
             Ok(true) => {}
             Ok(false) => return,
@@ -157,6 +165,7 @@ impl Alerts {
         }
         self.record(&rule, &event, "alert_opened", signal);
         self.post(rule, event, "opened");
+        drop(transitions);
     }
 
     /// A condition stopped holding: every open event of the kind and subject resolves and posts a resolve.
@@ -197,6 +206,7 @@ impl Alerts {
     }
 
     fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) {
+        let transitions = self.transitions.lock().expect(TRANSITIONS_POISONED);
         match self.parts.store.resolve_alert_event(&event.id, now) {
             Ok(true) => {}
             Ok(false) => return,
@@ -221,6 +231,7 @@ impl Alerts {
         };
         self.record(&rule, &event, "alert_resolved", &signal);
         self.post(rule, event, "resolved");
+        drop(transitions);
     }
 
     fn record(&self, rule: &Rule, event: &AlertEventRow, kind: &str, signal: &Signal) {

@@ -164,6 +164,90 @@ async fn a_resolve_waits_behind_the_open_it_follows() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resolve_that_commits_mid_transition_still_reaches_the_receiver_second() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let engine: Arc<OnceLock<Arc<phoebis_alerts::Alerts>>> = Arc::new(OnceLock::new());
+    let armed = Arc::new(AtomicBool::new(false));
+    let fired = Arc::new(AtomicBool::new(false));
+    let resolver: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    let runtime = tokio::runtime::Handle::current();
+    let hook: ClockHook = {
+        let (store, engine, armed, fired, resolver) = (
+            store.clone(),
+            engine.clone(),
+            armed.clone(),
+            fired.clone(),
+            resolver.clone(),
+        );
+        Arc::new(move || {
+            // The first armed read that finds the row is the one inside the open's own ledger record: the
+            // event is committed and its opened transition is not queued yet, which is the interval a
+            // resolve could otherwise be enqueued in front of.
+            if !armed.load(Ordering::SeqCst)
+                || store.open_alert_events().is_ok_and(|o| o.is_empty())
+            {
+                return;
+            }
+            armed.store(false, Ordering::SeqCst);
+            fired.store(true, Ordering::SeqCst);
+            let alerts = engine.get().expect("the rig is built").clone();
+            let runtime = runtime.clone();
+            let thread = std::thread::spawn(move || {
+                let _entered = runtime.enter();
+                alerts.clear(Kind::ReauthRequired, "business");
+            });
+            // Long enough for that resolve to commit and enqueue if nothing holds it behind this open.
+            std::thread::sleep(Duration::from_millis(200));
+            *resolver.lock().unwrap() = Some(thread);
+        })
+    };
+    let rig = rig_with_hook(store, hook).await;
+    engine.set(rig.alerts.clone()).ok();
+    rig.store
+        .upsert_alert_rule(
+            &rule("ordered", Kind::ReauthRequired, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    armed.store(true, Ordering::SeqCst);
+    rig.alerts.signal(&signal(
+        Kind::ReauthRequired,
+        Some("business"),
+        None,
+        None,
+        "business",
+    ));
+    let thread = resolver.lock().unwrap().take().expect("the resolve ran");
+    thread.join().unwrap();
+    settled(&rig).await;
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the hook never found its window, so this test proved nothing"
+    );
+    let states: Vec<String> = rig
+        .webhook
+        .posts()
+        .iter()
+        .map(|p| p.body["state"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        states,
+        ["opened", "resolved"],
+        "the queue's order is the order the two transitions committed in"
+    );
+    assert_eq!(
+        rig.store.alert_events(Some("resolved"), 10).unwrap().len(),
+        1,
+        "the store ends where the receiver does"
+    );
+}
+
 #[test]
 fn the_body_is_the_spec_shape_and_the_signature_is_hmac_sha256_hex() {
     use phoebis_alerts::{Rule, Scope};

@@ -337,26 +337,30 @@ impl Store {
     }
 
     /// Resolved events older than the mark go, deliveries with them; an open event is never purged. The
-    /// question an `ask_user_question` detail carries is prompt content, so it follows the body retention
-    /// instead of the event one: past `questions_before` the key is nulled and the event stays. Answers how
-    /// many events were deleted.
+    /// question an `ask_user_question` detail carries is prompt content, so it follows the body it was
+    /// extracted from: past that body's own `question_expires_at`, or past `questions_before` for a detail
+    /// that carries no deadline, the key is nulled and the event stays. Answers how many events were deleted.
     pub fn purge_alert_events_before(
         &self,
         resolved_before: i64,
         questions_before: i64,
+        now: i64,
     ) -> Result<usize, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let purged = conn.execute(
             "DELETE FROM alert_events WHERE state = 'resolved' AND resolved_at < ?1",
             params![resolved_before],
         )?;
-        // `json_valid` guards the two json calls: a detail this process did not write would otherwise abort
-        // the statement and take the purge with it.
+        // `json_valid` guards the json calls: a detail this process did not write would otherwise abort the
+        // statement and take the purge with it.
         conn.execute(
             "UPDATE alert_events SET detail_json = json_set(detail_json, '$.question', NULL) \
-             WHERE kind = 'ask_user_question' AND opened_at < ?1 AND json_valid(detail_json) \
-               AND json_extract(detail_json, '$.question') IS NOT NULL",
-            params![questions_before],
+             WHERE kind = 'ask_user_question' AND json_valid(detail_json) \
+               AND json_extract(detail_json, '$.question') IS NOT NULL \
+               AND CASE WHEN json_extract(detail_json, '$.question_expires_at') IS NULL \
+                        THEN opened_at < ?1 \
+                        ELSE json_extract(detail_json, '$.question_expires_at') <= ?2 END",
+            params![questions_before, now],
         )?;
         Ok(purged)
     }

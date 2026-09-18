@@ -107,11 +107,24 @@ pub struct Rig {
     pub webhook: Arc<FakeWebhook>,
 }
 
+/// Runs on every clock read, for the two tests that must act at a point inside the engine that has no seam
+/// of its own; the hook itself decides which read is the one it wants.
+pub type ClockHook = Arc<dyn Fn() + Send + Sync>;
+
 pub async fn rig() -> Rig {
     rig_with_store(Arc::new(
         Store::open_in_memory(&StorageKey::generate()).unwrap(),
     ))
     .await
+}
+
+/// The rig over a store the test opened itself and a clock that calls the test back on every read.
+pub async fn rig_with_hook(store: Arc<Store>, hook: ClockHook) -> Rig {
+    let webhook = FakeWebhook::new();
+    Rig {
+        webhook: webhook.clone(),
+        ..rig_over(store, webhook, Some(hook)).await
+    }
 }
 
 /// The rig over a store the test opened itself, for the case that needs the registry in a file a second
@@ -120,7 +133,7 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
     let webhook = FakeWebhook::new();
     Rig {
         webhook: webhook.clone(),
-        ..rig_over(store, webhook).await
+        ..rig_over(store, webhook, None).await
     }
 }
 
@@ -131,11 +144,12 @@ pub async fn rig_with(webhook: Arc<dyn Webhook>) -> Rig {
     rig_over(
         Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
         webhook,
+        None,
     )
     .await
 }
 
-async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>) -> Rig {
+async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<ClockHook>) -> Rig {
     for (id, kind) in [
         ("business", AccountKind::Oauth),
         ("direct", AccountKind::ApiKey),
@@ -209,7 +223,12 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>) -> Rig {
     let clock_cell = Arc::new(AtomicI64::new(NOW));
     let clock: Clock = {
         let c = clock_cell.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
+        Arc::new(move || {
+            if let Some(hook) = &hook {
+                hook();
+            }
+            c.load(Ordering::SeqCst)
+        })
     };
     let router = spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
     let bus = Bus::new();
