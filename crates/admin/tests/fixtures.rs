@@ -11,7 +11,7 @@ use phoebis_ledger::{
     AttemptRecord, BodyRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,
 };
 use phoebis_store::{AccountState, Identity, NewBundle, Secret};
-use common::{deltas_until, get, json, login, next_text, post, serve, wait_json};
+use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use serde_json::{json as j, Value};
 
@@ -31,7 +31,12 @@ fn shape(v: &Value) -> Value {
 
 /// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
 /// grows a new one has to name it here as well. The three literals are the harness's own configuration.
-fn planted(access_token: &str, refresh_token: &str, key_secret: &str) -> Vec<String> {
+fn planted(
+    access_token: &str,
+    refresh_token: &str,
+    key_secret: &str,
+    rule_secret: &str,
+) -> Vec<String> {
     let mut needles: Vec<String> = ["admin-secret", "viewer-secret", "sk-ant-"]
         .into_iter()
         .map(str::to_string)
@@ -39,6 +44,7 @@ fn planted(access_token: &str, refresh_token: &str, key_secret: &str) -> Vec<Str
     needles.push(access_token.into());
     needles.push(refresh_token.into());
     needles.push(key_secret.into());
+    needles.push(rule_secret.into());
     needles
 }
 
@@ -183,7 +189,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .as_str()
         .expect("a created key answers its secret once")
         .to_string();
-    let planted = planted(access_token, refresh_token, &key_secret);
+    // The alert rule seeded below signs with this, and the guard reads every planted secret from here on.
+    let rule_secret = "s3cret";
+    let planted = planted(access_token, refresh_token, &key_secret, rule_secret);
     let mut key_created = created.clone();
     // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
     key_created["secret"] = j!("phoebis-fixture");
@@ -357,12 +365,38 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
+    // One rule per shape the page draws: an enabled one with a secret and a threshold, and a disabled one. The
+    // drift rule is turned off only after its event opened, since a disabled rule matches no signal.
+    post(app, "/admin/alerts/rules", &format!(r#"{{"kind":"utilization_above","scope":{{"type":"pool","id":"main"}},"threshold":0.9,"window":"7d_oi","webhook_url":"http://127.0.0.1:1/hook","secret":"{rule_secret}"}}"#), Some(&cookie)).await;
+    let drift = json(post(app, "/admin/alerts/rules", r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/drift"}"#, Some(&cookie)).await).await;
+    // A refusal, then a 500, then the 200 that ends it: the event carries all three attempts.
+    parts.webhook.answer(Err("refused".into()));
+    parts.webhook.answer(Ok(500));
+    parts.webhook.answer(Ok(200));
+    parts.alerts.signal(&phoebis_alerts::Signal {
+        kind: phoebis_alerts::Kind::ClientDrift,
+        account_id: None,
+        key_id: Some("desktop".into()),
+        pool_id: None,
+        subject: "client 2.1.274".into(),
+        detail: j!({ "client_version": "2.1.274", "key": "desktop", "trigger": "hash" }),
+    });
+    parts.alerts.wait_idle().await;
+    patch(
+        app,
+        &format!("/admin/alerts/rules/{}", drift["id"].as_str().unwrap()),
+        r#"{"enabled":false}"#,
+        Some(&cookie),
+    )
+    .await;
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_models", "/admin/accounts/business/models"),
         ("account_quota", "/admin/accounts/business/quota?range=7d"),
         ("account_usage", "/admin/accounts/business/usage"),
         ("accounts", "/admin/accounts"),
+        ("alert_events", "/admin/alerts/events"),
+        ("alert_rules", "/admin/alerts/rules"),
         ("analytics_accounts", "/admin/analytics/accounts?range=24h"),
         (
             "analytics_breakdown",
@@ -397,6 +431,26 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The deliveries route needs the id the events answer carries, so it is captured after the loop.
+    let events = json(get(app, "/admin/alerts/events", Some(&cookie)).await).await;
+    let event = events["events"][0]["id"]
+        .as_str()
+        .expect("the seeded signal opened an event")
+        .to_string();
+    hold(
+        &planted,
+        "alert_deliveries",
+        "GET /admin/alerts/events/{id}/deliveries",
+        json(
+            get(
+                app,
+                &format!("/admin/alerts/events/{event}/deliveries"),
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await,
+    );
     let preview = json(
         post(
             app,

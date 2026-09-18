@@ -1,0 +1,47 @@
+{
+  "route": "GET /admin/alerts/events",
+  "body": {
+    "events": [
+      {
+        "deliveries": [
+          {
+            "at": 1000000,
+            "attempt": 1,
+            "error": "refused",
+            "id": 1,
+            "state": "opened",
+            "status": null
+          },
+          {
+            "at": 1000000,
+            "attempt": 2,
+            "error": null,
+            "id": 2,
+            "state": "opened",
+            "status": 500
+          },
+          {
+            "at": 1000000,
+            "attempt": 3,
+            "error": null,
+            "id": 3,
+            "state": "opened",
+            "status": 200
+          }
+        ],
+        "detail": {
+          "client_version": "2.1.274",
+          "key": "desktop",
+          "trigger": "hash"
+        },
+        "id": "evt_fa4565bae883bb9f",
+        "kind": "client_drift",
+        "opened_at": 1000000,
+        "resolved_at": null,
+        "rule_id": "rule_a26a6bbc3d8e3d89",
+        "state": "open",
+        "subject": "client 2.1.274"
+      }
+    ]
+  }
+}

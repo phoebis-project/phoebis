@@ -539,7 +539,8 @@ export interface AskUserQuestionDetail {
 
 export interface ClientDriftDetail {
   clientVersion: string;
-  trigger: 'billing_hash' | 'version';
+  /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
+  trigger: string;
   type: 'client_drift';
 }
 

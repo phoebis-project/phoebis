@@ -195,3 +195,20 @@ test('the live snapshot and every delta decode with ISO times and null-safe fiel
   assert.ok(isIso(finished.phases.finishedAt) && isIso(finished.phases.firstContentAt));
   assert.equal(d.decodeLiveDelta({ type: 'nope', cursor: 1 }), null);
 });
+
+test('alert rules, events, and deliveries decode with the secret reduced to has_secret', () => {
+  const rules = fixture('alert_rules').rules.map(d.decodeAlertRule);
+  const util = rules.find((r) => r.kind === 'utilization_above');
+  assert.equal(util.hasSecret, true);
+  assert.equal(util.windowId, '7d_oi');
+  assert.equal(util.threshold, 0.9);
+  assert.deepEqual(util.scope, { id: 'main', type: 'pool' });
+  assert.ok(isIso(util.createdAt) && !('secret' in util));
+  assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
+  const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);
+  assert.equal(event.state, 'open');
+  assert.equal(event.detail.trigger, 'hash');
+  assert.deepEqual(event.deliveries.map((x) => [x.attempt, x.status, x.error]), [[1, null, 'refused'], [2, 500, null], [3, 200, null]]);
+  assert.ok(isIso(event.openedAt) && event.resolvedAt === null);
+  assert.equal(fixture('alert_deliveries').deliveries.map(d.decodeDelivery).length, 3);
+});

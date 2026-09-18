@@ -31,6 +31,16 @@ const seededSession = (): boolean => {
   }
 };
 
+/** Set to stand in for a fresh installation, whose alert lists are empty until an operator writes a rule. */
+const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
+const emptyStore = (): boolean => {
+  try {
+    return localStorage.getItem(EMPTY_STORE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
   let params: URLSearchParams;
   try {
@@ -300,11 +310,12 @@ export class MockApi implements Api {
   }
 
   listAlertEvents(state?: 'open' | 'resolved') {
-    return latency(state ? this.events.filter((e) => e.state === state) : this.events);
+    const events = emptyStore() ? [] : this.events;
+    return latency(state ? events.filter((e) => e.state === state) : events);
   }
 
   listAlertRules() {
-    return latency(this.rules);
+    return latency(emptyStore() ? [] : this.rules);
   }
 
   listCatalog() {

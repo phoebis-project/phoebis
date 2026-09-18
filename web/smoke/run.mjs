@@ -1047,67 +1047,95 @@ m.unmount();
 
 
 m = await mount('/alerts');
-expect('/alerts', m.text(), [
-  'Rules',
-  'Create rule',
-  'Re-auth required',
-  'Utilization above threshold',
-  'Pool exhausted',
-  'Waiting for user input',
-  'Client version drift',
-  'All traffic',
-  'Signed',
-  'Unsigned',
-  'Events',
-  'Any condition',
-  'open',
-  'resolved',
-  'timeout',
-  'connect timeout after 10s',
-  'asked: The ledger migration can rewrite rows in place',
-  'client 2.1.274, caught by the version check',
-  'agent main',
-]);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client version drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274', 'agent main', 'Resolve']);
 {
-  // The kind filter narrows the events list to one condition.
-  const filter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by condition');
-  const kinds = [...(filter?.options ?? [])].map((o) => o.textContent?.trim());
-  results.push({ name: '/alerts kind filter offers both new kinds', ok: kinds.includes('Waiting for user input') && kinds.includes('Client version drift'), missing: kinds });
+  const stateFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by state');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue.call(filter, 'client_drift');
-  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(250);
+  setValue.call(stateFilter, 'resolved');
+  stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(300);
   const rows = [...m.container.querySelectorAll('table')].pop()?.querySelectorAll('tbody tr') ?? [];
-  results.push({ name: '/alerts kind filter narrows the events list', ok: rows.length === 1 && rows[0].textContent.includes('Client version drift'), missing: [String(rows.length), rows[0]?.textContent?.slice(0, 60) ?? ''] });
-  setValue.call(filter, 'all');
-  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(250);
+  results.push({ name: '/alerts state filter narrows to resolved events', ok: rows.length >= 2 && [...rows].every((r) => r.textContent.includes('resolved')), missing: [String(rows.length)] });
+  setValue.call(stateFilter, 'all');
+  stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(300);
 }
 {
-  // The rule form explains each new kind and offers only the scopes it allows.
+  const menu = [...m.container.querySelectorAll('.menu__trigger')].find((b) => (b.getAttribute('aria-label') ?? '').startsWith('Actions for rule'));
+  menu?.click();
+  await m.settle(150);
+  const items = [...m.container.querySelectorAll('.menu__list button')].map((b) => b.textContent?.trim());
+  results.push({ name: '/alerts a rule row offers Edit, Test, and Delete', ok: items.join('|') === 'Edit|Test|Delete', missing: items });
+  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/alerts edit dialog is prefilled', dlg?.textContent ?? '', ['Edit alert rule', 'Leave empty to keep the stored secret', 'X-Router-Signature', 'Enabled', 'Save rule']);
+  const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
+  results.push({ name: '/alerts edit dialog carries the webhook URL', ok: (url?.value ?? '').startsWith('https://hooks.example.com/phoebis/'), missing: [url?.value ?? 'absent'] });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+  menu?.click();
+  await m.settle(150);
+  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Test')?.click();
+  await m.settle(500);
+  results.push({ name: '/alerts Test toasts the delivery answer', ok: /Test delivery answered 20\d/.test(m.text()), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
+}
+{
   const create = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create rule');
   create?.click();
   await m.settle(350);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const kindSelect = dlg?.querySelector('select');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue.call(kindSelect, 'ask_user_question');
-  kindSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(200);
-  expect('/alerts rule form explains ask_user_question', dlg?.textContent ?? '', ['AskUserQuestion tool call', "resolves on the session's next request"]);
-  const scopes = [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim());
-  results.push({ name: '/alerts ask_user_question scopes by key, pool, or all', ok: scopes.includes('All traffic') && scopes.some((o) => o.startsWith('Key ')) && scopes.some((o) => o.startsWith('Pool ')), missing: scopes });
-  setValue.call(kindSelect, 'client_drift');
-  kindSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(200);
-  expect('/alerts rule form explains client_drift', dlg?.textContent ?? '', ['billing-hash check', 'Re-pin the profile']);
-  const driftScopes = [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim());
-  results.push({ name: '/alerts client_drift scopes to all traffic only', ok: JSON.stringify(driftScopes) === JSON.stringify(['All traffic']), missing: driftScopes });
-  const cancel = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel');
-  cancel?.click();
-  await m.settle(200);
+  const scopesFor = async (kind) => { setValue.call(kindSelect, kind); kindSelect.dispatchEvent(new window.Event('change', { bubbles: true })); await m.settle(150); return [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim()); };
+  results.push({ name: '/alerts client_drift scopes to all traffic only', ok: JSON.stringify(await scopesFor('client_drift')) === JSON.stringify(['All traffic']), missing: [] });
+  const reauth = await scopesFor('reauth_required');
+  results.push({ name: '/alerts reauth_required scopes by any upstream or one upstream', ok: reauth[0] === 'Any upstream' && reauth.some((o) => o.startsWith('Upstream ')) && !reauth.includes('All traffic'), missing: reauth });
+  const cap = await scopesFor('keepalive_cost_cap');
+  results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
+  await scopesFor('utilization_above');
+  const windows = [...(dlg?.querySelectorAll('select')[2]?.options ?? [])].map((o) => o.textContent?.trim());
+  results.push({ name: '/alerts utilization windows include the Fable window under the shared label', ok: JSON.stringify(windows) === JSON.stringify(['5-hour', '7-day', '7-day Fable']), missing: windows });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
+  setter.call(url, 'https://hooks.example.com/phoebis/new');
+  url.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(100);
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create rule')?.click();
+  await m.settle(500);
+  results.push({ name: '/alerts a created rule joins the table', ok: m.text().includes('hooks.example.com/phoebis/new') && m.text().includes('Rule created'), missing: [] });
+}
+{
+  // The drift event by name rather than by position: every open event offers Resolve, and this check is about
+  // the confirmation naming the subject it was opened for.
+  const eventRows = () => [...[...m.container.querySelectorAll('table')].pop().querySelectorAll('tbody tr')];
+  const resolve = [...(eventRows().find((r) => r.textContent.includes('client 2.1.274'))?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resolve');
+  resolve?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/alerts Resolve confirms with the subject', confirm?.textContent ?? '', ['Resolve event', 'client 2.1.274']);
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resolve')?.click();
+  await m.settle(500);
+  const drift = eventRows().find((r) => r.textContent.includes('client 2.1.274'));
+  results.push({ name: '/alerts a resolved event reads resolved and loses its button', ok: Boolean(drift) && drift.textContent.includes('resolved') && !drift.querySelector('button'), missing: [drift?.textContent?.slice(0, 80) ?? 'row missing'] });
 }
 m.unmount();
+
+// A fresh installation: zero rules, zero events, and a filter that matches nothing must render, not throw.
+{
+  localStorage.setItem('phoebis.mockEmpty', '1');
+  const empty = await mount('/alerts');
+  expect('/alerts renders on an empty store', empty.text(), ['Rules', 'Create rule', 'Events', 'No events.']);
+  results.push({ name: '/alerts an empty store raises no console error', ok: !problems.some((p) => p.includes('toLowerCase')), missing: problems.filter((p) => p.includes('toLowerCase')) });
+  const filter = [...empty.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by condition');
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue.call(filter, 'client_drift');
+  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await empty.settle(250);
+  expect('/alerts an empty filtered result names the condition', empty.text(), ['No client version drift events.']);
+  empty.unmount();
+  localStorage.removeItem('phoebis.mockEmpty');
+}
 
 m = await mount('/settings');
 expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', '7d', 'Retention', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
@@ -1284,6 +1312,23 @@ await m.navigate('/accounts/business');
 {
   const t = m.text();
   results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add account') && !t.includes('Re-sync'), missing: [] });
+}
+await m.navigate('/alerts');
+{
+  const rows = [...m.container.querySelectorAll('tbody tr')].length;
+  // Buttons outside the dialogs: a closed dialog's own footer is in the DOM on every page and reaches nobody.
+  const buttons = [...m.container.querySelectorAll('button')].filter((b) => b.closest('dialog') === null).map((b) => b.textContent?.trim());
+  results.push({
+    name: 'viewer: /alerts lists rules and events without a control that writes',
+    ok:
+      rows > 2 &&
+      m.text().includes('Client version drift') &&
+      !buttons.includes('Create rule') &&
+      !buttons.includes('Resolve') &&
+      m.container.querySelector('.menu__trigger') === null &&
+      m.container.querySelector('dialog[open]') === null,
+    missing: [String(rows), ...buttons],
+  });
 }
 await m.navigate('/settings');
 results.push({
