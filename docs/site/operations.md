@@ -32,7 +32,11 @@ import pathlib, sqlite3
 
 pathlib.Path("/path/to/backups").mkdir(mode=0o700, exist_ok=True)
 sqlite3.connect("/var/lib/phoebis/router.sqlite").backup(sqlite3.connect("/path/to/backups/router.sqlite"))
+sqlite3.connect("/var/lib/phoebis/ledger.sqlite").backup(sqlite3.connect("/path/to/backups/ledger.sqlite"))
 ```
+
+A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
+and a restore built from only one of them leaves the two databases at different points in the request history.
 
 The key seals every credential in the registry, so a backup that carries the database is useless without the key,
 and dangerous with it. Keep the key somewhere separate, such as a password manager or a secrets store, and never
@@ -56,7 +60,11 @@ and the companion.
 
 There is no re-key command, so recovering from a lost or replaced key means:
 
-- Re-pairing every `oauth` account.
+- Re-pairing every `oauth` account, after disconnecting it first. Confirming a pairing reads the account's
+  existing credential to check its generation before committing the replacement; sealed under the key that was
+  just replaced, that read fails, and the pairing dialog answers `500 storage failure`. Disconnect the account
+  first, from the Upstreams view's Disconnect or `DELETE /admin/accounts/{id}/credentials`, which deletes the
+  credential without reading it and leaves the account's identity bound to the same slot, then re-pair.
 - Re-entering every `api_key` secret and alert secret under the new key.
 - Rotating every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest
   already stored against the old key stops matching a client's presented secret, and every existing downstream key
@@ -66,9 +74,13 @@ There is no re-key command, so recovering from a lost or replaced key means:
 ## Upgrades
 
 1. Build the new binary: `cargo build --release`.
-2. Run `phoebis check-config --config /etc/phoebis/config.yaml` with the new binary against the live configuration file.
-   `check-config` opens neither the store nor a socket, so it is safe to run while the old binary still serves
-   traffic.
+2. Validate the live configuration file with the binary just built, not the one still installed, since step 5 is
+   what replaces that one: `sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec target/release/phoebis check-config
+   --config /etc/phoebis/config.yaml'`. `check-config` resolves its secrets from the process environment, and only
+   systemd's `EnvironmentFile` loads `/etc/phoebis/phoebis.env` automatically, so sourcing it into this one shell is what
+   lets the command run at all; skipping that fails with `environment variable ROUTER_ADMIN_SECRET is unset or
+   empty`. `check-config` opens neither the store nor a socket, so it is safe to run while the old binary still
+   serves traffic.
 3. Read the [changelog](changelog.md) for a bootstrap key that changed.
 4. Take the [backup](#backup) above.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.

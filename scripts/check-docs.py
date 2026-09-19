@@ -50,12 +50,14 @@ def resolves(site, page, raw):
         return True
     site = site.resolve()
     if path.startswith("/"):
-        candidates = [site / path.lstrip("/")]
-        # A root-relative link carries the site's own path prefix when site_url has one; the tree under
-        # site/ starts below it. Only strip the prefix this site actually publishes under.
+        # A root-relative link must carry the prefix site_url publishes this site under; a browser resolves
+        # it against the host root, not against site/, so a link missing the prefix is dangling regardless
+        # of whether some other path happens to exist under site/.
         parts = path.lstrip("/").split("/", 1)
-        if len(parts) == 2 and parts[0] == PREFIX:
-            candidates.append(site / parts[1])
+        if parts[0] != PREFIX:
+            return False
+        remainder = parts[1] if len(parts) == 2 else ""
+        candidates = [site / remainder] if remainder else [site]
     else:
         candidates = [page.parent / path]
     for target in candidates:
@@ -92,12 +94,18 @@ def routes_in(source):
     unknown = []
     for call in ROUTE_CALL.finditer(source):
         path, handlers = call.group(1), call.group(2)
-        for method in CALL.finditer(handlers):
+        line = source.count("\n", 0, call.start()) + 1
+        calls = list(CALL.finditer(handlers))
+        if not calls:
+            # A handler expression with no call at all, such as a prebuilt router passed by name, still
+            # serves the route; fail closed on it like an unrecognized method rather than dropping it.
+            unknown.append((line, handlers.strip(), path))
+            continue
+        for method in calls:
             name = method.group(1)
             if name in METHODS:
                 served.add((name.upper(), path))
             else:
-                line = source.count("\n", 0, call.start()) + 1
                 unknown.append((line, name, path))
     return served, unknown
 

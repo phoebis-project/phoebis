@@ -32,6 +32,20 @@ echo '<a href="/anything/">gone</a>' > "$tmp/prefix-site/index.html"
 out=$(python3 "$check" links "$tmp/prefix-site" 2>&1) && fail "a root-relative link with an unrelated prefix passed"
 echo "$out" | grep -q "index.html: /anything/ resolves to nothing" || fail "wrong finding for unrelated prefix: $out"
 
+# A root-relative link missing the site's own prefix must fail even when an unprefixed path of the same name
+# exists directly under site/, which is exactly how the built tree is laid out locally.
+mkdir -p "$tmp/unprefixed-site/installation"
+: > "$tmp/unprefixed-site/installation/index.html"
+echo '<a href="/installation/">gone</a>' > "$tmp/unprefixed-site/index.html"
+out=$(python3 "$check" links "$tmp/unprefixed-site" 2>&1) && fail "a root-relative link without the site prefix passed"
+echo "$out" | grep -q "index.html: /installation/ resolves to nothing" || fail "wrong finding for unprefixed link: $out"
+
+# The same link, carrying the site's own prefix, must resolve.
+mkdir -p "$tmp/prefixed-site/installation"
+: > "$tmp/prefixed-site/installation/index.html"
+echo '<a href="/phoebis/installation/">ok</a>' > "$tmp/prefixed-site/index.html"
+python3 "$check" links "$tmp/prefixed-site" >/dev/null || fail "a root-relative link with the site prefix was refused"
+
 # A root-relative link into a directory that has no index.html must not fall back past its own path.
 mkdir -p "$tmp/missing-dir-site"
 echo '<a href="/x/index.html">gone</a>' > "$tmp/missing-dir-site/index.html"
@@ -84,5 +98,15 @@ RS
 out=$(python3 "$check" routes "$tmp/routes-unknown.rs" "$tmp/api-unknown.md" 2>&1) && \
   fail "a handler call the checker cannot consume passed"
 echo "$out" | grep -q "is not a method this checker consumes" || fail "unknown handler did not report expected finding: $out"
+
+cat > "$tmp/routes-prebuilt.rs" <<'RS'
+    Router::new()
+        .route("/admin/new", extra_routes)
+        .layer(x)
+RS
+: > "$tmp/api-prebuilt.md"
+out=$(python3 "$check" routes "$tmp/routes-prebuilt.rs" "$tmp/api-prebuilt.md" 2>&1) && \
+  fail "a route whose handler expression has no recognized call passed"
+echo "$out" | grep -q "/admin/new" || fail "unrecognized handler expression did not name the route: $out"
 
 echo "check-docs: ok"
