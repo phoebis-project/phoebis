@@ -71,6 +71,10 @@ BILLING_BLOCK = re.compile(rb'"x-anthropic-billing-header:[^"]*"')
 BILLING_PROMPT_ID = re.compile(rb"cc_prompt_id=[^;\"]*;")
 BILLING_STAMP = re.compile(rb"cch=[0-9a-f]{5};")
 
+# The billing fields the relay restores on a reduced-shape request; under THROUGH_ROUTER these are dropped
+# outright rather than masked, since a baseline that never carried one has no value for a placeholder to replace.
+RESTORED_BILLING_FIELDS = (b"cch", b"cc_prev_req", b"cc_prompt_id")
+
 # The relay puts the serving account's identity into the escaped metadata string; a capture taken at the router's
 # upstream carries it where the native capture, made with a dummy token, carried nothing.
 ACCOUNT_UUID = re.compile(rb'(\\"account_uuid\\":\\")[^\\]*(\\")')
@@ -344,13 +348,47 @@ def _self_test_normalize_body() -> None:
         raise AssertionError("normalize_head masked Content-Length with THROUGH_ROUTER off")
     print("self-test passed: THROUGH_ROUTER masks account_uuid and Content-Length")
 
+    # A baseline that never carried the restored fields, and a live capture where the relay filled them in, must
+    # normalize to the same bytes under THROUGH_ROUTER: a field moving from absent to present is the point of
+    # restoration, not drift.
+    reduced_body = (
+        b'{"system":[{"type":"text","text":'
+        b'"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"}]}'
+    )
+    restored_body = (
+        b'{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517;'
+        b" cc_entrypoint=sdk-cli; cch=9b244; cc_prev_req=req_up_0001;"
+        b' cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa;"}]}'
+    )
+    reduced_head = b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n\r\n"
+    restored_head = (
+        b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n"
+        b"x-client-request-id: 33333333-3333-4333-8333-333333333333\r\n\r\n"
+    )
+    assert reduced_body != restored_body and reduced_head != restored_head, "self-test feeds identical fixtures"
+    THROUGH_ROUTER = True
+    try:
+        if normalize_body(reduced_body) != normalize_body(restored_body):
+            raise AssertionError("THROUGH_ROUTER left a restored billing field in the comparison")
+        if normalize_head(reduced_head) != normalize_head(restored_head):
+            raise AssertionError("THROUGH_ROUTER left x-client-request-id in the comparison")
+    finally:
+        THROUGH_ROUTER = False
+    if normalize_body(reduced_body) == normalize_body(restored_body):
+        raise AssertionError("normalize_body dropped the restored billing fields with THROUGH_ROUTER off")
+    if normalize_head(reduced_head) == normalize_head(restored_head):
+        raise AssertionError("normalize_head dropped x-client-request-id with THROUGH_ROUTER off")
+    print("self-test passed: THROUGH_ROUTER treats a restored field as absent, not drift")
+
 
 def normalize_head(raw: bytes) -> bytes:
     """Replace the per-run session/request id header values so a diff reflects profile drift, not a random id.
 
     Under THROUGH_ROUTER two more values are masked, each keeping its header's name and position: a credential,
     which a live capture must never hold unredacted, and Content-Length, which the relay regenerates from the
-    body it edited (a change there is what the body comparison already covers).
+    body it edited (a change there is what the body comparison already covers). `x-client-request-id` is dropped
+    outright rather than masked, since the relay generates one when the caller sent none: a line moving from
+    absent to present is the point of restoration, and a placeholder value could not make the two compare equal.
     """
     head_bytes, sep, rest = raw.partition(b"\r\n\r\n")
     lines = head_bytes.decode("latin1").split("\r\n")
@@ -358,6 +396,8 @@ def normalize_head(raw: bytes) -> bytes:
     for line in lines:
         name, colon, value = line.partition(":")
         key = name.strip().lower()
+        if THROUGH_ROUTER and key == "x-client-request-id":
+            continue
         if THROUGH_ROUTER and key in CREDENTIAL_HEADERS:
             placeholder = "CREDENTIAL-PLACEHOLDER"
         elif THROUGH_ROUTER and key == "content-length":
@@ -369,9 +409,29 @@ def normalize_head(raw: bytes) -> bytes:
 
 
 def mask_billing(block: bytes) -> bytes:
-    """Mask one billing block's per-capture values, leaving cc_version and cc_entrypoint to be compared."""
+    """Mask one billing block's per-capture values, leaving cc_version and cc_entrypoint to be compared.
+
+    Under THROUGH_ROUTER, `strip_restored_billing_fields` runs instead: masking assumes a field is present on
+    both sides, which a restored one is not.
+    """
+    if THROUGH_ROUTER:
+        return strip_restored_billing_fields(block)
     block = BILLING_STAMP.sub(b"cch=CCH-PLACEHOLDER;", block)
     return BILLING_PROMPT_ID.sub(b"cc_prompt_id=PROMPT-ID-PLACEHOLDER;", block)
+
+
+def strip_restored_billing_fields(block: bytes) -> bytes:
+    """Drops `cch`, `cc_prev_req`, and `cc_prompt_id` from a `"x-anthropic-billing-header: ...;"` string, field by
+    field rather than by masking a value in place, so a baseline that never carried one of them and a live
+    capture the relay filled in normalize to the same bytes.
+    """
+    prefix = b'"x-anthropic-billing-header: '
+    if not (block.startswith(prefix) and block.endswith(b'"')):
+        return block
+    fields = block[len(prefix) : -1].rstrip(b";").split(b"; ")
+    kept = [f for f in fields if f.split(b"=", 1)[0] not in RESTORED_BILLING_FIELDS]
+    joined = b"; ".join(kept)
+    return prefix + joined + (b";" if kept else b"") + b'"'
 
 
 def normalize_body(raw: bytes) -> bytes:
@@ -436,6 +496,28 @@ def normalize_tree(root: pathlib.Path) -> dict:
     return normalized
 
 
+def restored_report(fresh_dir: pathlib.Path) -> list:
+    """One line per inference run naming which of the fields `strip_restored_billing_fields` and `normalize_head`
+    ignore the live capture actually carried, so an operator sees the restoration happened rather than reading
+    it out of a grade that now passes either way.
+    """
+    lines = []
+    for i, body_name in enumerate(INFERENCE_BODIES):
+        block = BILLING_BLOCK.search((fresh_dir / body_name).read_bytes())
+        carried = [
+            field.decode()
+            for field in RESTORED_BILLING_FIELDS
+            if block and (field + b"=") in block.group(0)
+        ]
+        if i < len(INFERENCE_HEADS):
+            head_bytes = (fresh_dir / INFERENCE_HEADS[i]).read_bytes()
+            if re.search(rb"(?im)^x-client-request-id:", head_bytes):
+                carried.append("x-client-request-id")
+        named = ", ".join(carried) if carried else "none of the restored fields"
+        lines.append(f"run {i} ({body_name}): carries {named}")
+    return lines
+
+
 def body_diff(name: str, committed: bytes, fresh: bytes) -> list:
     """Bounded unified diff of one body, pretty-printed as JSON so a changed value shows as a changed line.
 
@@ -459,6 +541,9 @@ def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
         build(capture_dir, fresh_dir)
+        if THROUGH_ROUTER:
+            for line in restored_report(fresh_dir):
+                print(line)
         hashes = 0 if skip_hashes else check_hashes(fresh_dir)
         if baseline is not None:
             # The same two masks that apply to the router capture apply here too, so a live date or a live
