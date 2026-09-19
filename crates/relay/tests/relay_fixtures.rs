@@ -99,15 +99,21 @@ async fn api_key_request_emits_the_measured_api_key_shape() {
     let app = relay_with(AccountKind::ApiKey, &up).await;
     let head = inference_head(FixtureKind::ApiKey);
     let native = body(BodyFixture::ApiKey);
-    let resp = app
-        .oneshot(request_from_fixture(head, native, "phoebis-testkey"))
-        .await
-        .unwrap();
+    let mut req = request_from_fixture(head, native, "phoebis-testkey");
+    // An SDK caller, so restoration never applies: this test is about the measured API-key shape, not about
+    // the fields a `claude-cli/` agent gets restored, which the restoration suite covers on its own.
+    set_header(&mut req, "user-agent", "anthropic-sdk-python/0.40.0");
+    let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let got = wire_of(&up.requests()[0]);
+    let expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
+        "User-Agent: claude-cli/2.1.269 (external, sdk-cli)",
+        "User-Agent: anthropic-sdk-python/0.40.0",
+    );
+    let mut expected = expected_head.into_bytes();
+    expected.extend_from_slice(native);
     assert_eq!(
-        got,
-        [head, native].concat(),
+        got, expected,
         "an API-key fixture round-trips byte-identical: no uuid, no cch, key in its slot"
     );
     up.shutdown().await;

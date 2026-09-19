@@ -46,12 +46,17 @@ const NEVER_COPIED: &[&str] = &[
 /// The head the relay writes upstream. Every caller header travels as it was sent, in the order it was sent,
 /// except the never-copied set, the credential slot, the beta list, and the three headers whose values
 /// describe the relay's own hop rather than the caller's.
+///
+/// `client_request_id` is emitted only when the caller sent no `x-client-request-id`: after the caller's `x-app`
+/// line, else immediately before the credential slot.
+#[allow(clippy::too_many_arguments)]
 pub fn outbound_headers(
     caller: &HeaderMap,
     original: Option<&OriginalHead>,
     kind: &CredentialKind,
     host: &str,
     content_length: usize,
+    client_request_id: Option<&str>,
 ) -> Vec<(String, String)> {
     let sent: Vec<(&str, &str)> = match original {
         Some(head) => head
@@ -66,6 +71,11 @@ pub fn outbound_headers(
             .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
             .collect(),
     };
+    let caller_has_request_id = sent
+        .iter()
+        .any(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"));
+    let caller_has_app = sent.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-app"));
+    let generated = client_request_id.filter(|_| !caller_has_request_id);
     // A caller may split a list-valued beta across several lines. Every line's tokens are entries in one
     // list, so they are joined in order and kept once each, and the credential's own claim is applied to the
     // whole list once. A caller that wrote one line has it travel exactly as it was written.
@@ -99,6 +109,9 @@ pub fn outbound_headers(
             "authorization" | "x-api-key" => {
                 if !saw_credential {
                     saw_credential = true;
+                    if let (false, Some(id)) = (caller_has_app, generated) {
+                        out.push(("x-client-request-id".into(), id.into()));
+                    }
                     out.push(credential(kind));
                 }
             }
@@ -126,17 +139,28 @@ pub fn outbound_headers(
                 }
             }
             _ if NEVER_COPIED.contains(&lower.as_str()) => {}
-            _ => out.push((name.into(), value.into())),
+            _ => {
+                out.push((name.into(), value.into()));
+                if lower == "x-app" {
+                    if let Some(id) = generated {
+                        out.push(("x-client-request-id".into(), id.into()));
+                    }
+                }
+            }
         }
     }
     if !saw_credential {
         // An in-process caller presents no credential of its own, so there is no slot to take over. The
         // measured client puts its API key right after `anthropic-version`, the one position the capture
         // gives for a credential the caller did not place.
-        let at = out
+        let mut at = out
             .iter()
             .position(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
             .map_or(out.len(), |at| at + 1);
+        if let (false, Some(id)) = (caller_has_app, generated) {
+            out.insert(at, ("x-client-request-id".into(), id.into()));
+            at += 1;
+        }
         out.insert(at, credential(kind));
     }
     if !saw_host {
@@ -207,6 +231,7 @@ mod tests {
             kind,
             "api.anthropic.com",
             7,
+            None,
         )
     }
 
@@ -312,6 +337,7 @@ mod tests {
             &api_key(),
             "api.anthropic.com",
             7,
+            None,
         );
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
         let version = names
@@ -320,5 +346,78 @@ mod tests {
             .expect("the caller sent a version");
         assert_eq!(names[version + 1], "x-api-key");
         assert!(names.contains(&"Host") && names.contains(&"Content-Length"));
+    }
+
+    #[test]
+    fn a_generated_client_request_id_follows_the_callers_x_app_line() {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("anthropic-version", "2023-06-01"),
+            ("x-app", "cli"),
+        ]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &oauth(),
+            "api.anthropic.com",
+            7,
+            Some("generated-id"),
+        );
+        let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
+        let app = names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case("x-app"))
+            .expect("the caller sent x-app");
+        assert_eq!(names[app + 1], "x-client-request-id");
+        assert_eq!(emitted[app + 1].1, "generated-id");
+    }
+
+    #[test]
+    fn without_an_x_app_line_the_generated_id_precedes_the_credential() {
+        let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &oauth(),
+            "api.anthropic.com",
+            7,
+            Some("generated-id"),
+        );
+        assert_eq!(
+            emitted[0],
+            ("x-client-request-id".into(), "generated-id".into())
+        );
+        assert_eq!(emitted[1].0, "Authorization");
+    }
+
+    #[test]
+    fn a_callers_own_client_request_id_travels_once_at_its_own_position_and_nothing_is_generated() {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("x-app", "cli"),
+            ("x-client-request-id", "caller-id"),
+        ]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &oauth(),
+            "api.anthropic.com",
+            7,
+            Some("generated-id"),
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"))
+                .count(),
+            1
+        );
+        let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
+        let app = names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case("x-app"))
+            .expect("the caller sent x-app");
+        assert_eq!(names[app + 1], "x-client-request-id");
+        assert_eq!(emitted[app + 1].1, "caller-id");
     }
 }

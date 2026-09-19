@@ -1,7 +1,9 @@
-//! The in-place body edits: the bound account's identity, the model the upstream is asked for, and the billing
-//! hash that has to follow both.
+//! The in-place body edits: the bound account's identity, the model the upstream is asked for, the billing hash
+//! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
+use crate::billing::{restore_billing_line, Restore};
 use crate::identity::is_valid_id;
+use crate::memory::Injected;
 use crate::RelayError;
 
 #[derive(Debug)]
@@ -10,6 +12,15 @@ pub struct BodyEdits {
     pub attribution_stripped: bool,
     pub model_replaced: bool,
     pub cch_restamped: bool,
+    pub restored: Vec<Injected>,
+}
+
+/// The native edit's inputs: the account identity and model every request needs, and the restoration a
+/// `claude-cli/` inference request carries.
+pub struct NativeEdit<'a> {
+    pub account_uuid: Option<&'a str>,
+    pub upstream_model: &'a str,
+    pub restore: Option<Restore<'a>>,
 }
 
 /// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
@@ -45,16 +56,12 @@ const ESCAPED_UUID_KEY: &[u8] = br#"\"account_uuid\":\""#;
 const ESCAPED_QUOTE: &[u8] = br#"\""#;
 
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
-const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
+pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 
 /// Length of the hash after `cch=`, the only bytes `phoebis_cch::sign` rewrites.
 const CCH_DIGITS: usize = 5;
 
-pub fn edit_body(
-    body: &mut Vec<u8>,
-    account_uuid: Option<&str>,
-    upstream_model: &str,
-) -> Result<BodyEdits, RelayError> {
+pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits, RelayError> {
     // A full parse would walk a body of up to the request limit a second time to learn what the upstream
     // validates anyway; the edits below fail closed on a body their scanner cannot walk.
     if !starts_with_object(body) {
@@ -67,7 +74,7 @@ pub fn edit_body(
         return Err(RelayError::ClientDrift { kind: client_drift });
     }
     // An API-key account has no identity to splice: the measured client never carried one for it.
-    let account_uuid_replaced = match account_uuid {
+    let account_uuid_replaced = match edit.account_uuid {
         None => false,
         Some(uuid) => {
             // The uuid is spliced into an escaped JSON string, so a value needing escaping would corrupt the
@@ -84,10 +91,14 @@ pub fn edit_body(
             }
         }
     };
-    let model_replaced = match replace_model(body, upstream_model) {
+    let model_replaced = match replace_model(body, edit.upstream_model) {
         Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::Model)),
         Spliced::Replaced => true,
         Spliced::Unchanged => false,
+    };
+    let restored = match &edit.restore {
+        Some(restore) => restore_billing_line(body, restore)?,
+        None => Vec::new(),
     };
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
@@ -95,6 +106,7 @@ pub fn edit_body(
         attribution_stripped: false,
         model_replaced,
         cch_restamped,
+        restored,
     })
 }
 
@@ -188,8 +200,15 @@ mod tests {
     fn a_body_that_already_names_the_account_and_the_model_keeps_its_bytes() {
         let mut body = native(UUID, "claude-sonnet-4-5");
         let before = body.clone();
-        let edits = edit_body(&mut body, Some(UUID), "claude-sonnet-4-5")
-            .expect("a JSON object is editable");
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                account_uuid: Some(UUID),
+                upstream_model: "claude-sonnet-4-5",
+                restore: None,
+            },
+        )
+        .expect("a JSON object is editable");
         assert!(!edits.account_uuid_replaced);
         assert!(!edits.model_replaced);
         assert!(!edits.cch_restamped);
@@ -200,7 +219,14 @@ mod tests {
     fn an_oauth_body_with_no_account_uuid_target_is_refused() {
         let mut body = br#"{"model":"claude-sonnet-4-5","messages":[]}"#.to_vec();
         assert!(matches!(
-            edit_body(&mut body, Some(UUID), "claude-sonnet-4-5"),
+            edit_body(
+                &mut body,
+                &NativeEdit {
+                    account_uuid: Some(UUID),
+                    upstream_model: "claude-sonnet-4-5",
+                    restore: None
+                },
+            ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
         ));
     }
@@ -209,7 +235,14 @@ mod tests {
     fn a_body_with_no_top_level_model_is_refused_for_either_account_kind() {
         let mut body = br#"{"messages":[]}"#.to_vec();
         assert!(matches!(
-            edit_body(&mut body, None, "claude-sonnet-4-5"),
+            edit_body(
+                &mut body,
+                &NativeEdit {
+                    account_uuid: None,
+                    upstream_model: "claude-sonnet-4-5",
+                    restore: None
+                },
+            ),
             Err(RelayError::BodyShape(BodyMember::Model))
         ));
         let mut oauth = String::from_utf8(native(UUID, "claude-sonnet-4-5"))
@@ -217,7 +250,14 @@ mod tests {
             .replacen(r#""model""#, r#""mdl""#, 1)
             .into_bytes();
         assert!(matches!(
-            edit_body(&mut oauth, Some(UUID), "claude-sonnet-4-5"),
+            edit_body(
+                &mut oauth,
+                &NativeEdit {
+                    account_uuid: Some(UUID),
+                    upstream_model: "claude-sonnet-4-5",
+                    restore: None
+                },
+            ),
             Err(RelayError::BodyShape(BodyMember::Model))
         ));
     }
@@ -225,16 +265,30 @@ mod tests {
     #[test]
     fn an_api_key_body_needs_no_account_uuid() {
         let mut body = br#"{"model":"claude-sonnet-4-5","messages":[]}"#.to_vec();
-        let edits = edit_body(&mut body, None, "claude-sonnet-4-5")
-            .expect("an api-key account never carried an identity");
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                account_uuid: None,
+                upstream_model: "claude-sonnet-4-5",
+                restore: None,
+            },
+        )
+        .expect("an api-key account never carried an identity");
         assert!(!edits.account_uuid_replaced);
     }
 
     #[test]
     fn the_uuid_and_the_model_are_spliced_in_place() {
         let mut body = br#"{"model":"claude-sonnet-4-5[1m]","metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#.to_vec();
-        let edits = edit_body(&mut body, Some("acct-uuid"), "claude-sonnet-4-5")
-            .expect("a JSON object is editable");
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                account_uuid: Some("acct-uuid"),
+                upstream_model: "claude-sonnet-4-5",
+                restore: None,
+            },
+        )
+        .expect("a JSON object is editable");
         assert!(edits.account_uuid_replaced && edits.model_replaced);
         assert_eq!(
             String::from_utf8(body).unwrap(),
@@ -246,7 +300,14 @@ mod tests {
     fn a_body_that_is_not_an_object_is_refused() {
         let mut body = b"[1,2,3]".to_vec();
         assert!(matches!(
-            edit_body(&mut body, None, "claude-sonnet-4-5"),
+            edit_body(
+                &mut body,
+                &NativeEdit {
+                    account_uuid: None,
+                    upstream_model: "claude-sonnet-4-5",
+                    restore: None
+                },
+            ),
             Err(RelayError::NotAnObject)
         ));
     }

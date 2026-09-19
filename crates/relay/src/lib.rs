@@ -2,6 +2,7 @@
 //! the account's endpoint, the two body edits, and the upstream round trip with its retry and refresh rules.
 
 mod auth;
+mod billing;
 mod body;
 mod cache_ttl;
 mod casing;
@@ -11,9 +12,11 @@ mod dispatch;
 mod drift;
 mod errors;
 mod exhaustion;
+mod facts;
 mod headers;
 mod hold;
 mod identity;
+mod memory;
 mod messages;
 mod observe;
 mod portability;
@@ -23,7 +26,7 @@ mod sse;
 mod stream;
 
 pub use auth::{presented_key, AuthError};
-pub use body::{edit_body, BodyEdits, BodyMember};
+pub use body::{edit_body, BodyEdits, BodyMember, NativeEdit};
 pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};

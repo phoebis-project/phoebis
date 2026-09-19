@@ -31,6 +31,7 @@ use phoebis_transport::TransportError;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 
+use crate::billing::{entrypoint_of, Restore};
 use crate::casing::OriginalHead;
 use crate::classify::{classify, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
@@ -39,9 +40,11 @@ use crate::errors::{
     MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
+use crate::facts::BodyFacts;
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
+use crate::memory::{uuid_v4, MemoryKey, SessionMemory, MEMORY_CAP};
 use crate::observe::{published_headers, usage_from_json, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
@@ -49,7 +52,9 @@ use crate::stream::{
     drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, ReturnToPool,
     MAX_BUFFERED_BODY,
 };
-use crate::{edit_body, is_portable, presented_key, DriftGuard, RelayError};
+use crate::{
+    edit_body, is_portable, presented_key, DriftGuard, NativeEdit, RelayError,
+};
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
 /// payload, and the framing ones no longer match the body the caller is sent.
@@ -128,6 +133,7 @@ pub struct Relay {
     drift: DriftGuard,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
+    memory: Arc<SessionMemory>,
     pub(crate) pool: Arc<Pool>,
     resolver: Resolver,
     router: RouterHandle,
@@ -151,6 +157,7 @@ impl Relay {
             drift: DriftGuard,
             limits,
             manager,
+            memory: Arc::new(SessionMemory::new(MEMORY_CAP)),
             pool,
             resolver,
             router,
@@ -566,6 +573,40 @@ impl Relay {
                 })
                 .collect(),
         };
+        let facts = BodyFacts::read(&raw);
+        // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
+        // has no line to fill.
+        let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
+            (Some(version), _) if trace.kind == Kind::Inference => Some(RestoreContext {
+                cli_version: version.to_string(),
+                entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
+                prompt_chars: facts.prompt_chars,
+                prompt_id: identity.session_id.as_deref().map(|session| {
+                    self.memory.prompt_id(
+                        &MemoryKey {
+                            key_id: key.id.clone(),
+                            session_id: session.into(),
+                            agent_id: identity.agent_id.clone(),
+                        },
+                        identity.parent_agent_id.as_deref(),
+                        facts.fresh_user_turn,
+                        received_at,
+                    )
+                }),
+            }),
+            _ => None,
+        };
+        // A separate field from `restore`: dispatch reads it to look up the previous request id per account,
+        // and the response half writes the upstream's `request-id` and message id back under it, whether or
+        // not restoration itself found a client version to key the line on.
+        let memory_key = match (&restore, identity.session_id.as_deref()) {
+            (Some(_), Some(session)) => Some(MemoryKey {
+                key_id: key.id.clone(),
+                session_id: session.into(),
+                agent_id: identity.agent_id.clone(),
+            }),
+            _ => None,
+        };
         let portable = is_portable(&raw);
         let target = parts
             .uri
@@ -588,10 +629,12 @@ impl Relay {
             fallback_ms,
             identity: &identity,
             key: &key,
+            memory_key,
             original,
             portable,
             raw: &raw,
             request_id: &trace.request_id,
+            restore,
             target: &target,
             trace: &trace,
         };
@@ -729,16 +772,36 @@ impl Relay {
         };
         let mut edited = admitted.raw.to_vec();
         let edit = {
+            // Isolated per account, so a failover never carries one account's previous request id into
+            // another's `cc_prev_req`.
+            let previous = admitted
+                .memory_key
+                .as_ref()
+                .map(|key| {
+                    self.memory
+                        .previous(key, &account.id, &admitted.identity.canonical_model)
+                })
+                .unwrap_or_default();
             edit_body(
                 &mut edited,
-                // The public `count_tokens` schema carries no `metadata` member and the upstream refuses
-                // unknown top-level ones, so there is no slot the account identity could go in. It is not
-                // billed either, so nothing is lost by leaving the body without it.
-                match admitted.trace.kind {
-                    Kind::CountTokens => None,
-                    Kind::Inference | Kind::Probe => credential.account_uuid.as_deref(),
+                &NativeEdit {
+                    // The public `count_tokens` schema carries no `metadata` member and the upstream refuses
+                    // unknown top-level ones, so there is no slot the account identity could go in. It is not
+                    // billed either, so nothing is lost by leaving the body without it.
+                    account_uuid: match admitted.trace.kind {
+                        Kind::CountTokens => None,
+                        Kind::Inference | Kind::Probe => credential.account_uuid.as_deref(),
+                    },
+                    upstream_model: &selection.upstream_model,
+                    restore: admitted.restore.as_ref().map(|r| Restore {
+                        cli_version: &r.cli_version,
+                        entrypoint: &r.entrypoint,
+                        prompt_chars: r.prompt_chars,
+                        prompt_id: r.prompt_id.as_deref(),
+                        prev_req: previous.request_id.as_deref(),
+                        restore_cch: true,
+                    }),
                 },
-                &selection.upstream_model,
             )
         };
         if let Err(error) = edit {
@@ -813,6 +876,7 @@ impl Relay {
                 fallback_ms: admitted.fallback_ms,
                 identity: admitted.identity,
                 key: admitted.key,
+                memory_key: admitted.memory_key.as_ref(),
                 pin: selection.pin.as_ref(),
                 pin_epoch,
                 portable: admitted.portable,
@@ -830,6 +894,7 @@ impl Relay {
                         &credential.kind,
                         &authority,
                         edited.len(),
+                        admitted.restore.as_ref().map(|_| uuid_v4()).as_deref(),
                     ),
                     body: edited.clone(),
                 };
@@ -1122,6 +1187,22 @@ impl Relay {
             }
             Verdict::FailOver { cooldown, mark } => (cooldown, mark),
             Verdict::Commit => {
+                if let (Some(key), Some(id)) = (ctx.memory_key, head.get("request-id")) {
+                    self.memory
+                        .record_request_id(key, &ctx.account.id, id, arrived);
+                }
+                // Built once and moved into whichever branch below commits: a JSON answer and a streamed one
+                // both reach the caller through `stream()`, so both parse for a message id the same way.
+                let on_message_id: Option<Box<dyn FnOnce(String) + Send>> =
+                    ctx.memory_key.map(|key| {
+                        let memory = self.memory.clone();
+                        let key = key.clone();
+                        let account_id = ctx.account.id.clone();
+                        let model = ctx.identity.canonical_model.clone();
+                        Box::new(move |id: String| {
+                            memory.record_message_id(&key, &account_id, &model, &id, arrived)
+                        }) as Box<dyn FnOnce(String) + Send>
+                    });
                 if let Some(pin) = ctx.pin {
                     self.router.report(Report::PinRenewed {
                         pin: pin.clone(),
@@ -1189,7 +1270,7 @@ impl Relay {
                         head: &head,
                         keep_alive: reusable,
                         observer,
-                        on_message_id: None,
+                        on_message_id,
                         outcome,
                         prefix,
                         reader: reader
@@ -1635,6 +1716,7 @@ struct Responding<'a> {
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
+    memory_key: Option<&'a MemoryKey>,
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
@@ -1652,6 +1734,16 @@ enum Next {
     Respond(Response),
 }
 
+/// The restoration facts computed once at admission: the client version and entrypoint the wire already named,
+/// the version-suffix characters, and the prompt id this turn carries. The previous request id is not here
+/// because it is per-account, looked up in the failover loop against the account each attempt actually tries.
+struct RestoreContext {
+    cli_version: String,
+    entrypoint: String,
+    prompt_chars: [char; 3],
+    prompt_id: Option<String>,
+}
+
 /// What the same-account leg reads about the request it is part of: fixed at admission and shared by every
 /// account the request tries.
 struct Admitted<'a> {
@@ -1660,12 +1752,16 @@ struct Admitted<'a> {
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
+    /// The session memory key this request reads and writes under, absent when the request carries no session.
+    memory_key: Option<MemoryKey>,
     /// The caller's head as it arrived, absent for an in-process caller and for a connection the recorder
     /// gave up on.
     original: Option<&'a OriginalHead>,
     portable: bool,
     raw: &'a Bytes,
     request_id: &'a str,
+    /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
+    restore: Option<RestoreContext>,
     target: &'a str,
     trace: &'a Trace,
 }
