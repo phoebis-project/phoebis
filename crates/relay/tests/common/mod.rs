@@ -64,6 +64,8 @@ pub fn api_key(id: &'static str, secret: &'static str, priority: u32) -> TestAcc
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
     pub allowed_models: Option<Vec<&'static str>>,
+    pub cache_diagnostics: Option<bool>,
+    pub cache_ttl: &'static str,
     pub migrate_above_utilization: Option<f64>,
     pub overage_policy: OveragePolicy,
     pub strategy: Strategy,
@@ -74,6 +76,8 @@ impl Default for PoolSpec {
         PoolSpec {
             affinity_ttl_seconds: 3600,
             allowed_models: None,
+            cache_diagnostics: None,
+            cache_ttl: "{}",
             migrate_above_utilization: None,
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::PriorityRandom,
@@ -310,6 +314,8 @@ async fn build(
                     body_capture_hours: 0,
                     prefer_subscription: false,
                     api_key_sub_strategy: SubStrategy::PriorityRandom,
+                    cache_ttl_json: pool.cache_ttl.into(),
+                    cache_diagnostics: pool.cache_diagnostics,
                     created_at: NOW,
                     updated_at: NOW,
                 },

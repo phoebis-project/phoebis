@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
+use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{OveragePolicy, PoolMember, PoolRow, StoreError, Strategy, SubStrategy};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -48,6 +49,10 @@ struct PoolInput {
     #[serde(default)]
     keepalive: Option<Value>,
     #[serde(default)]
+    cache_ttl: Option<Value>,
+    #[serde(default, deserialize_with = "double_option")]
+    cache_diagnostics: Option<Option<bool>>,
+    #[serde(default)]
     body_capture_hours: Option<u32>,
     #[serde(default)]
     members: Option<Vec<MemberInput>>,
@@ -73,6 +78,22 @@ fn merged_keepalive(row: &PoolRow, incoming: &Value) -> Value {
         return incoming.clone();
     };
     let mut merged = serde_json::to_value(KeepalivePolicy::from_json(&row.keepalive_json))
+        .unwrap_or_else(|_| json!({}));
+    if let Value::Object(base) = &mut merged {
+        for (key, value) in patch {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+/// Mirrors `merged_keepalive`: a PATCH's `cache_ttl` names only the fields the operator touched, and the
+/// struct fills the rest with defaults on parse.
+fn merged_cache_ttl(row: &PoolRow, incoming: &Value) -> Value {
+    let Value::Object(patch) = incoming else {
+        return incoming.clone();
+    };
+    let mut merged = serde_json::to_value(CacheTtlPolicy::from_json(&row.cache_ttl_json))
         .unwrap_or_else(|_| json!({}));
     if let Value::Object(base) = &mut merged {
         for (key, value) in patch {
@@ -186,6 +207,28 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         };
         row.keepalive_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
     }
+    if let Some(cache_ttl) = &input.cache_ttl {
+        let mut merged = merged_cache_ttl(row, cache_ttl);
+        if let Some(models) = merged.get_mut("models").and_then(Value::as_array_mut) {
+            for entry in models.iter_mut() {
+                if let Some(model) = entry
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(phoebis_store::canonical_id)
+                {
+                    entry["model"] = Value::String(model);
+                }
+            }
+        }
+        let policy = match CacheTtlPolicy::parse(&merged) {
+            Ok(policy) => policy,
+            Err(error) => return Err(failure(StatusCode::BAD_REQUEST, &error.to_string())),
+        };
+        row.cache_ttl_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
+    }
+    if let Some(diagnostics) = input.cache_diagnostics {
+        row.cache_diagnostics = diagnostics;
+    }
     if let Some(hours) = input.body_capture_hours {
         if hours > state.body_capture_max_hours {
             return Err(failure(
@@ -252,6 +295,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         body_capture_hours: 0,
         prefer_subscription: false,
         api_key_sub_strategy: SubStrategy::PriorityRandom,
+        cache_ttl_json: "{}".into(),
+        cache_diagnostics: None,
         created_at: now,
         updated_at: now,
     };
@@ -457,6 +502,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "default_allowed_models": row.default_allowed_models,
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
+        "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority, "eligible": ineligible(m).unwrap_or("eligible") })).collect::<Vec<_>>(),
         "keys": keys,

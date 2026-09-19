@@ -3,6 +3,7 @@
 
 mod auth;
 mod body;
+mod cache_ttl;
 mod casing;
 mod catalog;
 mod classify;
@@ -23,6 +24,7 @@ mod stream;
 
 pub use auth::{presented_key, AuthError};
 pub use body::{edit_body, BodyEdits, BodyMember};
+pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};
 pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};

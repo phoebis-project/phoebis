@@ -446,6 +446,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 body_capture_hours: 0,
                 prefer_subscription: false,
                 api_key_sub_strategy: phoebis_store::SubStrategy::PriorityRandom,
+                cache_ttl_json: "{}".into(),
+                cache_diagnostics: None,
                 created_at: common::NOW,
                 updated_at: common::NOW,
             },
@@ -809,4 +811,80 @@ async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_throu
             .status(),
         400
     );
+}
+
+#[tokio::test]
+async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = json(post(&app, "/admin/pools", r#"{"id":"cached","label":"Cached","cache_ttl":{"enabled":true,"main":"1h","subagent":"5m","in_overage":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]},"cache_diagnostics":true}"#, Some(&cookie)).await).await;
+    assert_eq!(created["cache_ttl"]["in_overage"], "5m");
+    assert_eq!(
+        created["cache_ttl"]["models"][0]["model"],
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(created["cache_diagnostics"], true);
+    let plain = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"plain","label":"Plain"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            plain["cache_ttl"]["enabled"].as_bool(),
+            plain["cache_ttl"]["main"].as_str(),
+            plain["cache_diagnostics"].is_null()
+        ),
+        (Some(false), Some("1h"), true),
+        "defaults are answered in full; null inherits the bootstrap option"
+    );
+    let patched = json(
+        patch(
+            &app,
+            "/admin/pools/cached",
+            r#"{"cache_ttl":{"subagent":"1h"},"cache_diagnostics":null}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            patched["cache_ttl"]["subagent"].as_str(),
+            patched["cache_ttl"]["in_overage"].as_str(),
+            patched["cache_diagnostics"].is_null()
+        ),
+        (Some("1h"), Some("5m"), true),
+        "a partial policy merges over the stored one"
+    );
+    for (body, message) in [
+        (
+            r#"{"cache_ttl":{"main":"2h"}}"#,
+            "cache_ttl is not a policy object",
+        ),
+        (
+            r#"{"cache_ttl":{"strategy":"x"}}"#,
+            "cache_ttl is not a policy object",
+        ),
+        (
+            r#"{"cache_ttl":{"models":[{"model":"m","main":"5m","subagent":"5m"},{"model":"m","main":"1h","subagent":"1h"}]}}"#,
+            "cache_ttl.models lists m twice",
+        ),
+        (r#"{"cache_ttl":[]}"#, "cache_ttl is not a policy object"),
+    ] {
+        let resp = patch(&app, "/admin/pools/cached", body, Some(&cookie)).await;
+        assert_eq!(resp.status(), 400, "{body}");
+        assert!(
+            json(resp).await["error"]
+                .as_str()
+                .unwrap()
+                .starts_with(message),
+            "{body}"
+        );
+    }
 }

@@ -1172,6 +1172,8 @@ mod tests {
             body_capture_hours: 0,
             prefer_subscription: false,
             api_key_sub_strategy: SubStrategy::PriorityRandom,
+            cache_ttl_json: "{}".into(),
+            cache_diagnostics: None,
             created_at: 0,
             updated_at: 0,
         }

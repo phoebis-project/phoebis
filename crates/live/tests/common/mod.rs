@@ -116,6 +116,8 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 body_capture_hours: capture_hours,
                 prefer_subscription: false,
                 api_key_sub_strategy: SubStrategy::PriorityRandom,
+                cache_ttl_json: "{}".into(),
+                cache_diagnostics: None,
                 created_at: NOW,
                 updated_at: NOW,
             },

@@ -30,9 +30,17 @@
           "retry_seconds": 30,
           "stop_when_net_negative": true
         },
+        "cache_ttl": {
+          "enabled": false,
+          "in_overage": null,
+          "main": "1h",
+          "models": [],
+          "subagent": "5m"
+        },
+        "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1789767514021,
-        "updated_at": 1789767514021,
+        "created_at": 1789829544740,
+        "updated_at": 1789829544740,
         "members": [
           {
             "account_id": "business",
@@ -49,7 +57,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "8Z8YXLAi",
+            "prefix": "LP9Dgxqw",
             "enabled": true
           }
         ],

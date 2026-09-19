@@ -170,6 +170,8 @@ pub async fn harness_on(
                     body_capture_hours: capture.0,
                     prefer_subscription: false,
                     api_key_sub_strategy: SubStrategy::PriorityRandom,
+                    cache_ttl_json: "{}".into(),
+                    cache_diagnostics: None,
                     created_at: NOW,
                     updated_at: NOW,
                 },

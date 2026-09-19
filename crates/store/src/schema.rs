@@ -42,6 +42,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (10, V10),
     (11, V11),
     (12, V12),
+    (13, V13),
 ];
 
 const V2: &str = r#"
@@ -177,4 +178,12 @@ ALTER TABLE pins ADD COLUMN migrated_at INTEGER;
 "#;
 
 const V12: &str = r#"
+"#;
+
+// The policy is one JSON object rather than a column per field: a second override strategy joins as one more
+// defaulted member of the object, read by every build that knows it and ignored by none. `cache_diagnostics`
+// is nullable because null is the value that inherits the bootstrap option.
+const V13: &str = r#"
+ALTER TABLE pools ADD COLUMN cache_ttl_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE pools ADD COLUMN cache_diagnostics INTEGER;
 "#;

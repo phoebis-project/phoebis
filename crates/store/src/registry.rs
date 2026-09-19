@@ -159,6 +159,9 @@ pub struct PoolRow {
     /// Order the selection set by account kind before priority; forced on under the sample-driven strategies.
     pub prefer_subscription: bool,
     pub api_key_sub_strategy: SubStrategy,
+    pub cache_ttl_json: String,
+    /// `None` inherits `compatibility.cache_diagnostics`; `Some` overrides it for this pool.
+    pub cache_diagnostics: Option<bool>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -378,8 +381,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
             params![
                 row.id,
                 row.label,
@@ -394,6 +397,8 @@ impl Store {
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
                 row.api_key_sub_strategy,
+                row.cache_ttl_json,
+                row.cache_diagnostics,
                 now
             ],
         )?;
@@ -407,7 +412,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, updated_at = ?14 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -422,6 +427,8 @@ impl Store {
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
                 row.api_key_sub_strategy,
+                row.cache_ttl_json,
+                row.cache_diagnostics,
                 now
             ],
         )?;
@@ -1027,7 +1034,7 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy FROM pools";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
@@ -1064,6 +1071,8 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         updated_at: r.get(12)?,
         prefer_subscription: r.get(13)?,
         api_key_sub_strategy: r.get(14)?,
+        cache_ttl_json: r.get(15)?,
+        cache_diagnostics: r.get::<_, Option<bool>>(16)?,
     })
 }
 
@@ -1116,6 +1125,8 @@ fn pool_diff(row: &PoolRow) -> String {
         "body_capture_hours": row.body_capture_hours,
         "prefer_subscription": row.prefer_subscription,
         "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
+        "cache_ttl": serde_json::from_str::<serde_json::Value>(&row.cache_ttl_json).unwrap_or(serde_json::Value::Null),
+        "cache_diagnostics": row.cache_diagnostics,
     })
     .to_string()
 }

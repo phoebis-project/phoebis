@@ -140,6 +140,8 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,
             api_key_sub_strategy: pool.sub_strategy,
+            cache_ttl_json: "{}".into(),
+            cache_diagnostics: None,
             created_at: 0,
             updated_at: 0,
         }],

@@ -841,6 +841,8 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 body_capture_hours: 0,
                 prefer_subscription: false,
                 api_key_sub_strategy: phoebis_store::SubStrategy::PriorityRandom,
+                cache_ttl_json: "{}".into(),
+                cache_diagnostics: None,
                 created_at: NOW,
                 updated_at: NOW,
             },
