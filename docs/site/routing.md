@@ -10,7 +10,7 @@ itself, and the answers a client gets when nothing can serve it.
 Creating an account also discovers the models it serves, and discovery repeats every
 `routing.catalog_sync_interval_seconds`. `GET /admin/accounts/{id}/models` lists what discovery found, and a
 `PUT` on the same path replaces the list by hand. Two upstream spellings that fold to the same canonical id, a
-plain id and its `[1m]` long-context variant among them, are refused: `two spellings of {canonical_id}`. Each
+plain id and its `[1m]` long-context variant among them, are refused: `409 two spellings of {canonical_id}`. Each
 served model carries a `long_context` flag, and the console marks one `missing` when discovery no longer reports
 it, `new` when nobody has reviewed it yet.
 
@@ -40,7 +40,7 @@ Every field, in the order the request body takes them:
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `default_allowed_models` | unset | a list of canonical model ids |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
-| `body_capture_hours` | unset | `body_capture_hours exceeds stats.body_capture_max_hours` |
+| `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
@@ -180,7 +180,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
-| Transport failure after fully written, no head | None | No; 502, client retries |
+| Transport failure after fully written, no head | None | No; 502 `upstream_unreachable`, client retries |
 
 `Retry-After` parsing is case-insensitive and accepts integer seconds or an HTTP date, rounding fractional
 seconds up; anything non-finite, negative, malformed, or absent is invalid, and an api_key row then takes the
