@@ -95,15 +95,14 @@ scrape rather than accumulated between them.
 
 ## The live feed
 
-`GET /admin/live` upgrades to a WebSocket that reports requests while they run; `GET /admin/live/snapshot`
-answers the same shape for a past window. Both need an admin session, like every other admin route. After the
-upgrade the socket sends one `{"kind": "snapshot", ...}` message and then a `{"kind": "delta", ...}` message for
-every change. The feed keeps 30 minutes or 2,048 finished requests, whichever bound is reached first; a request
-or response preview inside a message is at most 4 KiB; and a client that falls 1,024 messages behind the
-broadcast is disconnected rather than left to grow an unbounded backlog. A session logged in with the viewer
-secret sees no preview on the socket, and a past snapshot carries no preview whatever the role.
-`GET /admin/live/snapshot?at=` (or `?from=` and `?to=`) answers a past window, 30 minutes by default, without
-previews.
+`GET /admin/live` upgrades to a WebSocket that reports requests while they run; `GET /admin/live/snapshot?at=`
+(or `?from=` and `?to=`) answers the same shape for a past window, 30 minutes by default. Both need an admin
+session, like every other admin route. After the upgrade the socket sends one `{"kind": "snapshot", ...}`
+message and then a `{"kind": "delta", ...}` message for every change. The feed keeps 30 minutes or 2,048
+finished requests, whichever bound is reached first; a request or response preview inside a message is at most
+4 KiB; and a client that falls 1,024 messages behind the broadcast is disconnected rather than left to grow an
+unbounded backlog. A session logged in with the viewer secret sees no preview on the socket, and a past
+snapshot carries no preview whatever the role.
 
 ## The console's views
 
@@ -156,8 +155,8 @@ utilization, ineligible time, and pin churn per upstream.
 
 ### Settings
 
-Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, retention, the
-downstream client block, and an about panel.
+Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
+keepalive, listeners, the downstream client block, and an about panel.
 
 ## Alerts
 

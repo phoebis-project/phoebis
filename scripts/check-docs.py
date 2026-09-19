@@ -15,6 +15,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SITE = ROOT / "site"
 ROUTES_RS = ROOT / "crates/admin/src/routes.rs"
 API_MD = ROOT / "docs/site/api.md"
+# The path zensical.toml's site_url publishes the site under; a root-relative link carries it.
+PREFIX = "phoebis"
 
 # Another host's links are not this script's business, and a bare fragment stays on the page it is in.
 SKIPPED = ("http:", "https:", "mailto:", "javascript:", "data:", "tel:", "#")
@@ -46,16 +48,20 @@ def resolves(site, page, raw):
     path = urllib.parse.unquote(urllib.parse.urlsplit(raw).path)
     if not path:
         return True
+    site = site.resolve()
     if path.startswith("/"):
         candidates = [site / path.lstrip("/")]
         # A root-relative link carries the site's own path prefix when site_url has one; the tree under
-        # site/ starts below it.
+        # site/ starts below it. Only strip the prefix this site actually publishes under.
         parts = path.lstrip("/").split("/", 1)
-        if len(parts) == 2:
+        if len(parts) == 2 and parts[0] == PREFIX:
             candidates.append(site / parts[1])
     else:
         candidates = [page.parent / path]
     for target in candidates:
+        target = target.resolve()
+        if not target.is_relative_to(site):
+            continue
         if target.is_file():
             return True
         if target.is_dir() and (target / "index.html").is_file():

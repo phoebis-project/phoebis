@@ -140,5 +140,7 @@ then check that the published URL answers `404` before treating the site as take
 To build the site locally, run `pipx run zensical build --clean` at the repository root; it writes `site/`. `pipx
 run zensical serve` previews it.
 
+## License
+
 The workspace manifest declares an MIT license, but the repository carries no license file, so its terms are not
 published anywhere a reader can find them.

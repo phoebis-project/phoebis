@@ -71,9 +71,9 @@ sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-con
 ```
 
 `check-config` resolves `admin.secret_env` and `admin.viewer_secret_env` from the process environment like every
-other invocation, so the env file has to be sourced into this one shell first; plain `sudo phoebis check-config`
-fails with `environment variable ROUTER_ADMIN_SECRET is unset or empty`. Once it is clean,
-`sudo systemctl enable --now phoebis`.
+other invocation, so the env file has to be sourced into this one shell first; plain
+`sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable ROUTER_ADMIN_SECRET is
+unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 
 ## Commands
 
@@ -280,7 +280,8 @@ Refused with:
 
 ### sessions
 
-Defaults whole: `expire_after_seconds`, default `86400`, at least 60, refused with
+Defaults whole: `expire_after_seconds` is how long a session may go without a request before it leaves the
+Sessions view, taking its pin and any keepalive recipe with it; default `86400`, at least 60, refused with
 `sessions.expire_after_seconds must be at least 60`.
 
 ### stats
@@ -329,8 +330,9 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Required: `cache_ttl_seconds`, and `refresh_concurrency`, at least 1, refused with `usage.refresh_concurrency
-must be at least 1`.
+Required: `cache_ttl_seconds` is how long a cached usage snapshot is served before the next request triggers a
+fresh fetch; `refresh_concurrency` is how many accounts' usage and profile fetches may run at once, at least 1,
+refused with `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the

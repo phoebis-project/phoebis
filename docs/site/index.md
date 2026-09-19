@@ -56,7 +56,7 @@ The sidebar shows the views in this order:
 | Upstreams | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
 | API keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
-| Request logs | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
+| Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
 | Alerts | Webhook alert rules and their events (see [Statistics and alerts](statistics.md)). |

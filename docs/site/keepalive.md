@@ -9,9 +9,9 @@ may run, every tuning field, and how the ledger accounts what a probe cost again
 
 With keepalive enabled on a pool, the router keeps a replayable copy of every eligible request a session sends: a
 request whose thinking is adaptive or disabled, whose tool choice is not forced, and whose output is neither
-structured nor bound to a strict tool. A request that fails one of those checks is never retained, and the reason
-is one of `fixed_thinking`, `forced_tool`, `invalid_model`, `request_too_large`, `structured_output`, or
-`unsupported_shape`.
+structured nor bound to a strict tool. A request that fails one of those checks is never retained; the Sessions
+view shows it as `unsupported shape`, or as `storage limit` when the body or a header block ran over its size
+limit.
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it: the same
 body with `max_tokens` set to `0` and `stream` set to `false`, through the same failover loop a real request
@@ -68,7 +68,7 @@ The pool's `keepalive` object carries thirteen fields, each with its own default
 | `jitter_seconds_5m` | `5` | 0 to 299 | Random seconds trimmed off a 5m probe's due time. |
 | `lead_seconds_1h` | `360` | 0 to 3599 | How long before a 1h entry expires its probe is due. |
 | `lead_seconds_5m` | `60` | 0 to 299 | How long before a 5m entry expires its probe is due. |
-| `max_idle_seconds` | `3600` | 0 to 31536000 | Stops probing the main agent this long after its last real request. |
+| `max_idle_seconds` | `3600` | 0 to 31536000 | Stops probing the main agent while reporting, every agent once silent. |
 | `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes instead of seconds. |
 | `net_negative_grace_probes` | `2` | 0 to 100 | Probes still granted once the net turns negative. |
 | `probe_cost_cap_usd_per_day` | unset | unset or a positive number | Daily probe spend cap per pool. |
