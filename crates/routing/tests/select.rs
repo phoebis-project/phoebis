@@ -1920,3 +1920,58 @@ fn purge_drops_a_round_robin_cursor_once_its_cohort_account_is_gone() {
         "the purged cursor restarted at index 0 instead of resuming on b"
     );
 }
+
+#[test]
+fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_group() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        strategy: Strategy::PriorityRandom,
+        prefer_subscription: true,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let pick = |st: &mut RoutingState, r: &mut StdRng, at: i64| {
+        picked(
+            &select(
+                st,
+                &s,
+                &request(&s, None, "claude-sonnet-5", true, &[], at),
+                r,
+            )
+            .0,
+        )
+        .to_string()
+    };
+    let sampled = |in_use: bool, observed_at: i64| OverageEvidence {
+        in_use,
+        since: Some(observed_at),
+        reset: None,
+        observed_at,
+        source: EvidenceSource::Sample,
+    };
+    st.record_overage("a", sampled(true, 1_000));
+    let mut served = std::collections::HashSet::new();
+    for i in 0..8 {
+        served.insert(pick(&mut st, &mut r, 1_000 + i));
+    }
+    assert_eq!(
+        served,
+        ["b".to_string()].into_iter().collect(),
+        "the account in overage sits one group below the plan-funded one while the evidence stands"
+    );
+    // `in_overage` never expires evidence of its own and the quota poll writes the ledger, not routing state,
+    // so this sample is the only thing that can retire it. `needs_sample` has to ask for it.
+    st.record_overage("a", sampled(false, 2_000));
+    assert!(!st.in_overage("a"));
+    let mut served = std::collections::HashSet::new();
+    for i in 0..20 {
+        served.insert(pick(&mut st, &mut r, 2_000 + i));
+    }
+    assert_eq!(
+        served.len(),
+        2,
+        "the recovered account shares the first group again: {served:?}"
+    );
+}

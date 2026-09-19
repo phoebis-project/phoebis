@@ -1090,7 +1090,9 @@ impl Task {
 /// live rate-limit cooldown is read whatever the strategy: while the account is cooled no response head of its
 /// own can show the window the upstream reset ahead of the deadline it announced. A candidate whose latest
 /// sample spent its model-scoped window is read for the same reason: selection excludes it on that reading,
-/// so no request of its own will ever bring a fresher one.
+/// so no request of its own will ever bring a fresher one. The kind order is a third: it reads overage
+/// evidence to put an account in the second group, and nothing but a sample retires that evidence, so without
+/// one a recovered account would sit below its plan-funded siblings until the process restarts.
 fn needs_sample(
     pool: &phoebis_store::PoolRow,
     state: &RoutingState,
@@ -1098,8 +1100,7 @@ fn needs_sample(
     canonical_model: &str,
     now: i64,
 ) -> bool {
-    pool.strategy == phoebis_store::Strategy::EarliestRefresh
-        || pool.strategy == phoebis_store::Strategy::LeastUtilized
+    pool.kind_ordered()
         || pool.migrate_above_utilization.is_some()
         || pool.select_below_utilization.is_some()
         || pool.overage_policy != phoebis_store::OveragePolicy::Allow
@@ -1239,6 +1240,38 @@ mod tests {
         assert!(
             needs(&migrating, &quiet),
             "the pool's own reasons to sample still stand"
+        );
+    }
+
+    #[test]
+    fn a_kind_ordered_pool_is_sampled_even_when_nothing_else_reads_usage() {
+        let quiet = RoutingState::from_load(RoutingLoad::default());
+        let kind_ordered = PoolRow {
+            prefer_subscription: true,
+            ..plain_pool()
+        };
+        assert!(
+            !needs_sample(&plain_pool(), &quiet, "a", "claude-sonnet-5", 1_000),
+            "the same pool without the preference reads no usage at all"
+        );
+        assert!(
+            needs_sample(&kind_ordered, &quiet, "a", "claude-sonnet-5", 1_000),
+            "the kind order reads overage evidence, and only a sample retires it"
+        );
+        let mut recovered = RoutingState::from_load(RoutingLoad::default());
+        recovered.record_overage(
+            "a",
+            OverageEvidence {
+                in_use: true,
+                since: Some(1_000),
+                reset: None,
+                observed_at: 1_000,
+                source: EvidenceSource::Sample,
+            },
+        );
+        assert!(
+            needs_sample(&kind_ordered, &recovered, "a", "claude-sonnet-5", 1_000),
+            "an account already in the second group is exactly the one whose evidence has to be refreshed"
         );
     }
 }
