@@ -103,6 +103,10 @@ key secret, so the secret leaves your network on every send. `DISABLE_TELEMETRY=
 policy and settings lookups the client makes at start still go to `api.anthropic.com` with the secret under either
 setting; they fail there and the client tolerates that.
 
+A client on a LAN where the router speaks plain HTTP off loopback also sets `CC_KEEPALIVE_ALLOW_PLAINTEXT=1` for the
+`cc-cache-keepalive` companion (see Keepalive), which refuses to report session identifiers over `http://` to a
+non-loopback host without it.
+
 Request headers travel as the client sent them, in its own order and spelling: `phoebis` drops the hop-by-hop and
 forwarding headers, puts the account's credential where the client put yours, adjusts `anthropic-beta` to what the
 account may claim, and owns `Host` and `Content-Length`. Nothing is added for a header the client left out, so any
@@ -200,12 +204,12 @@ the error recorded and no models; `GET /admin/accounts/{id}/models` lists what d
 same path replaces the list, which is how you add such a host's models by hand. Discovery repeats every
 `routing.catalog_sync_interval_seconds`.
 
-A pool holds one or more accounts, each with a priority:
+A pool holds one or more accounts, each with a priority; `strategy` defaults to `least_utilized`:
 
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/pools \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
-  -d '{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"vendor","priority":0}]}'
+  -d '{"id":"main","label":"Main","members":[{"account_id":"vendor","priority":0}]}'
 ```
 
 A downstream client presents a key, and a key routes into exactly one pool. Its secret is in the answer to the
@@ -223,13 +227,22 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/keys \
 A pool picks the account for each request from its lowest priority band that still has an eligible account: an account
 is eligible when it is enabled, ready, off cooldown, serves the requested model, and has not already been tried by this
 request. Inside that band, `earliest_refresh` picks the account whose weekly window, the fable window for a fable model,
-resets soonest, `least_utilized` picks the account with the most five-hour headroom left, and `priority_random` picks at
-random. A pool that sets `select_below_utilization` keeps every account whose five-hour reading has reached that
-threshold out of the selection set, for as long as one account is still under it.
+resets soonest, `least_utilized` picks the account with the most five-hour headroom left, `priority_random` picks at
+random, and `round_robin` takes the accounts in turn (one pointer per tier and candidate set, in memory, so a restart
+starts every round again). Under `earliest_refresh` and `least_utilized` every subscription account with plan quota is
+tried before one in overage, and both before any API-key account, whatever the priorities say, because an API key has no
+usage sample to order by; `api_key_sub_strategy` (`priority_random` or `round_robin`) orders the API-key group.
+`prefer_subscription` switches that same order on under `priority_random` and `round_robin`. A pool that sets
+`select_below_utilization` keeps every account whose five-hour reading has reached that threshold out of the selection
+set, for as long as one account is still under it.
 
 A request that carries a session stays on the account that served it first, for as long as the pool's
 `affinity_ttl_seconds`, so a conversation does not move mid-flight. `GET /admin/sessions` lists the live pins, and a
 release drops one.
+
+A pool with `migrate_above_utilization` moves a pinned session off an account whose 5h or 7d reading has reached the
+threshold, onto a sibling whose readings are both below the threshold minus 0.05, and then leaves that session alone for
+five minutes however the readings move, so two accounts hovering at the line do not trade a session back and forth.
 
 When nothing in the pool can serve the request, the answer says whether waiting helps. With every account rate
 limited, `phoebis` answers 429 with `retry-after` and the unified rate-limit headers, shaped as a single rate-limited
