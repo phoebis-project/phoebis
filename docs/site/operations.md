@@ -10,8 +10,8 @@ alert rules, pricing versions, pins, and cooldowns; `stats.ledger_path`, the led
 samples, rollups, and captured bodies; and `storage.encryption_key_file`, the key that seals every credential the
 registry holds. No script in this repository takes a backup of any of them.
 
-Both databases are SQLite, and the ledger runs in WAL mode. A plain file copy taken while the service is running can
-land mid-transaction and split the database file from its `-wal` file, losing the last transactions in between.
+Both databases are SQLite, and both run in WAL mode. A plain file copy taken while the service is running can land
+mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
 SQLite's own `.backup` avoids that by copying a consistent snapshot instead.
 
 Create the destination directory before either backup, and make it private first: `.backup` does not carry the
