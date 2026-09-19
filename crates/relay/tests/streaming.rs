@@ -590,3 +590,26 @@ async fn a_timeout_with_the_request_in_the_socket_is_not_retried() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0001".into())],
+            body: b"{\"id\":\"msg_01\",\"type\":\"message\"}".to_vec(),
+        },
+    }])
+    .await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(
+        common::outcome(&resp).upstream_request_id.as_deref(),
+        Some("req_up_0001")
+    );
+    up.shutdown().await;
+}

@@ -78,6 +78,17 @@ pub(crate) fn is_tool_use_delta(data: &[u8]) -> bool {
     data.windows(18).any(|w| w == br#""input_json_delta""#)
 }
 
+/// The message id of a Messages answer: `message.id` under `path` (`["message"]` for `message_start`, empty for a
+/// JSON answer). `None` when the document does not parse or carries no string id.
+pub(crate) fn message_id_from_json(body: &[u8], path: &[&str]) -> Option<String> {
+    let root = serde_json::from_slice::<Value>(body).ok()?;
+    let mut at = &root;
+    for key in path {
+        at = at.get(*key)?;
+    }
+    at.get("id").and_then(Value::as_str).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +137,38 @@ mod tests {
         assert!(!is_tool_use_delta(
             br#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}"#
         ));
+    }
+
+    #[test]
+    fn the_message_id_is_read_under_the_path_and_nowhere_else() {
+        assert_eq!(
+            message_id_from_json(
+                br#"{"type":"message_start","message":{"id":"msg_01","usage":{}}}"#,
+                &["message"]
+            )
+            .as_deref(),
+            Some("msg_01")
+        );
+        assert_eq!(
+            message_id_from_json(br#"{"id":"msg_02","type":"message"}"#, &[]).as_deref(),
+            Some("msg_02")
+        );
+        assert_eq!(
+            message_id_from_json(
+                br#"{"type":"message_start","message":{"id":7}}"#,
+                &["message"]
+            ),
+            None,
+            "a non-string id is no id"
+        );
+        assert_eq!(
+            message_id_from_json(br#"{"type":"message_start"}"#, &["message"]),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unparseable_document_yields_no_id() {
+        assert_eq!(message_id_from_json(b"{not json", &[]), None);
     }
 }

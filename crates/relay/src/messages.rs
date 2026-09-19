@@ -105,6 +105,9 @@ pub struct RelayOutcome {
     pub received_at: i64,
     /// When the head that answered the caller arrived, which a local answer never has.
     pub head_at: Option<i64>,
+    /// The upstream's own `request-id` response header on the committed attempt, `None` for a local answer or an
+    /// upstream that sent none.
+    pub upstream_request_id: Option<String>,
 }
 
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
@@ -942,7 +945,7 @@ impl Relay {
         let framing = framing(&head);
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
-        let outcome = self.outcome(
+        let mut outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
             Some(ctx.identity),
@@ -956,6 +959,7 @@ impl Relay {
             ctx.pin_epoch,
             Some(head_at),
         );
+        outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         self.report_overage(ctx.account, &head, head_at);
 
         // Heads the table reads a body for are drained within the bound; a body too large to read
@@ -986,6 +990,7 @@ impl Relay {
                         head: &head,
                         keep_alive: reusable,
                         observer: None,
+                        on_message_id: None,
                         outcome,
                         prefix,
                         reader,
@@ -1184,6 +1189,7 @@ impl Relay {
                         head: &head,
                         keep_alive: reusable,
                         observer,
+                        on_message_id: None,
                         outcome,
                         prefix,
                         reader: reader
@@ -1220,6 +1226,7 @@ impl Relay {
                 head: &head,
                 keep_alive: false,
                 observer: None,
+                on_message_id: None,
                 outcome,
                 prefix: held.bytes,
                 reader: reader.expect("a streaming head still holds the reader the hold read from"),
@@ -1400,6 +1407,7 @@ impl Relay {
             pin_epoch,
             received_at: trace.received_at,
             head_at,
+            upstream_request_id: None,
         }
     }
 
@@ -1453,6 +1461,7 @@ impl Relay {
             head,
             keep_alive,
             observer,
+            on_message_id,
             outcome,
             prefix,
             reader,
@@ -1474,7 +1483,8 @@ impl Relay {
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
-        let publish = trace.bus_attached().then(|| Publish {
+        // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run for it.
+        let publish = (trace.bus_attached() || on_message_id.is_some()).then(|| Publish {
             trace: trace.clone(),
             clock: self.clock.clone(),
             outcome: outcome.clone(),
@@ -1498,6 +1508,8 @@ impl Relay {
             saw_tool_use: false,
             stream_error: None,
             status: head.status,
+            message_id: None,
+            on_message_id,
         });
         let body = relay_body(Relayed {
             cancel,
@@ -1596,6 +1608,7 @@ struct Forward<'a, C> {
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
+    on_message_id: Option<Box<dyn FnOnce(String) + Send>>,
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::hold::Inspect;
 use crate::messages::{RelayOutcome, Trace};
-use crate::observe::{is_tool_use_delta, usage_from_json};
+use crate::observe::{is_tool_use_delta, message_id_from_json, usage_from_json};
 use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -65,6 +65,11 @@ pub(crate) struct Publish {
     pub stream_error: Option<String>,
     /// The status the client was answered with, for the completion.
     pub status: u16,
+    /// The id of the message this response carries, once `message_start` or the JSON answer named it.
+    pub message_id: Option<String>,
+    /// Runs once, with the id, the moment it is known: a later request on the same session reads it before this
+    /// body has finished, so the hand-off cannot wait for `finish`.
+    pub on_message_id: Option<Box<dyn FnOnce(String) + Send>>,
 }
 
 impl Publish {
@@ -144,6 +149,9 @@ impl Publish {
             Some(b"message_start") => {
                 let usage = usage_from_json(&event.data, &["message"]);
                 self.usage.merge(&usage);
+                if let Some(id) = message_id_from_json(&event.data, &["message"]) {
+                    self.saw_message_id(id);
+                }
                 Some(Phase::MessageStart { usage })
             }
             Some(b"content_block_delta") => {
@@ -184,6 +192,9 @@ impl Publish {
         }
         if let Some(json) = self.json.take() {
             self.usage.merge(&usage_from_json(&json, &[]));
+            if let Some(id) = message_id_from_json(&json, &[]) {
+                self.saw_message_id(id);
+            }
         }
         let outcome = match (end, self.stream_error.take()) {
             (BodyEnd::Complete, None) => None,
@@ -208,6 +219,17 @@ impl Publish {
             outcome,
             (self.clock)(),
         );
+    }
+
+    /// The id is handed off once, on first sight: `message_start` names it for a stream, the whole document for a
+    /// JSON answer, and neither arrives twice.
+    fn saw_message_id(&mut self, id: String) {
+        if self.message_id.is_none() {
+            if let Some(hook) = self.on_message_id.take() {
+                hook(id.clone());
+            }
+            self.message_id = Some(id);
+        }
     }
 }
 
