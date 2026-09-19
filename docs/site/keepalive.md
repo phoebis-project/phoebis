@@ -157,9 +157,9 @@ unanswered:
 | Reason | What settles it |
 | --- | --- |
 | `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |
-| `released` | An operator released the session before the probe was answered. |
+| `released` | By an operator's release, a key's opt-out, or the companion reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
-| `session_ended` | The companion reported the session ending. |
+| `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |
 
 The analytics view puts it plainly: "a high idle-limit share means the pool's max idle time is set too high for
 how these sessions are used."
@@ -168,11 +168,11 @@ how these sessions are used."
 
 Per pool and per hour, the ledger's rollup carries the keepalive fields the console reads: `kept_warm_requests`
 and `kept_warm_tokens`, the requests and tokens a probe kept off a cache miss; `saved_usd_gross`, what those
-requests saved against an uncached write; `probe_cost_usd`, what sending the probes cost; `probe_migrated`, a
-probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`, probes still
-unanswered when the recipe was discarded, and what they cost; `wasted_probe_reasons`, those wasted probes counted
-by the reason above; and `probes_skipped`, a due probe a gate withheld rather than sending, for example because
-the cost cap or an idle limit already held the recipe.
+kept-warm tokens saved against paying them as uncached input every turn; `probe_cost_usd`, what sending the
+probes cost; `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and
+`wasted_probe_usd`, probes still unanswered when the recipe was discarded, and what they cost;
+`wasted_probe_reasons`, those wasted probes counted by the reason above; and `probes_skipped`, a due probe a gate
+withheld rather than sending, for example because the cost cap or a cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
 `probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap.
