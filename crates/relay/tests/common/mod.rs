@@ -61,6 +61,30 @@ pub fn api_key(id: &'static str, secret: &'static str, priority: u32) -> TestAcc
     }
 }
 
+/// The row `build` inserts for a `TestAccount`, so a test can add a member to a running harness through the
+/// store directly instead of restarting it with a wider account list.
+pub fn test_account_row(account: &TestAccount) -> AccountRow {
+    let identity = matches!(account.kind, AccountKind::Oauth).then(|| Identity {
+        account_uuid: account
+            .uuid
+            .map(String::from)
+            .unwrap_or_else(|| "00000000-0000-4000-8000-000000000199".into()),
+        email: format!("{}@example.invalid", account.id),
+        organization_uuid: None,
+    });
+    AccountRow {
+        id: account.id.into(),
+        kind: account.kind,
+        label: account.id.into(),
+        enabled: true,
+        identity,
+        lifecycle_generation: 1,
+        incarnation: 1,
+        revision: 1,
+        state: AccountState::Ready,
+    }
+}
+
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
     pub allowed_models: Option<Vec<&'static str>>,
