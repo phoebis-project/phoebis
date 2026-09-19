@@ -664,7 +664,7 @@ usage:
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
 
-    // The pairing procedure Task 12's rehearsal walks: start, callback, confirm.
+    // Pairs an oauth account through the router's own flow: start, callback, confirm.
     let pair = |account_id: &'static str| {
         let client = client.clone();
         async move {
@@ -2320,10 +2320,10 @@ usage:
             );
         }
     }
-    // Ruling 1's CREDENTIAL-PLACEHOLDER mask is meaningless unless the relay actually swapped the credential:
-    // check the bytes the fake upstream received directly, not only the normalized comparison below. Run 2
-    // (index 2) is the api_key account; the other three are the paired oauth account, whose stored access
-    // token is this fixture's canned token response, verbatim.
+    // The fixture comparison below masks the credential, which proves nothing unless the relay actually
+    // swapped it: check the bytes the fake upstream received directly instead. Run 2 (index 2) is the
+    // api_key account; the other three are the paired oauth account, whose stored access token is this
+    // fixture's canned token response, verbatim.
     for (i, r) in posts.iter().enumerate() {
         let carries_the_account_credential = if i == 2 {
             r.headers.iter().any(|(n, v)| {

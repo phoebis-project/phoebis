@@ -166,9 +166,10 @@ CREATE TABLE IF NOT EXISTS alert_deliveries (
 CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id, id);
 "#;
 
-// Round robin and the kind-ordered selection are per-pool choices; a pool written before them keeps the
-// priority-then-strategy order it had. A pin's migration time is what the dwell reads, null for a pin that
-// never moved for utilization.
+// Round robin and the kind-ordered selection are per-pool choices, but the stored flag only governs
+// `priority_random`: a pre-existing `least_utilized` or `earliest_refresh` pool takes the kind order at this
+// version regardless, per the spec; only a `priority_random` pool keeps the priority-then-strategy order it had.
+// A pin's migration time is what the dwell reads, null for a pin that never moved for utilization.
 const V11: &str = r#"
 ALTER TABLE pools ADD COLUMN prefer_subscription INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pools ADD COLUMN api_key_sub_strategy TEXT NOT NULL DEFAULT 'priority_random';
