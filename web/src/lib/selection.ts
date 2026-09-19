@@ -91,8 +91,10 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
     for (const p of eligible) {
       const score = keyOf(p.account, strategy);
       if (!previous || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
-      // Round robin takes each eligible member of the tier in turn, so every one of them is equally the next.
-      p.rank = strategy === 'round_robin' ? 1 : rank;
+      // Round robin and priority_random both score every member 0, so the rank only moves across the deferred
+      // boundary: each member of a subtier is equally the next, and the router rotates the plan-funded subtier
+      // on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
+      p.rank = rank;
       previous = { deferred: p.deferred, score };
     }
     const ordered = [...eligible, ...placements.filter((p) => p.ineligible !== null).sort((a, b) => a.account.label.localeCompare(b.account.label))];

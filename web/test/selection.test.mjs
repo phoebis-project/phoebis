@@ -155,3 +155,21 @@ test('the kind order walks plan oauth, overage oauth, then api keys ahead of pri
   assert.equal(forced[0].group, 0, 'least_utilized forces the kind order whatever the flag says');
   assert.deepEqual(selectionOrder(pool('round_robin', 'allow', [member('a', 0), member('b', 0)]), [account('a'), account('b')], [])[0].next.sort(), ['a', 'b'], 'round robin marks every member of the tier as next');
 });
+
+test('round robin ranks the overage subtier behind the plan-funded one it rotates', () => {
+  const members = [member('over', 0), member('plan', 0)];
+  const tiers = selectionOrder(pool('round_robin', 'prefer_plan', members), accounts, []);
+  assert.deepEqual(
+    tiers[0].placements.map((p) => [p.account.id, p.deferred, p.rank]),
+    [
+      ['plan', false, 1],
+      ['over', true, 2],
+    ],
+    'the router rotates the plan-funded members alone while they last, so the overage one is not next',
+  );
+  assert.deepEqual(tiers[0].next, ['plan']);
+  const allow = selectionOrder(pool('round_robin', 'allow', members), accounts, []);
+  assert.deepEqual(allow[0].next.sort(), ['over', 'plan'], 'allow rotates them together, so both are next');
+  const deferredOnly = selectionOrder(pool('round_robin', 'prefer_plan', [member('over', 0)]), accounts, []);
+  assert.deepEqual(deferredOnly[0].next, ['over'], 'a subtier with nothing ahead of it is still the one the router takes');
+});
