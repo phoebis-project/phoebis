@@ -275,6 +275,21 @@ impl FakeUpstream {
             request_count: 0,
             pending: None,
             credential: Some(credential.into()),
+            header: None,
+            queue: VecDeque::new(),
+        });
+    }
+
+    /// Answers only the requests that carry `header: value`, ahead of every prefix-only rule: for a gateway
+    /// whose token rides in a name of its own rather than the credential slot `add_credential_rule` matches.
+    pub fn add_header_rule(&self, header: &str, value: &str, path_prefix: &str, respond: Respond) {
+        self.shared.rules.lock().unwrap().push(RuleState {
+            path_prefix: path_prefix.into(),
+            respond,
+            request_count: 0,
+            pending: None,
+            credential: None,
+            header: Some((header.to_ascii_lowercase(), value.into())),
             queue: VecDeque::new(),
         });
     }
@@ -293,6 +308,7 @@ impl FakeUpstream {
                 request_count: 0,
                 pending: None,
                 credential: Some(credential.into()),
+                header: None,
                 queue: VecDeque::from([respond]),
             }),
         }
@@ -364,6 +380,8 @@ struct RuleState {
     pending: Option<PendingSwitch>,
     /// `None` matches on the path prefix alone; `Some` matches only the requests carrying that credential.
     credential: Option<String>,
+    /// `Some((name, value))` matches only requests carrying that header (case-insensitive name, exact value).
+    header: Option<(String, String)>,
     /// Scripted responses served one per request before the standing `respond`.
     queue: VecDeque<Respond>,
 }
@@ -376,6 +394,7 @@ impl From<Rule> for RuleState {
             request_count: 0,
             pending: None,
             credential: None,
+            header: None,
             queue: VecDeque::new(),
         }
     }
@@ -441,18 +460,28 @@ impl Shared {
             .any(|r| matches!(r.respond, Respond::CloseImmediately))
     }
 
-    /// Credential-scoped rules are consulted before the prefix-only ones, so one fake can answer several
-    /// accounts on the same path without their rules shadowing each other.
+    /// Credential- and header-scoped rules are consulted before the prefix-only ones, so one fake can answer
+    /// several accounts, or a gateway's own header check, on the same path without shadowing each other.
     fn resolve(&self, path: &str, headers: &[(String, String)]) -> Respond {
         let credential = credential_of(headers);
+        let has_header = |name: &str, value: &str| {
+            headers
+                .iter()
+                .any(|(n, v)| n.eq_ignore_ascii_case(name) && v == value)
+        };
         let mut rules = self.rules.lock().unwrap();
         for scoped in [true, false] {
             for rule in rules.iter_mut() {
-                let admitted = match &rule.credential {
-                    // A credential rule answers that account and nothing else: a request carrying another
-                    // credential, or none, must fall through to the prefix-only rules.
-                    Some(c) => scoped && Some(c.as_str()) == credential,
-                    None => !scoped,
+                // A scoped rule answers its own account or header and nothing else: a request carrying
+                // another credential, another header value, or none, must fall through to the prefix-only
+                // rules.
+                let admitted = match (&rule.credential, &rule.header) {
+                    (Some(c), None) => scoped && Some(c.as_str()) == credential,
+                    (None, Some((name, value))) => scoped && has_header(name, value),
+                    (Some(c), Some((name, value))) => {
+                        scoped && Some(c.as_str()) == credential && has_header(name, value)
+                    }
+                    (None, None) => !scoped,
                 };
                 if !admitted {
                     continue;

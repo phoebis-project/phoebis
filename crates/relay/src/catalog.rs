@@ -90,7 +90,7 @@ impl CatalogService {
     }
 
     /// `secret` is a staged replacement: the admin route verifies it against the account before the store
-    /// learns of it.
+    /// learns of it. On create there is no stored row to fall back to.
     pub async fn discover_with(
         &self,
         account: &AccountRow,
