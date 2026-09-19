@@ -167,8 +167,12 @@ while read -r key var; do
   fi
 done < <(grep -E '^\s*(secret_env|viewer_secret_env):' "$OUT/config.yaml" | sed -E 's/^\s*([a-z_]+):\s*(\S+)\s*$/\1 \2/')
 
-env ROUTER_ADMIN_SECRET="$ROUTER_ADMIN_SECRET" ROUTER_VIEWER_SECRET="${ROUTER_VIEWER_SECRET:-}" \
-  "$PHOEBIS_BIN" --config "$OUT/config.yaml" >"$OUT/phoebis.log" 2>&1 &
+# Exported inside the subshell rather than passed to `env`, so the secrets never sit in a process's argv
+# between the assignment and the exec.
+(
+  export ROUTER_ADMIN_SECRET="$ROUTER_ADMIN_SECRET" ROUTER_VIEWER_SECRET="${ROUTER_VIEWER_SECRET:-}"
+  exec "$PHOEBIS_BIN" --config "$OUT/config.yaml"
+) >"$OUT/phoebis.log" 2>&1 &
 ROUTER_PID=$!
 
 # The router loads its configuration and binds its three listeners before answering anything; HEAD /api/hello
@@ -179,7 +183,7 @@ ROUTER_PID=$!
 ready=0
 deadline=$((SECONDS + 15))
 while [[ "$SECONDS" -lt "$deadline" ]]; do
-  if curl -fsS -o /dev/null --connect-timeout 1 --max-time 1 -X HEAD "$ROUTER_BASE/api/hello" 2>/dev/null; then
+  if curl -fsS -o /dev/null --connect-timeout 1 --max-time 1 -I "$ROUTER_BASE/api/hello" 2>/dev/null; then
     ready=1
     break
   fi
@@ -206,14 +210,17 @@ runcli() { # $1=label $2=config dir name $3=prompt; remaining args are VAR=value
   echo "=== $name ==="
   # The router answers 400 to every relayed run here (tls_raw.py's canned response), so the client is expected
   # to fail; capture the status explicitly (the `||` keeps `set -e` from aborting the whole script on that
-  # failure).
-  ( cd "$CLIENT_CWD" && env -i \
-      PATH="$PATH" HOME="$HOME" \
-      CLAUDE_CONFIG_DIR="$cfg" \
-      DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1 \
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_COST_WARNINGS=1 \
-      "$@" \
-      timeout 45 "$BINARY" -p "$prompt" --model claude-sonnet-4-5 2>&1 | tail -3 ) || status=$?
+  # failure). The client's credentials in "$@" are exported inside the subshell rather than passed to `env`,
+  # so they never sit in a process's argv between the assignment and the exec.
+  ( cd "$CLIENT_CWD" && (
+      for var in $(compgen -e); do unset "$var"; done
+      export PATH="$PATH" HOME="$HOME" CLAUDE_CONFIG_DIR="$cfg" \
+        DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1 \
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_COST_WARNINGS=1
+      # shellcheck disable=SC2163 # "$@" holds the caller's VAR=value assignments, not a literal name
+      export "$@"
+      exec timeout 45 "$BINARY" -p "$prompt" --model claude-sonnet-4-5
+    ) 2>&1 | tail -3 ) || status=$?
   echo "run $name: client exited $status"
   RUN_COUNT=$((RUN_COUNT + 1))
   if [[ "$status" -ne 0 ]]; then
