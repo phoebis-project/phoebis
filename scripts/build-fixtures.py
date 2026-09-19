@@ -83,6 +83,15 @@ def redact(line: str) -> str:
     return line
 
 
+def declared_length(entry):
+    """The Content-Length the capture recorded on this entry's head, or None when it carried none."""
+    for line in entry["headers"]:
+        name, colon, value = line.partition(":")
+        if colon and name.strip().lower() == "content-length":
+            return int(value.strip())
+    return None
+
+
 def head(entry, content_length=None):
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     if content_length is not None:
@@ -114,6 +123,18 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
     for (idx, _), name in zip(posts, INFERENCE_BODIES):
         # Byte-for-byte: the captured CCH digits in the heads are the hash of exactly these bytes.
         (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
+    if THROUGH_ROUTER:
+        # head() below regenerates Content-Length from the body, and the router grading masks the field, so a
+        # body the declared length does not describe would normalize to the same bytes as one it does. Checked
+        # here, before either happens, because this is the last point where both numbers are still on hand.
+        for (idx, entry), name in zip(posts, INFERENCE_BODIES):
+            declared = declared_length(entry)
+            captured = len((out / name).read_bytes())
+            if declared != captured:
+                raise SystemExit(
+                    f"{src}/clean_modes.json entry {idx} ({entry['request_line']}) declares Content-Length "
+                    f"{declared}, but the body captured beside it is {captured} bytes"
+                )
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
     # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
@@ -208,6 +229,40 @@ def mask_hello(raw: bytes) -> bytes:
 def _self_test() -> None:
     _self_test_mask_hello()
     _self_test_normalize_body()
+    _self_test_declared_length()
+
+
+def _self_test_declared_length() -> None:
+    """A router capture whose head and body disagree on the length must stop the build, naming the entry."""
+    global THROUGH_ROUTER
+    bodies = [b'{"model":"a"}', b'{"model":"b"}', b'{"model":"c"}', b'{"model":"d"}']
+    def entry(body):
+        return {
+            "request_line": "POST /v1/messages HTTP/1.1",
+            "headers": ["Host: api.anthropic.com", f"Content-Length: {len(body)}"],
+            "body": body.decode(),
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = pathlib.Path(tmp) / "capture"
+        src.mkdir()
+        entries = [entry(b) for b in bodies]
+        # The third entry declares one byte fewer than it carries, the drift the router capture cannot see.
+        entries[2]["headers"][1] = f"Content-Length: {len(bodies[2]) - 1}"
+        (src / "clean_modes.json").write_text(json.dumps(entries))
+        for i, body in enumerate(bodies):
+            (src / f"clean_body_{i}.json").write_bytes(body)
+        THROUGH_ROUTER = True
+        try:
+            build(src, pathlib.Path(tmp) / "good")
+        except SystemExit as e:
+            if "entry 2" not in str(e) or "Content-Length" not in str(e):
+                raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("the build accepted a body its declared Content-Length does not describe")
+        finally:
+            THROUGH_ROUTER = False
 
 
 def _self_test_mask_hello() -> None:

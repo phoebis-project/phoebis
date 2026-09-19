@@ -94,7 +94,7 @@ import socket, ssl, sys
 port, ca_pem, body, token_body, count_body = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 ctx = ssl.create_default_context(cafile=ca_pem)
 
-def send(target, extra_body):
+def send(target, extra_body, declared=None):
     raw = socket.create_connection(("127.0.0.1", port), 5)
     c = ctx.wrap_socket(raw, server_hostname="api.anthropic.com")
     request = (
@@ -102,7 +102,7 @@ def send(target, extra_body):
         "Host: api.anthropic.com\r\n"
         "Authorization: Bearer test\r\n"
         "content-type: application/json\r\n"
-        f"Content-Length: {len(extra_body)}\r\n"
+        f"Content-Length: {len(extra_body) if declared is None else declared}\r\n"
         "\r\n"
         f"{extra_body}"
     )
@@ -116,6 +116,10 @@ send("POST /v1/oauth/token", token_body)
 # A path this tool does not claim to capture, and a prefix of one it does: the match has to be exact, not a
 # prefix, or this line would be graded as a POST /v1/messages request and its body kept in the clear.
 send("POST /v1/messages/count_tokens", count_body)
+# Two mis-framed Messages requests. The builder regenerates Content-Length from the stored body and the router
+# grading masks the field, so neither would show up downstream: the receiver has to refuse them here.
+send("POST /v1/messages", body, declared=len(body) - 1)
+send("POST /v1/messages", body, declared=len(body) + 1)
 PY
 kill "$TLS_PID" 2>/dev/null || true
 wait "$TLS_PID" 2>/dev/null || true
@@ -123,7 +127,7 @@ python3 - "$TMP/tls" "$BODY" "$TOKEN_BODY" "$COUNT_BODY" <<'PY'
 import json, pathlib, sys
 out, body, token_body, count_body = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 modes = json.loads((out / "clean_modes.json").read_text())
-assert len(modes) == 3, f"clean_modes.json holds {len(modes)} entries, want 3"
+assert len(modes) == 5, f"clean_modes.json holds {len(modes)} entries, want 5"
 entry = modes[0]
 assert entry["request_line"] == "POST /v1/messages?beta=true HTTP/1.1", entry["request_line"]
 assert "Authorization: REDACTED" in entry["headers"], entry["headers"]
@@ -144,8 +148,15 @@ assert count_entry["request_line"] == "POST /v1/messages/count_tokens HTTP/1.1",
 assert count_entry["body"] == "REDACTED", count_entry["body"]
 raw = (out / "clean_body_2.json").read_bytes()
 assert raw == b"REDACTED", raw
+# A declared length the body overruns and one it never reaches: each is recorded as the framing error it is,
+# with no body file, so scripts/build-fixtures.py fails on the entry instead of regenerating a plausible one.
+extra, short = modes[3], modes[4]
+assert extra["body"] == f"FRAMING-ERROR: extra body {len(body)} of {len(body) - 1}", extra["body"]
+assert short["body"] == f"FRAMING-ERROR: short body {len(body)} of {len(body) + 1}", short["body"]
+for idx in (3, 4):
+    assert not (out / f"clean_body_{idx}.json").exists(), f"clean_body_{idx}.json was written for a mis-framed request"
 connect = json.loads((out / "connect.json").read_text())
-assert len(connect) == 3, f"connect.json holds {len(connect)} entries, want 3"
+assert len(connect) == 5, f"connect.json holds {len(connect)} entries, want 5"
 assert all(c.get("hello_len", 0) > 0 for c in connect), connect
-print("smoke passed: tls_raw.py recorded the request behind TLS, redacted the credential, and redacted a non-messages body")
+print("smoke passed: tls_raw.py recorded the request behind TLS, redacted the credential, redacted a non-messages body, and refused both mis-framed requests")
 PY

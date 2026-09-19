@@ -3,7 +3,8 @@
 # authorization, cookie, proxy-authorization, or x-api-key is written with its value replaced by REDACTED. The
 # body is written verbatim only for a POST /v1/messages request line; every other line's body is written as
 # REDACTED too, since the OAuth token endpoint's own request body carries a raw refresh token no header mask
-# would catch.
+# would catch. A Messages body is graded against the Content-Length that framed it: a short one, one the
+# declared length does not cover, and a chunked one are each recorded as FRAMING-ERROR with no body file.
 # Usage: tls_raw.py <port> <output-dir> <seconds> <leaf.pem> <leaf.key>
 # Writes <output-dir>/clean_modes.json and <output-dir>/clean_body_<i>.json, the shape http_raw.py writes, plus
 # <output-dir>/connect.json, the shape connect_capture.py writes, one entry per connection.
@@ -16,6 +17,21 @@ reqs = []; conns = []; lock = threading.RLock()
 os.makedirs(OUT, exist_ok=True)
 
 CREDENTIAL_HEADERS = {b'authorization', b'cookie', b'proxy-authorization', b'x-api-key'}
+
+# Everything this receiver grades arrives over loopback, so a declared body that is still not complete after
+# BODY_TIMEOUT is a framing error rather than a slow link. TRAILER_PEEK is the other side of the same reading:
+# long enough for a byte already behind the declared body to land, short enough to spend on every request.
+BODY_TIMEOUT = 3
+TRAILER_PEEK = 0.3
+
+
+def trailing_bytes(tls) -> bytes:
+    """Whatever the peer sent past the declared body, or nothing: a single request per connection sends none."""
+    tls.settimeout(TRAILER_PEEK)
+    try:
+        return tls.recv(65536)
+    except OSError:
+        return b''
 
 
 def redact(line: bytes) -> bytes:
@@ -84,12 +100,18 @@ def handle(c):
             d = tls.recv(65536)
             if not d: break
             buf += d
-        head, _, rest = buf.partition(b'\r\n\r\n'); lines = head.split(b'\r\n'); clen = 0
+        head, _, rest = buf.partition(b'\r\n\r\n'); lines = head.split(b'\r\n'); clen = None; chunked = False
         for ln in lines[1:]:
             k, _, v = ln.partition(b':')
-            if k.strip().lower() == b'content-length': clen = int(v.strip())
-        while len(rest) < clen:
-            d = tls.recv(65536)
+            name = k.strip().lower()
+            if name == b'content-length': clen = int(v.strip())
+            elif name == b'transfer-encoding' and b'chunked' in v.strip().lower(): chunked = True
+        tls.settimeout(BODY_TIMEOUT)
+        while clen is not None and len(rest) < clen:
+            try:
+                d = tls.recv(65536)
+            except OSError:  # a declared body that has not arrived over loopback by now is not coming
+                break
             if not d: break
             rest += d
         # Only the request line this tool exists to capture is written verbatim; every other line's body is
@@ -98,10 +120,27 @@ def handle(c):
         line = lines[0].decode()
         parts = line.split(' ')
         is_messages = len(parts) > 1 and parts[0] == 'POST' and parts[1].split('?', 1)[0] == '/v1/messages'
+        # The fixture builder regenerates Content-Length from the stored body and the through-router grading
+        # masks the field, so a body that does not match the length the client declared would compare equal to
+        # a correctly framed one. Graded here instead, where both are still on hand, and recorded as an error
+        # with no body file beside it, so the build fails on the entry rather than passing a fiction.
+        framing = None
+        if is_messages:
+            if chunked:
+                framing = 'FRAMING-ERROR: chunked'
+            elif clen is None:
+                framing = 'FRAMING-ERROR: no content-length'
+            elif len(rest) < clen:
+                framing = 'FRAMING-ERROR: short body %d of %d' % (len(rest), clen)
+            else:
+                rest += trailing_bytes(tls)
+                if len(rest) > clen:
+                    framing = 'FRAMING-ERROR: extra body %d of %d' % (len(rest), clen)
         stored_body = rest if is_messages else b'REDACTED'
-        json_body = rest.decode('utf8', 'replace') if is_messages else 'REDACTED'
+        json_body = framing or (rest.decode('utf8', 'replace') if is_messages else 'REDACTED')
         with lock:
-            open(os.path.join(OUT, 'clean_body_%d.json' % len(reqs)), 'wb').write(stored_body)
+            if framing is None:
+                open(os.path.join(OUT, 'clean_body_%d.json' % len(reqs)), 'wb').write(stored_body)
             reqs.append({'t': round(time.time(), 2), 'request_line': line, 'headers': [redact(l).decode() for l in lines[1:]], 'body': json_body})
             dump()
         body = b'{"type":"error","error":{"type":"invalid_request_error","message":"capture"}}'
