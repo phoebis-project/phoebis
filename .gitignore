@@ -1,4 +1,5 @@
 # Build output
+/site/
 /target/
 /web/dist/
 /web/node_modules/

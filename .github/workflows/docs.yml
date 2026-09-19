@@ -1,0 +1,42 @@
+name: Documentation
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: scripts/tests/check-docs.sh
+      # Pinned to the version the site is written and checked against; a newer Zensical may warn on
+      # syntax this one accepts, and a warning fails the build below.
+      - run: pip install zensical==0.0.62
+      - run: zensical build --clean --strict
+      - run: python3 scripts/check-docs.py links
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+  deploy:
+    # Pages is the operator's switch: the job waits for a repository variable set after Pages is enabled,
+    # so a push to main stays green until then. configure-pages lives here rather than in build because it
+    # fails on a repository where Pages is not enabled.
+    if: github.event_name == 'push' && vars.DOCS_PAGES == '1'
+    needs: build
+    permissions:
+      id-token: write
+      pages: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/configure-pages@v6
+      - uses: actions/deploy-pages@v5
+        id: deployment

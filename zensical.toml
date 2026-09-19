@@ -1,0 +1,73 @@
+[project]
+site_name = "Phoebis Router"
+site_url = "https://daystrom-labs.github.io/phoebis/"
+site_description = "A local relay for Claude Code: accounts, pools, keys, routing, keepalive, statistics"
+repo_url = "https://github.com/daystrom-labs/phoebis"
+repo_name = "daystrom-labs/phoebis"
+# No edit_uri: the repository is private, so an edit link would land a reader on a login page.
+docs_dir = "docs/site"
+site_dir = "site"
+
+nav = [
+  { "Overview" = "index.md" },
+  { "Installation" = "installation.md" },
+  { "Downstream client" = "client.md" },
+  { "Pairing an account" = "pairing.md" },
+  { "Pools, keys, and routing" = "routing.md" },
+  { "Keepalive" = "keepalive.md" },
+  { "Statistics and alerts" = "statistics.md" },
+  { "Operations" = "operations.md" },
+  { "Changelog" = "changelog.md" },
+]
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.code.select",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+# Three palettes so the theme toggle offers system, light, and dark; the light and dark screenshot variants on
+# the pages switch on the scheme these set.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
