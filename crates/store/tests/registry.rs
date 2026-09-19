@@ -587,7 +587,9 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
         (revision(), store.account_revision("a").unwrap()),
         (1, Some(1))
     );
-    store.update_account("a", "Renamed", "admin").unwrap();
+    store
+        .update_account("a", 1, "Renamed", "admin")
+        .unwrap();
     assert_eq!(revision(), 2, "a label update");
     store.set_enabled("a", false).unwrap();
     assert_eq!(revision(), 3, "an enable flip");
@@ -619,7 +621,9 @@ fn a_catalog_sync_verified_against_a_superseded_revision_is_refused() {
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
     let discovered = [("claude-sonnet-5".into(), false)];
-    store.update_account("a", "Renamed", "admin").unwrap();
+    store
+        .update_account("a", 1, "Renamed", "admin")
+        .unwrap();
     assert!(matches!(
         store.apply_catalog_sync("a", &discovered, Some(1), 10, "catalog"),
         Err(StoreError::Stale)
@@ -748,8 +752,12 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
-    store.update_account("a", "first", "admin").unwrap();
-    store.update_account("a", "second", "admin").unwrap();
+    store
+        .update_account("a", 1, "first", "admin")
+        .unwrap();
+    store
+        .update_account("a", 2, "second", "admin")
+        .unwrap();
     let newest = store.newest_registry_change_id().unwrap().unwrap();
     let changes = store.registry_changes_after(0, 100).unwrap();
     assert_eq!(changes.len(), 2);
@@ -806,4 +814,50 @@ fn a_pool_stores_round_robin_the_subscription_preference_and_the_sub_strategy() 
         !read.prefer_subscription && read.kind_ordered(),
         "the stored flag stays the operator's answer; the sample-driven strategy orders by kind regardless"
     );
+}
+
+#[test]
+fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let row = account("vendor", AccountKind::ApiKey);
+    store
+        .create_account(
+            &row,
+            Some(&Secret::new("k1")),
+            None,
+            None,
+            1,
+            "admin",
+        )
+        .unwrap();
+    let built_from = store.account_revision("vendor").unwrap().unwrap();
+    store
+        .update_account(
+            "vendor",
+            built_from,
+            "Renamed",
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(
+        store.account("vendor").unwrap().unwrap().label.as_str(),
+        "Renamed"
+    );
+    assert!(
+        matches!(
+            store.update_account(
+                "vendor",
+                built_from,
+                "Renamed Again",
+                "admin",
+            ),
+            Err(StoreError::Stale)
+        ),
+        "the revision the caller read is gone, so the edit it assembled is about a row that moved"
+    );
+    assert_eq!(store.account("vendor").unwrap().unwrap().label, "Renamed");
+    assert!(matches!(
+        store.update_account("nobody", 1, "x", "admin"),
+        Err(StoreError::AccountNotFound(_))
+    ));
 }

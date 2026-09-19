@@ -691,7 +691,12 @@ async fn a_sync_that_cannot_publish_says_whether_the_registry_was_written() {
     .await;
     // The row moves under the discovery, so the result is stale and nothing is written.
     store
-        .update_account("direct", "Direct (renamed)", None, "test")
+        .update_account(
+            "direct",
+            store.account_revision("direct").unwrap().unwrap(),
+            "Direct (renamed)",
+            "test",
+        )
         .unwrap();
     store.debug_fail_next_load();
     up.release();

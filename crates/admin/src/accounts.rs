@@ -281,11 +281,23 @@ pub(crate) async fn patch(
             Err(error) => return store_failure(error),
         }
     } else if input.label.is_some() {
-        if let Err(error) = state
-            .store
-            .update_account(&id, label, ACTOR)
-        {
-            return store_failure(error);
+        // Fenced on the revision the row was read at, like the verified branch above: a patch built from a
+        // stale read must not land on a row another edit has moved since.
+        if let Err(error) = state.store.update_account(
+            &id,
+            row.revision,
+            label,
+            ACTOR,
+        ) {
+            match &error {
+                StoreError::Stale => {
+                    return failure(
+                        StatusCode::CONFLICT,
+                        "the account changed while the edit was being verified",
+                    )
+                }
+                _ => return store_failure(error),
+            }
         }
     }
     // Last, because every refusal above answers that nothing changed: a rejected key that had already flipped

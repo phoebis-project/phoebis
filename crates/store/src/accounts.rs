@@ -380,9 +380,12 @@ impl Store {
         Ok(())
     }
 
+    /// `expected_revision` is the revision the caller built the update from: an edit assembled out of a row
+    /// read a moment ago must not land on a row another edit has moved since.
     pub fn update_account(
         &self,
         id: &str,
+        expected_revision: u64,
         label: &str,
         actor: &str,
     ) -> Result<(), StoreError> {
@@ -391,11 +394,25 @@ impl Store {
         let now = jiff::Timestamp::now().as_millisecond();
         if tx.execute(
             "UPDATE accounts SET label = ?2, revision = revision + 1, updated_at = ?3 \
-             WHERE id = ?1",
-            params![id, label, now],
+             WHERE id = ?1 AND revision = ?4",
+            params![
+                id,
+                label,
+                now,
+                expected_revision as i64
+            ],
         )? == 0
         {
-            return Err(StoreError::AccountNotFound(id.to_string()));
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            return Err(if exists > 0 {
+                StoreError::Stale
+            } else {
+                StoreError::AccountNotFound(id.to_string())
+            });
         }
         let diff = serde_json::json!({ "label": label }).to_string();
         crate::registry::record_change(&tx, now, actor, "account_updated", id, &diff)?;

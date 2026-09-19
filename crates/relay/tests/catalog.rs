@@ -442,7 +442,12 @@ async fn a_catalog_discovered_under_a_superseded_revision_is_dropped() {
     })
     .await;
     h.store
-        .update_account("a", "a", "test")
+        .update_account(
+            "a",
+            h.store.account_revision("a").unwrap().unwrap(),
+            "a",
+            "test",
+        )
         .unwrap();
     up.release();
     let outcome = syncing.await.unwrap();
