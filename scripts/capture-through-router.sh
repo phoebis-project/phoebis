@@ -213,8 +213,11 @@ runcli() { # $1=label $2=config dir name $3=prompt; remaining args are VAR=value
   # failure). The client's credentials in "$@" are exported inside the subshell rather than passed to `env`,
   # so they never sit in a process's argv between the assignment and the exec.
   ( cd "$CLIENT_CWD" && (
+      # Snapshot the two the client needs before the sweep: `compgen -e` lists PATH and HOME too, and under
+      # `set -u` re-exporting them from the unset names would abort the subshell before the client starts.
+      keep_path=$PATH keep_home=$HOME
       for var in $(compgen -e); do unset "$var"; done
-      export PATH="$PATH" HOME="$HOME" CLAUDE_CONFIG_DIR="$cfg" \
+      export PATH="$keep_path" HOME="$keep_home" CLAUDE_CONFIG_DIR="$cfg" \
         DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 DISABLE_AUTOUPDATER=1 \
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_COST_WARNINGS=1
       # shellcheck disable=SC2163 # "$@" holds the caller's VAR=value assignments, not a literal name
