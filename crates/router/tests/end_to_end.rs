@@ -365,6 +365,522 @@ usage:
     up.shutdown().await;
 }
 
+/// A unified 429 on one seat fails the client's
+/// request over to its sibling inside a single call, and the log, the cooldown, and the session all show it.
+#[tokio::test]
+async fn a_forced_429_on_one_seat_migrates_the_session_through_the_binary() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let proxy_port = free_port();
+    let admin_port = free_port();
+    let metrics_port = free_port();
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_ADMIN_SECRET
+  dev_loopback_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+routing:
+  cooldown_fallback_seconds: 3600
+  max_attempts: 2
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+upstream:
+  resolve_override: {addr}
+  extra_ca_pem: {ca}
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display()
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+
+    // Distinct priorities give the first selection a deterministic winner: `least_utilized` only orders
+    // candidates within a tier, and each account here is alone in its own.
+    for (id, secret) in [("a", "sk-ant-api03-AAAA"), ("b", "sk-ant-api03-BBBB")] {
+        assert_eq!(
+            client
+                .post(admin("/accounts"))
+                .json(&serde_json::json!({ "id": id, "kind": "api_key", "label": id, "secret": secret }))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            201
+        );
+        up.add_credential_rule(
+            secret,
+            "/v1/messages",
+            Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        );
+    }
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "least_utilized", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+
+    up.push_credential_rule("sk-ant-api03-AAAA", "/v1/messages", exhausted_429());
+    let first = fixture_request(&client, proxy_port, &secret, "live-4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        first.status(),
+        200,
+        "the 429 on a fails over to b inside one client request"
+    );
+    let sessions = wait_json(&client, &admin("/sessions"), |v| {
+        v["sessions"][0]["account_id"] == "b"
+    })
+    .await;
+    assert_eq!(sessions["sessions"][0]["account_id"], "b");
+    // The request row lands through the ledger's own async writer, behind the session pin the router updates
+    // synchronously; waited on rather than fetched once, so a loaded test run cannot read it half-written.
+    let log = wait_json(&client, &admin("/requests?limit=1"), |v| {
+        v["requests"][0]["attempts"]
+            .as_array()
+            .is_some_and(|a| a.len() >= 2)
+    })
+    .await;
+    let attempts = &log["requests"][0]["attempts"];
+    assert_eq!(
+        (
+            attempts[0]["account_id"].as_str(),
+            attempts[0]["upstream_status"].as_u64(),
+            attempts[1]["account_id"].as_str()
+        ),
+        (Some("a"), Some(429), Some("b"))
+    );
+    assert!(
+        attempts[0]["cooldown_set"]["until"].is_number(),
+        "the log carries the cooldown the 429 set"
+    );
+    let events: serde_json::Value = client
+        .get(admin(&format!(
+            "/requests/{}",
+            log["requests"][0]["id"].as_str().unwrap()
+        )))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "pin_migrated" || e["kind"] == "cooldown_set"),
+        "{events}"
+    );
+    let a: serde_json::Value = client
+        .get(admin("/accounts/a"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(a["cooldowns"][0]["scope"], "account");
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// The plan-quota sibling takes a session once its
+/// current account reports overage, under the pool's default `prefer_plan` policy.
+#[tokio::test]
+async fn a_session_crossing_into_overage_migrates_under_prefer_plan_through_the_binary() {
+    use phoebis_profile::fixtures::{control_response, ControlFixture};
+    let control = |which: ControlFixture| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: control_response(which).to_vec(),
+    };
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: control(ControlFixture::Token),
+        },
+        Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: control(ControlFixture::Profile),
+        },
+        Rule {
+            path_prefix: "/api/oauth/claude_cli/roles".into(),
+            respond: control(ControlFixture::Roles),
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let proxy_port = free_port();
+    let admin_port = free_port();
+    let metrics_port = free_port();
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_ADMIN_SECRET
+  dev_loopback_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+upstream:
+  resolve_override: {addr}
+  extra_ca_pem: {ca}
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display()
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+
+    // The pairing procedure Task 12's rehearsal walks: start, callback, confirm.
+    let pair = |account_id: &'static str| {
+        let client = client.clone();
+        async move {
+            assert_eq!(
+                client
+                    .post(admin("/accounts"))
+                    .json(&serde_json::json!({ "id": account_id, "kind": "oauth", "label": account_id }))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                201
+            );
+            let started: serde_json::Value = client
+                .post(admin("/oauth/sessions"))
+                .json(&serde_json::json!({ "account_id": account_id }))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let (id, redirect) = (
+                started["id"].as_str().unwrap().to_string(),
+                started["redirect_uri"].as_str().unwrap().to_string(),
+            );
+            let state = started["authorization_url"]
+                .as_str()
+                .unwrap()
+                .split("state=")
+                .nth(1)
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                client
+                    .post(admin(&format!("/oauth/sessions/{id}/callback")))
+                    .json(&serde_json::json!({ "url": format!("{redirect}?code=CODE-{account_id}&state={state}") }))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200
+            );
+            assert_eq!(
+                client
+                    .post(admin(&format!("/oauth/sessions/{id}/confirm")))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200
+            );
+        }
+    };
+    pair("a").await;
+    // The identity a slot binds to comes from the profile lookup, not from the token response, so both are
+    // switched once `a`'s pairing has consumed them (one token exchange, two profile lookups): the store's
+    // unique index over the bound upstream account would otherwise refuse `b`'s confirm outright.
+    let second_token = String::from_utf8(control_response(ControlFixture::Token).to_vec())
+        .unwrap()
+        .replace(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        )
+        .replace("sk-ant-oat01-PLACEHOLDER", "sk-ant-oat01-SECOND");
+    up.set_rule_after(
+        1,
+        "/v1/oauth/token",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: second_token.into_bytes(),
+        },
+    );
+    let second_profile = String::from_utf8(control_response(ControlFixture::Profile).to_vec())
+        .unwrap()
+        .replace(
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        );
+    up.set_rule_after(
+        2,
+        "/api/oauth/profile",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: second_profile.into_bytes(),
+        },
+    );
+    pair("b").await;
+
+    let overage_head = |in_use: &str| Respond::Json {
+        status: 200,
+        headers: vec![
+            (
+                "anthropic-ratelimit-unified-status".into(),
+                "allowed".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-status".into(),
+                "allowed".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-utilization".into(),
+                "0.5".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-reset".into(),
+                (jiff::Timestamp::now().as_second() + 3_600).to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d-status".into(),
+                "allowed".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d-utilization".into(),
+                "0.5".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-7d-reset".into(),
+                (jiff::Timestamp::now().as_second() + 86_400).to_string(),
+            ),
+            (
+                "anthropic-ratelimit-unified-overage-in-use".into(),
+                in_use.into(),
+            ),
+        ],
+        body: b"{\"ok\":true}".to_vec(),
+    };
+    up.add_credential_rule(
+        "sk-ant-oat01-PLACEHOLDER",
+        "/v1/messages",
+        overage_head("true"),
+    );
+    up.add_credential_rule("sk-ant-oat01-SECOND", "/v1/messages", overage_head("false"));
+
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+
+    let first = fixture_request(&client, proxy_port, &secret, "live-5")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+    let a: serde_json::Value = wait_json(&client, &admin("/accounts/a"), |v| {
+        v["overage"]["in_use"] == true
+    })
+    .await;
+    assert_eq!(
+        a["overage"]["in_use"], true,
+        "the head is the overage evidence"
+    );
+    let second = fixture_request(&client, proxy_port, &secret, "live-5")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 200);
+    let sessions = wait_json(&client, &admin("/sessions"), |v| {
+        v["sessions"][0]["account_id"] == "b"
+    })
+    .await;
+    assert_eq!(
+        sessions["sessions"][0]["account_id"], "b",
+        "prefer_plan moved the pin to the plan-quota sibling"
+    );
+    // Waited on for the same reason as the first rehearsal: the second request's row lands through the
+    // ledger's async writer, behind the session pin the router already moved.
+    let log = wait_json(&client, &admin("/requests?limit=2"), |v| {
+        v["requests"].as_array().is_some_and(|r| r.len() >= 2)
+            && v["requests"][0]["attempts"][0]["overage_in_use"].is_boolean()
+    })
+    .await;
+    assert_eq!(log["requests"][0]["attempts"][0]["overage_in_use"], false);
+    let detail: serde_json::Value = client
+        .get(admin(&format!(
+            "/requests/{}",
+            log["requests"][0]["id"].as_str().unwrap()
+        )))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        detail["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "pin_migrated" && e["detail"].to_string().contains("overage")),
+        "{detail}"
+    );
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 /// Writes a configuration built from the given admin block, and returns its path.
 fn config_with(dir: &std::path::Path, name: &str, admin: &str) -> std::path::PathBuf {
     let key = dir.join("storage.key");
