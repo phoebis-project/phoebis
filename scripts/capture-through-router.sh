@@ -17,22 +17,34 @@
 #   the same host and the same day) to grade the router's capture against; --check without --baseline grades
 #   against the committed fixtures, which carry a different date in the client's own system reminder.
 # - The router's own service must be stopped before this runs: the capture instance opens the same store
-#   (storage.path in <config.yaml>), and a second writer on that SQLite file corrupts it. Run this as the
+#   (storage.path in <config.yaml>) and would otherwise race the running service's refresh attempts and
+#   keepalive leases on the same accounts, since both would believe themselves the only writer. Run this as the
 #   store's owner:
 #     sudo -u phoebis env PHOEBIS_CAPTURE_OAUTH_KEY=... PHOEBIS_CAPTURE_API_KEY=... ROUTER_ADMIN_SECRET=... \
 #       ROUTER_VIEWER_SECRET=... scripts/capture-through-router.sh <binary> <output-dir> <config.yaml>
+# - This script and scripts/capture-baseline.sh share the same client state root (/tmp/cc-capture), the pinning
+#   its own header documents, so they must never run at the same time: the fixture bodies embed that path (and
+#   its cfg-<name> children) in the system prompt, and a capture rooted anywhere else fails --check on every
+#   body as drift no mask touches.
 # - Every connection the router makes toward api.anthropic.com is redirected, inside this network namespace, to
 #   a throwaway TLS receiver on loopback: scripts/capture/rewrite_config.py writes $OUT/config.yaml from the
 #   given <config.yaml>, moving the admin, proxy, and metrics listeners to loopback ports this capture owns and
 #   pointing upstream.resolve_override and upstream.extra_ca_pem at the receiver and its CA. The router
 #   authenticates with the real paired account's stored credential, but that credential never leaves loopback,
 #   and scripts/capture/tls_raw.py redacts it before it ever reaches disk.
+# - The receiver's throwaway leaf carries only DNS:api.anthropic.com, and the OAuth token endpoint lives on a
+#   different host (crates/oauth/src/exchange.rs's `ControlKind::host`), so a token refresh the router attempts
+#   mid-run fails at the TLS handshake rather than reaching the receiver at all. This is deliberate, not a gap:
+#   pair the account (or otherwise ensure its stored token has plenty of life left) immediately before a run, or
+#   the whole capture fails wherever the refresh would have landed.
 # - The CONNECT run capture-baseline.sh's step 6 performs has nothing to record here: the router answers
 #   HEAD /api/hello itself rather than forwarding it, and the router's own ClientHello toward its upstream is
 #   graded by crates/transport/tests/client_hello.rs, not by this capture.
 #
 # The script ends by running `python3 scripts/build-fixtures.py --check --through-router` (plus --baseline, when
-# PHOEBIS_CAPTURE_BASELINE is set) against $OUT, and exits with its status.
+# PHOEBIS_CAPTURE_BASELINE is set) against $OUT, and exits with its status; that check re-signs every captured body
+# through `cargo run -p phoebis-cch --example resign` unless --skip-hash-check is added by hand, so cargo must be on
+# this host, or the check must be finished by hand elsewhere.
 
 set -euo pipefail
 
@@ -97,7 +109,7 @@ if [[ "${PHOEBIS_CAPTURE_NETNS:-}" != "1" ]]; then
   exec unshare -rn bash -c 'ip link set lo up && exec bash "$0" "$@"' "$SELF" "$@"
 fi
 
-STATE=/tmp/cc-capture-through-router
+STATE=/tmp/cc-capture
 CLIENT_CWD="$STATE/cwd"
 TLS_PORT=48444
 ROUTER_BASE="http://127.0.0.1:48317"
@@ -145,10 +157,39 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# admin.secret_env and admin.viewer_secret_env name the environment variables the config loader resolves; an
+# empty or unset one makes phoebis exit at load, before it ever opens a socket, which the readiness poll below
+# would otherwise misreport as "never answered" with no clue which variable was the problem.
+while read -r key var; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "capture-through-router.sh: $OUT/config.yaml's $key names $var, which is unset or empty" >&2
+    exit 1
+  fi
+done < <(grep -E '^\s*(secret_env|viewer_secret_env):' "$OUT/config.yaml" | sed -E 's/^\s*([a-z_]+):\s*(\S+)\s*$/\1 \2/')
+
 env ROUTER_ADMIN_SECRET="$ROUTER_ADMIN_SECRET" ROUTER_VIEWER_SECRET="${ROUTER_VIEWER_SECRET:-}" \
-  "$PHOEBIS_BIN" --config "$OUT/config.yaml" &
+  "$PHOEBIS_BIN" --config "$OUT/config.yaml" >"$OUT/phoebis.log" 2>&1 &
 ROUTER_PID=$!
-sleep 1
+
+# The router loads its configuration and binds its three listeners before answering anything; HEAD /api/hello
+# needs no credential, so it doubles as a readiness probe here. kill -0 tells a dead process from one still
+# starting, so a config error reported after this loop's own last curl attempt is not read as a timeout.
+ready=0
+for _ in $(seq 1 15); do
+  if curl -fsS -o /dev/null -m 1 -X HEAD "$ROUTER_BASE/api/hello" 2>/dev/null; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$ROUTER_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if [[ "$ready" -ne 1 ]]; then
+  echo "capture-through-router.sh: phoebis never answered on $ROUTER_BASE; its log:" >&2
+  tail -20 "$OUT/phoebis.log" >&2 || true
+  exit 1
+fi
 
 RUN_COUNT=0
 RUN_FAILURES=0
@@ -208,4 +249,8 @@ echo "capture written under $OUT: clean_modes.json, clean_body_<i>.json, gzip_mo
 stop_router
 trap - EXIT
 cd "$ROOT"
-exec python3 scripts/build-fixtures.py --check --through-router ${PHOEBIS_CAPTURE_BASELINE:+--baseline "$PHOEBIS_CAPTURE_BASELINE"} "$OUT"
+baseline_args=()
+if [[ -n "${PHOEBIS_CAPTURE_BASELINE:-}" ]]; then
+  baseline_args=(--baseline "$PHOEBIS_CAPTURE_BASELINE")
+fi
+exec python3 scripts/build-fixtures.py --check --through-router "${baseline_args[@]}" "$OUT"

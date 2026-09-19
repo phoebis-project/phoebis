@@ -37,9 +37,10 @@ CONTROL_PLANE = {
     "responses/usage.json",
 }
 
-# A router capture answers its own hello and carries no CONNECT tunnel to peek a ClientHello from, on top of
-# everything the control plane itself never reaches; --check reports all of these as not captured rather than
-# as drift when --through-router is given.
+# The relay answers HEAD /api/hello itself, so a router capture never carries one; and although tls_raw.py
+# peeks and records the router's own ClientHello on every connection, that shape is graded by
+# crates/transport/tests/client_hello.rs, not by this comparison. --check reports all of these as not captured
+# rather than as drift when --through-router is given, on top of everything the control plane never reaches.
 UNCAPTURED_THROUGH_ROUTER = CONTROL_PLANE | {"hello.http", "hello_inference.hex", "hello_control.hex"}
 
 # The header names a live capture must never let reach disk unredacted; scripts/capture/tls_raw.py blanks their
@@ -115,17 +116,17 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
         (out / name).write_bytes((src / f"clean_body_{idx}.json").read_bytes())
     for (_, entry), name, body_name in zip(posts, INFERENCE_HEADS, INFERENCE_BODIES):
         (out / name).write_bytes(head(entry, len((out / body_name).read_bytes())))
-    # A router capture answers HEAD /api/hello itself and holds no CONNECT tunnel to peek a ClientHello from;
-    # both are optional there, and the router's own ClientHello is graded by crates/transport/tests/client_hello.rs.
+    # The relay answers HEAD /api/hello itself, so a router capture never carries one; both it and the hex
+    # files below are optional in this mode.
     hello = next((e for e in cm if e["request_line"].startswith("HEAD /api/hello")), None)
     if hello is None:
         if not THROUGH_ROUTER:
             raise SystemExit(f"{src}/clean_modes.json holds no HEAD /api/hello entry")
     else:
         (out / "hello.http").write_bytes(head(hello))
-    # A router capture's connect.json, if tls_raw.py wrote one, holds the ClientHello the router itself sent
-    # toward its upstream; that shape is graded by crates/transport/tests/client_hello.rs, not here, so it is
-    # never opened in this mode even when present.
+    # connect.json, which tls_raw.py always writes, holds the ClientHello the router itself sent toward its
+    # upstream; that shape is graded by crates/transport/tests/client_hello.rs, not here, so it is never opened
+    # in this mode even though it exists.
     if not THROUGH_ROUTER:
         conn = json.load(open(src / "connect.json"))
         inf = next((h for h in conn if h.get("hello_len") == INFERENCE_HELLO_LEN), None)
@@ -399,7 +400,7 @@ def body_diff(name: str, committed: bytes, fresh: bytes) -> list:
     return lines
 
 
-def check(capture_dir: pathlib.Path, baseline: pathlib.Path = None, skip_hashes: bool = False) -> int:
+def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_hashes: bool = False) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
         build(capture_dir, fresh_dir)

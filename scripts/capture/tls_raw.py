@@ -1,7 +1,9 @@
 # http_raw.py behind TLS: peeks the ClientHello before the handshake, since nothing upstream of the router ever
 # sees it otherwise, then answers each HTTP/1.1 request with a canned 400 over TLS. A header whose name is
-# authorization, cookie, proxy-authorization, or x-api-key is written with its value replaced by REDACTED, so a
-# live account's token from a paired operator run never reaches disk.
+# authorization, cookie, proxy-authorization, or x-api-key is written with its value replaced by REDACTED. The
+# body is written verbatim only for a POST /v1/messages request line; every other line's body is written as
+# REDACTED too, since the OAuth token endpoint's own request body carries a raw refresh token no header mask
+# would catch.
 # Usage: tls_raw.py <port> <output-dir> <seconds> <leaf.pem> <leaf.key>
 # Writes <output-dir>/clean_modes.json and <output-dir>/clean_body_<i>.json, the shape http_raw.py writes, plus
 # <output-dir>/connect.json, the shape connect_capture.py writes, one entry per connection.
@@ -47,6 +49,8 @@ def peek_hello(c, deadline):
             head = c.recv(5, socket.MSG_PEEK)
         except socket.timeout:
             continue
+        if not head:  # the peer connected and closed without sending anything
+            return None
     need = 5 + int.from_bytes(head[3:5], 'big')
     record = head
     while len(record) < need:
@@ -56,6 +60,8 @@ def peek_hello(c, deadline):
             record = c.recv(need, socket.MSG_PEEK)
         except socket.timeout:
             continue
+        if not record:
+            return None
     return record
 
 
@@ -86,9 +92,15 @@ def handle(c):
             d = tls.recv(65536)
             if not d: break
             rest += d
+        # Only the request line this tool exists to capture is written verbatim; every other line's body is
+        # redacted at the same slot, since it might be an OAuth token endpoint call carrying a refresh token.
+        line = lines[0].decode()
+        is_messages = line.startswith('POST /v1/messages')
+        stored_body = rest if is_messages else b'REDACTED'
+        json_body = rest.decode('utf8', 'replace') if is_messages else 'REDACTED'
         with lock:
-            open(os.path.join(OUT, 'clean_body_%d.json' % len(reqs)), 'wb').write(rest)
-            reqs.append({'t': round(time.time(), 2), 'request_line': lines[0].decode(), 'headers': [redact(l).decode() for l in lines[1:]], 'body': rest.decode('utf8', 'replace')})
+            open(os.path.join(OUT, 'clean_body_%d.json' % len(reqs)), 'wb').write(stored_body)
+            reqs.append({'t': round(time.time(), 2), 'request_line': line, 'headers': [redact(l).decode() for l in lines[1:]], 'body': json_body})
             dump()
         body = b'{"type":"error","error":{"type":"invalid_request_error","message":"capture"}}'
         tls.sendall(b'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: ' + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)

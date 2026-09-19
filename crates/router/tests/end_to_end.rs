@@ -1804,6 +1804,26 @@ usage:
             );
         }
     }
+    // Ruling 1's CREDENTIAL-PLACEHOLDER mask is meaningless unless the relay actually swapped the credential:
+    // check the bytes the fake upstream received directly, not only the normalized comparison below. Run 2
+    // (index 2) is the api_key account; the other three are the paired oauth account, whose stored access
+    // token is this fixture's canned token response, verbatim.
+    for (i, r) in posts.iter().enumerate() {
+        let carries_the_account_credential = if i == 2 {
+            r.headers.iter().any(|(n, v)| {
+                n.eq_ignore_ascii_case("x-api-key") && v == "sk-ant-api03-PLACEHOLDER"
+            })
+        } else {
+            r.headers.iter().any(|(n, v)| {
+                n.eq_ignore_ascii_case("authorization") && v == "Bearer sk-ant-oat01-PLACEHOLDER"
+            })
+        };
+        assert!(
+            carries_the_account_credential,
+            "run {i} did not carry the account's own credential, not the caller's key: {:?}",
+            r.headers
+        );
+    }
     let capture = dir.path().join("capture");
     std::fs::create_dir_all(&capture).unwrap();
     let modes: Vec<serde_json::Value> = posts
@@ -1869,9 +1889,15 @@ usage:
         .arg(&mutated)
         .output()
         .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(
         !out.status.success(),
         "one header name re-cased still graded equal, so the check is not reading the wire shape"
+    );
+    assert!(
+        text.contains("inference_oauth.http") || text.contains("fixtures differ:"),
+        "the failure did not name the head it disagreed on:\n{text}"
     );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();

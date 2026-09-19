@@ -87,40 +87,55 @@ TLS_PORT=$(free_port)
 python3 "$HERE/tls_raw.py" "$TLS_PORT" "$TMP/tls" 30 "$CA_DIR/leaf.pem" "$CA_DIR/leaf.key" &
 TLS_PID=$!
 sleep 1
-python3 - "$TLS_PORT" "$CA_DIR/ca.pem" "$BODY" <<'PY'
+TOKEN_BODY='{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-notarealsecret"}'
+python3 - "$TLS_PORT" "$CA_DIR/ca.pem" "$BODY" "$TOKEN_BODY" <<'PY'
 import socket, ssl, sys
-port, ca_pem, body = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+port, ca_pem, body, token_body = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 ctx = ssl.create_default_context(cafile=ca_pem)
-raw = socket.create_connection(("127.0.0.1", port), 5)
-c = ctx.wrap_socket(raw, server_hostname="api.anthropic.com")
-request = (
-    "POST /v1/messages?beta=true HTTP/1.1\r\n"
-    "Host: api.anthropic.com\r\n"
-    "Authorization: Bearer test\r\n"
-    "content-type: application/json\r\n"
-    f"Content-Length: {len(body)}\r\n"
-    "\r\n"
-    f"{body}"
-)
-c.sendall(request.encode())
-c.recv(4096)
-c.close()
+
+def send(target, extra_body):
+    raw = socket.create_connection(("127.0.0.1", port), 5)
+    c = ctx.wrap_socket(raw, server_hostname="api.anthropic.com")
+    request = (
+        f"{target} HTTP/1.1\r\n"
+        "Host: api.anthropic.com\r\n"
+        "Authorization: Bearer test\r\n"
+        "content-type: application/json\r\n"
+        f"Content-Length: {len(extra_body)}\r\n"
+        "\r\n"
+        f"{extra_body}"
+    )
+    c.sendall(request.encode())
+    c.recv(4096)
+    c.close()
+
+# The second connection is a fresh one: tls_raw.py answers one request per connection, as http_raw.py does.
+send("POST /v1/messages?beta=true", body)
+send("POST /v1/oauth/token", token_body)
 PY
 kill "$TLS_PID" 2>/dev/null || true
 wait "$TLS_PID" 2>/dev/null || true
-python3 - "$TMP/tls" "$BODY" <<'PY'
+python3 - "$TMP/tls" "$BODY" "$TOKEN_BODY" <<'PY'
 import json, pathlib, sys
-out, body = pathlib.Path(sys.argv[1]), sys.argv[2]
+out, body, token_body = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 modes = json.loads((out / "clean_modes.json").read_text())
-assert len(modes) == 1, f"clean_modes.json holds {len(modes)} entries, want 1"
+assert len(modes) == 2, f"clean_modes.json holds {len(modes)} entries, want 2"
 entry = modes[0]
 assert entry["request_line"] == "POST /v1/messages?beta=true HTTP/1.1", entry["request_line"]
 assert "Authorization: REDACTED" in entry["headers"], entry["headers"]
 assert entry["body"] == body, entry["body"]
 raw = (out / "clean_body_0.json").read_bytes()
 assert raw == body.encode(), raw
+# A request line other than POST /v1/messages redacts its body too: nothing here proves this receiver would
+# not otherwise capture a live refresh token verbatim (see tls_raw.py's header comment).
+token_entry = modes[1]
+assert token_entry["request_line"] == "POST /v1/oauth/token HTTP/1.1", token_entry["request_line"]
+assert token_entry["body"] == "REDACTED", token_entry["body"]
+assert token_body not in token_entry["body"], "the refresh token reached the JSON copy"
+raw = (out / "clean_body_1.json").read_bytes()
+assert raw == b"REDACTED", raw
 connect = json.loads((out / "connect.json").read_text())
-assert len(connect) == 1, f"connect.json holds {len(connect)} entries, want 1"
-assert connect[0].get("hello_len", 0) > 0, connect[0]
-print("smoke passed: tls_raw.py recorded the request behind TLS and redacted the credential")
+assert len(connect) == 2, f"connect.json holds {len(connect)} entries, want 2"
+assert all(c.get("hello_len", 0) > 0 for c in connect), connect
+print("smoke passed: tls_raw.py recorded the request behind TLS, redacted the credential, and redacted a non-messages body")
 PY
