@@ -198,6 +198,26 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
     Some((start, s.pos))
 }
 
+/// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one
+/// or `path` does not resolve to an array. `array_member_span` already covers an array with at least one
+/// element; this is the empty case it has nothing to return for.
+pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    if !walk_to_last_segment(&mut s, path)? {
+        return None;
+    }
+    if !s.eat(b'[') {
+        return None;
+    }
+    s.ws();
+    (s.body.get(s.pos) == Some(&b']')).then_some(s.pos)
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -576,6 +596,32 @@ mod tests {
         assert!(
             array_member_span(body, &["system"], 2).is_none(),
             "past the last element"
+        );
+    }
+
+    #[test]
+    fn an_empty_array_end_is_found_by_depth_past_an_earlier_decoy_and_nowhere_for_a_non_empty_one()
+    {
+        let decoy = br#"{"messages":[{"role":"system","content":"x"}],"system":[]}"#;
+        let (start, end) = string_member_span(decoy, &["messages", "0", "role"]).unwrap();
+        assert_eq!(
+            &decoy[start..end],
+            br#""system""#,
+            "the decoy really does carry the same bytes"
+        );
+        let at = empty_array_member_end(decoy, &["system"]).unwrap();
+        assert_eq!(
+            &decoy[at..],
+            b"]}",
+            "the top-level array's own bracket, not the decoy's"
+        );
+        assert!(
+            empty_array_member_end(br#"{"system":[1]}"#, &["system"]).is_none(),
+            "an array holding an element is not empty"
+        );
+        assert!(
+            empty_array_member_end(br#"{"system":"x"}"#, &["system"]).is_none(),
+            "a string is not an array"
         );
     }
 }

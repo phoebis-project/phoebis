@@ -4,8 +4,10 @@ use common::*;
 use axum::body::Body;
 use axum::http::Request;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_relay::MemoryKey;
 use phoebis_store::AccountKind;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;
@@ -357,13 +359,35 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
         respond: sse,
     }])
     .await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let app = h.app.clone();
+    let key = MemoryKey {
+        key_id: "desktop".into(),
+        session_id: "s-1".into(),
+        agent_id: "main".into(),
+    };
     let resp = app
         .clone()
         .oneshot(cli_request("s-1", None, None))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    // Drained rather than dropped: the message id is captured as the body streams to the caller, by the same
+    // task that does the streaming, so it is not there to read back until that task has run to completion.
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+            .as_deref(),
+        Some("msg_stream_01"),
+        "the streamed commit's message_start id reaches the memory a unit test alone never proved"
+    );
     up.set_rule_after(
         1,
         "/v1/messages",
@@ -380,6 +404,12 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        h.relay.previous(&key, "acct", "claude-sonnet-4-5").message_id.as_deref(),
+        Some("msg_json_02"),
+        "a json commit's own id overwrites the streamed one under the same key, session, agent, and account"
+    );
     let second = billing_line(&up.requests()[1].body);
     assert_eq!(
         field(&second, "cc_prev_req"),

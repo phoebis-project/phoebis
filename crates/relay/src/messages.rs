@@ -44,7 +44,7 @@ use crate::facts::BodyFacts;
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
-use crate::memory::{uuid_v4, MemoryKey, SessionMemory, MEMORY_CAP};
+use crate::memory::{uuid_v4, MemoryKey, Previous, SessionMemory, MEMORY_CAP};
 use crate::observe::{published_headers, usage_from_json, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
@@ -178,6 +178,15 @@ impl Relay {
     pub async fn probe(&self, probe: Probe, mut request: Request) -> Response {
         request.extensions_mut().insert(probe);
         self.handle(request).await
+    }
+
+    /// Read-only test support: the previous-request record the response half maintains for `(key, session,
+    /// agent)` under one account, the same lookup the failover loop reads for `cc_prev_req`. Not part of the
+    /// relay's operational surface; the restoration suite uses it to verify the response id and the message id
+    /// are both retrievable after a commit, end to end rather than through a unit test of the memory alone.
+    #[doc(hidden)]
+    pub fn previous(&self, key: &MemoryKey, account_id: &str, canonical_model: &str) -> Previous {
+        self.memory.previous(key, account_id, canonical_model)
     }
 }
 
@@ -596,9 +605,10 @@ impl Relay {
             }),
             _ => None,
         };
-        // A separate field from `restore`: dispatch reads it to look up the previous request id per account,
-        // and the response half writes the upstream's `request-id` and message id back under it, whether or
-        // not restoration itself found a client version to key the line on.
+        // A separate field from `restore`, gated on `restore` being `Some` (so never set for a probe, a raw
+        // Messages caller, or a count_tokens request) and on a session id being present: dispatch reads it to
+        // look up the previous request id per account, and the response half writes the upstream's
+        // `request-id` and message id back under it.
         let memory_key = match (&restore, identity.session_id.as_deref()) {
             (Some(_), Some(session)) => Some(MemoryKey {
                 key_id: key.id.clone(),

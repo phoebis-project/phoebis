@@ -60,7 +60,10 @@ pub fn cc_version(cli_version: &str, prompt_chars: [char; 3]) -> String {
     format!("{cli_version}.{}", &hex[0..3])
 }
 
-/// `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`; `cli` when the agent carries no parenthesis.
+/// `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`; `cli` when the agent carries no parenthesis, or
+/// when the parenthesized tail is not a bare lowercase-and-hyphen token (the client's own spellings: `cli`,
+/// `sdk-cli`, `claude-vscode`, and the like). Unsanitized, a forged User-Agent could smuggle a `;`-separated
+/// field of its own choosing into the billing line this build then signs.
 pub fn entrypoint_of(user_agent: &str) -> &str {
     let Some(open) = user_agent.find('(') else {
         return "cli";
@@ -68,11 +71,19 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
     let Some(close) = user_agent[open..].find(')') else {
         return "cli";
     };
-    user_agent[open + 1..open + close]
-        .rsplit(',')
-        .next()
-        .map(str::trim)
-        .unwrap_or("cli")
+    let Some(candidate) = user_agent[open + 1..open + close].rsplit(',').next() else {
+        return "cli";
+    };
+    let candidate = candidate.trim();
+    let valid = !candidate.is_empty()
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b == b'-');
+    if valid {
+        candidate
+    } else {
+        "cli"
+    }
 }
 
 /// Absent-field candidates in `FIELD_ORDER`'s relative order: `cch` before `cc_prev_req` before `cc_prompt_id`.
@@ -147,14 +158,17 @@ fn patch_line(
 ) -> Result<Vec<Injected>, RelayError> {
     let decoded: String = serde_json::from_slice(&body[start..end])
         .expect("string_member_span validated a JSON string");
-    let rest = decoded
-        .strip_prefix("x-anthropic-billing-header: ")
-        .unwrap_or(&decoded);
-    let fields: Vec<String> = rest
-        .trim_end_matches(';')
-        .split("; ")
-        .map(String::from)
-        .collect();
+    // The dispatch above matched `BILLING_BLOCK`, which stops right after the colon; a line that carries no
+    // space after it, or nothing at all past the prefix, is not a shape this build ever writes, and splicing a
+    // field into it under the assumption that it is would double the prefix or leave a stray separator behind.
+    let Some(rest) = decoded.strip_prefix("x-anthropic-billing-header: ") else {
+        return Ok(Vec::new());
+    };
+    let rest = rest.trim_end_matches(';');
+    if rest.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fields: Vec<String> = rest.split("; ").map(String::from).collect();
     let (fields, injected) = apply_candidates(restore, fields);
     if injected.is_empty() {
         return Ok(Vec::new());
@@ -165,10 +179,30 @@ fn patch_line(
     Ok(injected)
 }
 
+/// Where the whole line splices in: right before the array's own first element, or, when the array holds none,
+/// right before its closing bracket.
+enum SystemArraySlot {
+    BeforeFirstElement(usize),
+    Empty(usize),
+}
+
 fn insert_whole_line(
     body: &mut Vec<u8>,
     restore: &Restore<'_>,
 ) -> Result<Vec<Injected>, RelayError> {
+    // Both lookups are the depth-aware walk `phoebis_cch`'s own scanners use, so a `"system"`-shaped decoy earlier
+    // in the body (a `"role":"system"` message, a tool's own `{"system":[...]}`) never stands in for the
+    // top-level member. `array_member_span` already covers an array with an element; a `None` from it can only
+    // mean an empty array once `restore_billing_line` has confirmed `system` really is one, but a duplicate
+    // top-level `"system"` key can still make the depth-aware walk (first match) and the caller's own
+    // `serde_json` check (last match) disagree, so a `None` here too is a body this build declines to guess at.
+    let slot = match phoebis_cch::array_member_span(body, &["system"], 0) {
+        Some((at, _)) => SystemArraySlot::BeforeFirstElement(at),
+        None => match phoebis_cch::empty_array_member_end(body, &["system"]) {
+            Some(at) => SystemArraySlot::Empty(at),
+            None => return Ok(Vec::new()),
+        },
+    };
     let fields = vec![
         format!(
             "cc_version={}",
@@ -182,41 +216,15 @@ fn insert_whole_line(
         r#"{{"type":"text","text":{}}}"#,
         serde_json::to_string(&line).expect("a string always encodes as JSON")
     );
-    match phoebis_cch::array_member_span(body, &["system"], 0) {
-        Some((at, _)) => {
+    match slot {
+        SystemArraySlot::BeforeFirstElement(at) => {
             body.splice(at..at, format!("{element},").bytes());
         }
-        None => {
-            let at = empty_system_array_end(body).expect("caller confirmed system is an array");
+        SystemArraySlot::Empty(at) => {
             body.splice(at..at, element.bytes());
         }
     }
     Ok(injected)
-}
-
-/// The empty-array shape (`"system":[]`) has no element for `array_member_span` to return; there is nothing
-/// between the brackets to walk past, so the scan for `]` needs no depth tracking.
-fn empty_system_array_end(body: &[u8]) -> Option<usize> {
-    let key = br#""system""#;
-    let at = body.windows(key.len()).position(|w| w == key)?;
-    let mut i = at + key.len();
-    let ws = |body: &[u8], i: &mut usize| {
-        while matches!(body.get(*i), Some(b' ' | b'\t' | b'\r' | b'\n')) {
-            *i += 1;
-        }
-    };
-    ws(body, &mut i);
-    if body.get(i) != Some(&b':') {
-        return None;
-    }
-    i += 1;
-    ws(body, &mut i);
-    if body.get(i) != Some(&b'[') {
-        return None;
-    }
-    i += 1;
-    ws(body, &mut i);
-    (body.get(i) == Some(&b']')).then_some(i)
 }
 
 #[cfg(test)]
@@ -240,8 +248,11 @@ mod tests {
 
     #[test]
     fn each_absent_field_is_inserted_after_the_last_present_field_that_precedes_it() {
+        // Hand-built: no fixture carries cc_workload or cc_is_subagent, but FIELD_ORDER still has to seat cch
+        // ahead of them and cc_prev_req behind them once they are on the line.
         let mut body = billing_body(
-            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;",
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; \
+             cc_workload=interactive; cc_is_subagent=false;",
         );
         let restore = Restore {
             cli_version: "2.1.269",
@@ -259,7 +270,8 @@ mod tests {
         assert_eq!(
             text_of(&body),
             "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=00000; \
-             cc_prev_req=req_1; cc_prompt_id=11111111-1111-4111-8111-111111111111;"
+             cc_workload=interactive; cc_is_subagent=false; cc_prev_req=req_1; \
+             cc_prompt_id=11111111-1111-4111-8111-111111111111;"
         );
     }
 
@@ -298,5 +310,98 @@ mod tests {
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert!(injected.is_empty());
         assert_eq!(body, before);
+    }
+
+    fn full_restore() -> Restore<'static> {
+        Restore {
+            cli_version: "2.1.269",
+            entrypoint: "sdk-cli",
+            prompt_chars: ['0', '0', '0'],
+            prompt_id: Some("11111111-1111-4111-8111-111111111111"),
+            prev_req: None,
+            restore_cch: true,
+        }
+    }
+
+    #[test]
+    fn a_role_system_message_ahead_of_an_empty_top_level_system_does_not_confuse_the_insertion() {
+        let mut body =
+            br#"{"model":"m","messages":[{"role":"system","content":"x"}],"system":[]}"#.to_vec();
+        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
+        assert!(
+            text_of(&body).starts_with(
+                "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"
+            ),
+            "{}",
+            text_of(&body)
+        );
+    }
+
+    #[test]
+    fn a_nested_empty_system_array_ahead_of_the_top_level_one_is_not_spliced_into() {
+        let mut body = br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_use","id":"t1","name":"x","input":{"system":[]}}]}],"system":[]}"#.to_vec();
+        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
+        let text = String::from_utf8(body.clone()).unwrap();
+        assert!(
+            text.contains(r#""input":{"system":[]}"#),
+            "the nested array is untouched: {text}"
+        );
+        assert!(text_of(&body).starts_with("x-anthropic-billing-header:"));
+    }
+
+    #[test]
+    fn duplicate_top_level_system_keys_are_left_alone_rather_than_guessed_at() {
+        // `serde_json` reads the object as the last `"system"` (the array), so `system_is_array` passes; the
+        // depth-aware scanner reads the object as the first (the string) and cannot descend into it as an
+        // array, so every lookup that would locate an insertion point returns nothing rather than a guess.
+        let mut body = br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#.to_vec();
+        let before = body.clone();
+        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+        assert!(injected.is_empty());
+        assert_eq!(body, before);
+    }
+
+    #[test]
+    fn a_prefix_missing_its_space_or_carrying_nothing_after_it_is_left_alone() {
+        for line in [
+            "x-anthropic-billing-header:cc_version=1;",
+            "x-anthropic-billing-header: ",
+        ] {
+            let mut body = billing_body(line);
+            let before = body.clone();
+            let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+            assert!(injected.is_empty(), "{line}");
+            assert_eq!(body, before, "{line}");
+        }
+    }
+
+    #[test]
+    fn entrypoint_of_reads_the_clients_own_spellings_and_falls_back_on_anything_else() {
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, sdk-cli)"),
+            "sdk-cli"
+        );
+        assert_eq!(entrypoint_of("claude-cli/2.1.269 (external, cli)"), "cli");
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, claude-vscode)"),
+            "claude-vscode"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269"),
+            "cli",
+            "no parenthesis at all"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, cli; cc_prev_req=forged)"),
+            "cli",
+            "a forged field smuggled into the parenthesis is not a bare token"
+        );
+        assert_eq!(
+            entrypoint_of("claude-cli/2.1.269 (external, sdk cli)"),
+            "cli",
+            "whitespace inside the token is not a spelling the client uses"
+        );
     }
 }
