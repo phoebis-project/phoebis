@@ -29,9 +29,9 @@ automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all t
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
 Optional. Set to `1`, it switches the client to the full first-party request shape: two extra betas,
-`x-client-request-id`, the `cch` billing header, `cc_prompt_id`, `diagnostics`, and the global cache scope.
-Without it the client sends the reduced shape, and the router relays that as it arrives. The variable is an
-internal one that a later client build may drop.
+`x-client-request-id`, the `cch` billing header, `cc_prompt_id`, `diagnostics`, and the global cache scope. It
+also switches off gateway model discovery. Without it the client sends the reduced shape, and the router relays
+that as it arrives. The variable is an internal one that a later client build may drop.
 
 ### DISABLE_TELEMETRY
 

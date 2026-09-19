@@ -107,11 +107,21 @@ every example above, and checks no `Origin`.
 | --- | --- | --- |
 | `disconnected` | Disconnect, on an `oauth` account | Pair or Re-pair |
 | `funding_required` | An `api_key` upstream named its credit balance | Clear funding, back to `ready` |
-| `pairing` | A pairing session is open | Confirm, to `ready`; or the session is cancelled or expires |
-| `reauth_required` | A refresh failed twice, or a 401 from an `api_key` upstream | Re-pair, or a new `api_key` secret |
-| `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | A refresh, reauth, funding, or Disconnect |
-| `refreshing` | An access token is being renewed | Success, back to `ready`; two failures, to `reauth_required` |
+| `pairing` | No code path sets this state at this version | see note below |
+| `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | Reauth, funding, or Disconnect |
+| `reauth_required` | A definitive credential failure; see note below | Re-pair, or a new `api_key` secret |
+| `refreshing` | No code path sets this state at this version | see note below |
 | `unpaired` | No credential yet, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
+
+The account state has seven possible values, and the admin API can report any of them, but two are never reached
+by an account's own state. Starting or running a pairing session leaves the account's state unchanged, `unpaired` or
+`reauth_required` for a re-pair, for the whole flow; the console tracks progress through the pairing session's
+own status instead. Renewing an access token leaves the account's state at `ready` for the whole attempt, win or
+lose; only a definitive failure moves it.
+
+`reauth_required` follows a single definitive failure, never a retry count: a 401 from an `api_key` upstream, an
+`oauth` refresh that finds no stored token, gets a 401 or `invalid_grant` from the token endpoint, or resolves to
+a mismatched identity, or a request retried once with a freshly refreshed token that still comes back 401.
 
 The Upstreams view offers these actions, each calling its own route:
 
