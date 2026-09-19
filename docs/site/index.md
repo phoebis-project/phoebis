@@ -53,7 +53,7 @@ The sidebar shows the views in this order:
 | Dashboard | Shown above: 24-hour tiles, remaining subscription quota, and recent requests and sessions. |
 | Observe | The live feed (see [Statistics and alerts](statistics.md)). |
 | Quota | Each account's usage windows and reset timing (see [Statistics and alerts](statistics.md)). |
-| Upstreams | Accounts and their credentials (see [Pools, keys, and routing](routing.md)). |
+| Upstreams | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
 | API keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
 | Request logs | Individual relayed requests (see [Statistics and alerts](statistics.md)). |

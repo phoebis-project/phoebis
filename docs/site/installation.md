@@ -64,8 +64,16 @@ Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative an
 `/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
 `storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.pricing_path` at
 `/etc/phoebis/pricing.yaml`. Set `admin.origin`, or `admin.dev_loopback_http: true` on a loopback listener behind an
-SSH tunnel. Then run `phoebis check-config --config
-/etc/phoebis/config.yaml`, and once it is clean, `sudo systemctl enable --now phoebis`.
+SSH tunnel. Then validate it before enabling the service:
+
+```sh
+sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
+```
+
+`check-config` resolves `admin.secret_env` and `admin.viewer_secret_env` from the process environment like every
+other invocation, so the env file has to be sourced into this one shell first; plain `sudo phoebis check-config`
+fails with `environment variable ROUTER_ADMIN_SECRET is unset or empty`. Once it is clean,
+`sudo systemctl enable --now phoebis`.
 
 ## Commands
 
