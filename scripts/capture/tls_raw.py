@@ -94,8 +94,10 @@ def handle(c):
             rest += d
         # Only the request line this tool exists to capture is written verbatim; every other line's body is
         # redacted at the same slot, since it might be an OAuth token endpoint call carrying a refresh token.
+        # An exact match, not a prefix: POST /v1/messages/count_tokens is a real, different endpoint.
         line = lines[0].decode()
-        is_messages = line.startswith('POST /v1/messages')
+        parts = line.split(' ')
+        is_messages = len(parts) > 1 and parts[0] == 'POST' and parts[1].split('?', 1)[0] == '/v1/messages'
         stored_body = rest if is_messages else b'REDACTED'
         json_body = rest.decode('utf8', 'replace') if is_messages else 'REDACTED'
         with lock:

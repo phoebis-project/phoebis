@@ -88,9 +88,10 @@ python3 "$HERE/tls_raw.py" "$TLS_PORT" "$TMP/tls" 30 "$CA_DIR/leaf.pem" "$CA_DIR
 TLS_PID=$!
 sleep 1
 TOKEN_BODY='{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-notarealsecret"}'
-python3 - "$TLS_PORT" "$CA_DIR/ca.pem" "$BODY" "$TOKEN_BODY" <<'PY'
+COUNT_BODY='{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}'
+python3 - "$TLS_PORT" "$CA_DIR/ca.pem" "$BODY" "$TOKEN_BODY" "$COUNT_BODY" <<'PY'
 import socket, ssl, sys
-port, ca_pem, body, token_body = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+port, ca_pem, body, token_body, count_body = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 ctx = ssl.create_default_context(cafile=ca_pem)
 
 def send(target, extra_body):
@@ -109,17 +110,20 @@ def send(target, extra_body):
     c.recv(4096)
     c.close()
 
-# The second connection is a fresh one: tls_raw.py answers one request per connection, as http_raw.py does.
+# Each is a fresh connection: tls_raw.py answers one request per connection, as http_raw.py does.
 send("POST /v1/messages?beta=true", body)
 send("POST /v1/oauth/token", token_body)
+# A path this tool does not claim to capture, and a prefix of one it does: the match has to be exact, not a
+# prefix, or this line would be graded as a POST /v1/messages request and its body kept in the clear.
+send("POST /v1/messages/count_tokens", count_body)
 PY
 kill "$TLS_PID" 2>/dev/null || true
 wait "$TLS_PID" 2>/dev/null || true
-python3 - "$TMP/tls" "$BODY" "$TOKEN_BODY" <<'PY'
+python3 - "$TMP/tls" "$BODY" "$TOKEN_BODY" "$COUNT_BODY" <<'PY'
 import json, pathlib, sys
-out, body, token_body = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+out, body, token_body, count_body = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 modes = json.loads((out / "clean_modes.json").read_text())
-assert len(modes) == 2, f"clean_modes.json holds {len(modes)} entries, want 2"
+assert len(modes) == 3, f"clean_modes.json holds {len(modes)} entries, want 3"
 entry = modes[0]
 assert entry["request_line"] == "POST /v1/messages?beta=true HTTP/1.1", entry["request_line"]
 assert "Authorization: REDACTED" in entry["headers"], entry["headers"]
@@ -134,8 +138,14 @@ assert token_entry["body"] == "REDACTED", token_entry["body"]
 assert token_body not in token_entry["body"], "the refresh token reached the JSON copy"
 raw = (out / "clean_body_1.json").read_bytes()
 assert raw == b"REDACTED", raw
+# A prefix match would treat this as a POST /v1/messages request and keep its body; the match must be exact.
+count_entry = modes[2]
+assert count_entry["request_line"] == "POST /v1/messages/count_tokens HTTP/1.1", count_entry["request_line"]
+assert count_entry["body"] == "REDACTED", count_entry["body"]
+raw = (out / "clean_body_2.json").read_bytes()
+assert raw == b"REDACTED", raw
 connect = json.loads((out / "connect.json").read_text())
-assert len(connect) == 2, f"connect.json holds {len(connect)} entries, want 2"
+assert len(connect) == 3, f"connect.json holds {len(connect)} entries, want 3"
 assert all(c.get("hello_len", 0) > 0 for c in connect), connect
 print("smoke passed: tls_raw.py recorded the request behind TLS, redacted the credential, and redacted a non-messages body")
 PY

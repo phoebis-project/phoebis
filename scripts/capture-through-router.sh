@@ -173,17 +173,20 @@ ROUTER_PID=$!
 
 # The router loads its configuration and binds its three listeners before answering anything; HEAD /api/hello
 # needs no credential, so it doubles as a readiness probe here. kill -0 tells a dead process from one still
-# starting, so a config error reported after this loop's own last curl attempt is not read as a timeout.
+# starting, so a config error reported after this loop's own last curl attempt is not read as a timeout. Bounded
+# by wall clock, not by a fixed iteration count: curl's own --connect-timeout/--max-time already spend up to a
+# second waiting, and adding a full second's sleep on top of that on every miss could run to twice this bound.
 ready=0
-for _ in $(seq 1 15); do
-  if curl -fsS -o /dev/null -m 1 -X HEAD "$ROUTER_BASE/api/hello" 2>/dev/null; then
+deadline=$((SECONDS + 15))
+while [[ "$SECONDS" -lt "$deadline" ]]; do
+  if curl -fsS -o /dev/null --connect-timeout 1 --max-time 1 -X HEAD "$ROUTER_BASE/api/hello" 2>/dev/null; then
     ready=1
     break
   fi
   if ! kill -0 "$ROUTER_PID" 2>/dev/null; then
     break
   fi
-  sleep 1
+  sleep 0.2
 done
 if [[ "$ready" -ne 1 ]]; then
   echo "capture-through-router.sh: phoebis never answered on $ROUTER_BASE; its log:" >&2
