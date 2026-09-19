@@ -20,6 +20,7 @@ jobs:
       - run: pip install zensical==0.0.62
       - run: zensical build --clean --strict
       - run: python3 scripts/check-docs.py links
+      - run: python3 scripts/check-docs.py routes
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
