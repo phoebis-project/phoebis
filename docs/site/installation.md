@@ -131,6 +131,7 @@ admin:
   secret_env: ROUTER_ADMIN_SECRET
   viewer_secret_env: ROUTER_VIEWER_SECRET
 compatibility:
+  cache_diagnostics: false
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
   usage_entrypoint: cli
@@ -209,11 +210,13 @@ Refused with:
 
 ### compatibility
 
-Required, and all three fields are required. Only `profile` is consumed today; the other two are validated so a
-file written for a later build is not accepted with the wrong meaning.
+Required; `outbound_gzip`, `profile`, and `usage_entrypoint` are required and `cache_diagnostics` defaults to
+`false`. Only `profile` and `cache_diagnostics` are consumed today; the other two are validated so a file
+written for a later build is not accepted with the wrong meaning.
 
 | Key | Accepts |
 | --- | --- |
+| `cache_diagnostics` | `true` or `false` (default) |
 | `outbound_gzip` | `false` |
 | `profile` | `claude-code-2.1.269-linux-x64`, the one profile this build carries |
 | `usage_entrypoint` | `cli` or `sdk-cli` |
@@ -223,6 +226,12 @@ Refused with:
 - `outbound_gzip`: `compatibility.outbound_gzip must be false: the native gzip gate is not implemented`
 - `profile`: `compatibility.profile {name} is not a profile this build carries`
 - `usage_entrypoint`: `compatibility.usage_entrypoint must be cli or sdk-cli, not {value}`
+
+With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07`
+beta and a `diagnostics.previous_message_id` naming the previous answer on the same key, session, agent, model,
+and upstream, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
+`cache_diagnostics`. The id is kept in memory only: the first
+request after a restart, and the first on an upstream the session moved to, carries `null`.
 
 ### keepalive
 

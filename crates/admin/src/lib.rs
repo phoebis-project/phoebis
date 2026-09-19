@@ -96,6 +96,7 @@ pub struct SettingsView {
     pub admin_listen: String,
     pub admin_origin: Option<String>,
     pub body_capture_max_hours: u32,
+    pub cache_diagnostics: bool,
     pub catalog_sync_interval_seconds: u64,
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
@@ -111,6 +112,7 @@ pub struct SettingsView {
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,
+    pub usage_entrypoint: String,
     pub usage_refresh_concurrency: usize,
     pub viewer_configured: bool,
 }

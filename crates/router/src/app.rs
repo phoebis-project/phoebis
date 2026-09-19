@@ -199,7 +199,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 max_request_bytes: MAX_REQUEST_BYTES,
             },
         )
-        .with_bus(bus.clone()),
+        .with_bus(bus.clone())
+        .with_cache_diagnostics(config.compatibility.cache_diagnostics),
     );
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
@@ -281,6 +282,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin_listen: config.admin.listen.to_string(),
             admin_origin: config.admin.origin.clone(),
             body_capture_max_hours: config.stats.body_capture_max_hours,
+            cache_diagnostics: config.compatibility.cache_diagnostics,
             catalog_sync_interval_seconds: config.routing.catalog_sync_interval_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
@@ -300,6 +302,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             session_expire_after_seconds: config.sessions.expire_after_seconds,
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
+            usage_entrypoint: config.compatibility.usage_entrypoint.clone(),
             usage_refresh_concurrency: config.usage.refresh_concurrency,
             viewer_configured: config.admin.viewer_secret.is_some(),
         }),

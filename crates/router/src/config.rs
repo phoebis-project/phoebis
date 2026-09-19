@@ -57,13 +57,16 @@ pub struct AdminConfig {
     pub viewer_secret_env: Option<String>,
 }
 
-/// Of these three, only `profile` is consumed today: `outbound_gzip` has to stay off because the native
-/// gzip gate is not implemented, and `usage_entrypoint` selects a `User-Agent` the usage service does not
-/// take from configuration yet. Both are parsed and validated so a file written for a later build is not
+/// Of these four, `profile` and `cache_diagnostics` are consumed today: `outbound_gzip` has to stay off because
+/// the native gzip gate is not implemented, and `usage_entrypoint` selects a `User-Agent` the usage service does
+/// not take from configuration yet. Every field is still parsed so a file written for a later build is not
 /// silently accepted with the wrong meaning.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompatConfig {
+    /// Opt-in: it changes the wire shape toward Anthropic for every client behind the router.
+    #[serde(default)]
+    pub cache_diagnostics: bool,
     pub outbound_gzip: bool,
     pub profile: String,
     pub usage_entrypoint: String,
@@ -490,6 +493,52 @@ mod tests {
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
+    }
+
+    /// `file`'s own template fixes the `compatibility` block, so this builds a whole document with a
+    /// caller-chosen one instead of appending a second, ambiguous top-level key.
+    fn file_with_compat(
+        dir: &std::path::Path,
+        name: &str,
+        compatibility: &str,
+    ) -> std::path::PathBuf {
+        let key = dir.join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let yaml = format!(
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  dev_loopback_http: true\n\
+             compatibility:\n{compatibility}\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  \
+             encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+            key.display(),
+            dir.join("router.sqlite").display()
+        );
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    #[test]
+    fn cache_diagnostics_parses_when_set_and_defaults_to_false() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        let without = "  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli";
+        assert!(
+            !load(&file_with_compat(dir.path(), "absent", without))
+                .unwrap()
+                .compatibility
+                .cache_diagnostics
+        );
+        let with = "  cache_diagnostics: true\n  outbound_gzip: false\n  \
+                    profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli";
+        assert!(
+            load(&file_with_compat(dir.path(), "set", with))
+                .unwrap()
+                .compatibility
+                .cache_diagnostics
+        );
     }
 
     #[test]

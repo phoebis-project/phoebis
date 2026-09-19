@@ -38,7 +38,7 @@ pub enum Injected {
 
 impl Injected {
     /// The text an upstream's 400 names it by.
-    pub fn wire_name(self) -> &'static str {
+    pub const fn wire_name(self) -> &'static str {
         match self {
             Injected::CacheDiagnosisBeta => "cache-diagnosis-2026-04-07",
             Injected::Cch => "cch",

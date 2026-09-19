@@ -218,6 +218,42 @@ pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
     (s.body.get(s.pos) == Some(&b']')).then_some(s.pos)
 }
 
+/// Raw span of the whole member (key quote to value end) at `path`, so a caller can insert a sibling before it.
+/// Walked as `walk_to_last_segment` walks: a decoy sharing the key's bytes inside an earlier string, or nested
+/// under another object, is skipped as part of the value it sits in rather than matched.
+pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let key = path.last()?;
+    walk_to_last_segment(&mut s, &path[..path.len() - 1])?;
+    if !s.eat(b'{') {
+        return None;
+    }
+    loop {
+        s.ws();
+        let member_start = s.pos;
+        let (ks, ke) = s.string().ok()?;
+        s.ws();
+        if !s.eat(b':') {
+            return None;
+        }
+        s.ws();
+        if s.body[ks + 1..ke - 1] == *key.as_bytes() {
+            s.value(false).ok()?;
+            return Some((member_start, s.pos));
+        }
+        s.value(false).ok()?;
+        s.ws();
+        if !s.eat(b',') {
+            return None;
+        }
+    }
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -597,6 +633,20 @@ mod tests {
             array_member_span(body, &["system"], 2).is_none(),
             "past the last element"
         );
+    }
+
+    #[test]
+    fn an_object_member_span_covers_the_key_and_the_value_past_a_decoy_and_a_nested_match() {
+        let body = br#"{"outer":{"stream":"decoy"},"diagnostics":{"previous_message_id":null},"stream":true}"#;
+        let (start, end) = object_member_span(body, &["diagnostics"]).unwrap();
+        assert_eq!(
+            &body[start..end],
+            br#""diagnostics":{"previous_message_id":null}"#,
+            "the nested decoy under \"outer\" is skipped as part of its value"
+        );
+        let (start, end) = object_member_span(body, &["outer", "stream"]).unwrap();
+        assert_eq!(&body[start..end], br#""stream":"decoy""#);
+        assert!(object_member_span(body, &["missing"]).is_none());
     }
 
     #[test]

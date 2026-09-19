@@ -23,6 +23,9 @@ pub struct Restore<'a> {
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
     pub restore_cch: bool,
+    /// Items the account has refused on a previous attempt; each is left out of the line even when the field
+    /// it names is otherwise absent and restorable.
+    pub skip: Vec<Injected>,
 }
 
 /// Fills every absent field the restoration names, or inserts the whole line as `system[0]` when the body has a
@@ -87,24 +90,30 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
 }
 
 /// Absent-field candidates in `FIELD_ORDER`'s relative order: `cch` before `cc_prev_req` before `cc_prompt_id`.
+/// An item the account has refused (`restore.skip`) never becomes a candidate, whether or not its field is
+/// otherwise absent and restorable.
 fn candidates(restore: &Restore<'_>) -> Vec<(&'static str, String, Injected)> {
     let mut out = Vec::new();
-    if restore.restore_cch {
+    if restore.restore_cch && !restore.skip.contains(&Injected::Cch) {
         out.push(("cch", "cch=00000".to_string(), Injected::Cch));
     }
     if let Some(id) = restore.prev_req {
-        out.push((
-            "cc_prev_req",
-            format!("cc_prev_req={id}"),
-            Injected::PrevReq,
-        ));
+        if !restore.skip.contains(&Injected::PrevReq) {
+            out.push((
+                "cc_prev_req",
+                format!("cc_prev_req={id}"),
+                Injected::PrevReq,
+            ));
+        }
     }
     if let Some(id) = restore.prompt_id {
-        out.push((
-            "cc_prompt_id",
-            format!("cc_prompt_id={id}"),
-            Injected::PromptId,
-        ));
+        if !restore.skip.contains(&Injected::PromptId) {
+            out.push((
+                "cc_prompt_id",
+                format!("cc_prompt_id={id}"),
+                Injected::PromptId,
+            ));
+        }
     }
     out
 }
@@ -261,6 +270,7 @@ mod tests {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: Some("req_1"),
             restore_cch: true,
+            skip: Vec::new(),
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -287,6 +297,7 @@ mod tests {
             prompt_id: None,
             prev_req: Some("req_other"),
             restore_cch: false,
+            skip: Vec::new(),
         };
         restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -306,6 +317,7 @@ mod tests {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,
+            skip: Vec::new(),
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert!(injected.is_empty());
@@ -320,7 +332,29 @@ mod tests {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,
+            skip: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_skipped_item_is_left_out_even_when_its_field_is_absent_and_otherwise_restorable() {
+        let mut body = billing_body(
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;",
+        );
+        let restore = Restore {
+            skip: vec![Injected::Cch, Injected::PromptId],
+            ..full_restore()
+        };
+        let injected = restore_billing_line(&mut body, &restore).unwrap();
+        assert_eq!(
+            injected,
+            Vec::<Injected>::new(),
+            "cch and cc_prompt_id are the only candidates full_restore offers, and both are skipped"
+        );
+        assert_eq!(
+            text_of(&body),
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"
+        );
     }
 
     #[test]

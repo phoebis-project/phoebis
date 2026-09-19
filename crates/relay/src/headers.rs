@@ -5,6 +5,7 @@ use axum::http::HeaderMap;
 use phoebis_store::Secret;
 
 use crate::casing::OriginalHead;
+use crate::memory::Injected;
 
 /// The credential the relay presents upstream, which decides both the header the secret goes in and the beta
 /// list the account may claim.
@@ -49,6 +50,19 @@ const NEVER_COPIED: &[&str] = &[
 ///
 /// `client_request_id` is emitted only when the caller sent no `x-client-request-id`: after the caller's `x-app`
 /// line, else immediately before the credential slot.
+///
+/// The head and exactly what the builder added on its own: a beta the caller's list lacked, the generated
+/// `x-client-request-id`. A beta the caller sent is never reported, so its 400 is the caller's to handle.
+pub struct OutboundHead {
+    pub headers: Vec<(String, String)>,
+    pub injected: Vec<Injected>,
+}
+
+/// `inject_betas` names beta items by their `wire_name`; each one absent from the
+/// caller's list is appended to the merged line; when the caller sent no `anthropic-beta` line at all and the
+/// list is non-empty, a line holding exactly the injected entries is inserted after `anthropic-version` (else
+/// right before the credential slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a
+/// missing line stays missing, as today.
 #[allow(clippy::too_many_arguments)]
 pub fn outbound_headers(
     caller: &HeaderMap,
@@ -57,7 +71,8 @@ pub fn outbound_headers(
     host: &str,
     content_length: usize,
     client_request_id: Option<&str>,
-) -> Vec<(String, String)> {
+    inject_betas: &[Injected],
+) -> OutboundHead {
     let sent: Vec<(&str, &str)> = match original {
         Some(head) => head
             .headers
@@ -84,6 +99,7 @@ pub fn outbound_headers(
         .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
         .map(|(_, value)| *value)
         .collect();
+    let has_beta_line = !beta_lines.is_empty();
     let beta_list = match beta_lines.as_slice() {
         [only] => (*only).to_string(),
         lines => {
@@ -97,6 +113,7 @@ pub fn outbound_headers(
         }
     };
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 3);
+    let mut injected: Vec<Injected> = Vec::new();
     // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
     // both lines, and a slot whose value the relay owns would then be written twice upstream.
     let (mut saw_beta, mut saw_credential, mut saw_host, mut saw_length) =
@@ -111,6 +128,7 @@ pub fn outbound_headers(
                     saw_credential = true;
                     if let (false, Some(id)) = (caller_has_app, generated) {
                         out.push(("x-client-request-id".into(), id.into()));
+                        injected.push(Injected::ClientRequestId);
                     }
                     out.push(credential(kind));
                 }
@@ -118,7 +136,9 @@ pub fn outbound_headers(
             "anthropic-beta" => {
                 if !saw_beta {
                     saw_beta = true;
-                    out.push((name.into(), betas(&beta_list, kind)));
+                    let (line, added) = betas(&beta_list, kind, inject_betas);
+                    out.push((name.into(), line));
+                    injected.extend(added);
                 }
             }
             // The relay's upstream connection is pooled and independent of the caller's, so it declares its
@@ -144,6 +164,7 @@ pub fn outbound_headers(
                 if lower == "x-app" {
                     if let Some(id) = generated {
                         out.push(("x-client-request-id".into(), id.into()));
+                        injected.push(Injected::ClientRequestId);
                     }
                 }
             }
@@ -159,9 +180,36 @@ pub fn outbound_headers(
             .map_or(out.len(), |at| at + 1);
         if let (false, Some(id)) = (caller_has_app, generated) {
             out.insert(at, ("x-client-request-id".into(), id.into()));
+            injected.push(Injected::ClientRequestId);
             at += 1;
         }
         out.insert(at, credential(kind));
+    }
+    // The caller sent no `anthropic-beta` line to merge into, so nothing above ever ran `betas`; an injected
+    // feature still needs a line of its own, but never the OAuth claim, which rides on the caller's own list.
+    if !has_beta_line && !inject_betas.is_empty() {
+        let line = inject_betas
+            .iter()
+            .map(|item| item.wire_name())
+            .collect::<Vec<_>>()
+            .join(",");
+        let at = out
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
+            .map(|at| at + 1)
+            .or_else(|| {
+                out.iter().position(|(name, _)| {
+                    name.eq_ignore_ascii_case("authorization")
+                        || name.eq_ignore_ascii_case("x-api-key")
+                })
+            })
+            .or_else(|| {
+                out.iter()
+                    .position(|(name, _)| name.eq_ignore_ascii_case("host"))
+            })
+            .unwrap_or(out.len());
+        out.insert(at, ("anthropic-beta".into(), line));
+        injected.extend(inject_betas.iter().copied());
     }
     if !saw_host {
         out.push(("Host".into(), host.into()));
@@ -169,7 +217,10 @@ pub fn outbound_headers(
     if !saw_length {
         out.push(("Content-Length".into(), content_length.to_string()));
     }
-    out
+    OutboundHead {
+        headers: out,
+        injected,
+    }
 }
 
 fn credential(kind: &CredentialKind) -> (String, String) {
@@ -182,9 +233,16 @@ fn credential(kind: &CredentialKind) -> (String, String) {
     }
 }
 
-fn betas(value: &str, kind: &CredentialKind) -> String {
+/// Splits `value`, applies the OAuth claim, then appends each `inject` item whose `wire_name`
+/// the list still lacks. Returns the merged line and exactly the items it appended, so a client-sent beta of
+/// the same name is never reported as the relay's own.
+fn betas(
+    value: &str,
+    kind: &CredentialKind,
+    inject: &[Injected],
+) -> (String, Vec<Injected>) {
     let claimed = || value.split(',').any(|entry| entry.trim() == OAUTH_BETA);
-    match kind {
+    let mut list = match kind {
         CredentialKind::ApiKey { .. } => value
             .split(',')
             .filter(|entry| entry.trim() != OAUTH_BETA)
@@ -195,7 +253,21 @@ fn betas(value: &str, kind: &CredentialKind) -> String {
         // The beta is a claim about the credential rather than about the client's feature set, so it leads
         // the list and the caller's own entries keep their order behind it.
         CredentialKind::Oauth { .. } => format!("{OAUTH_BETA},{value}"),
+    };
+    let mut injected = Vec::new();
+    for item in inject {
+        let name = item.wire_name();
+        if list.split(',').any(|entry| entry.trim() == name) {
+            continue;
+        }
+        list = if list.is_empty() {
+            name.to_string()
+        } else {
+            format!("{list},{name}")
+        };
+        injected.push(*item);
     }
+    (list, injected)
 }
 
 #[cfg(test)]
@@ -232,7 +304,9 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
+            &[],
         )
+        .headers
     }
 
     /// The bus may not depend on this crate, so it carries its own copy of this set and the two are kept in
@@ -338,7 +412,9 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
-        );
+            &[],
+        )
+        .headers;
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
         let version = names
             .iter()
@@ -362,7 +438,9 @@ mod tests {
             "api.anthropic.com",
             7,
             Some("generated-id"),
-        );
+            &[],
+        )
+        .headers;
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
         let app = names
             .iter()
@@ -382,7 +460,9 @@ mod tests {
             "api.anthropic.com",
             7,
             Some("generated-id"),
-        );
+            &[],
+        )
+        .headers;
         assert_eq!(
             emitted[0],
             ("x-client-request-id".into(), "generated-id".into())
@@ -404,7 +484,9 @@ mod tests {
             "api.anthropic.com",
             7,
             Some("generated-id"),
-        );
+            &[],
+        )
+        .headers;
         assert_eq!(
             emitted
                 .iter()
@@ -419,5 +501,110 @@ mod tests {
             .expect("the caller sent x-app");
         assert_eq!(names[app + 1], "x-client-request-id");
         assert_eq!(emitted[app + 1].1, "caller-id");
+    }
+
+    /// An API-key credential, so the OAuth claim `betas` would otherwise insert into an empty list never
+    /// contaminates what these cases check about `inject_betas` alone.
+    fn emit_injected(caller: &OriginalHead, inject: &[Injected]) -> OutboundHead {
+        outbound_headers(
+            &HeaderMap::new(),
+            Some(caller),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            None,
+            inject,
+        )
+    }
+
+    #[test]
+    fn a_caller_with_no_beta_line_gets_one_holding_exactly_the_injected_entries_after_the_version()
+    {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("anthropic-version", "2023-06-01"),
+        ]);
+        let head = emit_injected(&caller, &[Injected::CacheDiagnosisBeta]);
+        let names: Vec<&str> = head.headers.iter().map(|(n, _)| n.as_str()).collect();
+        let version = names
+            .iter()
+            .position(|n| *n == "anthropic-version")
+            .unwrap();
+        assert_eq!(names[version + 1], "anthropic-beta");
+        assert_eq!(head.headers[version + 1].1, "cache-diagnosis-2026-04-07");
+        assert_eq!(head.injected, vec![Injected::CacheDiagnosisBeta]);
+    }
+
+    #[test]
+    fn an_empty_injection_list_leaves_a_missing_beta_line_missing() {
+        let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
+        let head = emit_injected(&caller, &[]);
+        assert!(!head
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta")));
+        assert!(head.injected.is_empty());
+    }
+
+    #[test]
+    fn an_empty_beta_line_carries_the_injected_beta_alone() {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("anthropic-beta", ""),
+        ]);
+        let head = emit_injected(&caller, &[Injected::CacheDiagnosisBeta]);
+        let (_, value) = head
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+            .unwrap();
+        assert_eq!(value, "cache-diagnosis-2026-04-07");
+        assert_eq!(head.injected, vec![Injected::CacheDiagnosisBeta]);
+    }
+
+    #[test]
+    fn two_beta_lines_merge_into_one_ending_with_the_injected_beta_once() {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("anthropic-beta", "claude-code-20250219"),
+            ("anthropic-beta", "fine-grained-tool-streaming-2025-05-14"),
+        ]);
+        let head = emit_injected(&caller, &[Injected::CacheDiagnosisBeta]);
+        let (_, value) = head
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+            .unwrap();
+        assert_eq!(
+            value,
+            "claude-code-20250219,fine-grained-tool-streaming-2025-05-14,cache-diagnosis-2026-04-07"
+        );
+        assert_eq!(head.injected, vec![Injected::CacheDiagnosisBeta]);
+    }
+
+    #[test]
+    fn a_list_already_carrying_the_beta_reports_nothing_and_a_generated_request_id_reports_it() {
+        let caller = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            (
+                "anthropic-beta",
+                "claude-code-20250219,cache-diagnosis-2026-04-07",
+            ),
+        ]);
+        assert!(emit_injected(&caller, &[Injected::CacheDiagnosisBeta])
+            .injected
+            .is_empty());
+
+        let caller = head(&[("Authorization", "Bearer phoebis-testkey")]);
+        let outbound = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &oauth(),
+            "api.anthropic.com",
+            7,
+            Some("generated-id"),
+            &[],
+        );
+        assert_eq!(outbound.injected, vec![Injected::ClientRequestId]);
     }
 }

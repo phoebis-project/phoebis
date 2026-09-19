@@ -15,13 +15,20 @@ pub struct BodyEdits {
     pub restored: Vec<Injected>,
 }
 
-/// The native edit's inputs: the account identity and model every request needs, and the restoration a
-/// `claude-cli/` inference request carries.
+/// The native edit's inputs: the account identity and model every request needs, the restoration a
+/// `claude-cli/` inference request carries, and the diagnostics member `compatibility.cache_diagnostics` forces.
 pub struct NativeEdit<'a> {
     pub account_uuid: Option<&'a str>,
     pub upstream_model: &'a str,
     pub restore: Option<Restore<'a>>,
+    /// Outer `None` leaves the body alone; the inner option is the previous `message_start` id on this account,
+    /// `None` writing a JSON `null` for a first turn, a migration, or a failover.
+    pub diagnostics: Option<Option<&'a str>>,
 }
+
+/// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
+/// reported as injected, since its 400 is the client's to handle.
+pub const CACHE_DIAGNOSIS_BETA: &str = Injected::CacheDiagnosisBeta.wire_name();
 
 /// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
 /// on: the account it would be billed against, or the model it would be served by, is not the one the router
@@ -96,10 +103,21 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         Spliced::Replaced => true,
         Spliced::Unchanged => false,
     };
-    let restored = match &edit.restore {
+    let mut restored = match &edit.restore {
         Some(restore) => restore_billing_line(body, restore)?,
         None => Vec::new(),
     };
+    // A body with no restoration context still gets the member under the option: it names the operator's
+    // choice and the host, not the client.
+    let skip_diagnostics = edit
+        .restore
+        .as_ref()
+        .is_some_and(|r| r.skip.contains(&Injected::Diagnostics));
+    if let Some(previous) = edit.diagnostics {
+        if !skip_diagnostics && insert_diagnostics(body, previous) {
+            restored.push(Injected::Diagnostics);
+        }
+    }
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
         account_uuid_replaced,
@@ -108,6 +126,40 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         cch_restamped,
         restored,
     })
+}
+
+/// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
+/// without `stream` gets it last. Never rewrites a member the client sent.
+fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
+    if phoebis_cch::object_member_span(body, &["diagnostics"]).is_some() {
+        return false;
+    }
+    let member = format!(
+        r#""diagnostics":{{"previous_message_id":{}}}"#,
+        previous.map_or("null".to_string(), |p| serde_json::to_string(p)
+            .expect("a string encodes"))
+    );
+    match phoebis_cch::object_member_span(body, &["stream"]) {
+        Some((start, _)) => {
+            body.splice(start..start, format!("{member},").bytes());
+        }
+        None => {
+            let end = body
+                .iter()
+                .rposition(|b| *b == b'}')
+                .expect("checked to be an object");
+            let empty = body[..end]
+                .iter()
+                .rev()
+                .find(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+                == Some(&b'{');
+            body.splice(
+                end..end,
+                format!("{}{member}", if empty { "" } else { "," }).bytes(),
+            );
+        }
+    }
+    true
 }
 
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
@@ -206,6 +258,7 @@ mod tests {
                 account_uuid: Some(UUID),
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
+                diagnostics: None,
             },
         )
         .expect("a JSON object is editable");
@@ -224,7 +277,8 @@ mod tests {
                 &NativeEdit {
                     account_uuid: Some(UUID),
                     upstream_model: "claude-sonnet-4-5",
-                    restore: None
+                    restore: None,
+                    diagnostics: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -240,7 +294,8 @@ mod tests {
                 &NativeEdit {
                     account_uuid: None,
                     upstream_model: "claude-sonnet-4-5",
-                    restore: None
+                    restore: None,
+                    diagnostics: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -255,7 +310,8 @@ mod tests {
                 &NativeEdit {
                     account_uuid: Some(UUID),
                     upstream_model: "claude-sonnet-4-5",
-                    restore: None
+                    restore: None,
+                    diagnostics: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -271,6 +327,7 @@ mod tests {
                 account_uuid: None,
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
+                diagnostics: None,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -286,6 +343,7 @@ mod tests {
                 account_uuid: Some("acct-uuid"),
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
+                diagnostics: None,
             },
         )
         .expect("a JSON object is editable");
@@ -305,7 +363,8 @@ mod tests {
                 &NativeEdit {
                     account_uuid: None,
                     upstream_model: "claude-sonnet-4-5",
-                    restore: None
+                    restore: None,
+                    diagnostics: None,
                 },
             ),
             Err(RelayError::NotAnObject)

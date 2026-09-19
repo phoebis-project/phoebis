@@ -9,6 +9,8 @@ admin:
   secret_env: ROUTER_ADMIN_SECRET
   viewer_secret_env: ROUTER_VIEWER_SECRET
 compatibility:
+  # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
+  cache_diagnostics: false
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
   usage_entrypoint: cli

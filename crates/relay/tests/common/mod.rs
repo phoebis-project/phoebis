@@ -219,7 +219,29 @@ pub async fn harness_on(
     models: &[&str],
     limits: Limits,
 ) -> Harness {
-    build(store, up, accounts, pool, models, limits, None).await
+    build(store, up, accounts, pool, models, limits, None, false).await
+}
+
+/// The default harness with the bootstrap-level `cache_diagnostics` option set, for the cases that check how it
+/// interacts with a pool's own override.
+pub async fn harness_with_cache_diagnostics_default(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    cache_diagnostics: bool,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+        None,
+        cache_diagnostics,
+    )
+    .await
 }
 
 /// The default harness with a bus attached, for the suites that read what the relay publishes.
@@ -249,6 +271,7 @@ pub async fn harness_with_bus_limits(
         &["claude-sonnet-4-5", "claude-opus-5"],
         limits,
         Some(bus),
+        false,
     )
     .await
 }
@@ -262,6 +285,7 @@ async fn build(
     models: &[&str],
     limits: Limits,
     bus: Option<Bus>,
+    cache_diagnostics: bool,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -449,6 +473,7 @@ async fn build(
         clock,
         limits,
     );
+    let relay = relay.with_cache_diagnostics(cache_diagnostics);
     let relay = match bus {
         Some(bus) => relay.with_bus(bus),
         None => relay,

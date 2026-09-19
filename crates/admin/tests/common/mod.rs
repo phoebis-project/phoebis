@@ -664,6 +664,7 @@ async fn app_with_webhook_policy(
         admin_listen: "test".into(),
         admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        cache_diagnostics: false,
         catalog_sync_interval_seconds: 86_400,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
@@ -679,6 +680,7 @@ async fn app_with_webhook_policy(
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,
+        usage_entrypoint: "cli".into(),
         usage_refresh_concurrency: 4,
         viewer_configured: true,
     });

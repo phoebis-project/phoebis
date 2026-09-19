@@ -10,6 +10,12 @@
       "admin_configured": true,
       "viewer_configured": true
     },
+    "compatibility": {
+      "cache_diagnostics": false,
+      "outbound_gzip": false,
+      "profile": "claude-code-2.1.269-linux-x64",
+      "usage_entrypoint": "cli"
+    },
     "keepalive": {
       "lease_seconds": 90,
       "max_agents": 1024,

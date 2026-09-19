@@ -5,6 +5,7 @@ use phoebis_store::{AccountKind, AccountState};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
+use crate::memory::Injected;
 use crate::ratelimit::{retry_after, UnifiedHeaders};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
@@ -33,6 +34,9 @@ pub enum Verdict {
         mark: Option<AccountState>,
     },
     Refresh,
+    /// An upstream 400 `invalid_request_error` whose message names one or more items the relay injected: the
+    /// items to strip before one more try on the same account.
+    StripInjected(Vec<Injected>),
 }
 
 pub struct HeadContext<'a> {
@@ -46,6 +50,10 @@ pub struct HeadContext<'a> {
     /// The start of a non-streaming body, decoded: the caller decodes its inspection copy, so this is never
     /// compressed.
     pub body_prefix: Option<&'a [u8]>,
+    /// The attempt's own additions, body and head, that a 400 might name.
+    pub injected: &'a [Injected],
+    /// Whether an attempt remains under `max_attempts` and this leg has not stripped yet.
+    pub can_strip: bool,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
@@ -55,6 +63,20 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
             .first_event
             .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error"));
     let rate_limited = head.status == 429 || sse_rate_limited;
+    // Ahead of the per-kind table below, for either account kind: a 400 naming an item this leg added is a fact
+    // about the request shape, not about the credential, and a name outside `injected` is the client's own to
+    // handle.
+    if head.status == 400 && ctx.can_strip && !ctx.injected.is_empty() {
+        if let Some(body) = ctx
+            .body_prefix
+            .filter(|b| error_type(b).as_deref() == Some("invalid_request_error"))
+        {
+            let named = refused_names(body, ctx.injected);
+            if !named.is_empty() {
+                return Verdict::StripInjected(named);
+            }
+        }
+    }
     match ctx.kind {
         AccountKind::Oauth if rate_limited => {
             return Verdict::FailOver {
@@ -257,6 +279,31 @@ fn names_credit_balance(body: &[u8]) -> bool {
     std::str::from_utf8(body).is_ok_and(|t| t.to_ascii_lowercase().contains("credit balance"))
 }
 
+/// The names an upstream 400 refused, read off `error.message` alone (never the envelope, where a field such as
+/// `request_id` can spell any of these names by accident), each as a whole token: bounded on both sides by a
+/// character outside `[A-Za-z0-9_-]` or the string's edge.
+pub(crate) fn refused_names(body: &[u8], candidates: &[Injected]) -> Vec<Injected> {
+    let Some(message) = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+    else {
+        return Vec::new();
+    };
+    let boundary =
+        |c: Option<char>| c.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    candidates
+        .iter()
+        .copied()
+        .filter(|item| {
+            let name = item.wire_name();
+            message.match_indices(name).any(|(at, _)| {
+                boundary(message[..at].chars().next_back())
+                    && boundary(message[at + name.len()..].chars().next())
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +323,7 @@ mod tests {
         }
     }
 
-    fn context(kind: AccountKind) -> HeadContext<'static> {
+    fn context<'a>(kind: AccountKind) -> HeadContext<'a> {
         HeadContext {
             kind,
             canonical_model: "claude-opus-5",
@@ -284,6 +331,8 @@ mod tests {
             fallback_ms: FALLBACK,
             first_event: None,
             body_prefix: None,
+            injected: &[],
+            can_strip: false,
         }
     }
 
@@ -558,5 +607,78 @@ mod tests {
             "seven_day"
         );
         assert_eq!(exhaustion_window(None, AccountKind::ApiKey), "retry_after");
+    }
+
+    fn refusal(message: &str) -> Vec<u8> {
+        format!(
+            r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"{message}"}}}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_400_naming_one_or_two_injected_items_strips_exactly_those() {
+        let one = refusal(
+            "Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header.",
+        );
+        let mut ctx = context(AccountKind::Oauth);
+        ctx.can_strip = true;
+        ctx.injected = &[Injected::CacheDiagnosisBeta, Injected::Diagnostics];
+        ctx.body_prefix = Some(&one);
+        assert_eq!(
+            classify(&head(400, &[]), &ctx),
+            Verdict::StripInjected(vec![Injected::CacheDiagnosisBeta])
+        );
+        let both = refusal("`cache-diagnosis-2026-04-07` and `diagnostics` are not recognized.");
+        ctx.body_prefix = Some(&both);
+        assert_eq!(
+            classify(&head(400, &[]), &ctx),
+            Verdict::StripInjected(vec![Injected::CacheDiagnosisBeta, Injected::Diagnostics])
+        );
+    }
+
+    #[test]
+    fn a_400_naming_a_name_outside_injected_or_of_another_type_commits() {
+        let unnamed = refusal("model not found");
+        let mut ctx = context(AccountKind::Oauth);
+        ctx.can_strip = true;
+        ctx.injected = &[Injected::CacheDiagnosisBeta];
+        ctx.body_prefix = Some(&unnamed);
+        assert!(matches!(classify(&head(400, &[]), &ctx), Verdict::Commit));
+        let other_type = br#"{"type":"error","error":{"type":"overloaded_error","message":"cache-diagnosis-2026-04-07"}}"#;
+        ctx.body_prefix = Some(other_type);
+        assert!(matches!(classify(&head(400, &[]), &ctx), Verdict::Commit));
+    }
+
+    #[test]
+    fn a_400_that_cannot_be_retried_commits_whatever_the_message_names() {
+        let message = refusal("Unexpected value(s) `cache-diagnosis-2026-04-07`");
+        let mut ctx = context(AccountKind::Oauth);
+        ctx.can_strip = false;
+        ctx.injected = &[Injected::CacheDiagnosisBeta];
+        ctx.body_prefix = Some(&message);
+        assert!(matches!(classify(&head(400, &[]), &ctx), Verdict::Commit));
+    }
+
+    #[test]
+    fn refused_names_matches_whole_tokens_and_ignores_the_envelope() {
+        let envelope = br#"{"type":"error","error":{"type":"invalid_request_error","message":"model not found"},"request_id":"req_cch_0001"}"#;
+        assert_eq!(refused_names(envelope, &[Injected::Cch]), Vec::new());
+        let unrelated_field =
+            br#"{"type":"error","error":{"type":"invalid_request_error","message":"`diagnostics_extra` is not a valid field"}}"#;
+        assert_eq!(
+            refused_names(unrelated_field, &[Injected::Diagnostics]),
+            Vec::new()
+        );
+        let backtick_boundary = refusal("Unexpected value(s) `cache-diagnosis-2026-04-07`");
+        assert_eq!(
+            refused_names(&backtick_boundary, &[Injected::CacheDiagnosisBeta]),
+            vec![Injected::CacheDiagnosisBeta]
+        );
+        let period_boundary = refusal("unknown field diagnostics.");
+        assert_eq!(
+            refused_names(&period_boundary, &[Injected::Diagnostics]),
+            vec![Injected::Diagnostics]
+        );
     }
 }

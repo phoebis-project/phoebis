@@ -16,6 +16,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
         "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },
+        "compatibility": { "cache_diagnostics": s.cache_diagnostics, "outbound_gzip": false, "profile": s.profile, "usage_entrypoint": s.usage_entrypoint },
         "keepalive": s.keepalive,
         // The newest sync any account recorded, so the console can say when the catalog was last read
         // instead of inventing an instant of its own.

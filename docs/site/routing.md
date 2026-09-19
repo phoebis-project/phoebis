@@ -40,8 +40,13 @@ Every field, in the order the request body takes them:
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `default_allowed_models` | unset | a list of canonical model ids |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
+| `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
+
+`cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
+`api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
+says; `null` inherits it.
 
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.

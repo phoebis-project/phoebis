@@ -641,6 +641,11 @@ async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_c
         ),
         (Some(true), Some(true))
     );
+    assert_eq!(
+        settings["compatibility"]["cache_diagnostics"].as_bool(),
+        Some(false)
+    );
+    assert!(settings["compatibility"]["profile"].as_str().is_some());
     assert!(
         !settings.to_string().contains("secret"),
         "no secret and no variable name in the settings answer"

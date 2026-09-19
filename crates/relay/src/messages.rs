@@ -1,6 +1,7 @@
 //! The Messages routes: admission against the registry, the account the router selects, the failover loop
 //! across accounts, and the response the caller gets.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::billing::{entrypoint_of, Restore};
 use crate::casing::OriginalHead;
-use crate::classify::{classify, Cooldown, HeadContext, Scope, Verdict};
+use crate::classify::{classify, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
@@ -44,7 +45,7 @@ use crate::facts::BodyFacts;
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
-use crate::memory::{uuid_v4, MemoryKey, Previous, SessionMemory, MEMORY_CAP};
+use crate::memory::{uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP};
 use crate::observe::{published_headers, usage_from_json, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
@@ -129,6 +130,8 @@ pub struct Probe {
 
 pub struct Relay {
     bus: Option<Bus>,
+    /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
+    cache_diagnostics: bool,
     pub(crate) clock: Clock,
     drift: DriftGuard,
     pub(crate) limits: Limits,
@@ -153,6 +156,7 @@ impl Relay {
     ) -> Relay {
         Relay {
             bus: None,
+            cache_diagnostics: false,
             clock,
             drift: DriftGuard,
             limits,
@@ -169,6 +173,15 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// Opt-in, off by default: forces the cache-diagnosis beta and `diagnostics.previous_message_id` toward
+    /// `api.anthropic.com` for a request whose pool leaves `cache_diagnostics` unset.
+    pub fn with_cache_diagnostics(self, enabled: bool) -> Relay {
+        Relay {
+            cache_diagnostics: enabled,
             ..self
         }
     }
@@ -360,7 +373,41 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
         }
         Verdict::FailOver { .. } if status == 401 => AttemptOutcome::AuthFailed,
         Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
+        Verdict::StripInjected(_) => AttemptOutcome::UpstreamError,
     }
+}
+
+/// One leg's edited body, what the body editor restored, and the beta items it asks the header builder to add.
+type Built = Result<(Vec<u8>, Vec<Injected>, Vec<Injected>), RelayError>;
+
+/// Every kind of injection the relay may make. Order carries no meaning: it only seeds a `BTreeSet`.
+const INJECTED_KINDS: [Injected; 7] = [
+    Injected::CacheDiagnosisBeta,
+    Injected::Cch,
+    Injected::ClientRequestId,
+    Injected::Diagnostics,
+    Injected::ExtendedTtlBeta,
+    Injected::PrevReq,
+    Injected::PromptId,
+];
+
+/// The glue between what admission recorded and what this leg actually sends: builds a `Restore` from the
+/// context every account shares, this leg's previous-request lookup, and the fields the account has refused, so
+/// `Restore::skip` mirrors the same set `NativeEdit::diagnostics` is gated on.
+fn restore_with<'a>(
+    restore: &'a Option<RestoreContext>,
+    previous: &'a Previous,
+    skip: &BTreeSet<Injected>,
+) -> Option<Restore<'a>> {
+    restore.as_ref().map(|r| Restore {
+        cli_version: &r.cli_version,
+        entrypoint: &r.entrypoint,
+        prompt_chars: r.prompt_chars,
+        prompt_id: r.prompt_id.as_deref(),
+        prev_req: previous.request_id.as_deref(),
+        restore_cch: true,
+        skip: skip.iter().copied().collect(),
+    })
 }
 
 fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<CooldownSet> {
@@ -617,6 +664,13 @@ impl Relay {
             }),
             _ => None,
         };
+        // The pool's own setting overrides the bootstrap default; either way a `count_tokens` request never
+        // gets it, since its public schema has no slot for the beta or the member to land in.
+        let cache_diagnostics_on = snapshot
+            .pool(&key.pool_id)
+            .and_then(|p| p.cache_diagnostics)
+            .unwrap_or(self.cache_diagnostics);
+        let diagnostics = cache_diagnostics_on && trace.kind != Kind::CountTokens;
         let portable = is_portable(&raw);
         let target = parts
             .uri
@@ -636,6 +690,7 @@ impl Relay {
         let admitted = Admitted {
             caller: &parts.headers,
             client_version,
+            diagnostics,
             fallback_ms,
             identity: &identity,
             key: &key,
@@ -780,81 +835,93 @@ impl Relay {
             Ok(credential) => credential,
             Err(_) => return Leg::FailOver,
         };
-        let mut edited = admitted.raw.to_vec();
-        let edit = {
-            // Isolated per account, so a failover never carries one account's previous request id into
-            // another's `cc_prev_req`.
-            let previous = admitted
-                .memory_key
-                .as_ref()
-                .map(|key| {
-                    self.memory
-                        .previous(key, &account.id, &admitted.identity.canonical_model)
-                })
-                .unwrap_or_default();
-            edit_body(
-                &mut edited,
-                &NativeEdit {
-                    // The public `count_tokens` schema carries no `metadata` member and the upstream refuses
-                    // unknown top-level ones, so there is no slot the account identity could go in. It is not
-                    // billed either, so nothing is lost by leaving the body without it.
-                    account_uuid: match admitted.trace.kind {
-                        Kind::CountTokens => None,
-                        Kind::Inference | Kind::Probe => credential.account_uuid.as_deref(),
-                    },
-                    upstream_model: &selection.upstream_model,
-                    restore: admitted.restore.as_ref().map(|r| Restore {
-                        cli_version: &r.cli_version,
-                        entrypoint: &r.entrypoint,
-                        prompt_chars: r.prompt_chars,
-                        prompt_id: r.prompt_id.as_deref(),
-                        prev_req: previous.request_id.as_deref(),
-                        restore_cch: true,
-                    }),
-                },
-            )
+        // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
+        // it names, so this is read once rather than through the closure below.
+        let account_uuid = match admitted.trace.kind {
+            // The public `count_tokens` schema carries no `metadata` member and the upstream refuses unknown
+            // top-level ones, so there is no slot the account identity could go in. It is not billed either, so
+            // nothing is lost by leaving the body without it.
+            Kind::CountTokens => None,
+            Kind::Inference | Kind::Probe => credential.account_uuid.clone(),
         };
-        if let Err(error) = edit {
-            if let RelayError::ClientDrift { kind } = &error {
-                // Drift depends on the body alone, so it is found on the first account before any wire
-                // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
-                tracing::warn!(
-                    account = %account.id,
-                    drift = %kind,
-                    user_agent = %user_agent(admitted.caller),
-                    "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
-                );
-                let outcome = self.outcome(
+        let memory_key = admitted.memory_key.as_ref();
+        let canonical_model = &admitted.identity.canonical_model;
+        // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
+        let build = |skip: &BTreeSet<Injected>| -> Built {
+            let mut edited = admitted.raw.to_vec();
+            let mut body_injected = Vec::new();
+            let mut inject_betas: Vec<Injected> = Vec::new();
+                // Isolated per account, so a failover never carries one account's previous request id, or the
+                // previous message id a diagnostics member names, into another account's memory.
+                let previous = memory_key
+                    .map(|key| self.memory.previous(key, &account.id, canonical_model))
+                    .unwrap_or_default();
+                let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
+                    .then_some(previous.message_id.as_deref());
+                let edits = edit_body(
+                    &mut edited,
+                    &NativeEdit {
+                        account_uuid: account_uuid.as_deref(),
+                        upstream_model: &selection.upstream_model,
+                        restore: restore_with(&admitted.restore, &previous, skip),
+                        diagnostics,
+                    },
+                )?;
+                body_injected.extend(edits.restored);
+                if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
+                    inject_betas.push(Injected::CacheDiagnosisBeta);
+                }
+            Ok((edited, body_injected, inject_betas))
+        };
+        // Seeded from what this account has already refused, so a leg the operator has not touched since the
+        // last 400 never resubmits a field or a beta the upstream is known to reject.
+        let mut skip: BTreeSet<Injected> = INJECTED_KINDS
+            .into_iter()
+            .filter(|item| self.memory.refuses(account, *item))
+            .collect();
+        let (mut edited, mut body_injected, mut inject_betas) = match build(&skip) {
+            Ok(built) => built,
+            Err(error) => {
+                if let RelayError::ClientDrift { kind } = &error {
+                    // Drift depends on the body alone, so it is found on the first account before any wire
+                    // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
+                    tracing::warn!(
+                        account = %account.id,
+                        drift = %kind,
+                        user_agent = %user_agent(admitted.caller),
+                        "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
+                    );
+                    let outcome = self.outcome(
+                        admitted.trace,
+                        Some(admitted.key),
+                        Some(admitted.identity),
+                        &account.id,
+                        0,
+                        0,
+                        false,
+                        Some(kind.to_string()),
+                        admitted.client_version.clone(),
+                        Some("client_drift"),
+                        None,
+                        None,
+                    );
+                    return Leg::Respond(self.answer(
+                        admitted.trace,
+                        relay_failure(&error).response(admitted.request_id),
+                        outcome,
+                        None,
+                        None,
+                    ));
+                }
+                return Leg::Respond(self.refused(
                     admitted.trace,
+                    relay_failure(&error),
                     Some(admitted.key),
                     Some(admitted.identity),
-                    &account.id,
-                    0,
-                    0,
-                    false,
-                    Some(kind.to_string()),
-                    admitted.client_version.clone(),
-                    Some("client_drift"),
-                    None,
-                    None,
-                );
-                return Leg::Respond(self.answer(
-                    admitted.trace,
-                    relay_failure(&error).response(admitted.request_id),
-                    outcome,
-                    None,
-                    None,
+                    admitted.client_version.as_deref(),
                 ));
             }
-            return Leg::Respond(self.refused(
-                admitted.trace,
-                relay_failure(&error),
-                Some(admitted.key),
-                Some(admitted.identity),
-                admitted.client_version.as_deref(),
-            ));
-        }
-        let edited = Bytes::from(edited);
+        };
         let authority = "api.anthropic.com".to_string();
         let Some(addr) = (self.resolver)(&authority) else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
@@ -867,6 +934,7 @@ impl Relay {
         let mut fresh = false;
         let mut retried = false;
         let mut replayed = false;
+        let mut stripped_once = false;
 
         loop {
             *attempt += 1;
@@ -876,15 +944,42 @@ impl Relay {
                 pin_epoch,
                 (self.clock)(),
             );
+            // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
+            // find, and only the builder's own report joins `body_injected` in what a 400 may be matched against.
+            let head = {
+                // A latched or freshly stripped `ClientRequestId` means this leg generates none: the id is the
+                // relay's own addition, and the account has already refused it once.
+                let client_request_id = admitted
+                    .restore
+                    .as_ref()
+                    .filter(|_| !skip.contains(&Injected::ClientRequestId))
+                    .map(|_| uuid_v4());
+                outbound_headers(
+                    admitted.caller,
+                    admitted.original,
+                    &credential.kind,
+                    &authority,
+                    edited.len(),
+                    client_request_id.as_deref(),
+                    &inject_betas,
+                )
+            };
+            let injected: Vec<Injected> = body_injected
+                .iter()
+                .chain(&head.injected)
+                .copied()
+                .collect();
             let responding = Responding {
                 account,
                 attempt: *attempt,
                 caller: admitted.caller,
+                can_strip: !stripped_once && *attempt < self.limits.max_attempts,
                 cancel,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 fallback_ms: admitted.fallback_ms,
                 identity: admitted.identity,
+                injected: &injected,
                 key: admitted.key,
                 memory_key: admitted.memory_key.as_ref(),
                 pin: selection.pin.as_ref(),
@@ -898,15 +993,8 @@ impl Relay {
                 let request = RawRequest {
                     method: "POST",
                     target: admitted.target.to_string(),
-                    headers: outbound_headers(
-                        admitted.caller,
-                        admitted.original,
-                        &credential.kind,
-                        &authority,
-                        edited.len(),
-                        admitted.restore.as_ref().map(|_| uuid_v4()).as_deref(),
-                    ),
-                    body: edited.clone(),
+                    headers: head.headers,
+                    body: Bytes::from(edited.clone()),
                 };
                 match dispatch::attempt(
                     self,
@@ -996,6 +1084,35 @@ impl Relay {
                 }
                 Next::FailOver => return Leg::FailOver,
                 Next::Respond(response) => return Leg::Respond(response),
+                Next::Strip(items) => {
+                    for item in items {
+                        skip.insert(item);
+                    }
+                    // `skip` only grew from a set `build` already succeeded with, so the rebuild fails only if
+                    // the body stopped being editable between two edits of the same bytes.
+                    match build(&skip) {
+                        Ok((rebuilt, restored, betas)) => {
+                            edited = rebuilt;
+                            body_injected = restored;
+                            inject_betas = betas;
+                        }
+                        Err(error) => {
+                            tracing::error!(account = %account.id, %error, "a strip retry could not rebuild the body it just stripped from");
+                            return Leg::Respond(self.refused(
+                                admitted.trace,
+                                relay_failure(&error),
+                                Some(admitted.key),
+                                Some(admitted.identity),
+                                admitted.client_version.as_deref(),
+                            ));
+                        }
+                    }
+                    // The attempt counter already moved for this pass, so the retry is a wire submission the
+                    // budget counted through `can_strip`, not a fresh one.
+                    stripped_once = true;
+                    fresh = false;
+                    continue;
+                }
             }
         }
     }
@@ -1127,6 +1244,15 @@ impl Relay {
         }
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
+        if !ctx.can_strip && head.status == 400 {
+            // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
+            // against the item it named, a fact about the account whether or not this request could use it.
+            if let Some(body) = decoded.as_deref() {
+                for item in refused_names(body, ctx.injected) {
+                    self.memory.latch(ctx.account, item);
+                }
+            }
+        }
         let verdict = classify(
             &head,
             &HeadContext {
@@ -1136,6 +1262,8 @@ impl Relay {
                 fallback_ms: ctx.fallback_ms,
                 first_event: first_event.as_deref(),
                 body_prefix: decoded.as_deref(),
+                injected: ctx.injected,
+                can_strip: ctx.can_strip,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -1195,6 +1323,14 @@ impl Relay {
                     outcome,
                 ))
             }
+            // `classify` only returns this under `can_strip`, so the budget and the one-round rule are already
+            // applied; without either, the same 400 classifies as `Commit` and is forwarded as any other.
+            Verdict::StripInjected(items) => {
+                for item in &items {
+                    self.memory.latch(ctx.account, *item);
+                }
+                return Next::Strip(items);
+            }
             Verdict::FailOver { cooldown, mark } => (cooldown, mark),
             Verdict::Commit => {
                 if let (Some(key), Some(id)) = (ctx.memory_key, head.get("request-id")) {
@@ -1251,6 +1387,11 @@ impl Relay {
                                     fallback_ms,
                                     first_event: Some(&data),
                                     body_prefix: None,
+                                    // Nothing is stripped after a commit: this observer only records a
+                                    // rate-limit cooldown, and a 400 (which alone can name an injected item)
+                                    // never reaches it.
+                                    injected: &[],
+                                    can_strip: false,
                                 },
                             ) {
                                 report_failover(
@@ -1720,11 +1861,15 @@ struct Responding<'a> {
     account: &'a AccountRow,
     attempt: u8,
     caller: &'a HeaderMap,
+    /// Whether an attempt remains under `max_attempts` and this leg has not stripped yet.
+    can_strip: bool,
     cancel: &'a CancellationToken,
     client_version: Option<String>,
     credential_generation: u64,
     fallback_ms: i64,
     identity: &'a RequestIdentity,
+    /// The attempt's own additions, body and head, that a 400 might name.
+    injected: &'a [Injected],
     key: &'a ApiKeyRow,
     memory_key: Option<&'a MemoryKey>,
     pin: Option<&'a PinRef>,
@@ -1742,6 +1887,8 @@ enum Next {
     /// The refreshed token goes back to the same account.
     Replay(Credential),
     Respond(Response),
+    /// A 400 named these items; strip them and try again on the same account.
+    Strip(Vec<Injected>),
 }
 
 /// The restoration facts computed once at admission: the client version and entrypoint the wire already named,
@@ -1759,6 +1906,10 @@ struct RestoreContext {
 struct Admitted<'a> {
     caller: &'a HeaderMap,
     client_version: Option<String>,
+    /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a
+    /// `count_tokens` request: the public schema refuses an unknown top-level member and the beta names nothing
+    /// there, and a 400 on that path must never latch the account for its inference requests.
+    diagnostics: bool,
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
