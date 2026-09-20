@@ -241,6 +241,20 @@ pub struct RegistryChange {
     pub diff_json: String,
 }
 
+/// How long a rotated key's previous secret keeps authenticating; the console's rotation dialog promises this
+/// window to running sessions.
+pub const ROTATION_GRACE_MS: i64 = 15 * 60_000;
+
+/// A secret a rotation retired, accepted for its key until `expires_at`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetiredSecret {
+    pub key_id: String,
+    pub secret_digest: Vec<u8>,
+    pub prefix: String,
+    pub retired_at: i64,
+    pub expires_at: i64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RegistryLoad {
     pub accounts: Vec<crate::AccountRow>,
@@ -251,6 +265,7 @@ pub struct RegistryLoad {
     pub members: Vec<PoolMember>,
     pub models: Vec<ServedModel>,
     pub pools: Vec<PoolRow>,
+    pub retired_secrets: Vec<RetiredSecret>,
 }
 
 /// Everything a verified edit changes. Borrowed so the admin route can stage it, run discovery, and commit.
@@ -355,6 +370,20 @@ impl Store {
                 .query_map([], row_to_model)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pools: all_pools(&tx)?,
+            retired_secrets: tx
+                .prepare(
+                    "SELECT key_id, secret_digest, prefix, retired_at, expires_at FROM api_key_retired_secrets",
+                )?
+                .query_map([], |r| {
+                    Ok(RetiredSecret {
+                        key_id: r.get(0)?,
+                        secret_digest: r.get(1)?,
+                        prefix: r.get(2)?,
+                        retired_at: r.get(3)?,
+                        expires_at: r.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
         Ok(load)
@@ -545,6 +574,14 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
+        if tx.query_row(
+            "SELECT COUNT(*) FROM api_key_tombstones WHERE id = ?1",
+            params![row.id],
+            |r| r.get::<_, i64>(0),
+        )? > 0
+        {
+            return Err(StoreError::KeyIdRetired(row.id.clone()));
+        }
         let now = now_ms();
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at) \
@@ -613,20 +650,36 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let updated = tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4 WHERE id = ?1 AND revoked_at IS NULL",
+        let current: Option<(Vec<u8>, String)> = tx
+            .query_row(
+                "SELECT secret_digest, prefix FROM api_keys WHERE id = ?1 AND revoked_at IS NULL",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((old_digest, old_prefix)) = current else {
+            return Err(StoreError::KeyNotFound(id.to_string()));
+        };
+        tx.execute(
+            "DELETE FROM api_key_retired_secrets WHERE expires_at <= ?1",
+            params![at],
+        )?;
+        // Replace, never insert beside: the grace covers the secret this rotation retires and no earlier one.
+        tx.execute(
+            "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
+        )?;
+        tx.execute(
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4 WHERE id = ?1",
             params![id, digest, prefix, at],
         )?;
-        if updated == 0 {
-            return Err(StoreError::KeyNotFound(id.to_string()));
-        }
         record_change(
             &tx,
             at,
             actor,
             "key_rotated",
             id,
-            &serde_json::json!({ "prefix": prefix }).to_string(),
+            &serde_json::json!({ "prefix": prefix, "previous_secret_until": at + ROTATION_GRACE_MS }).to_string(),
         )?;
         tx.commit()?;
         Ok(())
@@ -635,6 +688,10 @@ impl Store {
     pub fn revoke_api_key(&self, id: &str, at: i64, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM api_key_retired_secrets WHERE key_id = ?1",
+            params![id],
+        )?;
         let updated = tx.execute(
             "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0 WHERE id = ?1",
             params![id, at],
@@ -654,7 +711,14 @@ impl Store {
             return Err(StoreError::KeyNotFound(id.to_string()));
         }
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
-        record_change(&tx, now_ms(), actor, "key_deleted", id, "{}")?;
+        let now = now_ms();
+        // The rollups stay under the id, so the id stays with them: a key created under it later would read
+        // the deleted holder's usage as its own.
+        tx.execute(
+            "INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES (?1, ?2)",
+            params![id, now],
+        )?;
+        record_change(&tx, now, actor, "key_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
     }

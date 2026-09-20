@@ -182,11 +182,24 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
             .status(),
         204
     );
+    let recreated = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(recreated.status(), 409);
+    assert_eq!(
+        json(recreated).await["error"],
+        "a deleted key used this id; its usage history stays with it, so choose another id"
+    );
     assert_eq!(
         delete(&app, "/admin/pools/main", Some(&cookie))
             .await
             .status(),
-        204
+        204,
+        "nothing was created under the retired id"
     );
     assert_eq!(get(&app, "/admin/pools", Some(&cookie)).await.status(), 200);
     let viewer = login(&app, "viewer-secret").await;
@@ -199,7 +212,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
 
 #[tokio::test]
 async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
-    let (app, _up) = common::admin_app().await;
+    let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     post(
         &app,
@@ -285,12 +298,28 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
     let second = rotated["secret"].as_str().unwrap().to_string();
     assert_ne!(second, secret);
     assert!(rotated["rotated_at"].is_number());
+    assert!(
+        router.snapshot().authenticate(&secret, common::NOW).is_ok(),
+        "the rotation dialog promises the old secret a grace window"
+    );
+    assert!(router
+        .snapshot()
+        .authenticate(&secret, common::NOW + phoebis_store::ROTATION_GRACE_MS)
+        .is_err());
     assert_eq!(
         post(&app, "/admin/keys/desktop/revoke", "", Some(&cookie))
             .await
             .status(),
         204
     );
+    assert!(router
+        .snapshot()
+        .authenticate(&secret, common::NOW)
+        .is_err());
+    assert!(router
+        .snapshot()
+        .authenticate(&secret, common::NOW + phoebis_store::ROTATION_GRACE_MS)
+        .is_err());
     assert_eq!(
         post(&app, "/admin/keys/desktop/rotate", "", Some(&cookie))
             .await

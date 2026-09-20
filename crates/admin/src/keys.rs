@@ -193,6 +193,12 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
+        Err(StoreError::KeyIdRetired(_)) => {
+            return failure(
+                StatusCode::CONFLICT,
+                "a deleted key used this id; its usage history stays with it, so choose another id",
+            )
+        }
         Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {

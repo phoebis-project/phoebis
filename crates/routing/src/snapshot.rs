@@ -36,6 +36,9 @@ pub struct RegistrySnapshot {
     members: HashMap<String, Vec<PoolMember>>,
     models: HashMap<String, HashMap<String, ServedModel>>,
     pools: HashMap<String, PoolRow>,
+    /// Retired secrets by digest, with the key each belonged to and the end of its grace; consulted only after
+    /// the current digests miss.
+    retired_by_digest: HashMap<[u8; 32], (String, i64)>,
 }
 
 impl RegistrySnapshot {
@@ -72,6 +75,12 @@ impl RegistrySnapshot {
                 .or_default()
                 .insert(model.canonical_id.clone(), model);
         }
+        let mut retired_by_digest = HashMap::with_capacity(load.retired_secrets.len());
+        for retired in &load.retired_secrets {
+            if let Ok(digest) = <[u8; 32]>::try_from(retired.secret_digest.as_slice()) {
+                retired_by_digest.insert(digest, (retired.key_id.clone(), retired.expires_at));
+            }
+        }
         RegistrySnapshot {
             accounts: load
                 .accounts
@@ -87,20 +96,30 @@ impl RegistrySnapshot {
             revision,
             models,
             pools: load.pools.into_iter().map(|p| (p.id.clone(), p)).collect(),
+            retired_by_digest,
         }
     }
 
-    /// The digest narrows the search and the constant-time compare decides, as the static key table did.
+    /// The digest narrows the search and the constant-time compare decides, as the static key table did. A
+    /// secret a rotation retired still names its key until the grace ends, so a running session switches on
+    /// its own time rather than on the operator's click.
     pub fn authenticate(&self, presented: &str, now: i64) -> Result<&ApiKeyRow, KeyRefusal> {
         let digest = digest_with(&self.digest_key, presented.as_bytes());
-        let id = self
-            .keys_by_digest
+        if let Some(id) = self.keys_by_digest.get(&digest) {
+            let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
+            if !bool::from(key.secret_digest.as_slice().ct_eq(&digest)) {
+                return Err(KeyRefusal::Unknown);
+            }
+            return self.live(key, now);
+        }
+        let (id, until) = self
+            .retired_by_digest
             .get(&digest)
             .ok_or(KeyRefusal::Unknown)?;
-        let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
-        if !bool::from(key.secret_digest.as_slice().ct_eq(&digest)) {
+        if now >= *until {
             return Err(KeyRefusal::Unknown);
         }
+        let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
         self.live(key, now)
     }
 

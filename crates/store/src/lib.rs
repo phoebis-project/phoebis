@@ -21,7 +21,7 @@ use rand::Rng;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 
-pub use accounts::{AccountKind, AccountRow, AccountState, Identity};
+pub use accounts::{AccountKind, AccountRow, AccountState, Identity, INFERENCE_HOST};
 pub use alerts::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
@@ -30,8 +30,8 @@ pub use credentials::{
 pub use pricing::PricingVersion;
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
-    PoolRow, RegistryChange, RegistryLoad, ServedModel, ServedModelWrite, Strategy, SubStrategy,
-    SyncDelta,
+    PoolRow, RegistryChange, RegistryLoad, RetiredSecret, ServedModel, ServedModelWrite, Strategy,
+    SubStrategy, SyncDelta, ROTATION_GRACE_MS,
 };
 pub use routing::{CooldownRow, OverageRow, PinRow, RoutingLoad};
 
@@ -69,6 +69,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("key id {0} belonged to a deleted key and stays with its usage history")]
+    KeyIdRetired(String),
     #[error("api key {0} not found")]
     KeyNotFound(String),
     #[error("account {0} already holds credentials, so its kind cannot change")]

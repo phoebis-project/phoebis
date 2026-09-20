@@ -143,6 +143,7 @@ fn snapshot() -> RegistrySnapshot {
             ),
             pool("off", false, None, 0),
         ],
+        retired_secrets: Vec::new(),
     };
     RegistrySnapshot::from_load(load, DIGEST_KEY, 1_000, 1)
 }
@@ -241,6 +242,7 @@ fn the_key_list_overrides_the_pool_list_and_unserved_models_are_refused() {
     let open = RegistrySnapshot::from_load(
         RegistryLoad {
             pools: vec![pool("main", true, None, 24), pool("off", false, None, 0)],
+            retired_secrets: Vec::new(),
             ..load_of(&snapshot())
         },
         DIGEST_KEY,
@@ -272,5 +274,6 @@ fn load_of(s: &RegistrySnapshot) -> RegistryLoad {
             })
             .collect(),
         pools: s.pools().cloned().collect(),
+        retired_secrets: Vec::new(),
     }
 }

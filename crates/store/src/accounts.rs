@@ -108,6 +108,9 @@ pub struct AccountRow {
     pub state: AccountState,
 }
 
+/// The one host the relay dials.
+pub const INFERENCE_HOST: &str = "api.anthropic.com";
+
 fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
     let identity_json: Option<String> = row.get("identity_json")?;
     let identity = identity_json

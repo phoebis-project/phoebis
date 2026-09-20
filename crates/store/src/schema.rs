@@ -43,6 +43,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (11, V11),
     (12, V12),
     (13, V13),
+    (14, V14),
 ];
 
 const V2: &str = r#"
@@ -186,4 +187,21 @@ const V12: &str = r#"
 const V13: &str = r#"
 ALTER TABLE pools ADD COLUMN cache_ttl_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE pools ADD COLUMN cache_diagnostics INTEGER;
+"#;
+
+// A rotation retires the previous secret rather than deleting it: the console promises running sessions a
+// window to switch, and a session presenting the retired secret inside it is the operator's own. One row per
+// key, so a second rotation inside the window ends the older secret at once; the grace is a bounded overlap of
+// two secrets, never a chain.
+// A deleted key's id is retired with it: the ledger keeps the rollups under the id, so a key created under it
+// again would read the previous holder's usage through the self-service route.
+const V14: &str = r#"
+CREATE TABLE IF NOT EXISTS api_key_retired_secrets (
+  key_id TEXT PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,
+  secret_digest BLOB NOT NULL, prefix TEXT NOT NULL,
+  retired_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_key_tombstones (
+  id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL
+);
 "#;
