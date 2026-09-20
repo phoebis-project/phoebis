@@ -11,6 +11,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 const HOUR: i64 = 3_600_000;
+/// `RoutingState::from_load` seeds this from `DEFAULT_SAMPLE_TTL_MS`, private to that crate; duplicated here
+/// since a state built with no override reads that default.
+const SAMPLE_TTL_MS: i64 = 60_000;
 
 struct Pool {
     policy: OveragePolicy,
@@ -1894,7 +1897,6 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    let mut r = rng();
     let pick = |st: &mut RoutingState, now: i64| {
         select(
             st,
@@ -1936,7 +1938,64 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
         "a spent migration takes no dwell: {writes:?}"
     );
-    let _ = &mut r;
+    // The reset branch: s1's pin already moved to b above, so a fresh session exercises the reset check on
+    // the current account itself rather than on a sibling. Both picks share one `now` so the pin's own TTL
+    // never enters into it.
+    let pick2 = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s2"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    let now = 9 * HOUR + 1_000;
+    st.record_sample("a", refreshing(0.3, 9 * HOUR, 9 * HOUR, 4_000));
+    assert_eq!(picked(&pick2(&mut st, now).0), "a");
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 4_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 4_500));
+    let SelectResult::Selected(sel) = pick2(&mut st, now).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "a's reset has already passed, so the reading no longer stands and a holds allowance again"
+    );
+    // The no-reset branch: absent a reset, a full reading stands only for the sample TTL. Continuing s2's pin
+    // on a with a fresh no-reset spent reading exercises the "still fresh" half: the account cannot serve, so
+    // the pin moves.
+    let t = now + 1_000;
+    st.record_sample("a", sample(1.0, 0.1, t));
+    st.record_sample("b", refreshing(0.2, 9 * HOUR, 9 * HOUR, t));
+    let SelectResult::Selected(sel) = pick2(&mut st, t + 1_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "no reset dated: a full reading still stands for the sample TTL"
+    );
+    // The same no-reset reading, on a fresh pin, once the sample TTL has passed: it no longer stands.
+    let pick3 = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s3"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    let t2 = t + 1_000;
+    assert_eq!(picked(&pick3(&mut st, t2).0), "a");
+    st.record_sample("a", sample(1.0, 0.1, t2));
+    let SelectResult::Selected(sel) = pick3(&mut st, t2 + SAMPLE_TTL_MS + 1).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "no reset dated: the reading ages out once the sample TTL passes, and a holds allowance again"
+    );
 }
 
 #[test]

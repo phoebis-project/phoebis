@@ -168,10 +168,11 @@ hovering at the line do not trade it back and forth. Under `prefer_plan`, a pinn
 any eligible sibling that is not.
 
 A pinned account whose window for the session's model is spent, the Fable window for a Fable session and the
-shared plan window otherwise (either the 5-hour or the 7-day reading at 1.0), moves on the next request to a
-sibling with allowance left in that window, without waiting for the upstream's 429. The migration band and the
-dwell do not apply to a spent move: a sibling reading over the threshold but under 1.0 still receives the
-session. With no sibling holding allowance the session stays and the upstream's answer decides.
+shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands
+(until its reset, or until the sample ages out), moves on the next request to a sibling with allowance left in
+that window, without waiting for the upstream's 429. The migration band and the dwell do not apply to a spent
+move: a sibling reading over the threshold but under 1.0 still receives the session. With no sibling holding
+allowance the session stays and the upstream's answer decides.
 
 Any move records a `pin_migrated` event with reason `overage`, `spent`, or `utilization`. Releasing a session by
 hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.

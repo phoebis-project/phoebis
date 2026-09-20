@@ -980,8 +980,9 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         .await
         .unwrap();
     assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    let event = next_event(&mut events).await;
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
+        matches!(event, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
     );
 }
 
