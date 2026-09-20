@@ -314,6 +314,15 @@ impl Store {
 
     /// `false` when the event is already resolved, so a second resolver does not move the timestamp.
     pub fn resolve_alert_event(&self, id: &str, at: i64) -> Result<bool, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self
+            .fail_next_alert_resolve
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected resolve failure",
+            )));
+        }
         let conn = self.conn.lock().expect(LOCK_POISONED);
         Ok(conn.execute(
             "UPDATE alert_events SET state = 'resolved', resolved_at = ?2 WHERE id = ?1 AND state = 'open'",

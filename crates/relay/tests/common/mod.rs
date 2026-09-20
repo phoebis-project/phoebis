@@ -557,6 +557,16 @@ pub fn set_header(req: &mut Request<Body>, name: &str, value: &str) {
     }
 }
 
+/// The mirror of `set_header`, for a caller that sent none of that name: off the map and off the recorded
+/// head, however many lines the fixture wrote.
+pub fn remove_header(req: &mut Request<Body>, name: &str) {
+    req.headers_mut().remove(name);
+    if let Some(head) = req.extensions_mut().get_mut::<OriginalHead>() {
+        head.headers
+            .retain(|(held, _)| !held.eq_ignore_ascii_case(name));
+    }
+}
+
 /// The OAuth non-first-party fixture with its model rewritten; that fixture carries no billing hash, so the
 /// rewrite changes nothing the relay would have to restamp.
 pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {

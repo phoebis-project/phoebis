@@ -9,8 +9,10 @@ use phoebis_store::AccountRow;
 
 /// Entries idle this long are dropped, which is also the client's own session expiry default.
 pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
-/// Entries held at most; past it the least recently seen entry goes. One entry is a few hundred bytes, so the
-/// cap bounds memory at a few tens of megabytes on a host that never restarts.
+/// Entries held at most; past it the least recently seen entry goes. Every string an entry holds is bounded
+/// on the way in (the key's ids and the model by `identity`, the carried prompt id by `facts`, the upstream's
+/// own ids by the response limits), so an entry is a few hundred bytes and the cap bounds memory at a few
+/// tens of megabytes on a host that never restarts.
 pub const MEMORY_CAP: usize = 65_536;
 
 /// A minute between sweeps is often enough to keep the map from growing unbounded between requests, and rare

@@ -251,7 +251,12 @@ impl Inner {
         // report the agent, not the companion's own liveness, so they leave it alone.
         let renews_lease = ev.event == "heartbeat";
         match ev.event.as_str() {
-            "heartbeat" => {}
+            // One per session per lease interval, and the only sign of life a session that just waits for
+            // its user gives: without it nothing tells the alerts the session is still attended.
+            "heartbeat" => self.emit(SessionLifecycle::Heartbeat {
+                key_id: key.0.clone(),
+                session_id: key.1.clone(),
+            }),
             "session_end" => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
                 for agent in &agents {

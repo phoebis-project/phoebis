@@ -125,28 +125,33 @@ impl Alerts {
     }
 
     /// A condition holds for a subject: every enabled matching rule without an open event for the subject opens
-    /// one and posts it.
-    pub fn signal(self: &Arc<Self>, signal: &Signal) {
-        for rule in self
+    /// one and posts it. Answers whether any rule matched at all, which is what an input's own record of
+    /// "an event of this subject is open" may be set from: a subject no rule watches has nothing open.
+    pub fn signal(self: &Arc<Self>, signal: &Signal) -> bool {
+        let matching: Vec<Rule> = self
             .rules()
             .into_iter()
             .filter(|r| r.enabled && r.matches(signal))
-        {
+            .collect();
+        let matched = !matching.is_empty();
+        for rule in matching {
             self.open(rule, signal);
         }
+        matched
     }
 
     /// `signal` narrowed to one rule, for a kind whose condition is the rule's own threshold rather than a
     /// fact about the world every rule of the kind would read the same way.
-    pub fn signal_rule(self: &Arc<Self>, rule_id: &str, signal: &Signal) {
+    pub fn signal_rule(self: &Arc<Self>, rule_id: &str, signal: &Signal) -> bool {
         let Some(rule) = self
             .rules()
             .into_iter()
             .find(|r| r.id == rule_id && r.enabled && r.matches(signal))
         else {
-            return;
+            return false;
         };
         self.open(rule, signal);
+        true
     }
 
     /// One rule's event for the signal's subject, opened atomically: the insert against the unique open index
@@ -179,31 +184,43 @@ impl Alerts {
     }
 
     /// A condition stopped holding: every open event of the kind and subject resolves and posts a resolve.
-    pub fn clear(self: &Arc<Self>, kind: Kind, subject: &str) {
+    /// Answers whether the store did its part, so a caller holding the one transition that closes those rows
+    /// can offer it again rather than lose it to a moment the store was unavailable.
+    pub fn clear(self: &Arc<Self>, kind: Kind, subject: &str) -> bool {
         let now = (self.parts.clock)();
         let open = match self.parts.store.open_alert_events() {
             Ok(o) => o,
             Err(e) => {
                 tracing::warn!(%e, "the open alert events could not be read");
-                return;
+                return false;
             }
         };
+        // Every matching event is finished, not just up to the first failure: they close together or the ones
+        // that landed would be retried beside the one that did not.
+        let mut ok = true;
         for event in open
             .into_iter()
             .filter(|e| e.kind == kind.as_str() && e.subject == subject)
         {
-            self.finish(event, now);
+            ok = self.finish(event, now) && ok;
         }
+        ok
     }
 
     /// `clear` narrowed to one rule, the dual of `signal_rule`.
-    pub fn clear_rule(self: &Arc<Self>, rule_id: &str, subject: &str) {
-        if let Ok(Some(event)) = self.parts.store.open_alert_event(rule_id, subject) {
-            self.finish(event, (self.parts.clock)());
+    pub fn clear_rule(self: &Arc<Self>, rule_id: &str, subject: &str) -> bool {
+        match self.parts.store.open_alert_event(rule_id, subject) {
+            Ok(Some(event)) => self.finish(event, (self.parts.clock)()),
+            Ok(None) => true,
+            Err(e) => {
+                tracing::warn!(%e, rule = %rule_id, "an open alert event could not be read");
+                false
+            }
         }
     }
 
-    /// The operator's resolve (client_drift): the event resolves whatever the input says.
+    /// The operator's resolve (client_drift): the event resolves whatever the input says. `Ok(false)` is an
+    /// event that was not there to resolve, or one the store refused.
     pub fn resolve(self: &Arc<Self>, event_id: &str) -> Result<bool, StoreError> {
         let Some(event) = self.parts.store.alert_event(event_id)? else {
             return Ok(false);
@@ -211,8 +228,7 @@ impl Alerts {
         if event.state != "open" {
             return Ok(false);
         }
-        self.finish(event, (self.parts.clock)());
-        Ok(true)
+        Ok(self.finish(event, (self.parts.clock)()))
     }
 
     /// `resolve` with the event's detail replaced first, so the resolved delivery carries `detail`.
@@ -232,24 +248,25 @@ impl Alerts {
             .store
             .update_alert_event_detail(event_id, &detail_json)?;
         event.detail_json = Some(detail_json);
-        self.finish(event, (self.parts.clock)());
-        Ok(true)
+        Ok(self.finish(event, (self.parts.clock)()))
     }
 
-    fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) {
+    /// Whether the store did its part: an event already resolved is nothing left to do and counts as done, a
+    /// store that refused the write is the one case a caller may retry.
+    fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) -> bool {
         let transitions = self.transitions.lock().expect(TRANSITIONS_POISONED);
         match self.parts.store.resolve_alert_event(&event.id, now) {
             Ok(true) => {}
-            Ok(false) => return,
+            Ok(false) => return true,
             Err(e) => {
                 tracing::warn!(%e, event = %event.id, "an alert event could not be resolved");
-                return;
+                return false;
             }
         }
         event.state = "resolved".into();
         event.resolved_at = Some(now);
         let Some(rule) = self.rules().into_iter().find(|r| r.id == event.rule_id) else {
-            return;
+            return true;
         };
         let signal = Signal {
             kind: rule.kind,
@@ -263,6 +280,7 @@ impl Alerts {
         self.record(&rule, &event, "alert_resolved", &signal);
         self.post(rule, event, "resolved");
         drop(transitions);
+        true
     }
 
     fn record(&self, rule: &Rule, event: &AlertEventRow, kind: &str, signal: &Signal) {

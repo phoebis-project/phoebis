@@ -189,3 +189,77 @@ async fn a_forgotten_session_ends_at_the_expiry() {
     r.engine.expire();
     assert_eq!(drain(&mut rx), [ended()]);
 }
+
+fn heartbeat() -> SessionLifecycle {
+    SessionLifecycle::Heartbeat {
+        key_id: KEY.into(),
+        session_id: SESSION.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_parked_main_agent_that_sends_a_request_resumes_once() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(drain(&mut rx), [started()]);
+    r.state("main", "parked");
+    assert_eq!(drain(&mut rx), [parked()]);
+    r.observe("main").await;
+    assert_eq!(
+        drain(&mut rx),
+        [resumed()],
+        "the request itself is the session coming back, whatever the companion reports later"
+    );
+    let generation = r.agent("main").request_generation;
+    r.event(Event {
+        event: "activity".into(),
+        agent_id: Some("main".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        drain(&mut rx),
+        [],
+        "the companion's report finds the agent already busy, so it is no second transition"
+    );
+}
+
+#[tokio::test]
+async fn an_accepted_heartbeat_says_the_session_is_still_there() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(drain(&mut rx), [started()]);
+    r.event(Event {
+        event: "heartbeat".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(drain(&mut rx), [heartbeat()]);
+    let stale = r.sequence;
+    r.engine
+        .apply_event(
+            KEY,
+            Event {
+                event: "heartbeat".into(),
+                instance_id: "instance".into(),
+                session_id: SESSION.into(),
+                sequence: stale,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        drain(&mut rx),
+        [],
+        "a heartbeat the engine refused says nothing about the session"
+    );
+}

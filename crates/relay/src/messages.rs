@@ -672,12 +672,14 @@ impl Relay {
             }
             _ => None,
         };
-        // A separate field from `restore`, gated on `restore` being `Some` (so never set for a probe, a raw
-        // Messages caller, or a count_tokens request) and on a session id being present: dispatch reads it to
-        // look up the previous request id per account, and the response half writes the upstream's
-        // `request-id` and message id back under it.
-        let memory_key = match (&restore, identity.session_id.as_deref()) {
-            (Some(_), Some(session)) => Some(MemoryKey {
+        // A separate field from `restore`: every client inference request naming a session gets one,
+        // because the diagnostics member the option forces names the previous answer on
+        // that session whoever sent it. A probe replays what the client sent and a count_tokens request has
+        // no slot for either, so neither is remembered. Dispatch reads the key to look up the previous
+        // request id per account, and the response half writes the upstream's `request-id` and message id
+        // back under it; what lands on the billing line stays gated on `restore` being `Some`.
+        let memory_key = match (trace.kind, identity.session_id.as_deref()) {
+            (Kind::Inference, Some(session)) => Some(MemoryKey {
                 key_id: key.id.clone(),
                 session_id: session.into(),
                 agent_id: identity.agent_id.clone(),
@@ -919,6 +921,11 @@ impl Relay {
                     },
                 )?;
                 body_injected.extend(edits.restored);
+                // A body whose markers the rewrite could not reach went as it arrived, so this leg claims
+                // nothing about its TTL: no beta for it, none dropped for it, and none reported.
+                if edits.cache_ttl_refused {
+                    ttl = None;
+                }
                 if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
                     inject_betas.push(Injected::CacheDiagnosisBeta);
                 }

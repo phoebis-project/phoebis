@@ -205,17 +205,20 @@ refresh that succeeds.
 
 **Session active** opens on a session's first request through the router, or on the keepalive companion's
 `session_start` when that comes first, and resolves on the companion's `session_end` or when the session has been
-silent for `sessions.expire_after_seconds`, checked every second. The opened and resolved deliveries are the start
-and the end of the session. After a restart every open lifecycle event is resolved at once with `reason: restart`
-in its detail, since the router no longer knows which sessions live; a live session reopens on its next request.
+silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the companion counts as a sign
+of life there, so a session whose user has stepped away stays open while its client is still attended. The opened
+and resolved deliveries are the start and the end of the session. After a restart every open lifecycle event is
+resolved at once with `reason: restart` in its detail, since the router no longer knows which sessions live; a
+live session reopens on its next request.
 
 **Session idle** opens once no request has arrived on the session for the rule's threshold in minutes, measured
 from the session's last request on any of its agents, and resolves on the next request.
 
-**Session parked** opens when the companion reports the main agent parked and resolves when it reports it busy or
-idle again; without a companion for the session neither happens. Resolving one by hand ends the event and leaves
-the router's record of the park as it was, so nothing reopens while the session stays parked; the companion's next
-report of the agent busy or idle arms the condition again.
+**Session parked** opens when the companion reports the main agent parked and resolves on the session's next
+request, or when the companion reports the agent busy or idle again; without a companion for the session neither
+happens. Resolving one by hand ends the event and leaves the router's record of the park as it was, so nothing
+reopens while the session stays parked; the session's next request, or the companion's next report of the agent
+busy or idle, arms the condition again.
 
 **Subagent active** opens on a subagent's first request, or on the companion's `agent_start`, and resolves when
 the companion releases the agent, when the session ends, or at the session's expiry. The detail names the parent

@@ -130,6 +130,8 @@ pub struct Store {
     _lock: Option<lock::ProcessLock>,
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub(crate) fail_next_alert_resolve: AtomicBool,
 }
 
 impl Store {
@@ -168,6 +170,8 @@ impl Store {
             _lock: Some(process_lock),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_alert_resolve: AtomicBool::new(false),
         })
     }
 
@@ -181,6 +185,8 @@ impl Store {
             _lock: None,
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_alert_resolve: AtomicBool::new(false),
         })
     }
 
@@ -207,6 +213,14 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_fail_next_load(&self) {
         self.fail_next_load.store(true, Ordering::SeqCst);
+    }
+
+    /// The next `resolve_alert_event` fails as a store under load does, for the paths that have to survive a
+    /// transition the store refused. Compiled only under `debug-hooks`, like the other seams.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_alert_resolve(&self) {
+        self.fail_next_alert_resolve.store(true, Ordering::SeqCst);
     }
 }
 

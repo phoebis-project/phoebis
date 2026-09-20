@@ -844,6 +844,7 @@ impl Engine {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
         }
+        let was = agent.state;
         agent.state = AgentState::Busy;
         agent.last_activity = now;
         agent.cache_started = now;
@@ -857,6 +858,14 @@ impl Engine {
         // request that lands warm, which needs a probe first.
         if agent.net_usd < 0.0 {
             agent.grace_left = agent.policy.net_negative_grace_probes;
+        }
+        // The engine's own transition out of parked, which no report will repeat: the companion's next busy
+        // report finds the agent already working and says nothing.
+        if agent_id == MAIN_AGENT && was == AgentState::Parked {
+            inner.emit(SessionLifecycle::MainResumed {
+                key_id: key.0.clone(),
+                session_id: key.1.clone(),
+            });
         }
         if inner.pending.len() >= limits.max_agents {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);

@@ -51,6 +51,10 @@ impl BodyFacts {
     }
 }
 
+/// What a carried id may weigh. A UUID is 36; the session memory retains one per entry for a day, so a value
+/// past this is read as absent rather than held.
+const PROMPT_ID_MAX: usize = 64;
+
 /// The `cc_prompt_id` of an attribution line, accepted only as the client's own spelling of an id: the value
 /// is recorded and then restored onto a later turn of the same session, in a line this build signs, so a
 /// separator smuggled into it would become a field of that line.
@@ -60,7 +64,7 @@ fn carried_prompt_id(text: &str) -> Option<&str> {
         .split("; ")
         .find_map(|field| field.strip_prefix("cc_prompt_id="))?
         .trim_end_matches(';');
-    let spelled = !value.is_empty()
+    let spelled = (1..=PROMPT_ID_MAX).contains(&value.len())
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-');

@@ -72,6 +72,21 @@ fn tool_loop_request(session: &str) -> Request<Body> {
     req
 }
 
+/// A reduced-shape turn whose billing line already names `id`. Unstamped, as the reduced shape is, so the
+/// body carries no hash to reproduce.
+fn carrying_prompt_id(session: &str, id: &str) -> Request<Body> {
+    let native = format!(
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cc_prompt_id={id};"}}],"metadata":{{"user_id":"{{\"account_uuid\":\"\",\"session_id\":\"s-1\"}}"}},"messages":[{{"role":"user","content":"hi"}}]}}"#
+    );
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
 /// The opt-out shape: `CLAUDE_CODE_ATTRIBUTION_HEADER=false` drops the billing line but leaves the rest of
 /// `system` in place, so `system[0]` becomes whatever followed it.
 fn without_billing_line(session: &str) -> Request<Body> {
@@ -284,6 +299,34 @@ async fn a_first_party_turns_own_prompt_id_is_what_its_subagent_inherits() {
         field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
         Some(SENT),
         "a reduced-shape subagent inherits the id its parent put on the wire, not one minted beside it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_carried_prompt_id_past_the_bound_is_retained_by_nothing_and_travels_as_sent() {
+    const SESSION: &str = "8f0d1f6e-9f7a-4f63-9e2d-2f8b1c5a7d31";
+    let huge = "a".repeat(100_000);
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(carrying_prompt_id(SESSION, &huge))
+        .await
+        .unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
+        Some(huge.as_str()),
+        "the caller's own value is relayed as sent, whatever its length"
+    );
+    app.clone()
+        .oneshot(cli_request(SESSION, Some("sub-1"), Some("main")))
+        .await
+        .unwrap();
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(
+        field(&line, "cc_prompt_id").map(str::len),
+        Some(UUID_RE_LEN),
+        "nothing was retained to inherit, so the subagent's turn carries a minted id"
     );
     up.shutdown().await;
 }

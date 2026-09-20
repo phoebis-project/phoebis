@@ -715,10 +715,25 @@ async fn a_request_racing_a_sessions_end_leaves_no_event_open_behind_it() {
 #[tokio::test]
 async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request() {
     let rig = rig().await;
+    // An enabled rule of the kind, watching another key: the kind being watched somewhere is not this
+    // session's event being open.
+    install(
+        &rig,
+        &[rule(
+            "elsewhere",
+            Kind::SessionActive,
+            ScopeType::Key,
+            Some("laptop"),
+        )],
+    );
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
-    assert_eq!(open(&rig), [], "no rule watches the kind yet");
+    assert_eq!(
+        open(&rig),
+        [],
+        "no rule this session matches is enabled yet"
+    );
     install(
         &rig,
         &[rule(
@@ -765,5 +780,197 @@ async fn a_request_observed_before_the_sessions_end_but_applied_after_it_reopens
         open(&rig),
         [("session_active".to_string(), question_subject(KEY, "s1"))],
         "a request of the session's own life opens it again"
+    );
+}
+
+#[tokio::test]
+async fn a_request_of_a_released_agent_applied_after_the_release_reopens_nothing() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
+    let released = SessionLifecycle::AgentReleased {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+        agent_id: "sub-1".into(),
+    };
+    arm.observe(main_turn("r1", "s1"));
+    arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW));
+    settled(&rig).await;
+    assert_eq!(open(&rig).len(), 2, "the session and its subagent");
+    rig.clock.store(NOW + 10_000, Ordering::SeqCst);
+    companion.apply(released.clone());
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        "the release resolves the agent's own event"
+    );
+    // The agent's own earlier request, applied after the release that ended its run.
+    arm.observe(turn("r3", "s1", "sub-1", Some("main"), NOW + 5_000));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        "a request the release outran opens nothing the release would not close"
+    );
+    // A new run of the same agent: the start is the agent working again, and its requests count once more.
+    rig.clock.store(NOW + 20_000, Ordering::SeqCst);
+    companion.apply(SessionLifecycle::AgentStarted {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+        agent_id: "sub-1".into(),
+    });
+    arm.observe(turn("r4", "s1", "sub-1", Some("main"), NOW + 21_000));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [
+            ("session_active".to_string(), question_subject(KEY, "s1")),
+            (
+                "subagent_active".to_string(),
+                agent_subject(KEY, "s1", "sub-1")
+            ),
+        ],
+        "the agent runs again, and once"
+    );
+    rig.clock.store(NOW + 30_000, Ordering::SeqCst);
+    companion.apply(released);
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        "and its second run closes like the first"
+    );
+}
+
+#[tokio::test]
+async fn heartbeats_keep_a_session_from_expiring_and_leave_its_idle_clock_alone() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        arm.tracked(),
+    );
+    let heartbeat = SessionLifecycle::Heartbeat {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    };
+    arm.observe(main_turn("r1", "s1"));
+    settled(&rig).await;
+    let active = ("session_active".to_string(), question_subject(KEY, "s1"));
+    let idle = ("session_idle".to_string(), question_subject(KEY, "s1"));
+    assert_eq!(open(&rig), std::slice::from_ref(&active));
+
+    // A session whose user has stepped away: the companion reports it is still there, and nothing else does.
+    for minute in [25, 31, 59, 90, 200] {
+        rig.clock.store(NOW + minute * 60_000, Ordering::SeqCst);
+        companion.apply(heartbeat.clone());
+        poller.tick().await;
+        settled(&rig).await;
+        let expected: Vec<(String, String)> = if minute < 30 {
+            vec![active.clone()]
+        } else {
+            vec![active.clone(), idle.clone()]
+        };
+        assert_eq!(
+            open(&rig),
+            expected,
+            "at minute {minute}: the expiry measures from the report, the idle rule from the request"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_key_moved_to_another_pool_matches_that_pools_rules_from_its_next_request() {
+    let rig = rig().await;
+    install(
+        &rig,
+        &[
+            rule("spare", Kind::SessionActive, ScopeType::Pool, Some("spare")),
+            idle_rule("spare-idle", 30.0, ScopeType::Pool, Some("spare")),
+        ],
+    );
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        arm.tracked(),
+    );
+    arm.observe(main_turn("r1", "s1"));
+    settled(&rig).await;
+    assert_eq!(open(&rig), [], "the rules watch a pool the key is not on");
+
+    // The operator moves the key to the pool those rules watch.
+    let mut spare = rig.store.pool("main").unwrap().unwrap();
+    spare.id = "spare".into();
+    spare.label = "Spare".into();
+    rig.store.insert_pool(&spare, "test").unwrap();
+    let mut key = rig.store.api_key(KEY).unwrap().unwrap();
+    key.pool_id = "spare".into();
+    rig.store.update_api_key(&key, "test").unwrap();
+    rig.router.reload().await.unwrap();
+
+    arm.observe(observed("r2", KEY, "spare", "s1", 0));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        "the session is on the new pool from its next request"
+    );
+    assert_eq!(detail_of(&rig, Kind::SessionActive)["pool"], "spare");
+    rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        detail_of(&rig, Kind::SessionIdle)["pool"],
+        "spare",
+        "and an idle crossing names the pool the session is on now"
+    );
+}
+
+#[tokio::test]
+async fn a_clear_the_store_refused_is_offered_again_on_the_next_tick() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        arm.tracked(),
+    );
+    let active = ("session_active".to_string(), question_subject(KEY, "s1"));
+    arm.observe(main_turn("r1", "s1"));
+    settled(&rig).await;
+    assert_eq!(open(&rig), std::slice::from_ref(&active));
+
+    // The session ends while the store is having a bad moment. The end is the one transition that closes the
+    // row: the entry it belonged to is gone, so nothing would decide it a second time.
+    rig.store.debug_fail_next_alert_resolve();
+    companion.apply(SessionLifecycle::SessionEnded {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    });
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        std::slice::from_ref(&active),
+        "the store refused the write, so the row is still open"
+    );
+    assert!(
+        !posted(&rig).iter().any(|(_, _, state)| state == "resolved"),
+        "and nothing was posted for a resolve that did not happen"
+    );
+
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(open(&rig), [], "the next tick offers the clear again");
+    assert!(
+        posted(&rig).contains(&(active.0, active.1, "resolved".to_string())),
+        "and the receiver is told once it lands"
     );
 }

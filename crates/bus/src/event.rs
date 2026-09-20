@@ -254,6 +254,12 @@ pub enum SessionLifecycle {
         session_id: String,
         agent_id: String,
     },
+    /// The companion is still attending the session, which is a sign of life rather than a turn: the idle
+    /// clock reads requests alone, and this only keeps the session from being forgotten.
+    Heartbeat {
+        key_id: String,
+        session_id: String,
+    },
     MainParked {
         key_id: String,
         session_id: String,
