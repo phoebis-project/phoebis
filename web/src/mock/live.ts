@@ -281,6 +281,7 @@ class LiveFeed {
   private requestFor(lane: Lane, plan: Plan): LiveRequest {
     const transport: Transport = plan.kind === 'inference' && rng.chance(0.86) ? 'sse' : 'json';
     return {
+      ...LIVE_REQUEST_SAMPLE,
       accountId: null,
       agentId: rng.pick(AGENT_IDS),
       attempts: [],

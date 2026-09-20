@@ -12,7 +12,7 @@ import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTI
 import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
-import { KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
+import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
 // A short delay keeps loading states honest without making the mock feel slow.
@@ -186,6 +186,7 @@ export class MockApi implements Api {
 
   createAccount(input: AccountInput): Promise<Account> {
     const account: Account = {
+      ...ACCOUNT_SAMPLE,
       catalogSyncedAt: null,
       cooldowns: [],
       credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },
@@ -209,7 +210,7 @@ export class MockApi implements Api {
   }
 
   createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
-    const rule: AlertRule = { createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
+    const rule: AlertRule = { ...ALERT_RULE_SAMPLE, createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
     this.rules = [...this.rules, rule];
     return latency(rule, 250);
   }
