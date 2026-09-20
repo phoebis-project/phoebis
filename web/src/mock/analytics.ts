@@ -81,7 +81,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
  * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read.
  */
-function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean, perBucket: boolean): AnalyticsGroup {
+function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
@@ -100,9 +100,10 @@ function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean, perB
   const succeeded = sum(counted, (r) => r.requests.ok);
   const requests = succeeded + rateLimited + overloaded + upstreamError;
   const failovers = sum(counted, (r) => r.failovers);
-  // No page reads a series point's own error-code breakdown, only the range-wide total does; leaving it empty
-  // here keeps every point's shape identical regardless of which hour a failure landed in.
-  const errors: Record<string, number> = perBucket ? {} : { upstream_error: rateLimited + overloaded + upstreamError };
+  const errors: Record<string, number> = {};
+  if (rateLimited) errors.rate_limit_error = rateLimited;
+  if (overloaded) errors.overloaded_error = overloaded;
+  if (upstreamError) errors.api_error = upstreamError;
 
   return {
     // Every attempt past the first on a request is a failover, so the two together are what the upstreams saw.
@@ -141,11 +142,11 @@ function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean, perB
   };
 }
 
-function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery, perBucket: boolean): AnalyticsGroup[] {
+function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
-  return [...buckets.entries()].map(([key, list]) => groupOf(key, list, q.includeProbes ?? false, perBucket)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  return [...buckets.entries()].map(([key, list]) => groupOf(key, list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
@@ -154,7 +155,6 @@ export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsG
   return groupsOf(
     rows.filter((r) => inQuery(r, q, fromMs, toMs)),
     q,
-    false,
   );
 }
 
@@ -167,7 +167,7 @@ export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoin
   // Buckets start on a whole multiple of their own width and run to the hour after the range ends, as the route's do.
   for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) {
     const inBucket = kept.filter((r) => Date.parse(r.hour) >= at && Date.parse(r.hour) < at + bucketMs);
-    points.push({ at: new Date(at).toISOString(), groups: groupsOf(inBucket, q, true) });
+    points.push({ at: new Date(at).toISOString(), groups: groupsOf(inBucket, q) });
   }
   return points;
 }

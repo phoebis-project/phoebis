@@ -597,28 +597,39 @@ export const ACCOUNT_ROLLUPS: AccountRollup[] = accountRollups();
 
 export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   if (!request.capturedBodies) return null;
+  const isClaude = request.model.startsWith('claude');
   return {
     requestId: request.id,
-    // The captured body is whatever the client sent and the upstream returned, so its top-level keys are the
-    // wire's own (messages/model, content/id); a cache-controlled block sits inside a message the way the real
-    // API takes it, rather than as a sibling top-level field a real capture does not carry.
     request: {
       model: request.model,
+      max_tokens: 32_000,
+      stream: request.transport === 'sse',
+      system: [
+        { type: 'text', text: 'You are Claude Code, Anthropic\'s official CLI for Claude.', cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: '[project instructions omitted from fixture: 4,812 tokens]' },
+      ],
       messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'You are Claude Code, Anthropic\'s official CLI for Claude.\n\n[project instructions omitted from fixture: 4,812 tokens]', cache_control: { type: 'ephemeral' } },
-            { type: 'text', text: 'Fix the flaky pre-commit hook and add a test.' },
-          ],
-        },
+        { role: 'user', content: [{ type: 'text', text: 'Fix the flaky pre-commit hook and add a test.' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'Reading the hook first.' }, { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: 'hooks/pre-commit.ts' } }] },
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: '[file contents: 212 lines]' }] },
       ],
+      metadata: { user_id: `session_${request.sessionId}` },
+      tools: [{ name: 'Read', description: 'Reads a file', input_schema: { type: 'object', properties: { file_path: { type: 'string' } } } }],
     },
     response: {
       id: `msg_${request.id.slice(4)}`,
+      type: 'message',
+      role: 'assistant',
+      model: isClaude ? request.model : `${request.model}-2026-05-01`,
       content: [{ type: 'text', text: 'The hook awaits a promise that resolves before the writer flushes. Moving the flush into the same tick fixes the race.' }],
+      stop_reason: 'end_turn',
+      usage: {
+        input_tokens: request.usage.input,
+        cache_read_input_tokens: request.usage.cacheRead,
+        cache_creation_input_tokens: request.usage.cacheWrite5m + request.usage.cacheWrite1h,
+        cache_creation: { ephemeral_5m_input_tokens: request.usage.cacheWrite5m, ephemeral_1h_input_tokens: request.usage.cacheWrite1h },
+        output_tokens: request.usage.output,
+      },
     },
   };
 }

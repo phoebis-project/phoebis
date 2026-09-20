@@ -6,6 +6,7 @@ test('a nested field missing from a later mock row is a finding', () => {
   const want = shapeOf([{ attempts: [{ accountId: 'a', outcome: 'succeeded' }], id: 'r1' }]);
   const got = [{ attempts: [{ accountId: 'a', outcome: 'succeeded' }], id: 'r1' }, { attempts: [{ accountId: 'b' }], id: 'r2' }];
   assert.deepEqual(same(want, got), ['[1].attempts[0].outcome: only in the decoded fixture']);
+  assert.deepEqual(same(shapeOf([{ accountId: 'a', id: 'r1' }]), [{ accountId: 5, extra: true, id: 'r1' }]), ['[0].accountId: number against string', '[0].extra: only in the mock']);
 });
 
 test('a required object answered as null is a finding, and a null in the fixture or inside a row asks nothing', () => {
@@ -27,4 +28,17 @@ test('an opaque detail with different keys is no finding, and a detail that is n
   const got = { detail: { agent: null, key: 'desktop', question: 'Continue?', session: 's1' }, kind: 'ask_user_question' };
   assert.deepEqual(same(want, got), []);
   assert.deepEqual(same(want, { detail: 'text', kind: 'ask_user_question' }), ['.detail: string where an object or null is expected']);
+});
+
+test('an open map only asks about entry types, but a sibling object with a different key set is a finding', () => {
+  const want = shapeOf({ errors: { upstream_error: 1 }, labels: { a: 1 } });
+  const got = { errors: { overloaded_error: 1, rate_limit_error: 2 }, labels: { b: 2 } };
+  assert.deepEqual(same(want, got), ['.labels.a: only in the decoded fixture', '.labels.b: only in the mock']);
+});
+
+test('a per-row pass-through path holds only to object-or-null, richer or not, the way a detail does', () => {
+  const passthrough = (path) => path === '.body';
+  const want = shapeOf({ body: { a: 1 } });
+  assert.deepEqual(same(want, { body: { a: 1, b: 2, c: 3 } }, '', 0, passthrough), []);
+  assert.deepEqual(same(want, { body: 'raw text' }, '', 0, passthrough), ['.body: string where an object or null is expected']);
 });
