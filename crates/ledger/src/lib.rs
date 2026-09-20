@@ -46,9 +46,7 @@ pub use rollup::{
     KEY_RANGE_PREDICATE, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
-pub use usage::{
-    key_usage, key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens,
-};
+pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {

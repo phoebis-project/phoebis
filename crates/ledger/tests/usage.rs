@@ -1,4 +1,4 @@
-//! `key_usage` sums one key's rollups alone, probes left out, and the route it backs answers only the caller's
+//! A window sums one key's rollups alone, probes left out, and the route it backs answers only the caller's
 //! own key, a deleted key's usage staying with the retired id.
 mod common;
 
@@ -9,8 +9,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::Request;
 use phoebis_ledger::{
-    key_usage, key_usage_windows, AttemptRecord, KeyUsageWindow, LedgerConfig, LedgerDb,
-    RequestRecord, KEY_RANGE_PREDICATE,
+    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, RequestRecord, KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, StorageKey, Store, StoreError};
 use common::*;
@@ -71,7 +70,7 @@ fn request(
 }
 
 #[test]
-fn key_usage_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
+fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     let db = LedgerDb::open_in_memory().unwrap();
     db.insert_request(
         &request("r1", "k1", "claude-sonnet-5", "inference", "succeeded", 200),
@@ -112,7 +111,14 @@ fn key_usage_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     )
     .unwrap();
 
-    let k1 = db.read(|c| key_usage(c, "k1", 0, 10_000)).unwrap();
+    // Rows an hour old and an id whose holder is its first, so the day window is every row under the id.
+    let day = |id: &str| {
+        db.read(|c| key_usage_windows(c, id, None, 10_000))
+            .map(|(day, _)| day)
+            .unwrap()
+    };
+
+    let k1 = day("k1");
     assert_eq!((k1.requests, k1.succeeded, k1.failed), (4, 3, 1));
     assert_eq!(k1.tokens.input, 300);
     assert_eq!(k1.tokens.cache_write, 60);
@@ -125,19 +131,19 @@ fn key_usage_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
         ["claude-opus-5", "claude-sonnet-5"]
     );
 
-    assert_eq!(
-        db.read(|c| key_usage(c, "k2", 0, 10_000)).unwrap().requests,
-        1
-    );
+    assert_eq!(day("k2").requests, 1);
 
-    let k3 = db.read(|c| key_usage(c, "k3", 0, 10_000)).unwrap();
+    let k3 = day("k3");
     assert_eq!(
-        k3,
-        KeyUsageWindow {
-            from: 0,
-            to: 10_000,
-            ..KeyUsageWindow::default()
-        }
+        (
+            k3.requests,
+            k3.succeeded,
+            k3.failed,
+            k3.cost_usd,
+            k3.models.len()
+        ),
+        (0, 0, 0, 0.0, 0),
+        "a key with no rows under its id answers an empty window"
     );
 }
 
@@ -180,11 +186,6 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
         "the bound each window reports is the hour its sum starts at"
     );
     assert_eq!((day.to, week.to), (now, now));
-    assert_eq!(
-        day,
-        db.read(|c| key_usage(c, "k1", now - DAY_MS, now)).unwrap(),
-        "the derived window is the one a direct read of the same range answers"
-    );
 }
 
 #[test]
@@ -604,8 +605,9 @@ async fn a_deleted_keys_usage_stays_with_it() {
 
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.db.read(|c| key_usage(c, "desktop", 0, now + 1))
+        h.db.read(|c| key_usage_windows(c, "desktop", None, now + 1))
             .unwrap()
+            .1
             .requests,
         1,
         "the history stays under an id no key can present"

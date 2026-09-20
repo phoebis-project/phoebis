@@ -67,23 +67,12 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
     tokens.cache_write += row.cache_write_5m_tokens + row.cache_write_1h_tokens;
 }
 
-/// The key's usage over `[from, to)`, read from the rollups under its id and nothing else. The sum is whole
-/// hourly buckets, so the window reports the hour `from` falls in rather than `from` itself.
-pub fn key_usage(
-    conn: &Connection,
-    key_id: &str,
-    from: i64,
-    to: i64,
-) -> Result<KeyUsageWindow, LedgerError> {
-    // The key is bound in SQL from the authenticated id and from nothing the caller sent: the ceiling on
-    // what this route may show is this one argument. The ledger files what it could not attribute under `-`,
-    // which the admin API's slug rule (`[a-z0-9][a-z0-9-]{0,63}`) cannot produce, so no key ever matches it.
-    let rows = read_rollups_for_key(conn, key_id, hour_of(from), hour_ceil(to))?;
-    Ok(window(rows.iter(), hour_of(from), to))
-}
-
 /// The two windows the self-service answer carries, from one read: the day is the tail of the week's own
 /// rows, so a caller polling the route costs one scan of its own key rather than two of every key's.
+///
+/// The key is bound in SQL from the authenticated id and from nothing the caller sent: the ceiling on what
+/// this route may show is that one argument. The ledger files what it could not attribute under `-`, which
+/// the admin API's slug rule (`[a-z0-9][a-z0-9-]{0,63}`) cannot produce, so no key ever matches it.
 ///
 /// `floor` is where the reading key's own lifetime begins, for an id that had a holder before it; a rollup
 /// names no holder of its own, so without that line the earlier holder's models, tokens, and cost would

@@ -211,6 +211,41 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     );
 }
 
+/// Both writes stamp themselves from the same clock, so a delete and the create that follows it can land in
+/// one millisecond. The stamps are pinned equal here rather than raced for, so the case the change log's
+/// order answers and a comparison of the two clocks does not is the one this test runs every time.
+#[test]
+fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage_key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &storage_key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    // The retirement the delete writes is what a database from before that rule does not have, and it is
+    // what refuses the second create, so the row goes and the id is created again as it was then.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("DELETE FROM api_key_tombstones WHERE id = 'back'", [])
+        .unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .unwrap();
+    conn.execute(
+        "UPDATE api_keys SET created_at = (SELECT at FROM registry_changes WHERE target = 'back' AND kind = 'key_deleted' ORDER BY id DESC LIMIT 1) WHERE id = 'back'",
+        [],
+    )
+    .unwrap();
+
+    assert_eq!(
+        store.load_registry().unwrap().reused_key_ids,
+        vec!["back".to_string()],
+        "the id carries a holder before this one whatever the two stamps read"
+    );
+}
+
 #[test]
 fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     let dir = tempfile::tempdir().unwrap();
@@ -232,7 +267,8 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     store.delete_api_key("kept", "test").unwrap();
     drop(store);
     // What a database written before the tombstone backfill existed looks like on disk: `old` was deleted
-    // and its id never reused, `back` was deleted at 900 and recreated at 1500, before the upgrade ran.
+    // and its id never reused, `back` was deleted at 900 and created again at 1500, before the upgrade ran,
+    // so its change log reads created, deleted, created.
     // `kept`'s tombstone stays, dated by a sentinel the backfill would overwrite if `OR IGNORE` ever became
     // a plain insert.
     let conn = rusqlite::Connection::open(&path).unwrap();
@@ -243,7 +279,8 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
          DELETE FROM api_keys WHERE id = 'old'; \
          UPDATE api_keys SET created_at = 1500 WHERE id = 'back'; \
          INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1000, 'test', 'key_deleted', 'old', '{}'); \
-         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}');",
+         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}'); \
+         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1500, 'test', 'key_created', 'back', '{}');",
     )
     .unwrap();
     drop(conn);
@@ -266,8 +303,8 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     assert_eq!(
         migrated.load_registry().unwrap().reused_key_ids,
         vec!["back".to_string()],
-        "only the id that outlived a deletion is a reused one: a read of that key's own usage starts at its \
-         creation, while `old` and `kept` are no longer live keys at all"
+        "only the id whose log reads created, deleted, created is a reused one: a read of that key's own \
+         usage starts at its creation, while `old` and `kept` are no longer live keys at all"
     );
     assert!(matches!(
         migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),

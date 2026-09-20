@@ -266,9 +266,10 @@ pub struct RegistryLoad {
     pub models: Vec<ServedModel>,
     pub pools: Vec<PoolRow>,
     pub retired_secrets: Vec<RetiredSecret>,
-    /// Live keys whose id was deleted with an earlier key before this one was created. A delete retires the
-    /// id, so only a database written before that rule holds one; the rollups under such an id carry both
-    /// holders' traffic, and a reader of one key's own usage has to start at the current holder.
+    /// Live keys whose id was deleted with an earlier key before this one was created, in the order the
+    /// change log recorded it. A delete retires the id, so only a database written before that rule holds
+    /// one; the rollups under such an id carry both holders' traffic, and a reader of one key's own usage
+    /// has to start at the current holder.
     pub reused_key_ids: Vec<String>,
 }
 
@@ -388,10 +389,18 @@ impl Store {
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
+            // The change log's own order decides, never the two clocks: a delete and the create that
+            // follows it can share a millisecond, and the id is reused all the same. `registry_changes` is
+            // never pruned, so the create that made the live key is always on record, and both lookups run
+            // on `registry_changes_target (target, id)`.
             reused_key_ids: tx
                 .prepare(
-                    "SELECT DISTINCT c.target FROM registry_changes c JOIN api_keys k ON k.id = c.target \
-                     WHERE c.kind = 'key_deleted' AND c.at < k.created_at ORDER BY c.target",
+                    "SELECT k.id FROM api_keys k WHERE EXISTS ( \
+                       SELECT 1 FROM registry_changes d \
+                       WHERE d.target = k.id AND d.kind = 'key_deleted' \
+                         AND d.id < (SELECT MAX(c.id) FROM registry_changes c \
+                                     WHERE c.target = k.id AND c.kind = 'key_created')) \
+                     ORDER BY k.id",
                 )?
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,

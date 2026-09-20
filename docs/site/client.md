@@ -112,7 +112,7 @@ are the router's hourly rollups under the key, probes left out, the same rollups
 window is summed from whole hourly buckets, so it starts at the top of an hour: the `from` the answer reports is that
 hour, up to an hour earlier than the window's name, and the figures cover it all. A key that is the first holder of its
 id reads the whole window, its own first hour included. Where a deleted key used the same id before this one, the window
-starts at the first whole hour after this key was created instead, so nothing the earlier holder spent is counted.
+starts no earlier than the first whole hour after this key was created, so nothing the earlier holder spent is counted.
 Nothing about the upstream accounts is answered, and the secret never is.
 
 ```sh title="The document"
