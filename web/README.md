@@ -19,6 +19,21 @@ npm run build    # typecheck, then bundle into dist/
 Node 20 and npm 9 or newer. The dependency list is React 18, react-router-dom 7, and Recharts; styling is plain CSS
 with custom properties.
 
+## Where the mock's data comes from
+
+`src/mock/generated/fixtures.ts` is written by `npm run sync-mock` from the admin fixtures under `test/fixtures/`,
+which the Rust harness captures from the real routes (`PHOEBIS_WRITE_FIXTURES=1 cargo test -p phoebis-admin --test
+fixtures`). `src/mock/samples.ts` decodes one row of each fixture with the console's own decoders, and every row
+of the story under `src/mock/` starts from that sample and overrides the values the story needs. A field the
+router adds therefore reaches the mock with the fixture's value on the next sync; a field it drops fails the
+type check wherever the story still names it. `test/mock-sync.test.mjs` fails `npm test` when the generated file
+is stale or when what the mock answers for a route differs in shape from what the decoder reads off the
+fixture.
+
+To add a route: capture its fixture in the Rust harness, run `npm run sync-mock`, write its decoder in
+`src/api/decode.ts` and its `Api` method, add a `SYNC` row for it in `test/mock-sync.test.mjs` (the test names
+the fixture that lacks one), and back it in `MockApi` from a story row that spreads its sample.
+
 ## What is in the mock
 
 - Light, dark, and system themes, switchable from the top bar and stored in `localStorage`.

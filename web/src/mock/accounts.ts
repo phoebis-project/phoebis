@@ -2,6 +2,7 @@ import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 import { CLAUDE_MODELS } from './catalog';
 import { createRng } from './rng';
+import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, hoursAgo, iso } from './time';
 
 const claudeModels = (opts: { discovered?: string[]; syncedAgoHours: number; vanished?: string[] }): ServedModel[] =>
@@ -34,6 +35,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
 
 export const ACCOUNTS: Account[] = [
   {
+    ...ACCOUNT_SAMPLE,
     id: 'business',
     kind: 'oauth',
     label: 'business',
@@ -58,6 +60,7 @@ export const ACCOUNTS: Account[] = [
     cooldowns: [],
   },
   {
+    ...ACCOUNT_SAMPLE,
     id: 'mail',
     kind: 'oauth',
     label: 'mail',
@@ -90,6 +93,7 @@ export const ACCOUNTS: Account[] = [
     ],
   },
   {
+    ...ACCOUNT_SAMPLE,
     id: 'personal',
     kind: 'oauth',
     label: 'personal',
@@ -114,6 +118,7 @@ export const ACCOUNTS: Account[] = [
     cooldowns: [],
   },
   {
+    ...ACCOUNT_SAMPLE,
     id: 'console',
     kind: 'api_key',
     label: 'Console workspace',
@@ -133,6 +138,7 @@ export const ACCOUNTS: Account[] = [
     cooldowns: [],
   },
   {
+    ...ACCOUNT_SAMPLE,
     id: 'team',
     kind: 'oauth',
     label: 'team',
@@ -163,13 +169,14 @@ export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
   if (a.id === 'team') {
     return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: 'Refresh token rejected (invalid_grant). Re-pair the account to load quota.',
       fetchedAt: ago(2 * DAY + 3 * HOUR),
       status: 'error',
     };
   }
-  return { accountId: a.id, error: null, fetchedAt: ago(40_000), status: 'success' };
+  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), status: 'success' };
 });
 
 const SAMPLE_STEP = 5 * MINUTE;

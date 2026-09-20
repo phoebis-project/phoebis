@@ -6,6 +6,7 @@ import type { HourlyRollup } from './analytics';
 import { priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
+import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
@@ -235,6 +236,7 @@ function buildRequests(): RequestLog[] {
     // little after the first byte; JSON responses arrive whole.
     const ttftMs = ttfbMs === null || kind !== 'inference' ? ttfbMs : ttfbMs + (transport === 'sse' ? rng.int(40, 600) : 0);
     rows.push({
+      ...REQUEST_SAMPLE,
       id: `req_${rng.uuid().slice(0, 12)}`,
       at: iso(atMs),
       keyId: lane.keyId,
@@ -581,6 +583,7 @@ function accountRollups(): AccountRollup[] {
       const overage = account.extraUsage?.enabled && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
       out.push({
+        ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
         peak: { '5h': Math.round(peak5 * 1000) / 1000, '7d': Math.round(peak7 * 1000) / 1000, '7d_fable': peakF === null ? null : Math.round(peakF * 1000) / 1000 },

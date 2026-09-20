@@ -2,6 +2,7 @@ import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
 import type { ApiKey, Pool, TrafficBucket } from '@/api/types';
 import { sampleDriven } from '@/lib/selection';
 import { createRng } from './rng';
+import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
 
 function traffic(seed: number, scale: number): TrafficBucket[] {
@@ -27,6 +28,7 @@ export const effectiveSubscriptionPreference = (pool: { preferSubscription: bool
 // The effective flag is computed rather than written, so no fixture can hold a pair the router would never serve.
 const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
   {
+    ...POOL_SAMPLE,
     id: 'all',
     name: 'all',
     status: 'degraded',
@@ -59,6 +61,7 @@ const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
     activePins: 10,
   },
   {
+    ...POOL_SAMPLE,
     id: 'codex',
     name: 'codex',
     status: 'active',
@@ -86,6 +89,7 @@ export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
 export const KEYS: ApiKey[] = [
   {
+    ...KEY_SAMPLE,
     id: 'desktop',
     name: 'desktop',
     prefix: 'phoebis-8f2a',
@@ -102,6 +106,7 @@ export const KEYS: ApiKey[] = [
     lifetime: { cost: 2_318.9, requests: 121_407 },
   },
   {
+    ...KEY_SAMPLE,
     id: 'laptop',
     name: 'laptop',
     prefix: 'phoebis-c41d',
@@ -118,6 +123,7 @@ export const KEYS: ApiKey[] = [
     lifetime: { cost: 204.6, requests: 14_882 },
   },
   {
+    ...KEY_SAMPLE,
     id: 'batch',
     name: 'batch',
     prefix: 'phoebis-5b70',
@@ -134,6 +140,7 @@ export const KEYS: ApiKey[] = [
     lifetime: { cost: 31.8, requests: 2_204 },
   },
   {
+    ...KEY_SAMPLE,
     id: 'ci',
     name: 'ci',
     prefix: 'phoebis-19e7',

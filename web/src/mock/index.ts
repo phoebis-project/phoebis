@@ -12,6 +12,7 @@ import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTI
 import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
+import { KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
 // A short delay keeps loading states honest without making the mock feel slow.
@@ -217,6 +218,7 @@ export class MockApi implements Api {
     const body = this.token(40);
     const secret = `phoebis-${body}`;
     const key: ApiKey = {
+      ...KEY_SAMPLE,
       id: `key_${body.slice(0, 6)}`,
       name: input.name,
       prefix: secret.slice(0, 8),
@@ -238,6 +240,7 @@ export class MockApi implements Api {
 
   createPool(input: PoolInput): Promise<Pool> {
     const pool: Pool = {
+      ...POOL_SAMPLE,
       ...input,
       activePins: 0,
       cost24h: 0,
@@ -427,7 +430,7 @@ export class MockApi implements Api {
   }
 
   previewPriceImport(url: string) {
-    const preview = { changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
+    const preview = { ...PRICE_IMPORT_SAMPLE, changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
     this.pricePreview = { models: preview.models, token: preview.token, url };
     return latency(preview, 400);
   }
@@ -487,7 +490,7 @@ export class MockApi implements Api {
       scope: 'org:create_api_key user:profile user:inference',
       state,
     });
-    return latency({ authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
+    return latency({ ...PAIRING_SAMPLE, authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
   }
 
   subscribeLive(handler: (event: LiveEvent) => void) {

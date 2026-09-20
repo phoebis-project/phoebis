@@ -3,6 +3,7 @@ import { histogramOf, percentileFromHistogram } from '@/lib/histogram';
 import { ACCOUNTS } from './accounts';
 import { createRng } from './rng';
 import { LANES, REQUESTS, SESSION_IDS, USER_AGENTS, costOf, warmsCaches, type Lane } from './requests';
+import { LIVE_REQUEST_SAMPLE } from './samples';
 import { MINUTE, iso } from './time';
 
 const TRAFFIC_KINDS: { value: RequestKind; weight: number }[] = [
@@ -93,6 +94,7 @@ function fromLog(r: RequestLog): LiveRequest {
   };
   const streaming = r.ttftMs !== null ? Math.max(50, durationMs - r.ttftMs) : null;
   return {
+    ...LIVE_REQUEST_SAMPLE,
     accountId: r.accountId,
     agentId: r.agentId ?? 'main',
     attempts: r.attempts.map((a) => ({ accountId: a.accountId, cooldownSet: a.cooldownSet, index: a.index, outcome: a.outcome, startedAt: a.startedAt, upstreamStatus: a.upstreamStatus, windows: a.windows })),

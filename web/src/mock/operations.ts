@@ -3,6 +3,7 @@ import { PRICES } from './catalog';
 import { keyById } from './pools';
 import { REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
+import { ALERT_EVENT_SAMPLE, ALERT_RULE_SAMPLE, DELIVERY_SAMPLE, KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, ago, ahead, daysAgo } from './time';
 
 const rng = createRng(2_024);
@@ -65,6 +66,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const lastUsedAgo = spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   return {
+    ...SESSION_SAMPLE,
     sessionId,
     keyId: spec.keyId,
     accountId: spec.accountId,
@@ -90,6 +92,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
 // A companion registered this session before its first request reached the router, so it holds no pin, no epoch and
 // no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
 SESSIONS.push({
+  ...SESSION_SAMPLE,
   accountId: null,
   agents: 0,
   companion: 'reporting',
@@ -149,6 +152,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     return {
+      ...RECIPE_SAMPLE,
       accountId: j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId,
       agentId,
       keyId: pin.keyId,
@@ -182,6 +186,7 @@ const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
 const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length;
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
+  ...KEEPALIVE_OVERVIEW_SAMPLE,
   sessions: WARMED.length,
   agents: {
     busy: WARMED.filter((p) => p.keepalive.state === 'busy').reduce((n, p) => n + p.agents, 0),
@@ -203,6 +208,7 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
 
 export const ALERT_RULES: AlertRule[] = [
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_question',
     kind: 'ask_user_question',
@@ -215,6 +221,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_drift',
     kind: 'client_drift',
@@ -227,6 +234,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_reauth',
     kind: 'reauth_required',
@@ -239,6 +247,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_7d',
     kind: 'utilization_above',
@@ -251,6 +260,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_exhausted',
     kind: 'pool_exhausted',
@@ -263,6 +273,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_funding',
     kind: 'funding_required',
@@ -275,6 +286,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_cap',
     kind: 'keepalive_cost_cap',
@@ -287,6 +299,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_idle',
     kind: 'session_idle',
@@ -299,6 +312,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_active',
     kind: 'session_active',
@@ -311,6 +325,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_subagent',
     kind: 'subagent_active',
@@ -323,6 +338,7 @@ export const ALERT_RULES: AlertRule[] = [
     updatedAt: daysAgo(46),
   },
   {
+    ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
     id: 'rule_refresh',
     kind: 'refresh_failed',
@@ -338,6 +354,7 @@ export const ALERT_RULES: AlertRule[] = [
 
 export const ALERT_EVENTS: AlertEvent[] = [
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_09',
     ruleId: 'rule_question',
     kind: 'ask_user_question',
@@ -351,9 +368,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(18 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(18 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(18 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_10',
     ruleId: 'rule_drift',
     kind: 'client_drift',
@@ -363,11 +381,12 @@ export const ALERT_EVENTS: AlertEvent[] = [
     openedAt: ago(3 * HOUR + 40 * MINUTE),
     resolvedAt: null,
     deliveries: [
-      { at: ago(3 * HOUR + 40 * MINUTE), attempt: 1, error: 'refused', state: 'opened', status: null },
-      { at: ago(3 * HOUR + 39 * MINUTE), attempt: 2, error: null, state: 'opened', status: 200 },
+      { ...DELIVERY_SAMPLE, at: ago(3 * HOUR + 40 * MINUTE), attempt: 1, error: 'refused', state: 'opened', status: null },
+      { ...DELIVERY_SAMPLE, at: ago(3 * HOUR + 39 * MINUTE), attempt: 2, error: null, state: 'opened', status: 200 },
     ],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_11',
     ruleId: 'rule_question',
     kind: 'ask_user_question',
@@ -381,9 +400,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: ago(9 * HOUR),
     resolvedAt: ago(8 * HOUR + 41 * MINUTE),
-    deliveries: [{ at: ago(9 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(9 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_01',
     ruleId: 'rule_reauth',
     kind: 'reauth_required',
@@ -392,9 +412,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(2 * DAY + 2 * HOUR),
     resolvedAt: null,
-    deliveries: [{ at: ago(2 * DAY + 2 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(2 * DAY + 2 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_02',
     ruleId: 'rule_7d',
     kind: 'utilization_above',
@@ -404,11 +425,12 @@ export const ALERT_EVENTS: AlertEvent[] = [
     openedAt: ago(6 * HOUR + 12 * MINUTE),
     resolvedAt: null,
     deliveries: [
-      { at: ago(6 * HOUR + 12 * MINUTE), attempt: 1, error: 'connect timeout after 10s', state: 'opened', status: null },
-      { at: ago(6 * HOUR + 11 * MINUTE), attempt: 2, error: null, state: 'opened', status: 200 },
+      { ...DELIVERY_SAMPLE, at: ago(6 * HOUR + 12 * MINUTE), attempt: 1, error: 'connect timeout after 10s', state: 'opened', status: null },
+      { ...DELIVERY_SAMPLE, at: ago(6 * HOUR + 11 * MINUTE), attempt: 2, error: null, state: 'opened', status: 200 },
     ],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_03',
     ruleId: 'rule_exhausted',
     kind: 'pool_exhausted',
@@ -417,9 +439,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: ago(1 * DAY + 4 * HOUR),
     resolvedAt: ago(1 * DAY + 3 * HOUR + 22 * MINUTE),
-    deliveries: [{ at: ago(1 * DAY + 4 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(1 * DAY + 4 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_04',
     ruleId: 'rule_7d',
     kind: 'utilization_above',
@@ -428,9 +451,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(3),
     resolvedAt: daysAgo(2),
-    deliveries: [{ at: daysAgo(3), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: daysAgo(3), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_05',
     ruleId: 'rule_7d',
     kind: 'utilization_above',
@@ -439,9 +463,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(5),
     resolvedAt: daysAgo(4),
-    deliveries: [{ at: daysAgo(5), attempt: 1, error: 'HTTP 500 from webhook', state: 'opened', status: 500 }, { at: daysAgo(5), attempt: 2, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: daysAgo(5), attempt: 1, error: 'HTTP 500 from webhook', state: 'opened', status: 500 }, { ...DELIVERY_SAMPLE, at: daysAgo(5), attempt: 2, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_06',
     ruleId: 'rule_reauth',
     kind: 'reauth_required',
@@ -450,9 +475,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(9),
     resolvedAt: daysAgo(9),
-    deliveries: [{ at: daysAgo(9), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: daysAgo(9), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_07',
     ruleId: 'rule_exhausted',
     kind: 'pool_exhausted',
@@ -461,9 +487,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(12),
     resolvedAt: daysAgo(12),
-    deliveries: [{ at: daysAgo(12), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: daysAgo(12), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_08',
     ruleId: 'rule_7d',
     kind: 'utilization_above',
@@ -472,9 +499,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'resolved',
     openedAt: daysAgo(14),
     resolvedAt: daysAgo(13),
-    deliveries: [{ at: daysAgo(14), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: daysAgo(14), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_12',
     ruleId: 'rule_cap',
     kind: 'keepalive_cost_cap',
@@ -483,9 +511,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(5 * HOUR + 6 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(5 * HOUR + 6 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(5 * HOUR + 6 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_13',
     ruleId: 'rule_refresh',
     kind: 'refresh_failed',
@@ -495,11 +524,12 @@ export const ALERT_EVENTS: AlertEvent[] = [
     openedAt: daysAgo(13),
     resolvedAt: daysAgo(12),
     deliveries: [
-      { at: daysAgo(13), attempt: 1, error: null, state: 'opened', status: 200 },
-      { at: daysAgo(12), attempt: 1, error: null, state: 'resolved', status: 200 },
+      { ...DELIVERY_SAMPLE, at: daysAgo(13), attempt: 1, error: null, state: 'opened', status: 200 },
+      { ...DELIVERY_SAMPLE, at: daysAgo(12), attempt: 1, error: null, state: 'resolved', status: 200 },
     ],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_14',
     ruleId: 'rule_active',
     kind: 'session_active',
@@ -508,9 +538,10 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(52 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(52 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(52 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_15',
     ruleId: 'rule_subagent',
     kind: 'subagent_active',
@@ -520,11 +551,12 @@ export const ALERT_EVENTS: AlertEvent[] = [
     openedAt: ago(48 * MINUTE),
     resolvedAt: ago(11 * MINUTE),
     deliveries: [
-      { at: ago(48 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 },
-      { at: ago(11 * MINUTE), attempt: 1, error: null, state: 'resolved', status: 200 },
+      { ...DELIVERY_SAMPLE, at: ago(48 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 },
+      { ...DELIVERY_SAMPLE, at: ago(11 * MINUTE), attempt: 1, error: null, state: 'resolved', status: 200 },
     ],
   },
   {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_16',
     ruleId: 'rule_idle',
     kind: 'session_idle',
@@ -534,11 +566,12 @@ export const ALERT_EVENTS: AlertEvent[] = [
     state: 'open',
     openedAt: ago(35 * MINUTE),
     resolvedAt: null,
-    deliveries: [{ at: ago(35 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(35 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
 ];
 
 export const SETTINGS: Settings = {
+  ...SETTINGS_SAMPLE,
   about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.home.example', version: '0.4.2' },
   access: { adminConfigured: true, viewerConfigured: true },
   compatibility: { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' },
