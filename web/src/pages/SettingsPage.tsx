@@ -322,6 +322,20 @@ export function SettingsPage() {
         </dl>
       </Card>
 
+      <Card title="Compatibility" subtitle="What the bootstrap file's compatibility block sets; a restart applies a change.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Cache diagnostics', value: s.compatibility.cacheDiagnostics ? 'on' : 'off', title: bootstrapNote('compatibility.cache_diagnostics') },
+              { label: 'Profile', value: s.compatibility.profile, mono: true },
+              { label: 'Usage entrypoint', value: s.compatibility.usageEntrypoint, mono: true },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+      </Card>
+
       <Card title="About">
         {s ? (
           <KeyValue

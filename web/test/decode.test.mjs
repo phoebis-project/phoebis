@@ -294,6 +294,13 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(ov.costToday[0].capUsd, 4);
 });
 
+test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
+  const bare = { ...fixture('settings') };
+  delete bare.compatibility;
+  assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
+  assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
+});
+
 test('settings, pricing, the import preview, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
   assert.equal(s.access.viewerConfigured, true);
@@ -301,6 +308,7 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.equal(s.keepalive.maxWorkers, 4);
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
+  assert.deepEqual(s.compatibility, { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' });
   assert.ok(isIso(s.lastSyncAt), 'the route answers the newest catalog sync as milliseconds');
   assert.equal(d.decodeSettings({ ...fixture('settings'), last_sync_at: null }).lastSyncAt, null, 'a registry that never synced answers no instant, and the strip says so');
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);

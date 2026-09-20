@@ -599,6 +599,8 @@ export interface PriceImportPreview {
 export interface Settings {
   about: { profile: string; publicUrl: string | null; version: string };
   access: { adminConfigured: boolean; viewerConfigured: boolean };
+  /** What the bootstrap file's compatibility block sets, which the route reads and never writes. */
+  compatibility: { cacheDiagnostics: boolean; outboundGzip: boolean; profile: string; usageEntrypoint: string };
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
   /** The newest catalog sync across the upstreams, or null before the first one. */
   lastSyncAt: string | null;

@@ -185,6 +185,58 @@ async function poolCachingControls(theme) {
 }
 
 /**
+ * The compatibility card on Settings, and its geometry against the About card it sits above. The two carry the
+ * same kind of read-only rows from the same bootstrap file, so a card that reads smaller than its neighbour is
+ * the defect this page would show first.
+ */
+async function compatibilityCard(theme) {
+  const say = (what) => failures.push(`${theme} /settings: ${what}`);
+  const read = await page.evaluate(() => {
+    const card = (title) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+    // Both cards print the running profile, so that row is what the two are compared through: `.kv__row` is
+    // `display: contents` and has no box of its own, and the rest of the rows carry different kinds of value.
+    const measure = (el) => {
+      const style = getComputedStyle(el);
+      const kv = el.querySelector('.kv');
+      const profile = [...el.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Profile');
+      const dt = profile?.querySelector('dt');
+      const dd = profile?.querySelector('dd');
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
+        labelFont: dt ? getComputedStyle(dt).fontSize : null,
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+        profileHeight: dd ? dd.getBoundingClientRect().height : null,
+        profileText: (dd?.textContent ?? '').trim(),
+        rowsHeight: kv ? kv.getBoundingClientRect().height : null,
+        titleFont: getComputedStyle(el.querySelector('.card__title')).fontSize,
+        valueFont: dd ? getComputedStyle(dd).fontSize : null,
+      };
+    };
+    const compatibility = card('Compatibility');
+    const about = card('About');
+    if (!compatibility || !about) return { about: null, compatibility: null, diagnostics: null };
+    const row = [...compatibility.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache diagnostics');
+    return {
+      about: measure(about),
+      compatibility: measure(compatibility),
+      diagnostics: row ? { title: row.querySelector('dd')?.getAttribute('title') ?? '', value: (row.querySelector('dd')?.textContent ?? '').trim() } : null,
+    };
+  });
+  if (!read.compatibility) {
+    say('no card titled "Compatibility" beside the About card');
+    return;
+  }
+  if (!read.diagnostics) say('the compatibility card has no "Cache diagnostics" row');
+  else if (read.diagnostics.value !== 'off') say(`cache diagnostics reads ${JSON.stringify(read.diagnostics.value)} on a registry whose bootstrap file sets nothing`);
+  else if (!read.diagnostics.title.includes('compatibility.cache_diagnostics')) say(`the cache diagnostics row names ${JSON.stringify(read.diagnostics.title)} as where it is set`);
+  measurements.push(`${theme} /settings compatibility card ${JSON.stringify(read.compatibility)}`);
+  measurements.push(`${theme} /settings about card ${JSON.stringify(read.about)}`);
+  const differs = ['background', 'border', 'labelFont', 'padding', 'profileHeight', 'profileText', 'rowsHeight', 'titleFont', 'valueFont'].filter((key) => String(read.compatibility[key]) !== String(read.about[key]));
+  if (differs.length) say(`the compatibility card's ${differs.join(', ')} differs from the About card's`);
+}
+
+/**
  * Both quota donuts against a registry with no subscription upstream: the seed has one API-key upstream, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
@@ -345,6 +397,7 @@ try {
         await poolCachingControls(theme);
       }
       if (view.path === '/analytics') await wastedProbeRows(theme);
+      if (view.path === '/settings') await compatibilityCard(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

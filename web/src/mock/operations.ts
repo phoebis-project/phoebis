@@ -468,6 +468,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
 export const SETTINGS: Settings = {
   about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.home.example', version: '0.4.2' },
   access: { adminConfigured: true, viewerConfigured: true },
+  compatibility: { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' },
   keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
   lastSyncAt: ago(40 * 1000),
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
