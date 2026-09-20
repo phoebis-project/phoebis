@@ -370,3 +370,16 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.ok(isIso(event.openedAt) && event.resolvedAt === null);
   assert.equal(fixture('alert_deliveries').deliveries.map(d.decodeDelivery).length, 3);
 });
+
+test('a session lifecycle rule keeps its threshold in minutes and a lifecycle event keeps its detail', () => {
+  const [wire] = fixture('alert_rules').rules;
+  const idle = d.decodeAlertRule({ ...wire, kind: 'session_idle', threshold: 30, window: null });
+  assert.equal(idle.kind, 'session_idle');
+  assert.equal(idle.threshold, 30, 'an idle rule counts whole minutes, so the threshold arrives as the number the operator wrote');
+  assert.equal(idle.windowId, null);
+  const [wireEvent] = fixture('alert_events').events;
+  const detail = { agent: 'sub-1', key: 'desktop', parent_agent: 'main', pool: 'main', session: 'e2e-ui' };
+  const started = d.decodeAlertEvent({ ...wireEvent, detail, kind: 'subagent_active', subject: 'desktop, session e2e-ui, agent sub-1' });
+  assert.equal(started.kind, 'subagent_active');
+  assert.deepEqual(started.detail, detail, 'a detail is the free-form object the signal built and is passed through undecoded');
+});

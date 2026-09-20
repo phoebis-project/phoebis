@@ -291,7 +291,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-const ALERT_KINDS = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'utilization_above'] as const;
+const ALERT_KINDS = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
 const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: (['account', 'all', 'any_account', 'key', 'pool'] as const).find((t) => t === str(s.type)) ?? 'all' }; };
 export function decodeAlertRule(v: unknown): AlertRule {
   const r = rec(v);

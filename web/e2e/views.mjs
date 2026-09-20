@@ -236,6 +236,60 @@ async function compatibilityCard(theme) {
   if (differs.length) say(`the compatibility card's ${differs.join(', ')} differs from the About card's`);
 }
 
+/** The box a labelled input draws in the open dialog: the control itself, never the label around it. */
+const measureInput = (label) =>
+  page.locator('dialog[open]').evaluate((el, text) => {
+    const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+    const input = field?.querySelector('input');
+    if (!input) return null;
+    const style = getComputedStyle(input);
+    return {
+      background: style.backgroundColor,
+      border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
+      font: style.fontSize,
+      height: input.getBoundingClientRect().height,
+      padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+    };
+  }, label);
+
+/**
+ * The create-rule dialog on Alerts: an idle rule counts minutes and takes no window, so the dialog swaps the
+ * threshold pair for a minutes field as the condition changes. The minutes input is measured against the
+ * threshold input it stands in for, since a control that reads smaller than the one it replaces is the defect
+ * this dialog would show first.
+ */
+async function alertRuleDialog(theme) {
+  const say = (what) => failures.push(`${theme} /alerts: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  // By the label's own text, not by the field's: a wrapping label reads as its control's options too, so a
+  // select would answer to the name of every condition it offers.
+  const control = (label, tag) => dialog.locator(`.field:has(.field__label:text-is("${label}")) ${tag}`);
+  try {
+    await page.getByRole('button', { name: 'Create rule', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    const condition = control('Condition', 'select');
+    await condition.selectOption({ label: 'Session idle' });
+    if ((await control('Idle after (minutes)', 'input').count()) !== 1) say('the session idle condition draws no minutes input');
+    if ((await control('Window', 'select').count()) !== 0) say('the session idle condition still offers a window, which only utilization_above takes');
+    const minutes = await measureInput('Idle after (minutes)');
+    await condition.selectOption({ label: 'Utilization above threshold' });
+    if ((await control('Window', 'select').count()) !== 1) say('the utilization condition draws no window select');
+    if ((await control('Idle after (minutes)', 'input').count()) !== 0) say('the utilization condition still offers the minutes input');
+    const threshold = await measureInput('Threshold (%)');
+    if (!minutes || !threshold) say('the minutes input and the threshold input are not both drawn to compare');
+    else {
+      measurements.push(`${theme} /alerts idle after minutes ${JSON.stringify(minutes)}`);
+      measurements.push(`${theme} /alerts threshold percent ${JSON.stringify(threshold)}`);
+      const differs = ['background', 'border', 'font', 'height', 'padding'].filter((key) => String(minutes[key]) !== String(threshold[key]));
+      if (differs.length) say(`the minutes input's ${differs.join(', ')} differs from the threshold input's`);
+    }
+  } catch (error) {
+    say(`the create-rule dialog never reached its conditions (${error instanceof Error ? error.message : String(error)})`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
 /**
  * Both quota donuts against a registry with no subscription upstream: the seed has one API-key upstream, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
@@ -398,6 +452,7 @@ try {
       }
       if (view.path === '/analytics') await wastedProbeRows(theme);
       if (view.path === '/settings') await compatibilityCard(theme);
+      if (view.path === '/alerts') await alertRuleDialog(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, Pool, WindowId } from '@/api/types';
+import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, Pool, SessionLifecycleDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
@@ -16,6 +16,10 @@ const KIND_LABEL: Record<AlertKind, string> = {
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
+  session_active: 'Session active',
+  session_idle: 'Session idle',
+  session_parked: 'Session parked',
+  subagent_active: 'Subagent active',
   utilization_above: 'Utilization above threshold',
 };
 const KINDS = Object.keys(KIND_LABEL).sort() as AlertKind[];
@@ -29,6 +33,10 @@ const KIND_HINT: Record<AlertKind, string> = {
   pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
   reauth_required: 'Fires when an upstream enters reauth_required. It resolves once the upstream is paired or verified again.',
   refresh_failed: 'Fires when a credential refresh fails twice in a row. It resolves on the next refresh that succeeds.',
+  session_active: "Opens on a session's first request, or on the companion's session_start, and resolves when the companion ends the session or it expires unseen.",
+  session_idle: 'Opens once no request has arrived on the session for the number of minutes chosen here, and resolves on the next request.',
+  session_parked: 'Opens when the keepalive companion reports the main agent parked and resolves when it is busy or idle again; a session without a companion never parks.',
+  subagent_active: "Opens on a subagent's first request, or on the companion's agent_start, and resolves when the agent is released, the session ends, or it expires.",
   utilization_above: 'Fires when a usage sample for the chosen window reaches the threshold. It resolves once a sample reads five points below it.',
 };
 type RuleWindow = NonNullable<AlertRule['windowId']>;
@@ -46,8 +54,14 @@ const ALLOWED_SCOPES: Record<AlertKind, AlertRule['scope']['type'][]> = {
   pool_exhausted: ['all', 'pool'],
   reauth_required: ['any_account', 'account'],
   refresh_failed: ['any_account', 'account'],
+  session_active: ['all', 'key', 'pool'],
+  session_idle: ['all', 'key', 'pool'],
+  session_parked: ['all', 'key', 'pool'],
+  subagent_active: ['all', 'key', 'pool'],
   utilization_above: ['all', 'any_account', 'account', 'key', 'pool'],
 };
+/** The kinds whose detail names a session, so an event of one reads as a sentence rather than as a key list. */
+const LIFECYCLE_KINDS: AlertKind[] = ['session_active', 'session_idle', 'session_parked', 'subagent_active'];
 /** A 2xx is the only answer the deliverer counts as landed; everything else, including no answer at all, reads as a failure. */
 const deliveryTone = (d: Delivery) => (d.status !== null && d.status < 300 ? 'good' : 'critical');
 const TRIGGER_LABEL: Record<string, string> = { hash: 'the billing-hash check' };
@@ -311,7 +325,14 @@ function RuleRow({ rule, scope, webhook, actions }: { actions: ReactNode; rule: 
       <td>{KIND_LABEL[rule.kind]}</td>
       <td>{scope}</td>
       <td className="num">
-        {rule.threshold !== null ? `${fmtPct(rule.threshold)} on ${rule.windowId ? ruleWindowLabel(rule.windowId) : 'n/a'}` : <span className="muted">-</span>}
+        {rule.threshold === null ? (
+          <span className="muted">-</span>
+        ) : rule.kind === 'session_idle' ? (
+          // The idle rule reuses the threshold column as a count of minutes, so a percentage would misread it.
+          `${rule.threshold} min idle`
+        ) : (
+          `${fmtPct(rule.threshold)} on ${rule.windowId ? ruleWindowLabel(rule.windowId) : 'n/a'}`
+        )}
       </td>
       <td className="mono">{webhook}</td>
       <td>{rule.hasSecret ? <Badge tone="good">Signed</Badge> : <Badge tone="warning">Unsigned</Badge>}</td>
@@ -362,7 +383,7 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
   );
 }
 
-// A detail is the free-form object the signal built, so the event's kind says which keys it holds. The two kinds
+// A detail is the free-form object the signal built, so the event's kind says which keys it holds. The kinds
 // below read as a sentence; every other kind is listed as it arrived, and so is a detail missing the keys its kind
 // promises, so a shape a later build changes stays readable.
 function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKind }) {
@@ -384,6 +405,20 @@ function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKi
           {asked.agent && `, agent ${asked.agent}`}
         </span>
         {asked.question ? <span className="sub">asked: {asked.question}</span> : <span className="sub muted">question not captured</span>}
+      </>
+    );
+  }
+  if (LIFECYCLE_KINDS.includes(kind) && typeof detail.session === 'string') {
+    const life = detail as unknown as SessionLifecycleDetail;
+    return (
+      <>
+        <span className="sub mono" title={life.session}>
+          key {life.key}, session {shortId(life.session, 8)}
+          {life.agent && `, agent ${life.agent}`}
+        </span>
+        {kind === 'session_active' && life.source && <span className="sub">{life.source}</span>}
+        {kind === 'session_idle' && <span className="sub">idle for {life.idle_minutes} min</span>}
+        {kind === 'subagent_active' && <span className="sub">parent {life.parent_agent ?? '-'}</span>}
       </>
     );
   }
@@ -424,6 +459,7 @@ function RuleDialog({
   const [kind, setKind] = useState<AlertKind>('utilization_above');
   const [scope, setScope] = useState('all');
   const [threshold, setThreshold] = useState(90);
+  const [idleMinutes, setIdleMinutes] = useState(30);
   const [windowId, setWindowId] = useState<RuleWindow>('7d');
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
@@ -434,7 +470,10 @@ function RuleDialog({
     if (!open) return;
     setKind(existing?.kind ?? 'utilization_above');
     setScope(existing ? (existing.scope.id ? `${existing.scope.type}:${existing.scope.id}` : existing.scope.type) : 'all');
-    setThreshold(existing?.threshold !== null && existing?.threshold !== undefined ? Math.round(existing.threshold * 100) : 90);
+    // Two kinds share the threshold column, one as a fraction and one as minutes, so each field reads it only
+    // for its own kind; a rule edited into the other kind would otherwise carry the wrong number across.
+    setThreshold(existing?.kind === 'utilization_above' && existing.threshold !== null ? Math.round(existing.threshold * 100) : 90);
+    setIdleMinutes(existing?.kind === 'session_idle' && existing.threshold !== null ? existing.threshold : 30);
     setWindowId(existing?.windowId ?? '7d');
     setUrl(existing?.webhookUrl ?? '');
     // Never prefilled: the router answers whether a rule is signed, never with what.
@@ -459,7 +498,7 @@ function RuleDialog({
       kind,
       scope: parseScope(effectiveScope),
       secret: secret === '' ? (existing ? undefined : '') : secret,
-      threshold: kind === 'utilization_above' ? threshold / 100 : null,
+      threshold: kind === 'utilization_above' ? threshold / 100 : kind === 'session_idle' ? Math.round(idleMinutes) : null,
       webhookUrl: url.trim(),
       windowId: kind === 'utilization_above' ? windowId : null,
     };
@@ -528,6 +567,11 @@ function RuleDialog({
             </Select>
           </Field>
         </div>
+      )}
+      {kind === 'session_idle' && (
+        <Field label="Idle after (minutes)">
+          <Input type="number" min={1} max={10080} step={1} value={idleMinutes} onChange={(e) => setIdleMinutes(Number(e.target.value))} />
+        </Field>
       )}
       <Field label="Webhook URL">
         <Input placeholder="https://hooks.example.com/phoebis" value={url} onChange={(e) => setUrl(e.target.value)} />

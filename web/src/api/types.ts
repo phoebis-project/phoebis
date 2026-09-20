@@ -499,14 +499,18 @@ export type AlertKind =
   | 'pool_exhausted'
   | 'reauth_required'
   | 'refresh_failed'
+  | 'session_active'
+  | 'session_idle'
+  | 'session_parked'
+  | 'subagent_active'
   | 'utilization_above';
 
 /** What an event of one of the session-scoped kinds captured; null for the kinds that need no extra fields. */
 export type AlertEventDetail = Record<string, unknown> | null;
 
 /**
- * The two details a page draws a sentence from. A detail is the free-form object the signal built, passed through
- * undecoded, so both carry the wire's own spelling rather than the camelCase every decoded type uses.
+ * The details a page draws a sentence from. A detail is the free-form object the signal built, passed through
+ * undecoded, so each carries the wire's own spelling rather than the camelCase every decoded type uses.
  */
 export interface AskUserQuestionDetail {
   agent: string | null;
@@ -522,6 +526,18 @@ export interface ClientDriftDetail {
   key: string | null;
   /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
   trigger: string;
+}
+
+/** What a session_active, session_idle, session_parked, or subagent_active event captured about its session. */
+export interface SessionLifecycleDetail {
+  agent?: string;
+  idle_minutes?: number;
+  key: string;
+  last_request_at?: number;
+  parent_agent?: string | null;
+  pool: string | null;
+  session: string;
+  source?: 'companion' | 'request';
 }
 
 export interface AlertRule {
@@ -544,6 +560,7 @@ export interface AlertRuleInput {
   scope: AlertRule['scope'];
   /** Absent leaves the stored secret alone; an empty string clears it. */
   secret?: string;
+  /** A fraction for utilization_above and whole minutes for session_idle; every other kind takes none. */
   threshold: number | null;
   webhookUrl: string;
   windowId: AlertRule['windowId'];
