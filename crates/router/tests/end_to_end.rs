@@ -1444,6 +1444,28 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    // `wait_json` sends a bare GET, so the key rides in the client's default headers.
+    let mut keyed = reqwest::header::HeaderMap::new();
+    keyed.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {secret}").parse().unwrap(),
+    );
+    let keyed = reqwest::Client::builder()
+        .default_headers(keyed)
+        .build()
+        .unwrap();
+    let usage = wait_json(
+        &keyed,
+        &format!("http://127.0.0.1:{proxy_port}/v1/usage"),
+        |v| {
+            v["windows"]["24h"]["requests"]
+                .as_u64()
+                .is_some_and(|n| n >= 1)
+        },
+    )
+    .await;
+    assert_eq!(usage["key"]["id"], "desktop");
+    assert!(usage["key"].get("secret").is_none() && usage.to_string().find("sk-ant-").is_none());
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
     let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();

@@ -44,6 +44,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (12, V12),
     (13, V13),
     (14, V14),
+    (15, V15),
 ];
 
 const V2: &str = r#"
@@ -204,4 +205,15 @@ CREATE TABLE IF NOT EXISTS api_key_retired_secrets (
 CREATE TABLE IF NOT EXISTS api_key_tombstones (
   id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL
 );
+"#;
+
+// V14 tombstones only what `delete_api_key` deletes from its landing on, so a store upgraded with keys already
+// deleted before then keeps those ids creatable, and the usage route lets a re-created id read the deleted
+// holder's rollups. `registry_changes` is never pruned, so every `key_deleted` change still on record backfills
+// the tombstone; the `NOT IN` leaves out an id that was deleted and legitimately re-created before this upgrade.
+const V15: &str = r#"
+INSERT OR IGNORE INTO api_key_tombstones (id, deleted_at)
+SELECT target, MAX(at) FROM registry_changes
+WHERE kind = 'key_deleted' AND target NOT IN (SELECT id FROM api_keys)
+GROUP BY target;
 "#;

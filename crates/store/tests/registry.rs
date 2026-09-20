@@ -76,12 +76,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 14);
+    assert_eq!(store.schema_version().unwrap(), 15);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        14,
+        15,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -104,7 +104,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        14,
+        15,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -129,7 +129,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        14,
+        15,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -155,7 +155,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        14,
+        15,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -174,7 +174,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        14,
+        15,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -194,7 +194,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        14,
+        15,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -209,6 +209,44 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         1,
         "and the index it was missing is there"
     );
+}
+
+#[test]
+fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage_key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &storage_key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "old", "main", "phoebis-old-secret"), "test")
+        .unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    drop(store);
+    // What a database written before the tombstone backfill existed looks like on disk: `old` was deleted
+    // and its id never reused, `back` was deleted and recreated before the upgrade ran.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DELETE FROM api_key_tombstones; UPDATE meta SET value = '14' WHERE key = 'schema_version'; \
+         DELETE FROM api_keys WHERE id = 'old'; \
+         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1000, 'test', 'key_deleted', 'old', '{}'); \
+         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}');",
+    )
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 15);
+    assert!(matches!(
+        migrated.insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test"),
+        Err(StoreError::KeyIdRetired(id)) if id == "old"
+    ));
+    assert_eq!(migrated.api_key("back").unwrap().unwrap().id, "back");
+    assert!(matches!(
+        migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),
+        Err(StoreError::Sqlite(_))
+    ));
 }
 
 #[test]

@@ -319,6 +319,13 @@ pub async fn harness_on(
     }
 }
 
+/// A `Clock` reading the same cell `harness_on` seeded, built the same way it builds its own: the harness
+/// stores only the raw `AtomicI64` cell, so a caller needing the closure form wraps it here.
+pub fn clock_of(h: &Harness) -> Clock {
+    let c = h.clock.clone();
+    Arc::new(move || c.load(Ordering::SeqCst))
+}
+
 pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
         .unwrap()

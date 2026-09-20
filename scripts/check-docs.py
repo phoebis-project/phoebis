@@ -20,6 +20,7 @@ API_MD = ROOT / "docs/site/api.md"
 # narrowing it.
 PROXY_ROUTE_FILES = [
     ROOT / "crates/keepalive/src/routes.rs",
+    ROOT / "crates/ledger/src/usage.rs",
     ROOT / "crates/relay/src/messages.rs",
 ]
 CLIENT_MD = ROOT / "docs/site/client.md"

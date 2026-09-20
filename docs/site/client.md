@@ -73,6 +73,7 @@ without warming. Through a pool with a cache TTL policy the variable has no effe
 | HEAD | `/api/hello` | none | `200 OK` |
 | POST | `/v1/messages` | router key | relayed to the selected account |
 | POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop |
+| GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days |
 | GET | `/v1/models` | none | `404` |
 | GET | `/v1/models/{id}` | none | `404` |
 | GET | `/v0/resource/plugins/cache-keepalive/events` | router key | the companion's event report |
@@ -102,6 +103,11 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 - the key was revoked
 - the key's pool does not exist
 - the key's pool is disabled
+
+## Your key's usage
+
+`GET /v1/usage` on the proxy listener, behind the key itself, answers that key's own usage for the last 24
+hours and 7 days.
 
 ## Headers and transport
 

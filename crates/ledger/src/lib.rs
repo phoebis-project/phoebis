@@ -14,6 +14,7 @@ mod record;
 mod rollup;
 mod schema;
 mod task;
+mod usage;
 
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS};
@@ -44,6 +45,7 @@ pub use rollup::{
     read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
+pub use usage::{key_usage, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
