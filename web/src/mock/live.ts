@@ -79,13 +79,18 @@ function fromLog(r: RequestLog): LiveRequest {
   const at = Date.parse(r.at);
   const ok = r.status === 200;
   const durationMs = r.durationMs ?? 0;
-  const phases: LivePhases = { receivedAt: r.at, selectedAt: iso(at + 60), writtenAt: iso(at + 140) };
-  if (r.ttfbMs !== null) phases.headAt = iso(at + r.ttfbMs);
-  if (ok && r.kind === 'inference' && r.ttftMs !== null) {
-    phases.firstContentAt = iso(at + r.ttftMs);
-    phases.streamEndAt = iso(at + Math.max(r.ttftMs + 10, durationMs - 40));
-  }
-  phases.finishedAt = iso(at + durationMs);
+  const ttftMs = ok && r.kind === 'inference' ? r.ttftMs : null;
+  // Every key stays present, undefined where it does not apply, so a still-running request's phases (only
+  // receivedAt set) and a finished one's share the same field set for a caller comparing shapes across the ring.
+  const phases: LivePhases = {
+    finishedAt: iso(at + durationMs),
+    firstContentAt: ttftMs !== null ? iso(at + ttftMs) : undefined,
+    headAt: r.ttfbMs !== null ? iso(at + r.ttfbMs) : undefined,
+    receivedAt: r.at,
+    selectedAt: iso(at + 60),
+    streamEndAt: ttftMs !== null ? iso(at + Math.max(ttftMs + 10, durationMs - 40)) : undefined,
+    writtenAt: iso(at + 140),
+  };
   const streaming = r.ttftMs !== null ? Math.max(50, durationMs - r.ttftMs) : null;
   return {
     accountId: r.accountId,
@@ -284,7 +289,9 @@ class LiveFeed {
       kind: plan.kind,
       model: plan.model,
       outputTps: null,
-      phases: { receivedAt: iso(plan.startedMs) },
+      // Every key stays present, undefined until advanceOne fills it in, so a snapshot taken mid-flight shows
+      // the same field set a finished request does.
+      phases: { finishedAt: undefined, firstContentAt: undefined, headAt: undefined, receivedAt: iso(plan.startedMs), selectedAt: undefined, streamEndAt: undefined, writtenAt: undefined },
       poolId: lane.poolId,
       preview: null,
       sessionId: rng.pick(LIVE_SESSION_IDS),
@@ -322,10 +329,18 @@ class LiveFeed {
     req.errorCode = plan.finalStatus === 200 ? null : plan.finalStatus === 429 ? 'rate_limit_error' : plan.finalStatus === 529 ? 'overloaded_error' : 'api_error';
     req.usage = plan.finalUsage;
     req.costUsd = Math.round(costOf(req.model, req.usage) * 10_000) / 10_000;
-    req.phases = { receivedAt: iso(s), selectedAt: iso(s + plan.selectAt), writtenAt: iso(s + plan.writtenAt), headAt: iso(s + plan.headAt), finishedAt: iso(finishAt) };
-    if (plan.finalStatus === 200 && req.kind === 'inference') {
-      req.phases.firstContentAt = iso(s + plan.firstContentAt);
-      req.phases.streamEndAt = iso(s + plan.streamEndAt);
+    const streamed = plan.finalStatus === 200 && req.kind === 'inference';
+    // Every key stays present, undefined where it does not apply, matching a still-running request's phases.
+    req.phases = {
+      finishedAt: iso(finishAt),
+      firstContentAt: streamed ? iso(s + plan.firstContentAt) : undefined,
+      headAt: iso(s + plan.headAt),
+      receivedAt: iso(s),
+      selectedAt: iso(s + plan.selectAt),
+      streamEndAt: streamed ? iso(s + plan.streamEndAt) : undefined,
+      writtenAt: iso(s + plan.writtenAt),
+    };
+    if (streamed) {
       req.outputTps = (plan.finalUsage.output / Math.max(50, plan.streamEndAt - plan.firstContentAt)) * 1000;
       if (req.keyId === 'laptop') req.preview = PREVIEW_WORDS.slice(0, rng.int(12, PREVIEW_WORDS.length)).join(' ');
     }
