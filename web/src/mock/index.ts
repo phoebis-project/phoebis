@@ -10,7 +10,7 @@ import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from '.
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
 import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUESTS, capturedBodiesFor, requestById } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
@@ -389,6 +389,10 @@ export class MockApi implements Api {
 
   listQuotaSnapshots() {
     return latency(QUOTA_SNAPSHOTS);
+  }
+
+  listRequestEvents(id: string) {
+    return latency(REQUEST_EVENTS.get(id) ?? []);
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {

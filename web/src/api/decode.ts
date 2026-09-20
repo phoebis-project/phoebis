@@ -1,7 +1,7 @@
 import type {
   Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
 } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -216,7 +216,7 @@ export function decodeRequest(v: unknown): RequestLog {
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissedInputTokens: null, cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
-    capturedBodies: bool(r.captured_bodies), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
     kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: (['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const).find((o) => o === str(r.outcome)) ?? 'failed',
     poolId: strOrNull(r.pool_id), sessionId: strOrNull(r.session_id), status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
@@ -225,6 +225,7 @@ export function decodeRequest(v: unknown): RequestLog {
 
 export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
 export const decodeBodies = (v: unknown): CapturedBodies => ({ request: rec(v).request, requestId: str(rec(v).request_id), response: rec(v).response });
+export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
 
 const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => Record<K, number>): Record<K, number> => {
   const out = empty();

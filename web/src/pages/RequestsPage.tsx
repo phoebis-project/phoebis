@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import type { Attempt, CapturedBodies, PinMigrationReason, RequestEvent, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
@@ -42,6 +42,14 @@ const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
   succeeded: 'Succeeded',
   transport_error: 'Transport error',
   upstream_error: 'Upstream error',
+};
+
+const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
+  cooldown: 'rate limited',
+  mark: 'upstream marked',
+  overage: 'overage',
+  spent: 'window spent',
+  utilization: 'utilization',
 };
 
 // A fixed three-slot readout: a plan that serves no Fable reports two windows in
@@ -319,6 +327,11 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
+  const events = useAsync<{ events: RequestEvent[]; requestId: string } | null>(() => (r ? api.listRequestEvents(r.id).then((list) => ({ events: list, requestId: r.id })) : Promise.resolve(null)), [r?.id]);
+  // A load that is pending or has failed leaves the answer to the request before it in hand, the guard the
+  // captured bodies apply above; and the route lists the session's events by time alone, so a move belongs
+  // to this request only when it is the same pin's, keyed by key, session, and canonical model.
+  const migrations = r === null || events.data?.requestId !== r.id ? [] : events.data.events.filter((e) => e.kind === 'pin_migrated' && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -409,6 +422,16 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 </li>
               ))}
             </ol>
+            {migrations.map((e) => {
+              const reason = String(e.detail?.reason ?? '') as PinMigrationReason;
+              const from = String(e.detail?.from_account ?? '-');
+              return (
+                <p className="attempt__migration" key={`${e.at}-${from}`} title={fmtAbsolute(e.at)}>
+                  Session moved from <Link to={`/upstreams/${from}`}>{from}</Link> to{' '}
+                  {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {PIN_MIGRATION_LABEL[reason] ?? reason}
+                </p>
+              );
+            })}
           </section>
 
           <section>

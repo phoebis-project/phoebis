@@ -294,6 +294,8 @@ export interface RequestLog {
   agentId: string | null;
   at: string;
   attempts: Attempt[];
+  /** The model the router resolved the request to, which a pin and its events are keyed by. */
+  canonicalModel: string;
   capturedBodies: boolean;
   costUsd: number;
   durationMs: number | null;
@@ -320,6 +322,21 @@ export interface CapturedBodies {
   request: unknown;
   requestId: string;
   response: unknown;
+}
+
+/** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
+export type PinMigrationReason = 'cooldown' | 'mark' | 'overage' | 'spent' | 'utilization';
+
+/** One event of a request's window, as `GET /admin/requests/{id}` lists them beside the summary. */
+export interface RequestEvent {
+  accountId: string | null;
+  at: string;
+  detail: Record<string, unknown> | null;
+  /** The pin's identity, where the event has one: the route lists a session's events by time alone. */
+  keyId: string | null;
+  kind: string;
+  model: string | null;
+  sessionId: string | null;
 }
 
 export interface RequestQuery {

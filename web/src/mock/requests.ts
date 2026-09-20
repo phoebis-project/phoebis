@@ -1,4 +1,4 @@
-import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, RateLimitWindow, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
+import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, PinMigrationReason, RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
@@ -241,6 +241,7 @@ function buildRequests(): RequestLog[] {
       poolId: lane.poolId,
       accountId: head.accountId,
       model,
+      canonicalModel: model,
       kind,
       outcome: finalStatus === 200 ? 'succeeded' : finalStatus === 429 ? 'exhausted' : 'failed',
       transport,
@@ -263,6 +264,44 @@ function buildRequests(): RequestLog[] {
 
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
+
+/** A migration reason the fixture draws for a single-attempt row, weighted toward the two the pool's samples drive. */
+const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
+  { value: 'overage', weight: 2 },
+  { value: 'spent', weight: 3 },
+  { value: 'utilization', weight: 3 },
+];
+
+function buildRequestEvents(): Map<string, RequestEvent[]> {
+  const h = createRng(8_080);
+  const out = new Map<string, RequestEvent[]>();
+  // The smoke checks and the drawer need a row that moved for a spent window, so the first eligible row carries one rather than leaving it to the draw below.
+  let spentOwed = true;
+  for (const r of REQUESTS) {
+    if (r.sessionId === null || r.kind === 'probe') continue;
+    const events: RequestEvent[] = [];
+    // The pin the event belongs to: the drawer shows a move only where these match the request's own.
+    const pin = { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
+    // A failover moves the pin off the account that answered 429; the event lands as the next attempt starts.
+    for (let i = 1; i < r.attempts.length; i += 1) {
+      const from = r.attempts[i - 1];
+      if (from.outcome !== 'rate_limited') continue;
+      events.push({ ...pin, accountId: r.attempts[i].accountId, at: r.attempts[i].startedAt, detail: { epoch: i + 1, from_account: from.accountId, reason: 'cooldown' }, kind: 'pin_migrated' });
+    }
+    // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429.
+    const lane = LANES.find((l) => l.keyId === r.keyId);
+    if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
+      const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
+      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
+      spentOwed = false;
+    }
+    if (events.length) out.set(r.id, events);
+  }
+  return out;
+}
+
+/** The events the mock's request detail answers, by request id; a failover writes one, a few rows carry a spent or a hot window. */
+export const REQUEST_EVENTS: Map<string, RequestEvent[]> = buildRequestEvents();
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;

@@ -154,6 +154,7 @@ export class HttpApi implements Api {
       }),
     );
   };
+  listRequestEvents = async (id: string) => (await call<{ events: unknown[] }>('GET', `/admin/requests/${enc(id)}`)).events.map(d.decodeRequestEvent);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
       await call('GET', `/admin/requests${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, user_agent: q.userAgent })}`),

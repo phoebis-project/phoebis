@@ -30,6 +30,7 @@ import type {
   PriceImportPreview,
   QuotaHistory,
   QuotaSnapshot,
+  RequestEvent,
   RequestLog,
   RequestPage,
   RequestQuery,
@@ -127,6 +128,7 @@ export interface Api {
   listKeys(): Promise<ApiKey[]>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
+  listRequestEvents(id: string): Promise<RequestEvent[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
   listSessions(): Promise<Session[]>;
   login(secret: string): Promise<SessionInfo>;

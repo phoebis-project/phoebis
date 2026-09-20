@@ -136,7 +136,9 @@ two-week weekly view and a three-day 5-hour view.
 The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status, attempts,
 TTFB, tokens, and cost. One row is one client request however many attempts it took, and the attempt trail reads
 as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. Filters narrow
-the table, and selecting a row opens a drawer with the request's detail.
+the table, and selecting a row opens a drawer with the request's detail. When the session moved during the request,
+the drawer says from which upstream to which and why: rate limited, upstream marked, overage, window spent, or
+utilization.
 
 ![The Request logs view: the filterable table and the request drawer](assets/requests-light.png#only-light)
 ![The Request logs view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)

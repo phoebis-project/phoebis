@@ -46,7 +46,7 @@ const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const started = performance.now();
 Date.now = () => CLOCK_ORIGIN + Math.floor(performance.now() - started);
 
-const { failNextCall, mount, requests, stallLive } = await import('./dist/entry.js');
+const { failNextCall, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -914,6 +914,25 @@ if (failoverRow) {
     ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
     missing: [...new Set(slots)],
   });
+}
+{
+  const spentId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.detail?.reason === 'spent'))?.[0];
+  results.push({ name: 'fixture: a request moved for a spent window exists', ok: spentId !== undefined, missing: [] });
+  if (spentId) {
+    await m.navigate(`/requests/${spentId}`);
+    expect('/requests/:spent drawer names the move and its reason', m.text(), ['Session moved from', 'window spent']);
+    // Moving to a request whose events fail to load must not leave the previous request's move on screen. The
+    // unmoved row is on the same pin, so only the request the events were read for can filter the stale one out.
+    const spentRow = requests.find((r) => r.id === spentId);
+    const unmoved = requests.find((r) => r.id !== spentId && !requestEvents.has(r.id) && r.keyId === spentRow.keyId && r.sessionId === spentRow.sessionId && r.canonicalModel === spentRow.canonicalModel);
+    results.push({ name: 'fixture: an unmoved request on the same pin as the moved one', ok: unmoved !== undefined, missing: [] });
+    if (unmoved) {
+      failNextCall('listRequestEvents', `/admin/requests/${unmoved.id}`, 'the ledger is unavailable');
+      await m.navigate(`/requests/${unmoved.id}`);
+      await m.settle(400);
+      results.push({ name: '/requests a failed events load never draws the move of the request before it', ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ['the previous move is still drawn'] : [] });
+    }
+  }
 }
 {
   const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));

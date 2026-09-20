@@ -7,8 +7,9 @@ import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
-import { REQUESTS } from '@/mock/requests';
+import { REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 
+export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
 
 /**

@@ -93,6 +93,21 @@
         }
       ]
     },
-    "events": []
+    "events": [
+      {
+        "at": -2599900,
+        "kind": "pin_migrated",
+        "account_id": "business",
+        "key_id": "desktop",
+        "session_id": "s1",
+        "model": "claude-sonnet-5",
+        "actor": null,
+        "detail": {
+          "from_account": "direct",
+          "epoch": 2,
+          "reason": "spent"
+        }
+      }
+    ]
   }
 }

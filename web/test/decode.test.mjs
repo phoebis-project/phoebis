@@ -178,6 +178,11 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failed.errorCode, 'upstream_error');
   assert.equal(failed.outcome, 'failed');
   assert.equal(d.decodeRequest(fixture('request').request).id, 'r-failover');
+  const moved = fixture('request').events.map(d.decodeRequestEvent);
+  assert.deepEqual([moved[0].kind, moved[0].accountId, moved[0].detail.from_account, moved[0].detail.reason], ['pin_migrated', 'business', 'direct', 'spent']);
+  assert.deepEqual([moved[0].keyId, moved[0].sessionId, moved[0].model], ['desktop', 's1', 'claude-sonnet-5'], 'the pin the event belongs to');
+  assert.ok(isIso(moved[0].at));
+  assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5');
   assert.equal(d.decodeBodies(fixture('request_bodies')).request.model, 'claude-sonnet-5');
 });
 

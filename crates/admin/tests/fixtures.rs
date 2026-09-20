@@ -8,7 +8,8 @@ use phoebis_bus::{
     ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_ledger::{
-    AttemptRecord, BodyRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
+    RequestRecord,
 };
 use phoebis_store::{AccountState, Identity, NewBundle, Secret};
 use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
@@ -266,6 +267,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ],
         bodies: None,
     });
+    // The session moved during this request's window, so the detail route lists the event beside it and the
+    // decoder has a real one to read.
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 100,
+        kind: "pin_migrated".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-sonnet-5".into()),
+        actor: None,
+        detail: Some(j!({ "from_account": "direct", "epoch": 2, "reason": "spent" }).to_string()),
+    }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
