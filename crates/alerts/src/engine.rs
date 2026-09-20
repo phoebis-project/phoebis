@@ -114,6 +114,16 @@ impl Alerts {
         &self.parts
     }
 
+    /// Whether any enabled rule watches `kind`, so an input can skip work the store would answer with nothing:
+    /// where no rule of the kind is enabled, no event of it can be open.
+    pub fn watches(&self, kind: Kind) -> bool {
+        self.rules
+            .lock()
+            .expect(LOCK_POISONED)
+            .iter()
+            .any(|r| r.enabled && r.kind == kind)
+    }
+
     /// A condition holds for a subject: every enabled matching rule without an open event for the subject opens
     /// one and posts it.
     pub fn signal(self: &Arc<Self>, signal: &Signal) {

@@ -66,6 +66,12 @@ async fn the_companions_reports_become_the_lifecycle_events_the_alerts_read() {
     })
     .await;
     assert_eq!(drain(&mut rx), [started()]);
+    r.observe("main").await;
+    assert_eq!(
+        drain(&mut rx),
+        [],
+        "a request of the session says nothing here: the request side is the alerts' own"
+    );
     r.event(Event {
         event: "agent_start".into(),
         agent_id: Some("sub-1".into()),
@@ -97,6 +103,63 @@ async fn the_companions_reports_become_the_lifecycle_events_the_alerts_read() {
     })
     .unwrap();
     assert_eq!(drain(&mut rx), [ended()]);
+}
+
+#[tokio::test]
+async fn a_main_agent_released_while_parked_leaves_the_parked_state() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(drain(&mut rx), [started()]);
+    r.state("main", "parked");
+    assert_eq!(drain(&mut rx), [parked()]);
+    r.state("main", "released");
+    assert_eq!(
+        drain(&mut rx),
+        [resumed()],
+        "leaving parked in any direction ends the parked condition"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_replacement_releases_the_agents_it_discards() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(drain(&mut rx), [started()]);
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub-1".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(drain(&mut rx), [agent("sub-1", true)]);
+    r.sequence += 1;
+    let sequence = r.sequence;
+    r.engine
+        .apply_event(
+            KEY,
+            Event {
+                event: "session_start".into(),
+                instance_id: "instance-2".into(),
+                previous_instance_id: Some("instance".into()),
+                session_id: SESSION.into(),
+                sequence,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        drain(&mut rx),
+        [agent("sub-1", false), started()],
+        "the agents the replacement discarded are released before the new instance starts"
+    );
 }
 
 #[tokio::test]

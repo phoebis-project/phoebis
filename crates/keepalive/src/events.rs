@@ -378,21 +378,19 @@ impl Inner {
                         }
                         _ => {}
                     }
-                    // The main agent's park and its return are the session's, and a subagent's release is the
-                    // end of that agent; a report of the state it already held is no transition.
+                    // The main agent's park and its leaving parked in any direction are the session's, and a
+                    // subagent's release is the end of that agent; a report of the state it already held is
+                    // no transition.
                     let transition = match (agent_id == MAIN_AGENT, was, state) {
-                        (true, AgentState::Parked, AgentState::Busy | AgentState::Idle) => {
-                            Some(SessionLifecycle::MainResumed {
-                                key_id: key.0.clone(),
-                                session_id: key.1.clone(),
-                            })
-                        }
-                        (true, previous, AgentState::Parked) if previous != AgentState::Parked => {
-                            Some(SessionLifecycle::MainParked {
-                                key_id: key.0.clone(),
-                                session_id: key.1.clone(),
-                            })
-                        }
+                        (true, AgentState::Parked, AgentState::Parked) => None,
+                        (true, AgentState::Parked, _) => Some(SessionLifecycle::MainResumed {
+                            key_id: key.0.clone(),
+                            session_id: key.1.clone(),
+                        }),
+                        (true, _, AgentState::Parked) => Some(SessionLifecycle::MainParked {
+                            key_id: key.0.clone(),
+                            session_id: key.1.clone(),
+                        }),
                         (false, _, AgentState::Released) => Some(SessionLifecycle::AgentReleased {
                             key_id: key.0.clone(),
                             session_id: key.1.clone(),
@@ -470,6 +468,15 @@ impl Inner {
                     Reason::InstanceReplaced,
                     Some(Wasted::Replaced),
                 );
+                // The replaced instance takes its subagents with it, and nothing else would say so: the new
+                // instance reports the agents it starts, never the ones it replaced.
+                if agent != MAIN_AGENT {
+                    self.emit(SessionLifecycle::AgentReleased {
+                        key_id: key.0.clone(),
+                        session_id: key.1.clone(),
+                        agent_id: agent.clone(),
+                    });
+                }
             }
             self.agents -= agents.len();
         }

@@ -71,17 +71,23 @@ pub const LIFECYCLE_KINDS: [Kind; 4] = [
 
 /// What the arm keeps about one key and session between that session's requests.
 struct SessionState {
+    /// Whether a `session_active` event is open for the pair, so a session opens one once however many
+    /// requests it sends, and an entry restored from an open question still opens one on its next request.
+    active_open: bool,
     /// The subagents of the session that are still running, by id.
     agents: BTreeMap<String, AgentSeen>,
     /// Turns the session's top-level agent has taken, so a question whose captured body is still being read
     /// can tell whether the user answered while it waited.
     generation: u64,
-    /// The newest request or report on any of the session's agents, which the idle rules and the expiry
-    /// measure from.
+    /// The newest client request on any of the session's agents, which the idle rules measure from: a report
+    /// about the session is not the session being used.
+    last_request: i64,
+    /// The newest sign of life of any kind, request or report, which the expiry measures from.
     last_seen: i64,
     /// Whether a `session_parked` event is open, so leaving parked resolves one only where one was opened.
     parked_open: bool,
-    /// The pool of the session's key, off the router snapshot, which is what a pool-scoped rule matches.
+    /// The pool of the session's key, which is what a pool-scoped rule matches; `None` until a request or a
+    /// snapshot lookup says which, and never read as a match.
     pool: Option<String>,
     /// Whether an `ask_user_question` event is open for the pair, so the next turn reads the store only when
     /// there is something there to resolve.
@@ -96,8 +102,10 @@ struct AgentSeen {
 impl SessionState {
     fn new(now: i64, pool: Option<String>) -> SessionState {
         SessionState {
+            active_open: false,
             agents: BTreeMap::new(),
             generation: 0,
+            last_request: now,
             last_seen: now,
             parked_open: false,
             pool,
@@ -129,60 +137,77 @@ fn pool_of(router: &RouterHandle, key: &str) -> Option<String> {
     router.snapshot().key(key).map(|k| k.pool_id.clone())
 }
 
-/// A session is in use: whichever side learned of it says so, and the engine keeps one event per rule and
-/// subject, so a repeat costs an insert the unique open index refuses.
-fn open_session_active(
-    alerts: &Arc<Alerts>,
-    key: &str,
-    session: &str,
-    pool: Option<&str>,
-    source: &str,
-) {
-    alerts.signal(&Signal {
+/// One store-touching step a lifecycle input decided on while it held the session map, taken once it has let
+/// go of it: a signal reads the rules and inserts a row, a clear reads every open event and queues its
+/// deliveries, and the two arms and the poller that share the map may not wait on either.
+enum Emit {
+    Clear(Kind, String),
+    Open(Signal),
+}
+
+fn emit_all(alerts: &Arc<Alerts>, emits: Vec<Emit>) {
+    for emit in emits {
+        match emit {
+            Emit::Clear(kind, subject) => alerts.clear(kind, &subject),
+            Emit::Open(signal) => alerts.signal(&signal),
+        }
+    }
+}
+
+/// A session is in use; `source` is the side that learned of it first.
+fn session_active_signal(key: &str, session: &str, pool: Option<&str>, source: &str) -> Signal {
+    Signal {
         kind: Kind::SessionActive,
         account_id: None,
         key_id: Some(key.into()),
         pool_id: pool.map(String::from),
         subject: question_subject(key, session),
         detail: json!({ "key": key, "pool": pool, "session": session, "source": source }),
-    });
+    }
 }
 
-fn open_subagent_active(
-    alerts: &Arc<Alerts>,
+fn subagent_active_signal(
     key: &str,
     session: &str,
     agent: &str,
     parent: Option<&str>,
     pool: Option<&str>,
-) {
-    alerts.signal(&Signal {
+) -> Signal {
+    Signal {
         kind: Kind::SubagentActive,
         account_id: None,
         key_id: Some(key.into()),
         pool_id: pool.map(String::from),
         subject: agent_subject(key, session, agent),
         detail: json!({ "agent": agent, "key": key, "parent_agent": parent, "pool": pool, "session": session }),
-    });
+    }
 }
 
 /// What a session's end or its expiry resolves: the kinds its own subject carries, and one `subagent_active`
-/// per subagent still running under it.
-fn clear_session(alerts: &Arc<Alerts>, key: &str, session: &str, state: &SessionState) {
+/// per subagent still running under it. The open flags go with them, so an entry that outlives the clear does
+/// not believe it still holds an event.
+fn clear_session(key: &str, session: &str, state: &mut SessionState) -> Vec<Emit> {
+    state.active_open = false;
+    state.parked_open = false;
     let subject = question_subject(key, session);
-    for kind in [Kind::SessionActive, Kind::SessionIdle, Kind::SessionParked] {
-        alerts.clear(kind, &subject);
-    }
-    for agent in state.agents.keys() {
-        alerts.clear(Kind::SubagentActive, &agent_subject(key, session, agent));
-    }
+    let mut emits: Vec<Emit> = [Kind::SessionActive, Kind::SessionIdle, Kind::SessionParked]
+        .into_iter()
+        .map(|kind| Emit::Clear(kind, subject.clone()))
+        .collect();
+    emits.extend(
+        state
+            .agents
+            .keys()
+            .map(|agent| Emit::Clear(Kind::SubagentActive, agent_subject(key, session, agent))),
+    );
+    emits
 }
 
 /// Resolves every open lifecycle event of a session past `expiry_ms` since its last request or report, and
 /// drops the terminal timestamps older than that; run by the poller on every tick and by the arm before it
 /// reads.
 pub fn sweep_expired(tracked: &Tracked, alerts: &Arc<Alerts>, expiry_ms: i64, now: i64) {
-    let expired: Vec<((String, String), SessionState)> = {
+    let emits = {
         let mut inner = tracked.lock();
         inner.terminals.retain(|_, ended| now - *ended < expiry_ms);
         let stale: Vec<(String, String)> = inner
@@ -191,15 +216,16 @@ pub fn sweep_expired(tracked: &Tracked, alerts: &Arc<Alerts>, expiry_ms: i64, no
             .filter(|(_, s)| now - s.last_seen >= expiry_ms)
             .map(|(pair, _)| pair.clone())
             .collect();
-        stale
-            .into_iter()
-            .filter_map(|pair| inner.sessions.remove_entry(&pair))
-            .collect()
+        let mut emits = Vec::new();
+        for pair in stale {
+            if let Some(((key, session), mut state)) = inner.sessions.remove_entry(&pair) {
+                emits.extend(clear_session(&key, &session, &mut state));
+            }
+        }
+        emits
     };
     // Outside the lock: a clear reads the open events and posts, which the other two arms must not wait on.
-    for ((key, session), state) in expired {
-        clear_session(alerts, &key, &session, &state);
-    }
+    emit_all(alerts, emits);
 }
 
 struct InFlight {
@@ -224,7 +250,6 @@ struct InFlight {
 pub struct BusArm {
     alerts: Arc<Alerts>,
     in_flight: HashMap<String, InFlight>,
-    router: RouterHandle,
     /// How long a session may go unseen before the arm forgets it. The poller retires that session's open
     /// question at the same age, so nothing the entry is kept for outlives it.
     session_expiry_ms: i64,
@@ -295,7 +320,6 @@ impl BusArm {
         BusArm {
             alerts,
             in_flight: HashMap::new(),
-            router: inputs.router.clone(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
             tracked: Tracked(Arc::new(Mutex::new(TrackedInner {
                 sessions,
@@ -328,9 +352,16 @@ impl BusArm {
     }
 
     /// The lifecycle side of a client's request: the session it belongs to, and the subagent that sent it.
-    fn observe_lifecycle(&self, tracked: &mut TrackedInner, o: &RequestObserved, now: i64) {
+    /// What it decides is returned rather than signalled, so the session map is not held through the store.
+    fn observe_lifecycle(
+        &self,
+        tracked: &mut TrackedInner,
+        o: &RequestObserved,
+        now: i64,
+    ) -> Vec<Emit> {
+        let mut emits = Vec::new();
         let (Some(key), Some(session)) = (o.key_id.as_deref(), o.session_id.as_deref()) else {
-            return;
+            return emits;
         };
         let pair = (key.to_string(), session.to_string());
         // The lifecycle channel and the request bus have consumer tasks of their own, so a session's end can
@@ -340,35 +371,51 @@ impl BusArm {
             .get(&pair)
             .is_some_and(|ended| o.received_at <= *ended)
         {
-            return;
+            return emits;
         }
-        let pool = match tracked.sessions.get(&pair) {
-            Some(state) => state.pool.clone(),
-            None => pool_of(&self.router, key),
-        };
         let state = tracked
             .sessions
             .entry(pair)
-            .or_insert_with(|| SessionState::new(now, pool.clone()));
+            .or_insert_with(|| SessionState::new(now, o.pool_id.clone()));
+        state.last_request = now;
         state.last_seen = now;
-        open_session_active(&self.alerts, key, session, pool.as_deref(), "request");
+        // An entry a question restored, or a report opened before the key had a pool, learns it from the
+        // request that names one: a pool-scoped rule matches on equality and would never fire on `None`.
+        if state.pool.is_none() {
+            state.pool.clone_from(&o.pool_id);
+        }
+        let pool = state.pool.clone();
+        if !state.active_open {
+            state.active_open = true;
+            emits.push(Emit::Open(session_active_signal(
+                key,
+                session,
+                pool.as_deref(),
+                "request",
+            )));
+        }
         let agent = o.agent_id.as_deref().unwrap_or(MAIN_AGENT);
         if agent != MAIN_AGENT && !state.agents.contains_key(agent) {
             let seen = state.agents.entry(agent.to_string()).or_insert(AgentSeen {
                 parent: o.parent_agent_id.clone(),
             });
-            open_subagent_active(
-                &self.alerts,
+            emits.push(Emit::Open(subagent_active_signal(
                 key,
                 session,
                 agent,
                 seen.parent.as_deref(),
                 pool.as_deref(),
-            );
+            )));
         }
-        // A request is the session in use, whatever an idle rule decided a moment before it arrived.
-        self.alerts
-            .clear(Kind::SessionIdle, &question_subject(key, session));
+        // A request is the session in use, whatever an idle rule decided a moment before it arrived. Where no
+        // idle rule is enabled nothing can be open to resolve, and the clear reads every open event.
+        if self.alerts.watches(Kind::SessionIdle) {
+            emits.push(Emit::Clear(
+                Kind::SessionIdle,
+                question_subject(key, session),
+            ));
+        }
+        emits
     }
 
     pub fn observe(&mut self, event: Event) {
@@ -381,6 +428,7 @@ impl BusArm {
         match event {
             Event::RequestObserved(o) => {
                 let mut generation = 0;
+                let mut emits = Vec::new();
                 if let (Some(key), Some(session)) = (&o.key_id, &o.session_id) {
                     // Only the top-level agent's own next turn says the user answered: a keepalive probe
                     // replays the session, a token count precedes a turn, and a sub-agent's turn is the
@@ -392,7 +440,7 @@ impl BusArm {
                     let pair = (key.clone(), session.clone());
                     let mut tracked = self.tracked.lock();
                     if client_turn {
-                        self.observe_lifecycle(&mut tracked, &o, now);
+                        emits = self.observe_lifecycle(&mut tracked, &o, now);
                     }
                     // A request the session's end outran has no entry to answer against; the end took it.
                     if let Some(state) = tracked.sessions.get_mut(&pair) {
@@ -411,6 +459,8 @@ impl BusArm {
                         generation = state.generation;
                     }
                 }
+                // The map is free again: what the lifecycle side decided reaches the store now.
+                emit_all(&self.alerts, emits);
                 self.in_flight.insert(
                     o.request_id.clone(),
                     InFlight {
@@ -522,10 +572,11 @@ impl BusArm {
                                 // between them the session's next turn could take the flag and clear a
                                 // question whose event has not reached the store yet.
                                 let mut tracked = tracked.lock();
-                                let state = tracked
-                                    .sessions
-                                    .entry(pair)
-                                    .or_insert_with(|| SessionState::new(now, None));
+                                // Only an entry that is still there: a session the companion ended took its
+                                // own with it, and a question of it may not put one back.
+                                let Some(state) = tracked.sessions.get_mut(&pair) else {
+                                    return;
+                                };
                                 if state.generation != admitted {
                                     return;
                                 }
@@ -535,13 +586,11 @@ impl BusArm {
                             });
                         } else {
                             let mut tracked = self.tracked.lock();
-                            let state = tracked
-                                .sessions
-                                .entry((key.clone(), session.clone()))
-                                .or_insert_with(|| SessionState::new(now, None));
+                            let state = tracked.sessions.get_mut(&(key.clone(), session.clone()));
                             // The same window the captured path checks: a response completing after the
                             // session's next top-level turn is answering a question that turn already closed.
-                            if state.generation == e.generation {
+                            // An entry the session's end removed is gone for good.
+                            if let Some(state) = state.filter(|s| s.generation == e.generation) {
                                 state.last_seen = now;
                                 state.question_open = true;
                                 self.alerts.signal(&base);
@@ -574,6 +623,13 @@ impl LifecycleArm {
 
     pub fn apply(&mut self, event: SessionLifecycle) {
         let now = (self.alerts.parts().clock)();
+        let emits = self.decide(event, now);
+        // The map is free again: what the report decided reaches the store now.
+        emit_all(&self.alerts, emits);
+    }
+
+    /// What the report changes in the session map, and what that leaves to signal once the map is free.
+    fn decide(&self, event: SessionLifecycle, now: i64) -> Vec<Emit> {
         let mut tracked = self.tracked.lock();
         match event {
             SessionLifecycle::AgentReleased {
@@ -585,101 +641,116 @@ impl LifecycleArm {
                     .sessions
                     .get_mut(&(key_id.clone(), session_id.clone()))
                 else {
-                    return;
+                    return Vec::new();
                 };
                 state.last_seen = now;
-                if state.agents.remove(&agent_id).is_some() {
-                    self.alerts.clear(
-                        Kind::SubagentActive,
-                        &agent_subject(&key_id, &session_id, &agent_id),
-                    );
+                if state.agents.remove(&agent_id).is_none() {
+                    return Vec::new();
                 }
+                vec![Emit::Clear(
+                    Kind::SubagentActive,
+                    agent_subject(&key_id, &session_id, &agent_id),
+                )]
             }
             SessionLifecycle::AgentStarted {
                 key_id,
                 session_id,
                 agent_id,
             } => {
-                let pool = pool_of(&self.router, &key_id);
                 let state = tracked
                     .sessions
                     .entry((key_id.clone(), session_id.clone()))
-                    .or_insert_with(|| SessionState::new(now, pool));
+                    .or_insert_with(|| SessionState::new(now, None));
                 state.last_seen = now;
-                let pool = state.pool.clone();
-                if !state.agents.contains_key(&agent_id) {
-                    // A report names no parent: only the client's own header says which agent spawned which.
-                    state
-                        .agents
-                        .insert(agent_id.clone(), AgentSeen { parent: None });
-                    open_subagent_active(
-                        &self.alerts,
-                        &key_id,
-                        &session_id,
-                        &agent_id,
-                        None,
-                        pool.as_deref(),
-                    );
+                if state.pool.is_none() {
+                    state.pool = pool_of(&self.router, &key_id);
                 }
+                if state.agents.contains_key(&agent_id) {
+                    return Vec::new();
+                }
+                // A report names no parent: only the client's own header says which agent spawned which.
+                state
+                    .agents
+                    .insert(agent_id.clone(), AgentSeen { parent: None });
+                vec![Emit::Open(subagent_active_signal(
+                    &key_id,
+                    &session_id,
+                    &agent_id,
+                    None,
+                    state.pool.as_deref(),
+                ))]
             }
             SessionLifecycle::MainParked { key_id, session_id } => {
                 let Some(state) = tracked
                     .sessions
                     .get_mut(&(key_id.clone(), session_id.clone()))
                 else {
-                    return;
+                    return Vec::new();
                 };
                 state.last_seen = now;
-                if !state.parked_open {
-                    state.parked_open = true;
-                    let pool = state.pool.clone();
-                    self.alerts.signal(&Signal {
-                        kind: Kind::SessionParked,
-                        account_id: None,
-                        key_id: Some(key_id.clone()),
-                        pool_id: pool.clone(),
-                        subject: question_subject(&key_id, &session_id),
-                        detail: json!({ "key": key_id, "pool": pool, "session": session_id }),
-                    });
+                if state.pool.is_none() {
+                    state.pool = pool_of(&self.router, &key_id);
                 }
+                if state.parked_open {
+                    return Vec::new();
+                }
+                state.parked_open = true;
+                let pool = state.pool.clone();
+                vec![Emit::Open(Signal {
+                    kind: Kind::SessionParked,
+                    account_id: None,
+                    key_id: Some(key_id.clone()),
+                    pool_id: pool.clone(),
+                    subject: question_subject(&key_id, &session_id),
+                    detail: json!({ "key": key_id, "pool": pool, "session": session_id }),
+                })]
             }
             SessionLifecycle::MainResumed { key_id, session_id } => {
                 let Some(state) = tracked
                     .sessions
                     .get_mut(&(key_id.clone(), session_id.clone()))
                 else {
-                    return;
+                    return Vec::new();
                 };
                 state.last_seen = now;
-                if std::mem::take(&mut state.parked_open) {
-                    self.alerts
-                        .clear(Kind::SessionParked, &question_subject(&key_id, &session_id));
+                if !std::mem::take(&mut state.parked_open) {
+                    return Vec::new();
                 }
+                vec![Emit::Clear(
+                    Kind::SessionParked,
+                    question_subject(&key_id, &session_id),
+                )]
             }
             SessionLifecycle::SessionEnded { key_id, session_id } => {
                 let pair = (key_id.clone(), session_id.clone());
-                if let Some(state) = tracked.sessions.remove(&pair) {
-                    clear_session(&self.alerts, &key_id, &session_id, &state);
-                }
+                let emits = match tracked.sessions.remove(&pair) {
+                    Some(mut state) => clear_session(&key_id, &session_id, &mut state),
+                    None => Vec::new(),
+                };
                 // The end outlives the entry it removed: a request of this session still on the bus, received
                 // before it, must not open the session again.
                 tracked.terminals.insert(pair, now);
+                emits
             }
             SessionLifecycle::SessionStarted { key_id, session_id } => {
-                let pool = pool_of(&self.router, &key_id);
                 let state = tracked
                     .sessions
                     .entry((key_id.clone(), session_id.clone()))
-                    .or_insert_with(|| SessionState::new(now, pool));
+                    .or_insert_with(|| SessionState::new(now, None));
                 state.last_seen = now;
-                let pool = state.pool.clone();
-                open_session_active(
-                    &self.alerts,
+                if state.pool.is_none() {
+                    state.pool = pool_of(&self.router, &key_id);
+                }
+                if state.active_open {
+                    return Vec::new();
+                }
+                state.active_open = true;
+                vec![Emit::Open(session_active_signal(
                     &key_id,
                     &session_id,
-                    pool.as_deref(),
+                    state.pool.as_deref(),
                     "companion",
-                );
+                ))]
             }
         }
     }
@@ -914,14 +985,14 @@ impl Poller {
                 tracked
                     .sessions
                     .iter()
-                    .filter(|(_, s)| now - s.last_seen >= idle_ms)
+                    .filter(|(_, s)| now - s.last_request >= idle_ms)
                     .map(|((key, session), s)| Signal {
                         kind: Kind::SessionIdle,
                         account_id: None,
                         key_id: Some(key.clone()),
                         pool_id: s.pool.clone(),
                         subject: question_subject(key, session),
-                        detail: json!({ "idle_minutes": threshold, "key": key, "last_request_at": s.last_seen, "pool": s.pool, "session": session }),
+                        detail: json!({ "idle_minutes": threshold, "key": key, "last_request_at": s.last_request, "pool": s.pool, "session": session }),
                     })
                     .collect()
             };

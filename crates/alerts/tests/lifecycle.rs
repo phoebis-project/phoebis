@@ -298,6 +298,7 @@ async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
     let mut poller = Poller::new(
         rig.alerts.clone(),
         &inputs(&rig, BTreeMap::new()),
@@ -312,12 +313,19 @@ async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request
         !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
         "a minute short of the threshold is not idle"
     );
+    // A report about the session is not the session being used, so it moves no idle clock.
+    companion.apply(SessionLifecycle::MainParked {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    });
+    settled(&rig).await;
     rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
     assert_eq!(
         detail_of(&rig, Kind::SessionIdle),
-        serde_json::json!({ "idle_minutes": 30.0, "key": KEY, "last_request_at": NOW, "pool": "main", "session": "s1" })
+        serde_json::json!({ "idle_minutes": 30.0, "key": KEY, "last_request_at": NOW, "pool": "main", "session": "s1" }),
+        "the companion's report a minute earlier postponed nothing"
     );
     rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
     arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW + 31 * 60_000));
@@ -546,6 +554,11 @@ async fn open_lifecycle_events_from_before_a_restart_are_resolved_at_start_with_
         open(&rig),
         [("session_active".to_string(), question_subject(KEY, "s1"))],
         "a live session opens a fresh event on its next request, which also answers the question"
+    );
+    assert_eq!(
+        detail_of(&rig, Kind::SessionActive)["pool"],
+        serde_json::json!("main"),
+        "the request names the pool a pool-scoped rule would have to match"
     );
 }
 
