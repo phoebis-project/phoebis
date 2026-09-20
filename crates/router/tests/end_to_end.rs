@@ -10,37 +10,80 @@ use std::sync::Mutex;
 /// variables with different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
+/// How long a poll waits for the binary's asynchronous pipeline (the routing task, the ledger's writer, an
+/// admin read) to converge. Generous on purpose: the assertion behind it is "it converges", never "within
+/// five seconds", and the loaded workspace run is the case it has to survive.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The listeners bind on the server task's first turns, so a boot is waited out by retrying the admin login
 /// until it answers rather than by a fixed sleep. The login that succeeds leaves the session cookie in the
 /// client's jar, which is what every admin call after it needs.
 async fn logged_in(client: &reqwest::Client, session_url: &str) {
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let answered = client
-            .post(session_url)
-            .header("content-type", "application/json")
-            .body(r#"{"secret":"admin-secret"}"#)
-            .send()
-            .await;
-        match answered {
-            Ok(response) if response.status() == 204 => return,
-            Ok(response) => panic!("the admin login answered {}", response.status()),
-            Err(_) => {}
+    let give_up = std::time::Instant::now() + SETTLE;
+    let attempts = async {
+        loop {
+            let answered = client
+                .post(session_url)
+                .header("content-type", "application/json")
+                .body(r#"{"secret":"admin-secret"}"#)
+                .send()
+                .await;
+            match answered {
+                Ok(response) if response.status() == 204 => return,
+                Ok(response) => panic!("the admin login answered {}", response.status()),
+                Err(_) => {}
+            }
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the admin listener never accepted a connection"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the admin listener never accepted a connection"
+    };
+    // The deadline above is read between attempts; the timeout covers an attempt that never returns.
+    if tokio::time::timeout(SETTLE, attempts).await.is_err() {
+        panic!(
+            "{session_url} accepted a connection and never answered the login within {SETTLE:?}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
 
+/// How many ports one test process draws from: a hundred slices of a hundred fill `20_000..30_000`, all of it
+/// below the kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
+const PORT_SPAN: u16 = 100;
+
+/// The first port of this process's slice, spread by pid so two test processes rarely share one.
+fn port_base() -> u16 {
+    20_000 + (std::process::id() % 100) as u16 * PORT_SPAN
+}
+
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    let base = port_base();
+    // The offset wraps inside the slice, so a failed probe advances the cursor without ever carrying the
+    // range toward the ephemeral ports. A probe bind tells a port another process holds from a free one; the
+    // socket is dropped at once. One full pass with no free port is a host with a hundred listeners in this
+    // slice, reported by name rather than looped on.
+    for _ in 0..PORT_SPAN {
+        let offset = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % PORT_SPAN;
+        let port = base + offset;
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port in {base}..{}", base + PORT_SPAN);
+}
+
+#[test]
+fn free_port_stays_below_the_ephemeral_range() {
+    // More draws than the slice holds, so the cursor wraps at least once and the wrap is what is under test.
+    for _ in 0..150 {
+        let port = free_port();
+        assert!(
+            (20_000..30_000).contains(&port),
+            "{port} is outside the allocator's range"
+        );
+    }
 }
 
 /// The fixture request, replayed against the proxy under the given secret and session id. Headers come from
@@ -1228,7 +1271,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         let _ = resp.text().await.unwrap();
     }
     // The ledger lands on its own task; the request log shows the rows once it has.
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let give_up = std::time::Instant::now() + SETTLE;
     let log = loop {
         let log: serde_json::Value = client
             .get(admin("/requests"))
@@ -1567,23 +1610,31 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     up.shutdown().await;
 }
 
-/// Polls an admin route until `ready` accepts its JSON, within five seconds.
+/// Polls an admin route until `ready` accepts its JSON, within the settle budget: the deadline for a route that
+/// answers but has not converged, the timeout for one that stops answering mid-request.
 async fn wait_json(
     client: &reqwest::Client,
     url: &str,
     ready: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let value: serde_json::Value = client.get(url).send().await.unwrap().json().await.unwrap();
-        if ready(&value) {
-            return value;
+    let give_up = std::time::Instant::now() + SETTLE;
+    let polls = async {
+        loop {
+            let value: serde_json::Value =
+                client.get(url).send().await.unwrap().json().await.unwrap();
+            if ready(&value) {
+                return value;
+            }
+            assert!(
+                std::time::Instant::now() < give_up,
+                "{url} never settled: {value}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "{url} never settled: {value}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    match tokio::time::timeout(SETTLE, polls).await {
+        Ok(value) => value,
+        Err(_) => panic!("{url} stopped answering within {SETTLE:?}"),
     }
 }
 

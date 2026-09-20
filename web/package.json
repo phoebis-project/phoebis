@@ -8,7 +8,7 @@
     "dev": "vite",
     "e2e": "node e2e/views.mjs",
     "preview": "vite preview",
-    "smoke": "vite build -c smoke/vite.config.ts && node smoke/run.mjs",
+    "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",
     "test": "vite build -c test/vite.config.ts && node --test test/"
   },
   "dependencies": {

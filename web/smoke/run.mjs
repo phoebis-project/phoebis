@@ -37,6 +37,15 @@ for (const level of ['error', 'warn']) {
 window.addEventListener('error', (e) => problems.push(`[window.error] ${e.message}`));
 process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?.stack ?? e}`));
 
+// The mock anchors its story at load (`NOW = Date.now()`) and buckets its traffic by the local hour and
+// weekday, so a check over a synthetic week reads a different draw for every hour the runner starts in. A
+// clock that starts at one fixed weekday afternoon and advances from there gives every run the same story
+// while intervals, relative labels, and the scroll guards keep seeing time pass. The zone is pinned to UTC by
+// the smoke script for the same reason.
+const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
+const started = performance.now();
+Date.now = () => CLOCK_ORIGIN + Math.floor(performance.now() - started);
+
 const { failNextCall, mount, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
