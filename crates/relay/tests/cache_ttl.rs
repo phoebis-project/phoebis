@@ -447,3 +447,42 @@ async fn the_policy_is_off_by_default_and_never_touches_a_count_tokens_body() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage_state() {
+    const POLICY: &str = r#"{"enabled":true,"main":"1h","in_overage":"5m"}"#;
+
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[api_key("acct", A, 0)], policy(POLICY)).await;
+    let req = request_from_fixture(
+        inference_head(FixtureKind::ApiKey),
+        body(BodyFixture::ApiKey),
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[0].body),
+        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
+        "an api_key account pays for every write, so in_overage applies with no overage evidence"
+    );
+
+    let oh = harness(&up, &[oauth("o", OA, 0)], policy(POLICY)).await;
+    let req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        body(BodyFixture::Oauth),
+        KEY,
+    );
+    let resp = oh.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[1].body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
+        "an oauth account with no overage evidence reads main"
+    );
+    up.shutdown().await;
+}

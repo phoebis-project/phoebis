@@ -872,7 +872,30 @@ impl Relay {
             let mut edited = admitted.raw.to_vec();
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
-            let mut ttl = None;
+            // Money, not the account's mood: an api_key account pays for every write, so the in-overage TTL is
+            // the right one there whatever the overage evidence says, and an oauth account pays only while in
+            // overage.
+            let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
+            // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
+            // retry reuses this body rather than pricing again.
+            let priced = admitted
+                .cache_ttl_policy
+                .ttl_for(
+                    canonical_model,
+                    admitted.identity.agent_id == "main",
+                    writes_cost_money,
+                )
+                .filter(|_| admitted.trace.kind != Kind::CountTokens);
+            // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
+            // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
+            // minutes and reports that.
+            let mut ttl = priced.map(|t| {
+                if skip.contains(&Injected::ExtendedTtlBeta) {
+                    CacheTtl::FiveMinutes
+                } else {
+                    t
+                }
+            });
                 // Isolated per account, so a failover never carries one account's previous request id, or the
                 // previous message id a diagnostics member names, into another account's memory.
                 let previous = memory_key
@@ -880,26 +903,6 @@ impl Relay {
                     .unwrap_or_default();
                 let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
                     .then_some(previous.message_id.as_deref());
-                // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
-                // retry reuses this body rather than pricing again.
-                let priced = admitted
-                    .cache_ttl_policy
-                    .ttl_for(
-                        canonical_model,
-                        admitted.identity.agent_id == "main",
-                        selection.in_overage,
-                    )
-                    .filter(|_| admitted.trace.kind != Kind::CountTokens);
-                // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
-                // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
-                // minutes and reports that.
-                ttl = priced.map(|t| {
-                    if skip.contains(&Injected::ExtendedTtlBeta) {
-                        CacheTtl::FiveMinutes
-                    } else {
-                        t
-                    }
-                });
                 let edits = edit_body(
                     &mut edited,
                     &NativeEdit {
@@ -994,6 +997,13 @@ impl Relay {
             );
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
             // find, and only the builder's own report joins `body_injected` in what a 400 may be matched against.
+            // A five-minute body carries no extended beta, whichever leg wrote it: the caller's own
+            // (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) or one an earlier attempt injected.
+            let drop_betas: &[&str] = if ttl == Some(CacheTtl::FiveMinutes) {
+                &[EXTENDED_TTL_BETA]
+            } else {
+                &[]
+            };
             let head = {
                 // A latched or freshly stripped `ClientRequestId` means this leg generates none: the id is the
                 // relay's own addition, and the account has already refused it once.
@@ -1002,13 +1012,6 @@ impl Relay {
                     .as_ref()
                     .filter(|_| !skip.contains(&Injected::ClientRequestId))
                     .map(|_| uuid_v4());
-                // A five-minute body carries no extended beta, whichever leg wrote it: the caller's own
-                // (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) or one an earlier attempt injected.
-                let drop_betas: &[&str] = if ttl == Some(CacheTtl::FiveMinutes) {
-                    &[EXTENDED_TTL_BETA]
-                } else {
-                    &[]
-                };
                 outbound_headers(
                     admitted.caller,
                     admitted.original,
