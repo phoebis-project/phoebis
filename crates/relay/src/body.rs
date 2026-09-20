@@ -4,7 +4,7 @@
 use crate::billing::{restore_billing_line, Restore};
 use crate::identity::is_valid_id;
 use crate::memory::Injected;
-use crate::RelayError;
+use crate::{CacheTtl, RelayError};
 
 #[derive(Debug)]
 pub struct BodyEdits {
@@ -13,10 +13,12 @@ pub struct BodyEdits {
     pub model_replaced: bool,
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
+    pub cache_ttl_edited: bool,
 }
 
 /// The native edit's inputs: the account identity and model every request needs, the restoration a
-/// `claude-cli/` inference request carries, and the diagnostics member `compatibility.cache_diagnostics` forces.
+/// `claude-cli/` inference request carries, the diagnostics member `compatibility.cache_diagnostics` forces, and
+/// the pool's cache TTL policy.
 pub struct NativeEdit<'a> {
     pub account_uuid: Option<&'a str>,
     pub upstream_model: &'a str,
@@ -24,11 +26,15 @@ pub struct NativeEdit<'a> {
     /// Outer `None` leaves the body alone; the inner option is the previous `message_start` id on this account,
     /// `None` writing a JSON `null` for a first turn, a migration, or a failover.
     pub diagnostics: Option<Option<&'a str>>,
+    /// `None` leaves every marker as sent; `Some` rewrites every marker (or adds the top-level one) to this TTL.
+    pub cache_ttl: Option<CacheTtl>,
 }
 
 /// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
 /// reported as injected, since its 400 is the client's to handle.
 pub const CACHE_DIAGNOSIS_BETA: &str = Injected::CacheDiagnosisBeta.wire_name();
+/// The beta a one-hour cache TTL pairs with; dropped from the caller's list for a five-minute body.
+pub const EXTENDED_TTL_BETA: &str = Injected::ExtendedTtlBeta.wire_name();
 
 /// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
 /// on: the account it would be billed against, or the model it would be served by, is not the one the router
@@ -118,6 +124,10 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             restored.push(Injected::Diagnostics);
         }
     }
+    let cache_ttl_edited = match edit.cache_ttl {
+        Some(ttl) => set_cache_ttl(body, ttl)?,
+        None => false,
+    };
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
         account_uuid_replaced,
@@ -125,7 +135,81 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         model_replaced,
         cch_restamped,
         restored,
+        cache_ttl_edited,
     })
+}
+
+/// Rewrites every ephemeral marker to `ttl`: `1h` writes `"ttl":"1h"` right after `"type":"ephemeral"`, `5m`
+/// removes the `ttl` member, and every other member of the marker keeps its place. A marker whose `type` is not
+/// `ephemeral` is left as sent. A body with no marker anywhere gets the top-level `cache_control` member with
+/// the TTL, before `stream`. Returns whether any byte changed.
+pub fn set_cache_ttl(body: &mut Vec<u8>, ttl: CacheTtl) -> Result<bool, RelayError> {
+    let spans = phoebis_cch::cache_control_spans(body)?;
+    if spans.is_empty() {
+        add_top_level_cache_control(body, ttl);
+        return Ok(true);
+    }
+    let mut changed = false;
+    // Last to first so an earlier span's offsets still hold after a later one is spliced.
+    for (start, end) in spans.into_iter().rev() {
+        let Ok(marker) =
+            serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&body[start..end])
+        else {
+            continue;
+        };
+        if marker.get("type").and_then(serde_json::Value::as_str) != Some("ephemeral") {
+            continue;
+        }
+        let mut rebuilt = serde_json::Map::new();
+        rebuilt.insert(
+            "type".to_string(),
+            serde_json::Value::String("ephemeral".into()),
+        );
+        if ttl == CacheTtl::OneHour {
+            rebuilt.insert("ttl".to_string(), serde_json::Value::String("1h".into()));
+        }
+        for (key, value) in &marker {
+            if key == "type" || key == "ttl" {
+                continue;
+            }
+            rebuilt.insert(key.clone(), value.clone());
+        }
+        let rewritten = serde_json::to_string(&rebuilt).expect("a map serializes");
+        if rewritten.as_bytes() != &body[start..end] {
+            body.splice(start..end, rewritten.into_bytes());
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// The top-level `cache_control` member for a body with no marker anywhere: before `stream` when present, else
+/// last, the same placement rule `insert_diagnostics` uses.
+fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
+    let member = match ttl {
+        CacheTtl::OneHour => r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#.to_string(),
+        CacheTtl::FiveMinutes => r#""cache_control":{"type":"ephemeral"}"#.to_string(),
+    };
+    match phoebis_cch::object_member_span(body, &["stream"]) {
+        Some((start, _)) => {
+            body.splice(start..start, format!("{member},").bytes());
+        }
+        None => {
+            let end = body
+                .iter()
+                .rposition(|b| *b == b'}')
+                .expect("checked to be an object");
+            let empty = body[..end]
+                .iter()
+                .rev()
+                .find(|b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+                == Some(&b'{');
+            body.splice(
+                end..end,
+                format!("{}{member}", if empty { "" } else { "," }).bytes(),
+            );
+        }
+    }
 }
 
 /// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
@@ -259,6 +343,7 @@ mod tests {
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
+                cache_ttl: None,
             },
         )
         .expect("a JSON object is editable");
@@ -279,6 +364,7 @@ mod tests {
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
+                    cache_ttl: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -296,6 +382,7 @@ mod tests {
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
+                    cache_ttl: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -312,6 +399,7 @@ mod tests {
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
+                    cache_ttl: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -328,6 +416,7 @@ mod tests {
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
+                cache_ttl: None,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -344,6 +433,7 @@ mod tests {
                 upstream_model: "claude-sonnet-4-5",
                 restore: None,
                 diagnostics: None,
+                cache_ttl: None,
             },
         )
         .expect("a JSON object is editable");
@@ -365,9 +455,82 @@ mod tests {
                     upstream_model: "claude-sonnet-4-5",
                     restore: None,
                     diagnostics: None,
+                    cache_ttl: None,
                 },
             ),
             Err(RelayError::NotAnObject)
         ));
+    }
+
+    #[test]
+    fn set_cache_ttl_rewrites_a_bare_marker_both_ways() {
+        let mut to_hour = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
+        assert!(set_cache_ttl(&mut to_hour, CacheTtl::OneHour).unwrap());
+        assert_eq!(
+            to_hour,
+            br#"{"cache_control":{"type":"ephemeral","ttl":"1h"}}"#
+        );
+
+        let mut stays_five = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
+        assert!(
+            !set_cache_ttl(&mut stays_five, CacheTtl::FiveMinutes).unwrap(),
+            "already the requested shape"
+        );
+        assert_eq!(stays_five, br#"{"cache_control":{"type":"ephemeral"}}"#);
+    }
+
+    #[test]
+    fn set_cache_ttl_rewrites_an_hour_marker_both_ways_and_keeps_a_third_members_place() {
+        let mut to_five =
+            br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
+        assert!(set_cache_ttl(&mut to_five, CacheTtl::FiveMinutes).unwrap());
+        assert_eq!(
+            to_five, br#"{"cache_control":{"type":"ephemeral","scope":"global"}}"#,
+            "ttl is dropped, scope keeps its place after type"
+        );
+
+        let mut to_hour =
+            br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
+        assert!(
+            !set_cache_ttl(&mut to_hour, CacheTtl::OneHour).unwrap(),
+            "already an hour"
+        );
+    }
+
+    #[test]
+    fn set_cache_ttl_leaves_a_marker_of_another_type_as_sent() {
+        let mut body = br#"{"cache_control":{"type":"persistent"}}"#.to_vec();
+        assert!(!set_cache_ttl(&mut body, CacheTtl::OneHour).unwrap());
+        assert_eq!(body, br#"{"cache_control":{"type":"persistent"}}"#);
+    }
+
+    #[test]
+    fn set_cache_ttl_adds_the_top_level_member_before_stream_when_no_marker_is_present() {
+        let mut with_stream = br#"{"model":"m","stream":true}"#.to_vec();
+        assert!(set_cache_ttl(&mut with_stream, CacheTtl::OneHour).unwrap());
+        assert_eq!(
+            with_stream,
+            br#"{"model":"m","cache_control":{"type":"ephemeral","ttl":"1h"},"stream":true}"#
+        );
+
+        let mut without_stream = br#"{"model":"m"}"#.to_vec();
+        assert!(set_cache_ttl(&mut without_stream, CacheTtl::FiveMinutes).unwrap());
+        assert_eq!(
+            without_stream,
+            br#"{"model":"m","cache_control":{"type":"ephemeral"}}"#
+        );
+    }
+
+    #[test]
+    fn set_cache_ttl_rewrites_every_wire_position_and_keeps_the_marker_count() {
+        // No fixture body carries a marker inside `tools[]`; this synthetic body covers all three container
+        // positions in one pass.
+        let mut body = br#"{"system":[{"type":"text","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","cache_control":{"type":"ephemeral"}}]}]}"#.to_vec();
+        assert!(set_cache_ttl(&mut body, CacheTtl::OneHour).unwrap());
+        let spans = phoebis_cch::cache_control_spans(&body).unwrap();
+        assert_eq!(spans.len(), 3, "the rewrite adds and removes no marker");
+        for (start, end) in spans {
+            assert_eq!(&body[start..end], br#"{"type":"ephemeral","ttl":"1h"}"#);
+        }
     }
 }

@@ -21,6 +21,10 @@ A probe costs a cache read at list price. The ledger credits the gross saving a 
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
 can go negative when probes outspend what they save.
 
+A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
+through the same edit path; the engine learns the TTL an entry was written with from the response's usage and
+from what the router sent, never from the marker the client wrote.
+
 ## The companion
 
 The engine learns which sessions are alive from `cc-cache-keepalive`, a Claude Code hook plugin that reports the

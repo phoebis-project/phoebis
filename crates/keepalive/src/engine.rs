@@ -341,6 +341,9 @@ pub(crate) struct Observation {
     /// Observed inside a gap's backlog, so this request's own terminal event may be one the gap dropped:
     /// nothing it carries may arm a recipe.
     pub poisoned: bool,
+    /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`; `None` when
+    /// the relay left the markers as sent, in which case the cap falls back to the recipe's own received TTL.
+    pub dispatched_ms: Option<i64>,
 }
 
 /// Probes a stopped recipe leaves unanswered, with the label the stop gives them. Queued under the lock and
@@ -857,6 +860,7 @@ impl Engine {
             ttl_ms: 0,
             prior,
             poisoned,
+            dispatched_ms: None,
         });
         inner.pending.insert(observed.request_id, (key, agent_id));
     }
@@ -885,6 +889,7 @@ impl Engine {
         observation.ready = false;
         observation.expected = 0;
         observation.ttl_ms = 0;
+        observation.dispatched_ms = selected.cache_ttl_ms;
         agent.cache_started = observation.started;
         agent.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
@@ -1154,7 +1159,12 @@ impl Inner {
             return;
         }
         observation.expected = usage.evidence();
-        agent.ttl_ms = usage.ttl_ms(agent.ttl_ms, observation.recipe.ttl_ms);
+        agent.ttl_ms = usage.ttl_ms(
+            agent.ttl_ms,
+            observation
+                .dispatched_ms
+                .unwrap_or(observation.recipe.ttl_ms),
+        );
         if observation.ttl_ms > 0 && observation.ttl_ms < agent.ttl_ms {
             agent.ttl_ms = observation.ttl_ms;
         }

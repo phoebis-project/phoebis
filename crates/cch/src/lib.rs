@@ -258,6 +258,184 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Raw span of every `cache_control` value the Messages API reads: the top-level member, one per `system[]` and
+/// `tools[]` entry, and one per `messages[].content[]` block, in body order. One pass; a member of that name
+/// anywhere else (a tool schema, a tool input) is skipped with the value that holds it.
+pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let mut spans = Vec::new();
+    s.ws();
+    if !s.eat(b'{') {
+        return Err(CchError::Json(s.pos));
+    }
+    s.ws();
+    if s.eat(b'}') {
+        return Ok(spans);
+    }
+    loop {
+        s.ws();
+        let (ks, ke) = s.string()?;
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.ws();
+        match &s.body[ks + 1..ke - 1] {
+            b"cache_control" => {
+                let start = s.pos;
+                s.value(false)?;
+                spans.push((start, s.pos));
+            }
+            b"system" | b"tools" => block_array(&mut s, &mut spans)?,
+            b"messages" => message_array(&mut s, &mut spans)?,
+            _ => s.value(false)?,
+        }
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b'}') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    Ok(spans)
+}
+
+/// The array behind `system` or `tools`, or a `messages[]` element's `content`: each object entry's own
+/// members are scanned for `cache_control`; anything not an array is skipped whole, as a value at that position
+/// with the wrong shape gives the scanner nothing to walk.
+fn block_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+    s.ws();
+    if s.body.get(s.pos) != Some(&b'[') {
+        return s.value(false);
+    }
+    s.pos += 1;
+    s.ws();
+    if s.eat(b']') {
+        return Ok(());
+    }
+    loop {
+        s.ws();
+        if s.body.get(s.pos) == Some(&b'{') {
+            block_object(s, spans)?;
+        } else {
+            s.value(false)?;
+        }
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b']') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    Ok(())
+}
+
+/// One `system[]`, `tools[]`, or content-block object: its own `cache_control` member is recorded, every other
+/// member is skipped whole.
+fn block_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+    s.pos += 1;
+    s.ws();
+    if s.eat(b'}') {
+        return Ok(());
+    }
+    loop {
+        s.ws();
+        let (ks, ke) = s.string()?;
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.ws();
+        if &s.body[ks + 1..ke - 1] == b"cache_control" {
+            let start = s.pos;
+            s.value(false)?;
+            spans.push((start, s.pos));
+        } else {
+            s.value(false)?;
+        }
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b'}') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    Ok(())
+}
+
+/// `messages[]`: each object element's `content` is walked as `block_array` walks `system` and `tools`, when it
+/// is an array; every other member, and a non-array `content`, is skipped whole.
+fn message_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+    s.ws();
+    if s.body.get(s.pos) != Some(&b'[') {
+        return s.value(false);
+    }
+    s.pos += 1;
+    s.ws();
+    if s.eat(b']') {
+        return Ok(());
+    }
+    loop {
+        s.ws();
+        if s.body.get(s.pos) == Some(&b'{') {
+            message_object(s, spans)?;
+        } else {
+            s.value(false)?;
+        }
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b']') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    Ok(())
+}
+
+fn message_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+    s.pos += 1;
+    s.ws();
+    if s.eat(b'}') {
+        return Ok(());
+    }
+    loop {
+        s.ws();
+        let (ks, ke) = s.string()?;
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.ws();
+        if &s.body[ks + 1..ke - 1] == b"content" {
+            block_array(s, spans)?;
+        } else {
+            s.value(false)?;
+        }
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b'}') {
+            return Err(CchError::Json(s.pos));
+        }
+        break;
+    }
+    Ok(())
+}
+
 pub fn sign(body: &[u8]) -> Result<Vec<u8>, CchError> {
     let Some(loc) = find_cch(body) else {
         return Ok(body.to_vec());
@@ -672,6 +850,23 @@ mod tests {
         assert!(
             empty_array_member_end(br#"{"system":"x"}"#, &["system"]).is_none(),
             "a string is not an array"
+        );
+    }
+
+    #[test]
+    fn cache_control_spans_finds_every_wire_position_and_skips_a_tool_schema_decoy() {
+        let body = br#"{"cache_control":{"type":"ephemeral"},"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"name":"t","input_schema":{"properties":{"cache_control":{"type":"ephemeral"}}},"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"m","cache_control":{"type":"ephemeral"}}]}],"model":"m"}"#;
+        let spans = cache_control_spans(body).unwrap();
+        let texts: Vec<&[u8]> = spans.iter().map(|(s, e)| &body[*s..*e]).collect();
+        assert_eq!(
+            texts,
+            vec![
+                br#"{"type":"ephemeral"}"#.as_slice(),
+                br#"{"type":"ephemeral","ttl":"1h"}"#.as_slice(),
+                br#"{"type":"ephemeral"}"#.as_slice(),
+                br#"{"type":"ephemeral"}"#.as_slice(),
+            ],
+            "the tool's own marker is found, the one inside its input_schema is skipped with the schema"
         );
     }
 }

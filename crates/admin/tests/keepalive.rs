@@ -235,6 +235,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             account_kind: "api_key".into(),
             pin_epoch: Some(1),
             started_at: now,
+            cache_ttl_ms: None,
         }));
     parts
         .keepalive

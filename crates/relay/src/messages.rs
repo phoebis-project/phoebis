@@ -54,7 +54,8 @@ use crate::stream::{
     MAX_BUFFERED_BODY,
 };
 use crate::{
-    edit_body, is_portable, presented_key, DriftGuard, NativeEdit, RelayError,
+    edit_body, is_portable, presented_key, CacheTtl, CacheTtlPolicy, DriftGuard,
+    NativeEdit, RelayError, EXTENDED_TTL_BETA,
 };
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
@@ -114,6 +115,8 @@ pub struct RelayOutcome {
     /// The upstream's own `request-id` response header on the committed attempt, `None` for a local answer or an
     /// upstream that sent none.
     pub upstream_request_id: Option<String>,
+    /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
+    pub cache_ttl_ms: Option<i64>,
 }
 
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
@@ -265,12 +268,14 @@ impl Trace {
         }));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn selected(
         &self,
         attempt: u8,
         account: &AccountRow,
         pin_epoch: Option<u64>,
         started_at: i64,
+        cache_ttl_ms: Option<i64>,
     ) {
         self.publish(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
@@ -283,6 +288,7 @@ impl Trace {
             .into(),
             pin_epoch,
             started_at,
+            cache_ttl_ms,
         }));
     }
 
@@ -377,8 +383,9 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
     }
 }
 
-/// One leg's edited body, what the body editor restored, and the beta items it asks the header builder to add.
-type Built = Result<(Vec<u8>, Vec<Injected>, Vec<Injected>), RelayError>;
+/// One leg's edited body, what the body editor restored, the beta items it asks the header builder to add, and
+/// the TTL it coupled the body to (the fourth element), `None` off the policy.
+type Built = Result<(Vec<u8>, Vec<Injected>, Vec<Injected>, Option<CacheTtl>), RelayError>;
 
 /// Every kind of injection the relay may make. Order carries no meaning: it only seeds a `BTreeSet`.
 const INJECTED_KINDS: [Injected; 7] = [
@@ -407,6 +414,14 @@ fn restore_with<'a>(
         prev_req: previous.request_id.as_deref(),
         restore_cch: true,
         skip: skip.iter().copied().collect(),
+    })
+}
+
+/// The wire value a coupled TTL dispatches as, for the bus and the outcome; `None` when the body went as sent.
+fn cache_ttl_ms(ttl: Option<CacheTtl>) -> Option<i64> {
+    ttl.map(|t| match t {
+        CacheTtl::FiveMinutes => 300_000,
+        CacheTtl::OneHour => 3_600_000,
     })
 }
 
@@ -671,6 +686,10 @@ impl Relay {
             .and_then(|p| p.cache_diagnostics)
             .unwrap_or(self.cache_diagnostics);
         let diagnostics = cache_diagnostics_on && trace.kind != Kind::CountTokens;
+        let cache_ttl_policy = snapshot
+            .pool(&key.pool_id)
+            .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
+            .unwrap_or_default();
         let portable = is_portable(&raw);
         let target = parts
             .uri
@@ -688,6 +707,7 @@ impl Relay {
             "relaying a Messages request",
         );
         let admitted = Admitted {
+            cache_ttl_policy,
             caller: &parts.headers,
             client_version,
             diagnostics,
@@ -785,6 +805,7 @@ impl Relay {
                         Some(code),
                         None,
                         None,
+                        None,
                     );
                     return self.answer(
                         &trace,
@@ -851,6 +872,7 @@ impl Relay {
             let mut edited = admitted.raw.to_vec();
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
+            let mut ttl = None;
                 // Isolated per account, so a failover never carries one account's previous request id, or the
                 // previous message id a diagnostics member names, into another account's memory.
                 let previous = memory_key
@@ -858,6 +880,26 @@ impl Relay {
                     .unwrap_or_default();
                 let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
                     .then_some(previous.message_id.as_deref());
+                // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
+                // retry reuses this body rather than pricing again.
+                let priced = admitted
+                    .cache_ttl_policy
+                    .ttl_for(
+                        canonical_model,
+                        admitted.identity.agent_id == "main",
+                        selection.in_overage,
+                    )
+                    .filter(|_| admitted.trace.kind != Kind::CountTokens);
+                // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
+                // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
+                // minutes and reports that.
+                ttl = priced.map(|t| {
+                    if skip.contains(&Injected::ExtendedTtlBeta) {
+                        CacheTtl::FiveMinutes
+                    } else {
+                        t
+                    }
+                });
                 let edits = edit_body(
                     &mut edited,
                     &NativeEdit {
@@ -865,13 +907,17 @@ impl Relay {
                         upstream_model: &selection.upstream_model,
                         restore: restore_with(&admitted.restore, &previous, skip),
                         diagnostics,
+                        cache_ttl: ttl,
                     },
                 )?;
                 body_injected.extend(edits.restored);
                 if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
                     inject_betas.push(Injected::CacheDiagnosisBeta);
                 }
-            Ok((edited, body_injected, inject_betas))
+                if ttl == Some(CacheTtl::OneHour) {
+                    inject_betas.push(Injected::ExtendedTtlBeta);
+                }
+            Ok((edited, body_injected, inject_betas, ttl))
         };
         // Seeded from what this account has already refused, so a leg the operator has not touched since the
         // last 400 never resubmits a field or a beta the upstream is known to reject.
@@ -879,7 +925,7 @@ impl Relay {
             .into_iter()
             .filter(|item| self.memory.refuses(account, *item))
             .collect();
-        let (mut edited, mut body_injected, mut inject_betas) = match build(&skip) {
+        let (mut edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
             Ok(built) => built,
             Err(error) => {
                 if let RelayError::ClientDrift { kind } = &error {
@@ -902,6 +948,7 @@ impl Relay {
                         Some(kind.to_string()),
                         admitted.client_version.clone(),
                         Some("client_drift"),
+                        None,
                         None,
                         None,
                     );
@@ -943,6 +990,7 @@ impl Relay {
                 account,
                 pin_epoch,
                 (self.clock)(),
+                cache_ttl_ms(ttl),
             );
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
             // find, and only the builder's own report joins `body_injected` in what a 400 may be matched against.
@@ -954,6 +1002,13 @@ impl Relay {
                     .as_ref()
                     .filter(|_| !skip.contains(&Injected::ClientRequestId))
                     .map(|_| uuid_v4());
+                // A five-minute body carries no extended beta, whichever leg wrote it: the caller's own
+                // (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) or one an earlier attempt injected.
+                let drop_betas: &[&str] = if ttl == Some(CacheTtl::FiveMinutes) {
+                    &[EXTENDED_TTL_BETA]
+                } else {
+                    &[]
+                };
                 outbound_headers(
                     admitted.caller,
                     admitted.original,
@@ -962,6 +1017,7 @@ impl Relay {
                     edited.len(),
                     client_request_id.as_deref(),
                     &inject_betas,
+                    drop_betas,
                 )
             };
             let injected: Vec<Injected> = body_injected
@@ -972,6 +1028,7 @@ impl Relay {
             let responding = Responding {
                 account,
                 attempt: *attempt,
+                cache_ttl_ms: cache_ttl_ms(ttl),
                 caller: admitted.caller,
                 can_strip: !stripped_once && *attempt < self.limits.max_attempts,
                 cancel,
@@ -1041,6 +1098,7 @@ impl Relay {
                         Some("account_cancelled"),
                         pin_epoch,
                         None,
+                        cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(self.answer(
                         admitted.trace,
@@ -1066,6 +1124,7 @@ impl Relay {
                         Some("upstream_unreachable"),
                         pin_epoch,
                         None,
+                        cache_ttl_ms(ttl),
                     );
                     return Leg::Respond(self.answer(
                         admitted.trace,
@@ -1091,10 +1150,11 @@ impl Relay {
                     // `skip` only grew from a set `build` already succeeded with, so the rebuild fails only if
                     // the body stopped being editable between two edits of the same bytes.
                     match build(&skip) {
-                        Ok((rebuilt, restored, betas)) => {
+                        Ok((rebuilt, restored, betas, rebuilt_ttl)) => {
                             edited = rebuilt;
                             body_injected = restored;
                             inject_betas = betas;
+                            ttl = rebuilt_ttl;
                         }
                         Err(error) => {
                             tracing::error!(account = %account.id, %error, "a strip retry could not rebuild the body it just stripped from");
@@ -1150,6 +1210,7 @@ impl Relay {
             None,
             ctx.pin_epoch,
             Some(head_at),
+            ctx.cache_ttl_ms,
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         self.report_overage(ctx.account, &head, head_at);
@@ -1541,6 +1602,7 @@ impl Relay {
             Some(failure.code),
             None,
             None,
+            None,
         );
         self.answer(
             trace,
@@ -1597,6 +1659,7 @@ impl Relay {
             Some("account_cancelled"),
             ctx.pin_epoch,
             None,
+            ctx.cache_ttl_ms,
         );
         self.answer(
             ctx.trace,
@@ -1622,6 +1685,7 @@ impl Relay {
         error_code: Option<&str>,
         pin_epoch: Option<u64>,
         head_at: Option<i64>,
+        cache_ttl_ms: Option<i64>,
     ) -> RelayOutcome {
         RelayOutcome {
             request_id: trace.request_id.clone(),
@@ -1640,6 +1704,7 @@ impl Relay {
             received_at: trace.received_at,
             head_at,
             upstream_request_id: None,
+            cache_ttl_ms,
         }
     }
 
@@ -1860,6 +1925,8 @@ enum NoCredential {
 struct Responding<'a> {
     account: &'a AccountRow,
     attempt: u8,
+    /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
+    cache_ttl_ms: Option<i64>,
     caller: &'a HeaderMap,
     /// Whether an attempt remains under `max_attempts` and this leg has not stripped yet.
     can_strip: bool,
@@ -1904,6 +1971,9 @@ struct RestoreContext {
 /// What the same-account leg reads about the request it is part of: fixed at admission and shared by every
 /// account the request tries.
 struct Admitted<'a> {
+    /// The pool's own policy, off by default; read once at admission since a migrated attempt still prices the
+    /// same request against the same policy, only the account's overage state changes per destination.
+    cache_ttl_policy: CacheTtlPolicy,
     caller: &'a HeaderMap,
     client_version: Option<String>,
     /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a

@@ -47,6 +47,9 @@ pub(crate) struct ProbeResult {
     pub error_code: Option<String>,
     /// `None` when the read crossed the usage bound or failed: nothing past it is a usage block.
     pub body: Option<Bytes>,
+    /// The TTL the relay dispatched the probe's body with, off `RelayOutcome::cache_ttl_ms`; `None` when the
+    /// body went as sent.
+    pub cache_ttl_ms: Option<i64>,
 }
 
 pub(crate) enum Exchange {
@@ -150,6 +153,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             account: None,
             error_code: None,
             body: None,
+            cache_ttl_ms: None,
         }),
         Ok(request) => {
             let relay = engine.parts.relay.clone();
@@ -171,6 +175,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                         .filter(|a| !a.is_empty()),
                     error_code: outcome.as_ref().and_then(|o| o.error_code.clone()),
                     body,
+                    cache_ttl_ms: outcome.as_ref().and_then(|o| o.cache_ttl_ms),
                 }
             };
             // The whole exchange, the head and the body, sits in one arm: a cancellation or the deadline ends
@@ -468,7 +473,10 @@ impl Inner {
             .unwrap();
         agent.failures = 0;
         agent.retry_at = None;
-        agent.ttl_ms = usage.ttl_ms(agent.ttl_ms, job.recipe.ttl_ms);
+        agent.ttl_ms = usage.ttl_ms(
+            agent.ttl_ms,
+            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
+        );
         agent.cache_started = job.started;
         agent.expires = Some(job.started + agent.ttl_ms);
         agent.jitter_frac = rand::random::<f64>();

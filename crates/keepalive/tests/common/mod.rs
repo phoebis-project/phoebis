@@ -343,6 +343,7 @@ impl Rig {
             account_kind: "api_key".into(),
             pin_epoch: Some(1),
             started_at: self.now(),
+            cache_ttl_ms: None,
         })
     }
 

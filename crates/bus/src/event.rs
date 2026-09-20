@@ -171,6 +171,8 @@ pub struct AccountSelected {
     pub account_kind: String,
     pub pin_epoch: Option<u64>,
     pub started_at: i64,
+    /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
+    pub cache_ttl_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug)]

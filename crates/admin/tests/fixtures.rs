@@ -328,6 +328,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             account_kind: "api_key".into(),
             pin_epoch: Some(1),
             started_at: now,
+            cache_ttl_ms: None,
         }));
     parts
         .keepalive
@@ -538,6 +539,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         account_kind: "oauth".into(),
         pin_epoch: Some(1),
         started_at: now + 5,
+        cache_ttl_ms: None,
     }));
     parts.bus.publish(Event::ResponseHead(ResponseHead {
         request_id: "live-1".into(),

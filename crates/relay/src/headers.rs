@@ -62,7 +62,8 @@ pub struct OutboundHead {
 /// caller's list is appended to the merged line; when the caller sent no `anthropic-beta` line at all and the
 /// list is non-empty, a line holding exactly the injected entries is inserted after `anthropic-version` (else
 /// right before the credential slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a
-/// missing line stays missing, as today.
+/// missing line stays missing, as today. `drop_betas` entries are removed from the caller's list,
+/// whether the caller sent them or an earlier attempt injected them.
 #[allow(clippy::too_many_arguments)]
 pub fn outbound_headers(
     caller: &HeaderMap,
@@ -72,6 +73,7 @@ pub fn outbound_headers(
     content_length: usize,
     client_request_id: Option<&str>,
     inject_betas: &[Injected],
+    drop_betas: &[&str],
 ) -> OutboundHead {
     let sent: Vec<(&str, &str)> = match original {
         Some(head) => head
@@ -136,7 +138,7 @@ pub fn outbound_headers(
             "anthropic-beta" => {
                 if !saw_beta {
                     saw_beta = true;
-                    let (line, added) = betas(&beta_list, kind, inject_betas);
+                    let (line, added) = betas(&beta_list, kind, inject_betas, drop_betas);
                     out.push((name.into(), line));
                     injected.extend(added);
                 }
@@ -233,27 +235,21 @@ fn credential(kind: &CredentialKind) -> (String, String) {
     }
 }
 
-/// Splits `value`, applies the OAuth claim, then appends each `inject` item whose `wire_name`
-/// the list still lacks. Returns the merged line and exactly the items it appended, so a client-sent beta of
-/// the same name is never reported as the relay's own.
+/// Splits `value`, drops every `drop` entry, applies the OAuth claim (inserted for an OAuth account and
+/// stripped for an API key), then appends each `inject` item whose `wire_name` the list still lacks. Returns
+/// the merged line and exactly the items it appended, so a client-sent beta of the same name is never reported
+/// as the relay's own.
 fn betas(
     value: &str,
     kind: &CredentialKind,
     inject: &[Injected],
+    drop: &[&str],
 ) -> (String, Vec<Injected>) {
-    let claimed = || value.split(',').any(|entry| entry.trim() == OAUTH_BETA);
-    let mut list = match kind {
-        CredentialKind::ApiKey { .. } => value
-            .split(',')
-            .filter(|entry| entry.trim() != OAUTH_BETA)
-            .collect::<Vec<_>>()
-            .join(","),
-        CredentialKind::Oauth { .. } if claimed() => value.into(),
-        CredentialKind::Oauth { .. } if value.trim().is_empty() => OAUTH_BETA.into(),
-        // The beta is a claim about the credential rather than about the client's feature set, so it leads
-        // the list and the caller's own entries keep their order behind it.
-        CredentialKind::Oauth { .. } => format!("{OAUTH_BETA},{value}"),
-    };
+    let mut list = value
+        .split(',')
+        .filter(|entry| !drop.contains(&entry.trim()))
+        .collect::<Vec<_>>()
+        .join(",");
     let mut injected = Vec::new();
     for item in inject {
         let name = item.wire_name();
@@ -267,6 +263,19 @@ fn betas(
         };
         injected.push(*item);
     }
+    let claimed = || list.split(',').any(|entry| entry.trim() == OAUTH_BETA);
+    let list = match kind {
+        CredentialKind::ApiKey { .. } => list
+            .split(',')
+            .filter(|entry| entry.trim() != OAUTH_BETA)
+            .collect::<Vec<_>>()
+            .join(","),
+        CredentialKind::Oauth { .. } if claimed() => list,
+        CredentialKind::Oauth { .. } if list.trim().is_empty() => OAUTH_BETA.into(),
+        // The beta is a claim about the credential rather than about the client's feature set, so it leads
+        // the list and the caller's own entries keep their order behind it.
+        CredentialKind::Oauth { .. } => format!("{OAUTH_BETA},{list}"),
+    };
     (list, injected)
 }
 
@@ -304,6 +313,7 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
+            &[],
             &[],
         )
         .headers
@@ -413,6 +423,7 @@ mod tests {
             7,
             None,
             &[],
+            &[],
         )
         .headers;
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
@@ -439,6 +450,7 @@ mod tests {
             7,
             Some("generated-id"),
             &[],
+            &[],
         )
         .headers;
         let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
@@ -460,6 +472,7 @@ mod tests {
             "api.anthropic.com",
             7,
             Some("generated-id"),
+            &[],
             &[],
         )
         .headers;
@@ -484,6 +497,7 @@ mod tests {
             "api.anthropic.com",
             7,
             Some("generated-id"),
+            &[],
             &[],
         )
         .headers;
@@ -514,6 +528,7 @@ mod tests {
             7,
             None,
             inject,
+            &[],
         )
     }
 
@@ -604,7 +619,68 @@ mod tests {
             7,
             Some("generated-id"),
             &[],
+            &[],
         );
         assert_eq!(outbound.injected, vec![Injected::ClientRequestId]);
+    }
+
+    #[test]
+    fn betas_drops_a_middle_entry_and_injects_into_an_empty_list() {
+        let (line, injected) = betas(
+            "a,extended-cache-ttl-2025-04-11,b",
+            &api_key(),
+            &[],
+            &["extended-cache-ttl-2025-04-11"],
+        );
+        assert_eq!(
+            line, "a,b",
+            "the middle entry is gone, the others keep their order"
+        );
+        assert!(injected.is_empty());
+
+        let (line, injected) = betas(
+            "",
+            &api_key(),
+            &[Injected::ExtendedTtlBeta],
+            &[],
+        );
+        assert_eq!(line, "extended-cache-ttl-2025-04-11");
+        assert_eq!(injected, vec![Injected::ExtendedTtlBeta]);
+    }
+
+    #[test]
+    fn a_dropped_beta_leaves_the_list() {
+        let caller = head(&[(
+            "anthropic-beta",
+            "claude-code-20250219,extended-cache-ttl-2025-04-11",
+        )]);
+        let (line, injected) = betas(
+            "claude-code-20250219,extended-cache-ttl-2025-04-11",
+            &api_key(),
+            &[],
+            &["extended-cache-ttl-2025-04-11"],
+        );
+        assert_eq!(line, "claude-code-20250219");
+        assert!(injected.is_empty());
+
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            None,
+            &[],
+            &["extended-cache-ttl-2025-04-11"],
+        );
+        assert_eq!(
+            emitted
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+                .unwrap()
+                .1,
+            "claude-code-20250219"
+        );
     }
 }

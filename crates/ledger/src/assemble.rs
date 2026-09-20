@@ -413,6 +413,7 @@ mod tests {
             account_kind: "oauth".into(),
             pin_epoch: Some(4),
             started_at: at,
+            cache_ttl_ms: None,
         })
     }
     fn head(id: &str, n: u8, status: u16, outcome: AttemptOutcome, at: i64) -> Event {

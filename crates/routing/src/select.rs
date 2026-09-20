@@ -40,6 +40,9 @@ pub struct Selection {
     pub upstream_model: String,
     pub pin: Option<PinRef>,
     pub migrated: Option<MigrateReason>,
+    /// The account's overage state at this selection, so an edit that prices a write reads the same fact the
+    /// selector did.
+    pub in_overage: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -365,6 +368,7 @@ pub fn select(
             upstream_model: chosen.upstream_model.clone(),
             pin: pin_ref,
             migrated,
+            in_overage: state.in_overage(&chosen.account_id),
         }),
         writes,
     )
@@ -450,6 +454,7 @@ fn renew(
             epoch: current.epoch,
         }),
         migrated: None,
+        in_overage: state.in_overage(&current.account_id),
     }
 }
 

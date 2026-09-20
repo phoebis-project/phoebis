@@ -249,6 +249,39 @@ async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
 }
 
 #[tokio::test]
+async fn a_pool_policy_dispatches_the_hour_a_five_minute_body_asked_for_and_the_engine_learns_it() {
+    // The fixture body's own marker carries no ttl (five minutes); with the cap reading the recipe's own
+    // received TTL, a one-hour write would have been capped back down to it. The cap now reads the TTL the
+    // relay actually dispatched, so the engine learns the hour the pool rewrote the request to.
+    let mut r = rig(RigSpec {
+        pool: PoolSpec {
+            cache_ttl: r#"{"enabled":true,"main":"1h"}"#,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000},"output_tokens":10}}"#.to_vec(),
+        },
+    );
+    r.observe("main").await;
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    r.advance(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the schedule armed off the dispatched hour, not the body's own five-minute marker"
+    );
+}
+
+#[tokio::test]
 async fn a_migrated_probe_is_exempt_and_the_next_request_counts_as_kept_warm() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],

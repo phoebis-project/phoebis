@@ -777,6 +777,7 @@ mod tests {
             account_kind: "oauth".into(),
             pin_epoch: None,
             started_at: 1_010,
+            cache_ttl_ms: None,
         })
     }
 
