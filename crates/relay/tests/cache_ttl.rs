@@ -418,8 +418,14 @@ async fn the_policy_is_off_by_default_and_never_touches_a_count_tokens_body() {
         respond: json_200(),
     }])
     .await;
-    // Default `PoolSpec`: the fixture wire this leaves is the regression guard's own, covered there.
-    let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
+    // An enabled policy, not the default: a count_tokens body has to be exempted from a policy that would
+    // otherwise rewrite it, not merely left alone because nothing was on.
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"main":"1h"}"#),
+    )
+    .await;
     let mut count_tokens = request_from_fixture(
         inference_head(FixtureKind::ApiKey),
         body(BodyFixture::ApiKey),
@@ -432,6 +438,12 @@ async fn the_policy_is_off_by_default_and_never_touches_a_count_tokens_body() {
         markers(&up.requests()[0].body),
         vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
         "count_tokens is left as sent even with the policy enabled elsewhere"
+    );
+    assert!(
+        !beta_list(&up.requests()[0])
+            .iter()
+            .any(|b| b == EXTENDED_TTL_BETA),
+        "count_tokens's public schema has no slot for the beta either"
     );
     up.shutdown().await;
 }

@@ -139,7 +139,11 @@ pub fn outbound_headers(
                 if !saw_beta {
                     saw_beta = true;
                     let (line, added) = betas(&beta_list, kind, inject_betas, drop_betas);
-                    out.push((name.into(), line));
+                    // A drop can empty a list whose only entry it removed; the caller's line then has
+                    // nothing left to say, so the header is left out rather than sent empty.
+                    if !line.is_empty() {
+                        out.push((name.into(), line));
+                    }
                     injected.extend(added);
                 }
             }
@@ -681,6 +685,28 @@ mod tests {
                 .unwrap()
                 .1,
             "claude-code-20250219"
+        );
+    }
+
+    #[test]
+    fn a_drop_that_empties_the_callers_only_entry_leaves_the_header_out_entirely() {
+        let caller = head(&[("anthropic-beta", "extended-cache-ttl-2025-04-11")]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            None,
+            &[],
+            &["extended-cache-ttl-2025-04-11"],
+        );
+        assert!(
+            !emitted
+                .headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta")),
+            "the drop left nothing for the caller's line to say"
         );
     }
 }
