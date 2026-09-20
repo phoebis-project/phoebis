@@ -385,6 +385,20 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_line_is_inserted_into_an_empty_top_level_system_array() {
+        let mut body = br#"{"model":"claude-sonnet-5","system":[],"messages":[]}"#.to_vec();
+        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+        let text = text_of(&body);
+        assert!(
+            text.starts_with("x-anthropic-billing-header: cc_version="),
+            "{text}"
+        );
+        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["system"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
     fn a_nested_empty_system_array_ahead_of_the_top_level_one_is_not_spliced_into() {
         let mut body = br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_use","id":"t1","name":"x","input":{"system":[]}}]}],"system":[]}"#.to_vec();
         let injected = restore_billing_line(&mut body, &full_restore()).unwrap();

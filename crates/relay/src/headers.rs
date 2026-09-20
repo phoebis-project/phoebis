@@ -93,8 +93,6 @@ pub fn outbound_headers(
     let caller_has_request_id = sent
         .iter()
         .any(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"));
-    let caller_has_app = sent.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-app"));
-    let generated = client_request_id.filter(|_| !caller_has_request_id);
     // A caller may split a list-valued beta across several lines. Every line's tokens are entries in one
     // list, so they are joined in order and kept once each, and the credential's own claim is applied to the
     // whole list once. A caller that wrote one line has it travel exactly as it was written.
@@ -116,6 +114,10 @@ pub fn outbound_headers(
             tokens.join(",")
         }
     };
+    // An operator's `x-app` replaces the caller's line, so the generated id has no caller line to follow and
+    // takes the credential slot instead; a caller that wrote `x-app` twice gets the id after the first.
+    let caller_has_app = sent.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-app"));
+    let generated = client_request_id.filter(|_| !caller_has_request_id);
     let effective_beta = has_beta_line.then_some(beta_list.as_str());
     let (merged_beta, merged_added) = match effective_beta {
         Some(value) => {
@@ -128,8 +130,8 @@ pub fn outbound_headers(
     let mut injected: Vec<Injected> = Vec::new();
     // A caller may write the same line twice: hyper keeps one value in its map, but the recorded head holds
     // both lines, and a slot whose value the relay owns would then be written twice upstream.
-    let (mut saw_beta, mut saw_credential, mut saw_host, mut saw_length) =
-        (false, false, false, false);
+    let (mut saw_app, mut saw_beta, mut saw_credential, mut saw_host, mut saw_length) =
+        (false, false, false, false, false);
     for (name, value) in sent {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
@@ -177,7 +179,8 @@ pub fn outbound_headers(
             _ if NEVER_COPIED.contains(&lower.as_str()) => {}
             _ => {
                 out.push((name.into(), value.into()));
-                if lower == "x-app" {
+                if lower == "x-app" && !saw_app {
+                    saw_app = true;
                     if let Some(id) = generated {
                         out.push(("x-client-request-id".into(), id.into()));
                         injected.push(Injected::ClientRequestId);
@@ -530,6 +533,38 @@ mod tests {
             .expect("the caller sent x-app");
         assert_eq!(names[app + 1], "x-client-request-id");
         assert_eq!(emitted[app + 1].1, "caller-id");
+    }
+
+    #[test]
+    fn the_generated_request_id_is_emitted_once_when_x_app_is_repeated() {
+        let emit = |caller: &OriginalHead| {
+            outbound_headers(
+                &HeaderMap::new(),
+                Some(caller),
+                &oauth(),
+                "api.anthropic.com",
+                7,
+                Some("generated-id"),
+                &[],
+                &[],
+            )
+            .headers
+        };
+        let ids = |emitted: &[(String, String)]| {
+            emitted
+                .iter()
+                .filter(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"))
+                .count()
+        };
+        let twice = head(&[
+            ("Authorization", "Bearer phoebis-testkey"),
+            ("x-app", "cli"),
+            ("x-app", "cli"),
+        ]);
+        let emitted = emit(&twice);
+        assert_eq!(ids(&emitted), 1, "two x-app lines, one id: {emitted:?}");
+        assert_eq!(emitted[1].0, "x-app");
+        assert_eq!(emitted[2].0, "x-client-request-id");
     }
 
     /// An API-key credential, so the OAuth claim `betas` would otherwise insert into an empty list never

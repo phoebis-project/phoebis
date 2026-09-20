@@ -4,10 +4,20 @@ mod common;
 use std::str::FromStr;
 use std::time::Duration;
 
+use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
     decode_query_event, AgentState, Event, EventError, KeepaliveLimits, RecipeState,
 };
 use common::*;
+
+fn usage(read: u64, write_5m: u64) -> Usage {
+    Usage {
+        cache_read_tokens: Some(read),
+        cache_write_5m_tokens: Some(write_5m),
+        output_tokens: Some(10),
+        ..Default::default()
+    }
+}
 
 #[tokio::test]
 async fn query_events_match_the_contract() {
@@ -594,6 +604,23 @@ async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_th
     );
 
     let mut r2 = rig(RigSpec::default()).await;
+    r2.engine.observe(r2.observed("req", "main", BODY));
+    r2.engine.observe(r2.selected("req", "a"));
+    r2.engine
+        .observe(phoebis_bus::Event::ResponseChunk(ResponseChunk {
+            request_id: "req".into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(Phase::MessageStart {
+                usage: usage(2_000, 0),
+            }),
+        }));
+    let before = r2.engine.stats();
+    assert!(
+        before.agents == 1 && before.retained_bytes > 0,
+        "the rig retains the request before the close: {before:?}"
+    );
     r2.engine.close();
     assert_eq!(
         r2.event(Event {

@@ -146,6 +146,12 @@ mod tests {
             ))
         );
         assert_eq!(
+            CacheTtlPolicy::parse(
+                &serde_json::json!({ "models": [{ "model": "", "main": "5m", "subagent": "5m" }] })
+            ),
+            Err(CacheTtlError::EmptyModel)
+        );
+        assert_eq!(
             CacheTtlPolicy::from_json("not json"),
             CacheTtlPolicy::default()
         );
