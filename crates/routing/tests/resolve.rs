@@ -144,6 +144,7 @@ fn snapshot() -> RegistrySnapshot {
             pool("off", false, None, 0),
         ],
         retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
     };
     RegistrySnapshot::from_load(load, DIGEST_KEY, 1_000, 1)
 }
@@ -275,5 +276,6 @@ fn load_of(s: &RegistrySnapshot) -> RegistryLoad {
             .collect(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
     }
 }

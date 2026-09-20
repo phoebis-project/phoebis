@@ -106,13 +106,13 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 
 ## Your key's usage
 
-`GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests,
-tokens, and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and
-pool. The figures are the router's hourly rollups under the key, probes left out, the same rollups the operator's
-analytics read. Each window is summed from whole hourly buckets, so it starts at the top of an hour: the `from`
-the answer reports is that hour, up to an hour earlier than the window's name, and the figures cover it all. A
-window never starts before the key itself: `from` is the later of the window's own start and the first whole
-hour after the key was created, so a key created during the current hour reports nothing until that hour turns.
+`GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens,
+and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and pool. The figures
+are the router's hourly rollups under the key, probes left out, the same rollups the operator's analytics read. Each
+window is summed from whole hourly buckets, so it starts at the top of an hour: the `from` the answer reports is that
+hour, up to an hour earlier than the window's name, and the figures cover it all. A key that is the first holder of its
+id reads the whole window, its own first hour included. Where a deleted key used the same id before this one, the window
+starts at the first whole hour after this key was created instead, so nothing the earlier holder spent is counted.
 Nothing about the upstream accounts is answered, and the secret never is.
 
 ```sh title="The document"

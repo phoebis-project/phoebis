@@ -266,6 +266,10 @@ pub struct RegistryLoad {
     pub models: Vec<ServedModel>,
     pub pools: Vec<PoolRow>,
     pub retired_secrets: Vec<RetiredSecret>,
+    /// Live keys whose id was deleted with an earlier key before this one was created. A delete retires the
+    /// id, so only a database written before that rule holds one; the rollups under such an id carry both
+    /// holders' traffic, and a reader of one key's own usage has to start at the current holder.
+    pub reused_key_ids: Vec<String>,
 }
 
 /// Everything a verified edit changes. Borrowed so the admin route can stage it, run discovery, and commit.
@@ -383,6 +387,13 @@ impl Store {
                         expires_at: r.get(4)?,
                     })
                 })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            reused_key_ids: tx
+                .prepare(
+                    "SELECT DISTINCT c.target FROM registry_changes c JOIN api_keys k ON k.id = c.target \
+                     WHERE c.kind = 'key_deleted' AND c.at < k.created_at ORDER BY c.target",
+                )?
+                .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;

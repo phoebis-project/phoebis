@@ -261,8 +261,13 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     assert_eq!(back.id, "back");
     assert!(
         back.created_at > 900,
-        "the id's holder was created after the holder before it was deleted, and a read of the key's own \
-         usage starts at that creation, so the earlier holder's rollups lie before it"
+        "the id's holder was created after the holder before it was deleted"
+    );
+    assert_eq!(
+        migrated.load_registry().unwrap().reused_key_ids,
+        vec!["back".to_string()],
+        "only the id that outlived a deletion is a reused one: a read of that key's own usage starts at its \
+         creation, while `old` and `kept` are no longer live keys at all"
     );
     assert!(matches!(
         migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),

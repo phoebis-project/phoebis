@@ -149,6 +149,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             updated_at: 0,
         }],
         retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -163,6 +164,7 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
         models: Vec::new(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
