@@ -110,7 +110,9 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 tokens, and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and
 pool. The figures are the router's hourly rollups under the key, probes left out, the same rollups the operator's
 analytics read. Each window is summed from whole hourly buckets, so it starts at the top of an hour: the `from`
-the answer reports is that hour, up to an hour earlier than the window's name, and the figures cover it all.
+the answer reports is that hour, up to an hour earlier than the window's name, and the figures cover it all. A
+window never starts before the key itself: `from` is the later of the window's own start and the first whole
+hour after the key was created, so a key created during the current hour reports nothing until that hour turns.
 Nothing about the upstream accounts is answered, and the secret never is.
 
 ```sh title="The document"

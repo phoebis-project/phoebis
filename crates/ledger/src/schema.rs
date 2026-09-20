@@ -193,6 +193,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 5: the due probes a scheduling gate withheld are a count of their own, and a kept-warm credit
 /// leaves a mark for a request row that has not landed yet, since the engine credits at completion while the
 /// writer batches.
+///
+/// Version 6: a key holder reads its own usage, which asks for one key's hours. The rollup key starts with
+/// the hour, so that read walked every key's entries for the week and held the shared reader for as long as
+/// everyone else's history was; an index that starts with the key narrows it to the rows the answer sums.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -267,5 +271,9 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;",
         5,
         "ALTER TABLE rollups_hourly ADD COLUMN probes_skipped INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL);",
+    ),
+    (
+        6,
+        "CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, hour);",
     ),
 ];

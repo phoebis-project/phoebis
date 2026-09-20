@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::http::Request;
 use phoebis_ledger::{
     key_usage, key_usage_windows, AttemptRecord, KeyUsageWindow, LedgerConfig, LedgerDb,
-    RequestRecord,
+    RequestRecord, KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, StoreError};
 use common::*;
@@ -166,7 +166,8 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
             .unwrap();
     }
 
-    let (day, week) = db.read(|c| key_usage_windows(c, "k1", now)).unwrap();
+    // A key as old as the rows themselves, so the creation bound narrows neither window here.
+    let (day, week) = db.read(|c| key_usage_windows(c, "k1", 0, now)).unwrap();
     assert_eq!(
         (day.requests, week.requests),
         (1, 2),
@@ -183,6 +184,58 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
         day,
         db.read(|c| key_usage(c, "k1", now - DAY_MS, now)).unwrap(),
         "the derived window is the one a direct read of the same range answers"
+    );
+}
+
+#[test]
+fn the_windows_leave_out_the_hour_the_key_was_created_in() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 30 * DAY_MS + HOUR_MS + 1_234;
+    // Two hours under one id: the earlier one is the bucket a recreated key would share with the holder
+    // before it, the later one is wholly the new key's.
+    for (id, at) in [("r1", now - 2 * HOUR_MS), ("r2", now - HOUR_MS)] {
+        db.insert_request(&request_at(id, "k1", at), &[used(id)], None)
+            .unwrap();
+    }
+
+    let (day, week) = db.read(|c| key_usage_windows(c, "k1", now, now)).unwrap();
+    assert_eq!(
+        (day.requests, week.requests),
+        (0, 0),
+        "a key created after every row under its id holds none of them"
+    );
+
+    let created = now - 2 * HOUR_MS + 60_000;
+    let (day, week) = db
+        .read(|c| key_usage_windows(c, "k1", created, now))
+        .unwrap();
+    assert_eq!(
+        (day.requests, week.requests),
+        (1, 1),
+        "the hour the key was created in is left out whole, the hour after it is the key's own"
+    );
+    assert_eq!(
+        (day.from, week.from),
+        (hour_ceil_ms(created), hour_ceil_ms(created)),
+        "each window reports the bound it started at"
+    );
+}
+
+#[test]
+fn the_keyed_read_is_planned_on_an_index_that_starts_with_the_key() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plan = db
+        .read(|c| {
+            let mut stmt = c.prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT hour FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE}"
+            ))?;
+            let rows = stmt.query_map(("k1", 0_i64, 1_i64), |r| r.get::<_, String>(3))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+        })
+        .unwrap();
+    assert!(
+        plan.iter().any(|step| step.contains("rollups_hourly_key")),
+        "one key's week costs its own rows, not a scan of every key's hours: {plan:?}"
     );
 }
 
@@ -299,6 +352,7 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    start_inside_the_lifetime_of(&h, &["desktop"]);
 
     let (status, headers, body) = get(&app, None).await;
     assert_eq!(status, 401);
@@ -380,6 +434,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
         )
         .unwrap();
     h.router.reload().await.unwrap();
+    start_inside_the_lifetime_of(&h, &["desktop", "laptop"]);
 
     for (key, model) in [(KEY, "claude-sonnet-4-5"), (LAPTOP, "claude-opus-5")] {
         let resp = h
@@ -400,6 +455,66 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
     assert_eq!(laptop["windows"]["24h"]["requests"], 1);
 }
 
+/// The store stamps a key's creation from the host clock while this suite drives its own, and a window starts
+/// at the key's creation, so the clock moves to the first whole hour after every key named here was created;
+/// what is recorded from there lies inside the lifetime the route reads.
+fn start_inside_the_lifetime_of(h: &Harness, keys: &[&str]) -> i64 {
+    let created = keys
+        .iter()
+        .map(|id| h.store.api_key(id).unwrap().unwrap().created_at)
+        .max()
+        .expect("a key to start after");
+    // A second into that hour rather than on its edge: a window is summed up to the hour boundary the
+    // clock stands on, so a row recorded exactly there falls outside it.
+    let at = (created.div_euclid(HOUR_MS) + 1) * HOUR_MS + 1_000;
+    h.clock.store(at, Ordering::SeqCst);
+    at
+}
+
+/// The hour boundary at or after `ms`, in milliseconds: the bound a window reports when the key's own
+/// creation is where it starts.
+fn hour_ceil_ms(ms: i64) -> i64 {
+    (ms.div_euclid(HOUR_MS) + i64::from(ms.rem_euclid(HOUR_MS) != 0)) * HOUR_MS
+}
+
+#[tokio::test]
+async fn the_route_reads_no_further_back_than_the_key_that_presented_the_secret() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+
+    // A row filed under the id before the key that holds it now was created. An id deleted and recreated
+    // before the store retired ids for good leaves exactly this, and a rollup names no holder of its own.
+    let created_at = h.store.api_key("desktop").unwrap().unwrap().created_at;
+    h.db.insert_request(
+        &request_at("r1", "desktop", created_at - HOUR_MS),
+        &[used("r1")],
+        None,
+    )
+    .unwrap();
+    h.clock.store(created_at + 60_000, Ordering::SeqCst);
+
+    let (status, _, body) = get(&app, Some(KEY)).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["windows"]["24h"]["requests"], 0,
+        "an hour before this key existed is the previous holder's: {body}"
+    );
+    assert_eq!(body["windows"]["7d"]["requests"], 0, "{body}");
+
+    // Its own traffic, from the first whole hour of its lifetime on, is answered.
+    let now = start_inside_the_lifetime_of(&h, &["desktop"]);
+    h.db.insert_request(&request_at("r2", "desktop", now), &[used("r2")], None)
+        .unwrap();
+    let (_, _, body) = get(&app, Some(KEY)).await;
+    assert_eq!(body["windows"]["24h"]["requests"], 1, "{body}");
+    assert_eq!(
+        body["windows"]["7d"]["from"],
+        hour_ceil_ms(created_at),
+        "the window says it starts where the key does: {body}"
+    );
+}
+
 #[tokio::test]
 async fn a_deleted_keys_usage_stays_with_it() {
     let up = FakeUpstream::start(vec![Rule {
@@ -409,6 +524,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    start_inside_the_lifetime_of(&h, &["desktop"]);
 
     let resp = h
         .app
@@ -534,6 +650,7 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    start_inside_the_lifetime_of(&h, &["desktop"]);
 
     let row = h.store.api_key("desktop").unwrap().unwrap();
     h.store

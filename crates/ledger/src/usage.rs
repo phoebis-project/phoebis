@@ -84,13 +84,21 @@ pub fn key_usage(
 
 /// The two windows the self-service answer carries, from one read: the day is the tail of the week's own
 /// rows, so a caller polling the route costs one scan of its own key rather than two of every key's.
+///
+/// Neither window reaches back past `created_at`, the lifetime of the key that asked. A rollup names no
+/// holder of its own, so an id deleted and recreated before the store began retiring ids would otherwise
+/// answer the previous holder's models, tokens, and cost to the new secret. The hour the key was created in
+/// can hold both holders' traffic, so it is left out whole rather than split: a new key loses at most its
+/// first partial hour, and each window reports the bound it actually started at.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
+    created_at: i64,
     now: i64,
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
-    let day_hour = hour_of(now - DAY_MS);
-    let week_hour = hour_of(now - 7 * DAY_MS);
+    let own = hour_ceil(created_at);
+    let day_hour = hour_of(now - DAY_MS).max(own);
+    let week_hour = hour_of(now - 7 * DAY_MS).max(own);
     let rows = read_rollups_for_key(conn, key_id, week_hour, hour_ceil(now))?;
     Ok((
         window(rows.iter().filter(|r| r.hour >= day_hour), day_hour, now),
@@ -186,16 +194,22 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         Err(error) => return no_store(auth_error_response(&error, &request_id)),
     };
     let snapshot = state.router.snapshot();
-    let key = match snapshot.authenticate(presented, now) {
-        Ok(key) => KeyView {
-            id: key.id.clone(),
-            label: key.label.clone(),
-            pool_id: key.pool_id.clone(),
-        },
+    let (key, created_at) = match snapshot.authenticate(presented, now) {
+        Ok(key) => (
+            KeyView {
+                id: key.id.clone(),
+                label: key.label.clone(),
+                pool_id: key.pool_id.clone(),
+            },
+            key.created_at,
+        ),
         Err(refusal) => return no_store(key_refusal_response(&refusal, &request_id)),
     };
     let key_id = key.id.clone();
-    let (day, week) = match state.db.read(|c| key_usage_windows(c, &key_id, now)) {
+    let (day, week) = match state
+        .db
+        .read(|c| key_usage_windows(c, &key_id, created_at, now))
+    {
         Ok(windows) => windows,
         Err(error) => {
             tracing::warn!(%error, "the usage route could not read the ledger");

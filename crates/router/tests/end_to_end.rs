@@ -1457,14 +1457,16 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     let usage = wait_json(
         &keyed,
         &format!("http://127.0.0.1:{proxy_port}/v1/usage"),
-        |v| {
-            v["windows"]["24h"]["requests"]
-                .as_u64()
-                .is_some_and(|n| n >= 1)
-        },
+        |v| v["key"]["id"] == "desktop",
     )
     .await;
-    assert_eq!(usage["key"]["id"], "desktop");
+    // A key minted moments ago holds no whole hour yet: a window starts at the first hour boundary after the
+    // key was created, so the requests it has just made are inside the hour that boundary excludes.
+    assert_eq!(usage["windows"]["24h"]["requests"], 0);
+    assert_eq!(
+        usage["windows"]["7d"]["from"], usage["windows"]["24h"]["from"],
+        "both windows start where the key does"
+    );
     assert!(usage["key"].get("secret").is_none() && usage.to_string().find("sk-ant-").is_none());
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();

@@ -2198,6 +2198,76 @@ fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() 
 }
 
 #[test]
+fn a_spent_pin_under_prefer_plan_stays_rather_than_moving_onto_a_sibling_in_overage() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    // a's five-hour window stands full while b is in known overage with no sample of its own, which is what
+    // a restart leaves: the overage rows are reloaded and the samples start empty, so b reads as holding
+    // allowance. Moving the pin there would hand it straight back on the next request.
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
+    for now in [2_000, 3_000] {
+        let SelectResult::Selected(sel) = pick(&mut st, now).0 else {
+            panic!()
+        };
+        assert_eq!(
+            (sel.account.id.as_str(), sel.migrated),
+            ("a", None),
+            "the session stays and the upstream's answer decides, as with no sibling at all"
+        );
+    }
+}
+
+#[test]
+fn a_spent_pin_under_allow_moves_onto_a_sibling_in_overage_once_and_is_not_moved_back() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
+    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "overage is what this pool pays for, so the spent pin takes the sibling holding allowance"
+    );
+    let SelectResult::Selected(sel) = pick(&mut st, 3_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", None),
+        "and nothing moves it back"
+    );
+}
+
+#[test]
 fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

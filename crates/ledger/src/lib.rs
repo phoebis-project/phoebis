@@ -42,7 +42,8 @@ pub use record::{
 };
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_event, fold_keepalive, fold_request, hour_of,
-    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
+    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow,
+    KEY_RANGE_PREDICATE, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 pub use usage::{

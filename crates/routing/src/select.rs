@@ -297,10 +297,12 @@ pub fn select(
         // A spent window is not a hover: the pinned account cannot serve the request until the window resets,
         // so the pin moves as soon as a sibling holds allowance, and the band and the dwell that keep two
         // accounts from trading a pin at the threshold do not apply. The set replaces the band's rather than
-        // intersecting it (every account the band admits holds allowance, so this is never the narrower set);
-        // only the overage set still narrows it, so a pin leaving overage does not land in overage. Step 5
-        // would otherwise renew the session on the spent account until the upstream's 429 moved it, one
-        // request later than the sample already allows.
+        // intersecting it (every account the band admits holds allowance, so this is never the narrower set).
+        // Step 5 would otherwise renew the session on the spent account until the upstream's 429 moved it,
+        // one request later than the sample already allows. Under `prefer_plan` a sibling in known overage is
+        // no destination, whether or not this pin is itself leaving overage: the overage rule hands the
+        // session back on the next request, the two rules trading it on no new evidence, so a spent pin with
+        // only such siblings stays and the upstream's 429 decides, as with no sibling at all.
         if !holds_allowance(state, &current.account_id, window, request.now) {
             let with_allowance: Vec<&Candidate> = eligible
                 .iter()
@@ -308,7 +310,8 @@ pub fn select(
                 .filter(|c| {
                     c.account_id != current.account_id
                         && holds_allowance(state, &c.account_id, window, request.now)
-                        && (!leaving_overage || !state.in_overage(&c.account_id))
+                        && !(pool.overage_policy == OveragePolicy::PreferPlan
+                            && state.in_overage(&c.account_id))
                 })
                 .collect();
             if !with_allowance.is_empty() {

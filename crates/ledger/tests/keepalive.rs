@@ -394,7 +394,7 @@ fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_
         db.write(|c| { c.execute_batch("ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
     }
     let db = LedgerDb::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

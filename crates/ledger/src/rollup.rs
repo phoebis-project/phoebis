@@ -840,6 +840,10 @@ pub fn read_rollups(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// What the keyed read narrows by, spelled once so the plan test explains the predicate the read runs and not
+/// a copy of it that could drift from it.
+pub const KEY_RANGE_PREDICATE: &str = "key_id = ?1 AND hour >= ?2 AND hour < ?3";
+
 /// The rows of one key over a range, narrowed by SQLite rather than in memory: a reader that wants a single
 /// key pays for that key's rows and not for every key's.
 pub fn read_rollups_for_key(
@@ -848,7 +852,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE key_id = ?1 AND hour >= ?2 AND hour < ?3 ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent"))?;
     let rows = stmt.query_map(params![key_id, from_hour, to_hour], row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -910,7 +914,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 5);
+        assert_eq!(db.schema_version().unwrap(), 6);
         let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -948,7 +952,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 5);
+        assert_eq!(db.schema_version().unwrap(), 6);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;

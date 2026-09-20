@@ -232,14 +232,16 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     store.delete_api_key("kept", "test").unwrap();
     drop(store);
     // What a database written before the tombstone backfill existed looks like on disk: `old` was deleted
-    // and its id never reused, `back` was deleted and recreated before the upgrade ran. `kept`'s tombstone
-    // stays, dated by a sentinel the backfill would overwrite if `OR IGNORE` ever became a plain insert.
+    // and its id never reused, `back` was deleted at 900 and recreated at 1500, before the upgrade ran.
+    // `kept`'s tombstone stays, dated by a sentinel the backfill would overwrite if `OR IGNORE` ever became
+    // a plain insert.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "UPDATE api_key_tombstones SET deleted_at = 1 WHERE id = 'kept'; \
          DELETE FROM api_key_tombstones WHERE id != 'kept'; \
          UPDATE meta SET value = '14' WHERE key = 'schema_version'; \
          DELETE FROM api_keys WHERE id = 'old'; \
+         UPDATE api_keys SET created_at = 1500 WHERE id = 'back'; \
          INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1000, 'test', 'key_deleted', 'old', '{}'); \
          INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}');",
     )
@@ -255,7 +257,13 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
         migrated.insert_api_key(&key(&migrated, "kept", "main", "phoebis-kept-reissued"), "test"),
         Err(StoreError::KeyIdRetired(id)) if id == "kept"
     ));
-    assert_eq!(migrated.api_key("back").unwrap().unwrap().id, "back");
+    let back = migrated.api_key("back").unwrap().unwrap();
+    assert_eq!(back.id, "back");
+    assert!(
+        back.created_at > 900,
+        "the id's holder was created after the holder before it was deleted, and a read of the key's own \
+         usage starts at that creation, so the earlier holder's rollups lie before it"
+    );
     assert!(matches!(
         migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),
         Err(StoreError::Sqlite(_))
