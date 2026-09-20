@@ -1888,6 +1888,259 @@ fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() 
 }
 
 #[test]
+fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays_without_one() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    st.record_sample("a", refreshing(0.97, 9 * HOUR, 9 * HOUR, 1_500));
+    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "a fresh sample under 1.0 is allowance, whatever the threshold-free pool thinks of it"
+    );
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
+    st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
+    let SelectResult::Selected(sel) = pick(&mut st, 3_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "spent with no sibling holding allowance: the pin stays and the upstream's answer decides"
+    );
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 3_500));
+    let (result, writes) = pick(&mut st, 4_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent))
+    );
+    assert!(
+        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
+        "a spent migration takes no dwell: {writes:?}"
+    );
+    let _ = &mut r;
+}
+
+#[test]
+fn a_spent_fable_window_moves_a_fable_pin_and_leaves_a_sonnet_pin_on_the_same_account_alone() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let fable = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-fable-5-1", true, &[], now),
+            &mut rng(),
+        )
+    };
+    let sonnet = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&fable(&mut st, 1_000).0), "a");
+    assert_eq!(picked(&sonnet(&mut st, 1_000).0), "a");
+    st.record_sample(
+        "a",
+        with_fable(sample(0.2, 0.1, 1_500), 1.0, Some(9 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.3, 0.1, 1_500), 0.5, Some(9 * HOUR)),
+    );
+    let SelectResult::Selected(sel) = fable(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "the fable window is spent on a and b holds fable allowance"
+    );
+    let SelectResult::Selected(sel) = sonnet(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "the sonnet pin reads the shared plan, neither of whose readings is spent"
+    );
+}
+
+#[test]
+fn a_spent_window_moves_a_pin_still_inside_the_utilization_dwell() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    st.record_sample("a", refreshing(0.85, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.3, 9 * HOUR, 9 * HOUR, 1_500));
+    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Utilization))
+    );
+    // Inside the five-minute dwell, b's window is spent and a has recovered: the hover rule would hold the pin,
+    // the spent rule moves it.
+    st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
+    st.record_sample("a", refreshing(0.2, 9 * HOUR, 9 * HOUR, 2_500));
+    let (result, writes) = pick(&mut st, 3_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", Some(MigrateReason::Spent))
+    );
+    assert!(writes
+        .iter()
+        .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))));
+}
+
+#[test]
+fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    // b reads over the threshold, so the band refuses it as a utilization destination, and under 1.0, so it
+    // holds allowance; no dwell is running, the pin was never migrated.
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.9, 9 * HOUR, 9 * HOUR, 1_500));
+    let (result, writes) = pick(&mut st, 2_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "the band would keep the pin on a; the spent window moves it"
+    );
+    assert!(
+        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
+        "a spent migration takes no dwell: {writes:?}"
+    );
+}
+
+#[test]
+fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    // a is in overage and spent; b is out of overage with allowance; c is out of overage and spent.
+    st.record_overage("a", overage(true, 1_500, Some(9_000)));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("c", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Overage)),
+        "overage is the recorded reason, and b is the one sibling both predicates allow"
+    );
+}
+
+#[test]
+fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    // a's five-hour reading is well under 1.0; its seven-day reading is the spent one, with its reset ahead.
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            seven_day_reset: Some(9 * HOUR),
+            ..sample(0.3, 1.0, 1_500)
+        },
+    );
+    st.record_sample("b", sample(0.2, 0.2, 1_500));
+    let (result, writes) = pick(&mut st, 2_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "the seven-day reading at 1.0 spends the shared plan as the five-hour one does"
+    );
+    assert!(
+        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
+        "a spent migration takes no dwell: {writes:?}"
+    );
+}
+
+#[test]
 fn purge_drops_a_round_robin_cursor_once_its_cohort_account_is_gone() {
     let s = snapshot(Pool {
         strategy: Strategy::RoundRobin,

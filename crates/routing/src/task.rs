@@ -567,6 +567,7 @@ impl Task {
                         {
                             let reason = match selection.migrated {
                                 Some(MigrateReason::Overage) => "overage",
+                                Some(MigrateReason::Spent) => "spent",
                                 Some(MigrateReason::Utilization) => "utilization",
                                 None => "expired",
                             };

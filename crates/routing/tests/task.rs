@@ -938,6 +938,53 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     );
 }
 
+#[tokio::test]
+async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
+    use phoebis_routing::{Report, RouterEvent, UtilizationSample};
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let a = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let b = if a == "a" { "b" } else { "a" };
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
+    let spent = |five_hour: f64, at: i64| UtilizationSample {
+        fable: None,
+        fable_reset: None,
+        five_hour: Some(five_hour),
+        five_hour_reset: Some(at + 3_600_000),
+        seven_day: Some(0.1),
+        seven_day_reset: Some(at + 7 * 86_400_000),
+        observed_at: at,
+    };
+    handle.report(Report::Sample {
+        account_id: a.clone(),
+        sample: spent(1.0, 1_500),
+    });
+    handle.report(Report::Sample {
+        account_id: b.into(),
+        sample: spent(0.2, 1_500),
+    });
+    let second = handle
+        .select(request(&handle, Some("s1"), 2_000))
+        .await
+        .unwrap();
+    assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
+    );
+}
+
 /// A rejection as the relay reports it, with the clock deciding the row's set time.
 fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) -> Report {
     Report::Cooldown {

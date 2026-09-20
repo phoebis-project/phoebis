@@ -24,6 +24,8 @@ pub struct SelectRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrateReason {
     Overage,
+    /// The pinned account's window for the request's model is spent while a sibling holds allowance in it.
+    Spent,
     Utilization,
 }
 
@@ -104,6 +106,34 @@ fn holds_fable_allowance(state: &RoutingState, account_id: &str, now: i64) -> bo
     match sample.fable_reset {
         Some(reset) => reset <= now,
         None => now - sample.observed_at >= state.sample_ttl_ms(),
+    }
+}
+
+/// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
+/// window for a fable request, the shared plan otherwise, either of whose two readings at 1.0 is spent. As
+/// `holds_fable_allowance`: no sample, or one that never read the window, counts as allowance, and a window
+/// read full excludes only while the reading stands for it, until the reset it named or, absent one, until the
+/// reading ages out.
+fn holds_allowance(state: &RoutingState, account_id: &str, window: Window, now: i64) -> bool {
+    match window {
+        Window::Fable => holds_fable_allowance(state, account_id, now),
+        Window::SevenDay => {
+            let Some(sample) = state.sample(account_id) else {
+                return true;
+            };
+            // The shared plan has two readings and either one at 1.0 means the upstream refuses the request
+            // until that window refunds; the `EarliestRefresh` arm reads the weekly reset for its own
+            // ordering, this reads both for the one question of whether the account can serve at all.
+            let standing = |reading: Option<f64>, reset: Option<i64>| {
+                reading.unwrap_or(0.0) >= 1.0
+                    && match reset {
+                        Some(reset) => reset > now,
+                        None => now - sample.observed_at < state.sample_ttl_ms(),
+                    }
+            };
+            !standing(sample.five_hour, sample.five_hour_reset)
+                && !standing(sample.seven_day, sample.seven_day_reset)
+        }
     }
 }
 
@@ -218,10 +248,11 @@ pub fn select(
     let mut migrated = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
     if let Some(current) = pin.as_ref() {
+        let leaving_overage = pool.overage_policy == OveragePolicy::PreferPlan
+            && state.in_overage(&current.account_id);
         let mut destination: Option<Vec<&Candidate>> = None;
         let mut reason = None;
-        if pool.overage_policy == OveragePolicy::PreferPlan && state.in_overage(&current.account_id)
-        {
+        if leaving_overage {
             destination = Some(
                 eligible
                     .iter()
@@ -261,6 +292,30 @@ pub fn select(
                     None => cool,
                 });
                 reason = reason.or(Some(MigrateReason::Utilization));
+            }
+        }
+        // A spent window is not a hover: the pinned account cannot serve the request until the window resets,
+        // so the pin moves as soon as a sibling holds allowance, and the band and the dwell that keep two
+        // accounts from trading a pin at the threshold do not apply. The set replaces the band's rather than
+        // intersecting it (every account the band admits holds allowance, so this is never the narrower set);
+        // only the overage set still narrows it, so a pin leaving overage does not land in overage. Step 5
+        // would otherwise renew the session on the spent account until the upstream's 429 moved it, one
+        // request later than the sample already allows.
+        if !holds_allowance(state, &current.account_id, window, request.now) {
+            let with_allowance: Vec<&Candidate> = eligible
+                .iter()
+                .copied()
+                .filter(|c| {
+                    c.account_id != current.account_id
+                        && holds_allowance(state, &c.account_id, window, request.now)
+                        && (!leaving_overage || !state.in_overage(&c.account_id))
+                })
+                .collect();
+            if !with_allowance.is_empty() {
+                destination = Some(with_allowance);
+                if reason != Some(MigrateReason::Overage) {
+                    reason = Some(MigrateReason::Spent);
+                }
             }
         }
         // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
