@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::billing::{entrypoint_of, Restore};
 use crate::casing::OriginalHead;
-use crate::classify::{classify, refused_names, Cooldown, HeadContext, Scope, Verdict};
+use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
@@ -1167,8 +1167,9 @@ impl Relay {
                             ));
                         }
                     }
-                    // The attempt counter already moved for this pass, so the retry is a wire submission the
-                    // budget counted through `can_strip`, not a fresh one.
+                    // The next pass increments `*attempt` exactly as any other submission would; `can_strip`
+                    // already confirmed that increment still leaves room under `max_attempts`, so this retry
+                    // spends a normal slot of the budget rather than a free one.
                     stripped_once = true;
                     fresh = false;
                     continue;
@@ -1308,7 +1309,12 @@ impl Relay {
         if !ctx.can_strip && head.status == 400 {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
-            if let Some(body) = decoded.as_deref() {
+            // Gated on the same error type the strip path itself requires, so a 400 of another kind that
+            // happens to spell an injected name in its message never latches on the strength of a coincidence.
+            if let Some(body) = decoded
+                .as_deref()
+                .filter(|b| error_type(b).as_deref() == Some("invalid_request_error"))
+            {
                 for item in refused_names(body, ctx.injected) {
                     self.memory.latch(ctx.account, item);
                 }

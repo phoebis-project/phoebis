@@ -226,12 +226,15 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
     match phoebis_cch::object_member_span(body, &["stream"]) {
         Some((start, _)) => {
             body.splice(start..start, format!("{member},").bytes());
+            true
         }
         None => {
-            let end = body
-                .iter()
-                .rposition(|b| *b == b'}')
-                .expect("checked to be an object");
+            // `starts_with_object` only checked the first byte and `edit_body` skips a full parse, so a body
+            // that opens with `{` and never closes reaches here; the upstream would refuse it either way, so
+            // nothing is inserted rather than guessing at a position that does not exist.
+            let Some(end) = body.iter().rposition(|b| *b == b'}') else {
+                return false;
+            };
             let empty = body[..end]
                 .iter()
                 .rev()
@@ -241,9 +244,9 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
                 end..end,
                 format!("{}{member}", if empty { "" } else { "," }).bytes(),
             );
+            true
         }
     }
-    true
 }
 
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
@@ -460,6 +463,30 @@ mod tests {
             ),
             Err(RelayError::NotAnObject)
         ));
+    }
+
+    #[test]
+    fn insert_diagnostics_places_the_member_last_with_correct_comma_handling() {
+        let mut non_empty = br#"{"model":"m"}"#.to_vec();
+        assert!(insert_diagnostics(&mut non_empty, None));
+        assert_eq!(
+            non_empty,
+            br#"{"model":"m","diagnostics":{"previous_message_id":null}}"#
+        );
+
+        let mut empty = br#"{}"#.to_vec();
+        assert!(insert_diagnostics(&mut empty, Some("msg_1")));
+        assert_eq!(empty, br#"{"diagnostics":{"previous_message_id":"msg_1"}}"#);
+    }
+
+    #[test]
+    fn insert_diagnostics_does_nothing_rather_than_panicking_on_an_unterminated_body() {
+        let mut body = br#"{"model":"m""#.to_vec();
+        assert!(!insert_diagnostics(&mut body, None));
+        assert_eq!(
+            body, br#"{"model":"m""#,
+            "left untouched rather than guessed at"
+        );
     }
 
     #[test]

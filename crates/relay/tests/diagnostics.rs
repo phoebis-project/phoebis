@@ -179,14 +179,16 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
 }
 
 #[tokio::test]
-async fn a_same_account_retry_keeps_the_id_and_a_present_member_or_beta_is_left_alone() {
+async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_beta_is_left_alone()
+{
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::CloseImmediately,
     }])
     .await;
-    // The first connection closes before a byte is read; only the retry's connection ever reaches the fake, so
-    // the edit that reached it is the only one there is to inspect, and it still has to be well formed.
+    // `CloseImmediately` decides at accept time, before any byte is read, so the fake never records the first
+    // connection's request; there is nothing to compare its bytes against, only the retry's own edit to check
+    // for correctness.
     up.set_rule_after_connections(1, "/v1/messages", json_200());
     let h = harness(
         &up,
@@ -468,11 +470,15 @@ async fn a_400_naming_a_beta_the_client_sent_is_forwarded_unchanged() {
     );
     assert_eq!(outcome(&resp).attempt, 1);
 
-    // Nothing was latched: the next request on the account still carries the caller's beta, in one request.
+    // Nothing was latched: the next request, this time naming no beta of its own, still gets the relay's own
+    // injection, in one request. A wrongly set latch would show up here as a missing beta.
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
-    let mut req2 = request_for(KEY, "claude-sonnet-4-5", "s1");
-    set_header(&mut req2, "anthropic-beta", CACHE_DIAGNOSIS_BETA);
-    let resp2 = h.app.clone().oneshot(req2).await.unwrap();
+    let resp2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
     assert_eq!(resp2.status(), 200);
     assert_eq!(up.requests().len(), 2);
     assert!(beta_header(&up.requests()[1])

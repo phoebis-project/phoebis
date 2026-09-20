@@ -72,26 +72,7 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
             }
             s.ws();
         } else {
-            if !s.eat(b'{') {
-                return None;
-            }
-            loop {
-                s.ws();
-                let (ks, ke) = s.string().ok()?;
-                s.ws();
-                if !s.eat(b':') {
-                    return None;
-                }
-                s.ws();
-                if s.body[ks + 1..ke - 1] == *key.as_bytes() {
-                    break;
-                }
-                s.value(false).ok()?;
-                s.ws();
-                if !s.eat(b',') {
-                    return None;
-                }
-            }
+            scan_object(s, |member| member == key.as_bytes())?;
         }
         if last {
             return Some(true);
@@ -99,6 +80,35 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
         s.ws();
     }
     Some(false)
+}
+
+/// Walks the object at `s`'s current position (its opening `{` not yet eaten), calling `matches` with each
+/// member's key bytes in turn. Stops on the first member `matches` answers true for, `s` left positioned right
+/// after that member's colon, its value not yet read; returns the key's opening quote. `None` on a syntax
+/// error, or an object that closes with no match. The one object-member scan every span helper walks through,
+/// so a fix to key matching lands once.
+fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> Option<usize> {
+    if !s.eat(b'{') {
+        return None;
+    }
+    loop {
+        s.ws();
+        let member_start = s.pos;
+        let (ks, ke) = s.string().ok()?;
+        s.ws();
+        if !s.eat(b':') {
+            return None;
+        }
+        s.ws();
+        if matches(&s.body[ks + 1..ke - 1]) {
+            return Some(member_start);
+        }
+        s.value(false).ok()?;
+        s.ws();
+        if !s.eat(b',') {
+            return None;
+        }
+    }
 }
 
 /// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
@@ -230,28 +240,9 @@ pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
     };
     let key = path.last()?;
     walk_to_last_segment(&mut s, &path[..path.len() - 1])?;
-    if !s.eat(b'{') {
-        return None;
-    }
-    loop {
-        s.ws();
-        let member_start = s.pos;
-        let (ks, ke) = s.string().ok()?;
-        s.ws();
-        if !s.eat(b':') {
-            return None;
-        }
-        s.ws();
-        if s.body[ks + 1..ke - 1] == *key.as_bytes() {
-            s.value(false).ok()?;
-            return Some((member_start, s.pos));
-        }
-        s.value(false).ok()?;
-        s.ws();
-        if !s.eat(b',') {
-            return None;
-        }
-    }
+    let member_start = scan_object(&mut s, |member| member == key.as_bytes())?;
+    s.value(false).ok()?;
+    Some((member_start, s.pos))
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -825,6 +816,15 @@ mod tests {
         let (start, end) = object_member_span(body, &["outer", "stream"]).unwrap();
         assert_eq!(&body[start..end], br#""stream":"decoy""#);
         assert!(object_member_span(body, &["missing"]).is_none());
+
+        let string_decoy =
+            br#"{"note":"the diagnostics field matters","diagnostics":{"previous_message_id":"x"}}"#;
+        let (start, end) = object_member_span(string_decoy, &["diagnostics"]).unwrap();
+        assert_eq!(
+            &string_decoy[start..end],
+            br#""diagnostics":{"previous_message_id":"x"}"#,
+            "the key's bytes sitting inside an earlier string value is not a match"
+        );
     }
 
     #[test]

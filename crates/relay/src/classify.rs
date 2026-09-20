@@ -248,7 +248,7 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>, kind: AccountKind) ->
 /// happens to appear inside an upstream `message` from being mistaken for the real type. A prefix cut
 /// mid-document fails to parse, so the type is then located textually, trusting only a `"type"` key that opens
 /// an object or follows a sibling field, never one embedded in a string value.
-fn error_type(body: &[u8]) -> Option<String> {
+pub(crate) fn error_type(body: &[u8]) -> Option<String> {
     if let Ok(value) = serde_json::from_slice::<Value>(body) {
         return value
             .get("error")
