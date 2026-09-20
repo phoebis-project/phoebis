@@ -76,7 +76,7 @@
   padding: 0 6px;
   font-size: 11px;
   font-weight: 600;
-  color: #1b1916;
+  color: var(--ink);
   background: var(--serious);
   border-radius: var(--radius-pill);
 }
