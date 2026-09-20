@@ -224,12 +224,21 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
         .unwrap();
+    store
+        .insert_api_key(&key(&store, "kept", "main", "phoebis-kept-secret"), "test")
+        .unwrap();
+    // Deleted through the store, so it carries the tombstone a V14 store already wrote as well as the change
+    // row the backfill reads; its id is never recreated, so the backfill selects it and collides.
+    store.delete_api_key("kept", "test").unwrap();
     drop(store);
     // What a database written before the tombstone backfill existed looks like on disk: `old` was deleted
-    // and its id never reused, `back` was deleted and recreated before the upgrade ran.
+    // and its id never reused, `back` was deleted and recreated before the upgrade ran. `kept`'s tombstone
+    // stays, dated by a sentinel the backfill would overwrite if `OR IGNORE` ever became a plain insert.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DELETE FROM api_key_tombstones; UPDATE meta SET value = '14' WHERE key = 'schema_version'; \
+        "UPDATE api_key_tombstones SET deleted_at = 1 WHERE id = 'kept'; \
+         DELETE FROM api_key_tombstones WHERE id != 'kept'; \
+         UPDATE meta SET value = '14' WHERE key = 'schema_version'; \
          DELETE FROM api_keys WHERE id = 'old'; \
          INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1000, 'test', 'key_deleted', 'old', '{}'); \
          INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}');",
@@ -242,11 +251,27 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
         migrated.insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test"),
         Err(StoreError::KeyIdRetired(id)) if id == "old"
     ));
+    assert!(matches!(
+        migrated.insert_api_key(&key(&migrated, "kept", "main", "phoebis-kept-reissued"), "test"),
+        Err(StoreError::KeyIdRetired(id)) if id == "kept"
+    ));
     assert_eq!(migrated.api_key("back").unwrap().unwrap().id, "back");
     assert!(matches!(
         migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),
         Err(StoreError::Sqlite(_))
     ));
+    drop(migrated);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT deleted_at FROM api_key_tombstones WHERE id = 'kept'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "the surviving tombstone is the one that stands; the backfill only fills what is missing"
+    );
 }
 
 #[test]

@@ -3,11 +3,15 @@
 mod common;
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
-use phoebis_ledger::{key_usage, AttemptRecord, KeyUsageWindow, LedgerConfig, LedgerDb, RequestRecord};
+use phoebis_ledger::{
+    key_usage, key_usage_windows, AttemptRecord, KeyUsageWindow, LedgerConfig, LedgerDb,
+    RequestRecord,
+};
 use phoebis_store::{ApiKeyRow, StoreError};
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
@@ -137,6 +141,51 @@ fn key_usage_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     );
 }
 
+const DAY_MS: i64 = 86_400_000;
+const HOUR_MS: i64 = 3_600_000;
+
+fn request_at(id: &str, key_id: &str, at: i64) -> RequestRecord {
+    RequestRecord {
+        received_at: at,
+        ..request(id, key_id, "claude-sonnet-5", "inference", "succeeded", 200)
+    }
+}
+
+#[test]
+fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Off the hour, so the reported bound can only match if it is rounded down to the bucket the sum starts
+    // at rather than copied from the caller's instant.
+    let now = 30 * DAY_MS + HOUR_MS + 1_234;
+    for (id, at) in [
+        ("r1", now - HOUR_MS),
+        ("r2", now - 3 * DAY_MS),
+        ("r3", now - 8 * DAY_MS),
+    ] {
+        db.insert_request(&request_at(id, "k1", at), &[used(id)], None)
+            .unwrap();
+    }
+
+    let (day, week) = db.read(|c| key_usage_windows(c, "k1", now)).unwrap();
+    assert_eq!(
+        (day.requests, week.requests),
+        (1, 2),
+        "the row three days back is the week's alone, and the row eight days back is neither's"
+    );
+    let hour_floor = |ms: i64| ms - ms.rem_euclid(HOUR_MS);
+    assert_eq!(
+        (day.from, week.from),
+        (hour_floor(now - DAY_MS), hour_floor(now - 7 * DAY_MS)),
+        "the bound each window reports is the hour its sum starts at"
+    );
+    assert_eq!((day.to, week.to), (now, now));
+    assert_eq!(
+        day,
+        db.read(|c| key_usage(c, "k1", now - DAY_MS, now)).unwrap(),
+        "the derived window is the one a direct read of the same range answers"
+    );
+}
+
 async fn get(
     app: &axum::Router,
     key: Option<&str>,
@@ -148,6 +197,38 @@ async fn get(
     let resp = app
         .clone()
         .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        headers,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// One raw credential header, so a shape `get` never sends reaches the route as a client would send it.
+async fn get_with_header(
+    app: &axum::Router,
+    name: &str,
+    value: &str,
+) -> (u16, Vec<(String, String)>, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/usage")
+                .header(name, value)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status().as_u16();
@@ -201,7 +282,7 @@ fn assert_nothing_leaks(value: &serde_json::Value) {
         serde_json::Value::Array(items) => items.iter().for_each(assert_nothing_leaks),
         serde_json::Value::String(s) => {
             assert!(
-                s != "a" && !s.starts_with("sk-ant-"),
+                s != "a" && !s.starts_with("sk-ant-") && s != KEY && !s.starts_with("phoebis-"),
                 "an account id or a secret leaked: {s}"
             );
         }
@@ -226,13 +307,27 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
 
     assert_eq!(get(&app, Some("phoebis-nobody")).await.0, 401);
 
-    let (status, _, body) = get(&app, Some(KEY)).await;
+    // A scheme the relay does not accept is refused in the same shape a missing header is, and says as
+    // little.
+    let (status, headers, body) = get_with_header(&app, "authorization", "Basic x").await;
+    assert_eq!(status, 401);
+    assert_eq!(body["error"]["type"], "authentication_error");
+    assert_eq!(header(&headers, "x-phoebis-error-code"), Some("auth_malformed"));
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+
+    let (status, headers, body) = get(&app, Some(KEY)).await;
     assert_eq!(status, 200);
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
     assert_eq!(
         body["key"],
         serde_json::json!({ "id": "desktop", "label": "desktop", "pool_id": "main" })
     );
     assert_eq!(body["windows"]["24h"]["requests"], 0);
+
+    // The page says the route takes the key header the relay takes, either shape.
+    let (status, _, x_api_key) = get_with_header(&app, "x-api-key", KEY).await;
+    assert_eq!(status, 200);
+    assert_eq!(x_api_key["key"], body["key"]);
 
     let resp = h
         .app
@@ -368,6 +463,41 @@ async fn a_deleted_keys_usage_stays_with_it() {
     );
 }
 
+#[tokio::test]
+async fn a_ledger_the_route_cannot_read_is_refused_in_the_relays_error_shape() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // A ledger without the table the window reads is the cheapest stand-in for the disk failure this branch
+    // exists for; the key still authenticates against the router's own snapshot.
+    let unreadable = Arc::new(LedgerDb::open_in_memory().unwrap());
+    unreadable
+        .write(|c| {
+            c.execute_batch("DROP TABLE rollups_hourly")?;
+            Ok(())
+        })
+        .unwrap();
+    let app = phoebis_ledger::usage_router(unreadable, h.router.clone(), clock_of(&h));
+
+    let (status, headers, body) = get(&app, Some(KEY)).await;
+    assert_eq!(status, 500);
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "api_error");
+    assert_eq!(
+        header(&headers, "x-phoebis-error-code"),
+        Some("usage_unavailable")
+    );
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    assert!(
+        body["request_id"].as_str().is_some_and(|id| !id.is_empty()),
+        "the request id an operator greps for is missing: {body}"
+    );
+    assert_nothing_leaks(&body);
+}
+
 async fn get_with_accept(
     app: &axum::Router,
     key: &str,
@@ -417,6 +547,18 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
         .unwrap();
     h.router.reload().await.unwrap();
 
+    // A model name is operator-visible text like the label, and the table body is where the page renders it.
+    let now = h.clock.load(Ordering::SeqCst);
+    h.db.insert_request(
+        &RequestRecord {
+            canonical_model: "claude-<b>5</b>".into(),
+            ..request_at("m1", "desktop", now)
+        },
+        &[used("m1")],
+        None,
+    )
+    .unwrap();
+
     let (status, headers, body) = get_with_accept(
         &app,
         KEY,
@@ -432,6 +574,7 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
         Some("default-src 'none'; style-src 'unsafe-inline'")
     );
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
     let body = String::from_utf8(body).unwrap();
     assert!(body.contains("&lt;b&gt;Desk&lt;/b&gt; &amp; &quot;Co&quot;"));
     assert!(!body.contains("<b>Desk"));
@@ -439,6 +582,14 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     assert!(body.contains("Last 7 days"));
     assert!(!body.contains("<script"));
     assert!(!body.contains(KEY));
+    assert!(
+        body.contains("<td>claude-&lt;b&gt;5&lt;/b&gt;</td>"),
+        "the model cell is rendered and escaped: {body}"
+    );
+    assert!(
+        body.contains(&jiff::Timestamp::from_millisecond(now).unwrap().to_string()),
+        "a page saved to a file says when it was generated: {body}"
+    );
 
     let (status, headers, _) =
         get_with_accept(&app, KEY, Some("application/json, text/html")).await;
@@ -446,6 +597,7 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     assert!(header(&headers, "content-type")
         .unwrap()
         .starts_with("application/json"));
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
 
     let (status, headers, _) = get_with_accept(&app, KEY, None).await;
     assert_eq!(status, 200);

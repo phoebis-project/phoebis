@@ -112,10 +112,15 @@ impl RegistrySnapshot {
             }
             return self.live(key, now);
         }
-        let (id, until) = self
+        // The map hit narrows and the constant-time compare decides, as on the live path above; the stored
+        // digest is the map's own key.
+        let (stored, (id, until)) = self
             .retired_by_digest
-            .get(&digest)
+            .get_key_value(&digest)
             .ok_or(KeyRefusal::Unknown)?;
+        if !bool::from(stored.as_slice().ct_eq(&digest)) {
+            return Err(KeyRefusal::Unknown);
+        }
         if now >= *until {
             return Err(KeyRefusal::Unknown);
         }

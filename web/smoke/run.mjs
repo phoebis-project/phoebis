@@ -44,7 +44,16 @@ process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?
 // the smoke script for the same reason.
 const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const started = performance.now();
+const WallClock = Date;
 Date.now = () => CLOCK_ORIGIN + Math.floor(performance.now() - started);
+// `new Date()` reads the wall clock rather than `Date.now`, so a page that takes the current instant that
+// way (Settings does) would see the host's date and draw a different story on every run.
+class PinnedDate extends WallClock {
+  constructor(...args) {
+    super(...(args.length === 0 ? [WallClock.now()] : args));
+  }
+}
+globalThis.Date = PinnedDate;
 
 const { failNextCall, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
 
@@ -932,6 +941,14 @@ if (failoverRow) {
       await m.settle(400);
       results.push({ name: '/requests a failed events load never draws the move of the request before it', ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ['the previous move is still drawn'] : [] });
     }
+    // The route lists the session's events by time, so a move that belongs to another key's pin can arrive
+    // with this request's own events; only the key, session, and model match keeps it off the screen.
+    const own = requestEvents.get(spentId);
+    requestEvents.set(spentId, own.map((e) => ({ ...e, keyId: `${e.keyId}-elsewhere` })));
+    await m.navigate(`/requests/${spentId}`);
+    await m.settle(400);
+    results.push({ name: "/requests a move under another pin's key is not drawn", ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ["another pin's move is drawn on this request"] : [] });
+    requestEvents.set(spentId, own);
   }
 }
 {

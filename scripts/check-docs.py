@@ -41,6 +41,9 @@ ENTRY = re.compile(r"^### (ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|TRACE) (/a
 CLIENT_ROW = re.compile(r"^\| (ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|TRACE) \| `([^`]+)` \|", re.M)
 # `pub const NAME: &str = "...";`, so a route registered under a constant is read as its path.
 PATH_CONST = re.compile(r'const ([A-Z_][A-Z0-9_]*): &str = "([^"]+)";')
+# A char or byte-char literal (`'x'`, `b'x'`, `'\n'`, `'\u{2026}'`); a quote inside one is a character and
+# opens no string, while a lifetime (`'a`, with no closing quote) is not matched at all.
+CHAR_LIT = re.compile(r"b?'(\\u\{[0-9a-fA-F_]+\}|\\.|[^\\'\n])'")
 # A raw string opener (`r"`, `r#"`, `br##"`); the closing quote carries the same hashes.
 RAW_OPEN = re.compile(r'b?r(#*)"')
 # A route path written as a raw string, read back to its contents.
@@ -116,7 +119,8 @@ def tokenized(source):
     """Two texts the length and line structure of `source`: `code`, every comment blanked and every string
     kept, for finding `.route(` and reading its path; `blanked`, the strings' contents blanked too, for
     balancing the parentheses and scanning the handlers. Line comments, block comments nested as Rust nests
-    them, `"..."` with escapes, `b"..."`, and raw strings with any hash count are the tokens."""
+    them, `"..."` with escapes, `b"..."`, char literals, and raw strings with any hash count are the
+    tokens."""
     code, blanked = [], []
     i, n = 0, len(source)
     while i < n:
@@ -124,6 +128,7 @@ def tokenized(source):
         # `b"` and `r#"` open a string only at a token boundary; inside an identifier they are letters.
         ident_before = i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_")
         raw = None if ident_before else RAW_OPEN.match(source, i)
+        char = None if ident_before else CHAR_LIT.match(source, i)
         if source.startswith("//", i):
             end = source.find("\n", i)
             end = n if end < 0 else end
@@ -152,6 +157,13 @@ def tokenized(source):
             end += len(close)
             code.append(source[i:end])
             blanked.append(source[i : raw.end()] + blank(source[raw.end() : end - len(close)]) + close)
+            i = end
+        elif char:
+            # Kept in `code` like a string, its one character blanked in `blanked` so a `'('` opens no call.
+            opened = i + char.group(0).index("'") + 1
+            end = char.end()
+            code.append(source[i:end])
+            blanked.append(source[i:opened] + blank(source[opened : end - 1]) + "'")
             i = end
         elif ch == '"' or (source.startswith('b"', i) and not ident_before):
             opened = i + (2 if ch == "b" else 1)

@@ -69,24 +69,24 @@ fn port_base() -> u16 {
 /// A port no other test in this binary is handed, from a hundred-port slice below the range the kernel picks
 /// ephemeral ports from, so a concurrent test's outbound connection cannot take it between here and the bind
 /// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
-/// Rests on one precondition, enforced below: a process draws no more than `PORT_SPAN` ports in its lifetime.
+/// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
+/// process, one advance per draw and one per port a foreign listener holds.
 fn free_port() -> u16 {
     static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-    static HANDED_OUT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
     let base = port_base();
-    // The offset wraps inside the slice, so a failed probe advances the cursor without ever carrying the
-    // range toward the ephemeral ports. A probe bind tells a port another process holds from a free one; the
-    // socket is dropped at once. One full pass with no free port is a host with a hundred listeners in this
-    // slice, reported by name rather than looped on.
+    // Every pass through the loop takes the next offset, so a probe that finds a port another process holds
+    // burns one rather than retrying it; the probe's socket is dropped at once. One full pass with no free
+    // port is a host with a hundred listeners in this slice, reported by name rather than looped on.
     for _ in 0..PORT_SPAN {
-        let offset = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % PORT_SPAN;
-        let port = base + offset;
+        // The raw counter rather than the ports handed out, because a slice another process is filling burns
+        // advances on failed probes: a counter that wrapped would hand one port out twice, silently.
+        let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            raw < PORT_SPAN,
+            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process; a test is drawing ports it never binds, foreign listeners are filling the slice, or the slice must grow"
+        );
+        let port = base + raw;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            let handed_out = HANDED_OUT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            assert!(
-                handed_out <= PORT_SPAN,
-                "end_to_end.rs drew more than {PORT_SPAN} ports in one process; a test is drawing ports it never binds, or the slice must grow"
-            );
             return port;
         }
     }

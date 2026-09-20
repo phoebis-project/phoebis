@@ -34,6 +34,10 @@ test('an open map only asks about entry types, but a sibling object with a diffe
   const want = shapeOf({ errors: { upstream_error: 1 }, labels: { a: 1 } });
   const got = { errors: { overloaded_error: 1, rate_limit_error: 2 }, labels: { b: 2 } };
   assert.deepEqual(same(want, got), ['.labels.a: only in the decoded fixture', '.labels.b: only in the mock']);
+  // The two the map branch itself reports: a map answered as something other than a map, and an entry whose
+  // value is not the type the fixture's entries carry.
+  const rows = shapeOf([{ errors: { upstream_error: 1 } }]);
+  assert.deepEqual(same(rows, [{ errors: [] }, { errors: { upstream_error: 'one' } }]), ['[0].errors: list where a map is expected', '[1].errors.upstream_error: string against number']);
 });
 
 test('a per-row pass-through path holds only to object-or-null, richer or not, the way a detail does', () => {

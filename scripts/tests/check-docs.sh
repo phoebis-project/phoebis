@@ -164,7 +164,19 @@ printf '| GET | `/v1/nowhere` | none | `404` |\n' >> "$tmp/client.md"
 out=$(python3 "$check" client "$tmp/proxy.rs" "$tmp/client.md" 2>&1) && fail "a stray client row passed"
 echo "$out" | grep -q "which the proxy listener does not serve" || fail "stray client row did not report: $out"
 
-# The five cases below each pair a route table with the reference that lists exactly its served set: a pass
+# A route file without the page to check it against is a mistake rather than a default: the check says how it
+# is called and exits 2, the way it does for an unknown command.
+out=$(python3 "$check" client "$tmp/proxy.rs" 2>&1) && fail "client with one argument passed"
+status=$?
+[ "$status" = 2 ] || fail "client with one argument exited $status rather than 2: $out"
+echo "$out" | grep -q "usage: check-docs.py" || fail "client with one argument did not print the usage: $out"
+
+# A route file the list names but the tree does not hold fails the check: narrowing the served set silently
+# is how a route slips past the page.
+out=$(python3 "$check" client "$tmp/gone.rs" "$tmp/client.md" 2>&1) && fail "a missing route file passed"
+echo "$out" | grep -q "is missing; the proxy route table names it" || fail "missing route file did not report: $out"
+
+# The six cases below each pair a route table with the reference that lists exactly its served set: a pass
 # proves the set (a missing and a stray entry are both findings), and a second reference proves the route the
 # parser must not serve is reported as unserved.
 
@@ -223,5 +235,26 @@ out=$(python3 "$check" routes "$tmp/routes-string-method.rs" "$tmp/api-string-me
 printf '### DELETE /admin/s\n' >> "$tmp/api-string-method.md"
 out=$(python3 "$check" routes "$tmp/routes-string-method.rs" "$tmp/api-string-method.md" 2>&1) && fail "DELETE /admin/s passed though only a string names delete"
 echo "$out" | grep -q "documents DELETE /admin/s, which the router does not serve" || fail "the string's delete was not reported as unserved: $out"
+
+# A quote inside a char literal is a character, not the start of a string: a table after one is still read,
+# so a route the page leaves out is still reported rather than hidden with the rest of the file.
+cat > "$tmp/routes-char.rs" <<'RS'
+fn escape(c: char) -> &'static str {
+    match c {
+        '"' => "&quot;",
+        '\'' => "&#39;",
+        _ => "",
+    }
+}
+
+    Router::new()
+        .route("/admin/a", get(a))
+        .layer(x)
+RS
+printf '### GET /admin/a\n' > "$tmp/api-char.md"
+out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) || fail "a route after a char literal was misread: $out"
+: > "$tmp/api-char.md"
+out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
+echo "$out" | grep -q "has no entry for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
 
 echo "check-docs: ok"

@@ -5,19 +5,23 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
+use axum::http::header::{
+    ACCEPT, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use phoebis_oauth::Clock;
-use phoebis_relay::{auth_error_response, key_refusal_response, new_request_id, presented_key};
+use phoebis_relay::{
+    anthropic_error, auth_error_response, key_refusal_response, new_request_id, presented_key,
+};
 use phoebis_routing::RouterHandle;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::query::{apply_filter, group_of, hour_ceil, RollupFilter};
-use crate::rollup::{hour_of, read_rollups, RollupRow};
+use crate::query::{group_of, hour_ceil};
+use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError};
 
 const DAY_MS: i64 = 86_400_000;
@@ -63,27 +67,51 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
     tokens.cache_write += row.cache_write_5m_tokens + row.cache_write_1h_tokens;
 }
 
-/// The key's usage over `[from, to)`, read from the rollups under its id and nothing else.
+/// The key's usage over `[from, to)`, read from the rollups under its id and nothing else. The sum is whole
+/// hourly buckets, so the window reports the hour `from` falls in rather than `from` itself.
 pub fn key_usage(
     conn: &Connection,
     key_id: &str,
     from: i64,
     to: i64,
 ) -> Result<KeyUsageWindow, LedgerError> {
-    let rows = read_rollups(conn, hour_of(from), hour_ceil(to))?;
-    // The filter is built here from the authenticated key and from nothing the caller sent: the ceiling on
-    // what this route may show is this line.
-    let filter = RollupFilter {
-        keys: vec![key_id.to_string()],
-        ..RollupFilter::default()
-    };
+    // The key is bound in SQL from the authenticated id and from nothing the caller sent: the ceiling on
+    // what this route may show is this one argument. The ledger files what it could not attribute under `-`,
+    // which the admin API's slug rule (`[a-z0-9][a-z0-9-]{0,63}`) cannot produce, so no key ever matches it.
+    let rows = read_rollups_for_key(conn, key_id, hour_of(from), hour_ceil(to))?;
+    Ok(window(rows.iter(), hour_of(from), to))
+}
+
+/// The two windows the self-service answer carries, from one read: the day is the tail of the week's own
+/// rows, so a caller polling the route costs one scan of its own key rather than two of every key's.
+pub fn key_usage_windows(
+    conn: &Connection,
+    key_id: &str,
+    now: i64,
+) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
+    let day_hour = hour_of(now - DAY_MS);
+    let week_hour = hour_of(now - 7 * DAY_MS);
+    let rows = read_rollups_for_key(conn, key_id, week_hour, hour_ceil(now))?;
+    Ok((
+        window(rows.iter().filter(|r| r.hour >= day_hour), day_hour, now),
+        window(rows.iter(), week_hour, now),
+    ))
+}
+
+/// One window folded from the rows already read for it; probe rows are left out as the key list's totals
+/// leave them out.
+fn window<'a>(
+    rows: impl Iterator<Item = &'a RollupRow>,
+    from_hour: i64,
+    to: i64,
+) -> KeyUsageWindow {
     let mut out = KeyUsageWindow {
-        from,
+        from: from_hour * 1_000,
         to,
         ..KeyUsageWindow::default()
     };
     let mut models: std::collections::BTreeMap<String, ModelUsage> = Default::default();
-    for row in apply_filter(rows, &filter) {
+    for row in rows {
         if row.kind == "probe" {
             continue;
         }
@@ -91,18 +119,18 @@ pub fn key_usage(
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.cost_usd += row.estimated_usd;
-        add(&mut out.tokens, &row);
-        let model = group_of(&row, "model");
+        add(&mut out.tokens, row);
+        let model = group_of(row, "model");
         let entry = models.entry(model.clone()).or_insert_with(|| ModelUsage {
             model,
             ..ModelUsage::default()
         });
         entry.requests += row.requests;
         entry.cost_usd += row.estimated_usd;
-        add(&mut entry.tokens, &row);
+        add(&mut entry.tokens, row);
     }
     out.models = models.into_values().collect();
-    Ok(out)
+    out
 }
 
 #[derive(Serialize)]
@@ -167,19 +195,19 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         Err(refusal) => return no_store(key_refusal_response(&refusal, &request_id)),
     };
     let key_id = key.id.clone();
-    let read = state.db.read(|c| {
-        Ok((
-            key_usage(c, &key_id, now - DAY_MS, now)?,
-            key_usage(c, &key_id, now - 7 * DAY_MS, now)?,
-        ))
-    });
-    let (day, week) = match read {
+    let (day, week) = match state.db.read(|c| key_usage_windows(c, &key_id, now)) {
         Ok(windows) => windows,
         Err(error) => {
             tracing::warn!(%error, "the usage route could not read the ledger");
-            return no_store(
-                (StatusCode::INTERNAL_SERVER_ERROR, [(CONTENT_TYPE, "application/json")], r#"{"type":"error","error":{"type":"api_error","message":"the usage ledger could not be read"}}"#).into_response(),
-            );
+            // The relay's own shape, so this answer carries the request id and the error code header every
+            // other refusal on the proxy listener carries.
+            return no_store(anthropic_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                "usage_unavailable",
+                "the usage ledger could not be read",
+                &request_id,
+            ));
         }
     };
     let answer = UsageAnswer {
@@ -197,6 +225,7 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
                         CONTENT_SECURITY_POLICY,
                         "default-src 'none'; style-src 'unsafe-inline'",
                     ),
+                    (X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 render_html(&answer),
             )
@@ -206,7 +235,10 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
     no_store(
         (
             StatusCode::OK,
-            [(CONTENT_TYPE, "application/json")],
+            [
+                (CONTENT_TYPE, "application/json"),
+                (X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
             serde_json::to_string(&answer).unwrap_or_else(|_| "{}".into()),
         )
             .into_response(),
@@ -290,6 +322,14 @@ fn window_html(title: &str, w: &KeyUsageWindow) -> String {
     )
 }
 
+/// When the figures were read, for a page the holder saves to a file and reads later; the raw milliseconds
+/// stand in for an instant no calendar can render.
+fn generated_at(now: i64) -> String {
+    jiff::Timestamp::from_millisecond(now)
+        .map(|t| t.to_string())
+        .unwrap_or_else(|_| now.to_string())
+}
+
 fn render_html(answer: &UsageAnswer) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
@@ -299,11 +339,12 @@ fn render_html(answer: &UsageAnswer) -> String {
          .key{{color:#555;margin:0 0 1rem}}.sum{{margin:0 0 .5rem}}table{{border-collapse:collapse;width:100%}}\
          th,td{{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left}}.n{{text-align:right;font-variant-numeric:tabular-nums}}\
          @media (prefers-color-scheme:dark){{body{{color:#e6e6e6;background:#151515}}th,td{{border-color:#333}}.key{{color:#aaa}}}}</style></head>\
-         <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>; figures from the router's hourly rollups, probes left out</p>\
+         <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>; figures from the router's hourly rollups, probes left out; generated <time>{now}</time></p>\
          {day}{week}</body></html>",
         label = escape_html(&answer.key.label),
         id = escape_html(&answer.key.id),
         pool = escape_html(&answer.key.pool_id),
+        now = escape_html(&generated_at(answer.now)),
         day = window_html("Last 24 hours", &answer.windows.day),
         week = window_html("Last 7 days", &answer.windows.week),
     )

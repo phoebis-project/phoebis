@@ -1233,11 +1233,14 @@ impl AlertInputHandles {
     /// a store write cannot hold the shutdown.
     pub async fn shutdown(self) {
         if let Some(mut lifecycle) = self.lifecycle {
-            if tokio::time::timeout(std::time::Duration::from_secs(5), &mut lifecycle)
-                .await
-                .is_err()
-            {
-                lifecycle.abort();
+            match tokio::time::timeout(std::time::Duration::from_secs(5), &mut lifecycle).await {
+                Ok(Ok(())) => {}
+                // A consumer that panicked took the session ends it had not written with it, which is
+                // otherwise silent at shutdown.
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "the alerts lifecycle consumer did not finish cleanly")
+                }
+                Err(_) => lifecycle.abort(),
             }
         }
         self.bus.abort();

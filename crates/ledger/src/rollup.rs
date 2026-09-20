@@ -840,6 +840,19 @@ pub fn read_rollups(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The rows of one key over a range, narrowed by SQLite rather than in memory: a reader that wants a single
+/// key pays for that key's rows and not for every key's.
+pub fn read_rollups_for_key(
+    conn: &Connection,
+    key_id: &str,
+    from_hour: i64,
+    to_hour: i64,
+) -> Result<Vec<RollupRow>, LedgerError> {
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE key_id = ?1 AND hour >= ?2 AND hour < ?3 ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent"))?;
+    let rows = stmt.query_map(params![key_id, from_hour, to_hour], row_to_rollup)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn read_account_rollups(
     conn: &Connection,
     from_hour: i64,

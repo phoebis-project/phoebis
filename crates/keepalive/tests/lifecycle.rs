@@ -236,6 +236,13 @@ async fn a_close_ends_every_live_session_once_and_an_announced_one_not_again() {
         }],
         "the live session ends at the close; the announced one ended before it"
     );
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ),
+        "the close drops the sender too: the alerts consumer's drain ends on that and nothing else"
+    );
 }
 
 fn heartbeat() -> SessionLifecycle {

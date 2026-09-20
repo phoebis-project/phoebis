@@ -45,7 +45,9 @@ pub use rollup::{
     read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
-pub use usage::{key_usage, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
+pub use usage::{
+    key_usage, key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {

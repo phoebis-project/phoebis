@@ -2129,6 +2129,44 @@ fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
 }
 
 #[test]
+fn a_spent_pin_stays_when_its_only_sibling_is_cooled() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    // b holds allowance and is the only sibling, but its cooldown takes it out of the eligible set before
+    // the spent block looks for a destination.
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_cooldown(cooled("b", "account", 2_000 + HOUR, "five_hour"));
+    let (result, writes) = pick(&mut st, 2_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "with nowhere to move, the pin stays and the upstream's answer decides"
+    );
+    assert!(
+        !writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id != "a")),
+        "the pin was moved off a: {writes:?}"
+    );
+}
+
+#[test]
 fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1), ("c", 1)],
