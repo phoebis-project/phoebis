@@ -153,6 +153,10 @@ async function poolCachingControls(theme) {
   if ((await toggle('Also warm subagent caches').count()) === 0) {
     const keepalive = toggle('Keep prompt caches warm');
     if ((await keepalive.count()) === 1 && (await keepalive.isEnabled())) await keepalive.click();
+    else if ((await keepalive.count()) === 1) {
+      say("the first pool's keepalive toggle is disabled (its affinity is under 300 s), so the subagent switch is out of reach; seed a pool with a longer affinity first");
+      return;
+    }
   }
   if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle, with keepalive on');
   // The in-overage select is drawn only while the policy is on, which is also the state the two are compared in.
@@ -215,16 +219,16 @@ async function compatibilityCard(theme) {
     };
     const compatibility = card('Compatibility');
     const about = card('About');
-    if (!compatibility || !about) return { about: null, compatibility: null, diagnostics: null };
-    const row = [...compatibility.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache diagnostics');
+    const row = compatibility ? [...compatibility.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache diagnostics') : null;
     return {
-      about: measure(about),
-      compatibility: measure(compatibility),
+      about: about ? measure(about) : null,
+      compatibility: compatibility ? measure(compatibility) : null,
       diagnostics: row ? { title: row.querySelector('dd')?.getAttribute('title') ?? '', value: (row.querySelector('dd')?.textContent ?? '').trim() } : null,
     };
   });
-  if (!read.compatibility) {
-    say('no card titled "Compatibility" beside the About card');
+  const missing = [!read.compatibility && 'Compatibility', !read.about && 'About'].filter(Boolean);
+  if (missing.length) {
+    say(`no card titled ${missing.map((m) => JSON.stringify(m)).join(' or ')}`);
     return;
   }
   if (!read.diagnostics) say('the compatibility card has no "Cache diagnostics" row');
@@ -325,6 +329,8 @@ async function errorStateBox(theme) {
       const box = el.getBoundingClientRect();
       return {
         border: `${style.borderStyle} ${style.borderWidth}`,
+        borderColor: style.borderTopColor,
+        color: style.color,
         height: box.height,
         ink: getComputedStyle(el.querySelector('.empty__title')).color,
         padding: `${style.paddingTop} ${style.paddingLeft}`,
@@ -345,6 +351,9 @@ async function errorStateBox(theme) {
   const differs = ['border', 'height', 'padding', 'radius', 'width'].filter((key) => String(measured.empty[key]) !== String(measured.error[key]));
   if (differs.length) failures.push(`${theme} /: the error state's ${differs.join(', ')} differs from the empty state's`);
   if (measured.empty.ink === measured.error.ink) failures.push(`${theme} /: the error state's title reads in the empty state's ink (${measured.error.ink})`);
+  // An undefined custom property leaves border-color at its initial `currentcolor`, which is the box's own ink.
+  if (measured.error.borderColor === measured.error.color) failures.push(`${theme} /: the error state's border is the text colour, so --critical-border resolved to nothing`);
+  if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border colour equals the empty state's`);
 }
 
 /** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */

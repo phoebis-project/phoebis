@@ -30,6 +30,7 @@
   --serious-ink: #9b3f19;
   --serious-soft: #fce6dc;
   --critical: #d03b3b;
+  --critical-border: #e39c9c;
   --critical-ink: #a12f2f;
   --critical-soft: #f9dede;
   --critical-track: #f3c9c9;
@@ -93,6 +94,7 @@
   --serious-ink: #f3a17e;
   --serious-soft: #3d2418;
   --critical: #d03b3b;
+  --critical-border: #7a3a3a;
   --critical-ink: #ef7b7b;
   --critical-soft: #3c1c1c;
   --critical-track: #4d2323;

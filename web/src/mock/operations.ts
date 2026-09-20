@@ -300,6 +300,30 @@ export const ALERT_RULES: AlertRule[] = [
   },
   {
     createdAt: daysAgo(46),
+    id: 'rule_active',
+    kind: 'session_active',
+    scope: { type: 'key', id: 'desktop' },
+    threshold: null,
+    windowId: null,
+    webhookUrl: 'https://hooks.example.com/phoebis/active',
+    enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(46),
+  },
+  {
+    createdAt: daysAgo(46),
+    id: 'rule_subagent',
+    kind: 'subagent_active',
+    scope: { type: 'key', id: 'desktop' },
+    threshold: null,
+    windowId: null,
+    webhookUrl: 'https://hooks.example.com/phoebis/subagent',
+    enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(46),
+  },
+  {
+    createdAt: daysAgo(46),
     id: 'rule_refresh',
     kind: 'refresh_failed',
     scope: { type: 'account', id: 'team' },
@@ -477,7 +501,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
   },
   {
     id: 'evt_14',
-    ruleId: 'rule_idle',
+    ruleId: 'rule_active',
     kind: 'session_active',
     subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}`,
     detail: { key: 'desktop', pool: 'all', session: SESSION_IDS[1], source: 'request' },
@@ -488,7 +512,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
   },
   {
     id: 'evt_15',
-    ruleId: 'rule_idle',
+    ruleId: 'rule_subagent',
     kind: 'subagent_active',
     subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}, agent a7f3`,
     detail: { agent: 'a7f3', key: 'desktop', parent_agent: 'main', pool: 'all', session: SESSION_IDS[1] },
@@ -499,6 +523,18 @@ export const ALERT_EVENTS: AlertEvent[] = [
       { at: ago(48 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 },
       { at: ago(11 * MINUTE), attempt: 1, error: null, state: 'resolved', status: 200 },
     ],
+  },
+  {
+    id: 'evt_16',
+    ruleId: 'rule_idle',
+    kind: 'session_idle',
+    subject: `desktop, session ${SESSION_IDS[2].slice(0, 8)}`,
+    // The router always writes idle_minutes; the type leaves it optional, and the row must read without it.
+    detail: { key: 'desktop', pool: 'all', session: SESSION_IDS[2] },
+    state: 'open',
+    openedAt: ago(35 * MINUTE),
+    resolvedAt: null,
+    deliveries: [{ at: ago(35 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
 ];
 

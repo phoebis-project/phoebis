@@ -232,7 +232,7 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <Card title="Retention" subtitle="Older rows are deleted by the nightly compaction.">
+      <Card title="Retention" subtitle="Older rows are deleted by the hourly purge.">
         {s ? (
           <>
             <KeyValue

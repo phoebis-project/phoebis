@@ -417,7 +417,7 @@ function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKi
           {life.agent && `, agent ${life.agent}`}
         </span>
         {kind === 'session_active' && life.source && <span className="sub">{life.source}</span>}
-        {kind === 'session_idle' && <span className="sub">idle for {life.idle_minutes} min</span>}
+        {kind === 'session_idle' && <span className="sub">{typeof life.idle_minutes === 'number' ? `idle for ${life.idle_minutes} min` : 'idle'}</span>}
         {kind === 'subagent_active' && <span className="sub">parent {life.parent_agent ?? '-'}</span>}
       </>
     );
