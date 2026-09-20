@@ -42,9 +42,7 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
     };
     // The deadline above is read between attempts; the timeout covers an attempt that never returns.
     if tokio::time::timeout(SETTLE, attempts).await.is_err() {
-        panic!(
-            "{session_url} accepted a connection and never answered the login within {SETTLE:?}"
-        );
+        panic!("{session_url} did not complete the login within {SETTLE:?}");
     }
 }
 
@@ -52,13 +50,29 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
 /// below the kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
 const PORT_SPAN: u16 = 100;
 
-/// The first port of this process's slice, spread by pid so two test processes rarely share one.
-fn port_base() -> u16 {
-    20_000 + (std::process::id() % 100) as u16 * PORT_SPAN
+/// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux); the
+/// allocator's whole span must stay below it.
+const EPHEMERAL_FLOOR: u16 = 32_768;
+
+/// The first port of the slice for a given pid residue: pulled out of `port_base` so the bounds test can check
+/// every residue's arithmetic without drawing from the counter `free_port` shares with the rest of this
+/// process's tests.
+fn slice_base(residue: u32) -> u16 {
+    20_000 + residue as u16 * PORT_SPAN
 }
 
+/// The first port of this process's slice, spread by pid so two test processes rarely share one.
+fn port_base() -> u16 {
+    slice_base(std::process::id() % 100)
+}
+
+/// A port no other test in this binary is handed, from a hundred-port slice below the range the kernel picks
+/// ephemeral ports from, so a concurrent test's outbound connection cannot take it between here and the bind
+/// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
+/// Rests on one precondition, enforced below: a process draws no more than `PORT_SPAN` ports in its lifetime.
 fn free_port() -> u16 {
     static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    static HANDED_OUT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
     let base = port_base();
     // The offset wraps inside the slice, so a failed probe advances the cursor without ever carrying the
     // range toward the ephemeral ports. A probe bind tells a port another process holds from a free one; the
@@ -68,6 +82,11 @@ fn free_port() -> u16 {
         let offset = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % PORT_SPAN;
         let port = base + offset;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            let handed_out = HANDED_OUT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            assert!(
+                handed_out <= PORT_SPAN,
+                "end_to_end.rs drew more than {PORT_SPAN} ports in one process; a test is drawing ports it never binds, or the slice must grow"
+            );
             return port;
         }
     }
@@ -75,15 +94,34 @@ fn free_port() -> u16 {
 }
 
 #[test]
-fn free_port_stays_below_the_ephemeral_range() {
-    // More draws than the slice holds, so the cursor wraps at least once and the wrap is what is under test.
-    for _ in 0..150 {
-        let port = free_port();
+fn every_pid_slice_stays_below_the_ephemeral_range() {
+    // Checked once rather than per residue: even the highest slice never reaches the kernel's own range.
+    assert!(
+        20_000u32 + 100 * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
+        "the allocator's full span reaches the kernel's ephemeral range"
+    );
+    // Arithmetic only: a live draw per residue would draw from the counter every other test in this process
+    // shares, which is the bug this test used to cause.
+    for residue in 0..100u32 {
+        let base = slice_base(residue);
         assert!(
-            (20_000..30_000).contains(&port),
-            "{port} is outside the allocator's range"
+            base as u32 >= 20_000,
+            "residue {residue} starts below the allocator's floor: base {base}"
+        );
+        assert!(
+            base as u32 + PORT_SPAN as u32 <= 20_000 + 100 * PORT_SPAN as u32,
+            "residue {residue} pushes its slice past the allocator's own span: base {base}"
         );
     }
+    // One live draw, which cannot wrap the shared counter by itself, proves free_port actually lands inside
+    // this process's own slice.
+    let port = free_port();
+    let base = slice_base(std::process::id() % 100);
+    assert!(
+        (base..base + PORT_SPAN).contains(&port),
+        "{port} is outside this process's slice ({base}..{})",
+        base + PORT_SPAN
+    );
 }
 
 /// The fixture request, replayed against the proxy under the given secret and session id. Headers come from
