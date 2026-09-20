@@ -63,7 +63,7 @@ export async function mount(path: string): Promise<Mounted> {
   root.render(
     <SessionProvider>
       <AppSettingsProvider>
-        <RouterProvider router={router} future={{ v7_startTransition: true }} />
+        <RouterProvider router={router} />
       </AppSettingsProvider>
     </SessionProvider>,
   );
