@@ -196,7 +196,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 401/403 auth error | Oauth: refresh once, else reauth_required; api_key: reauth_required now | Yes, post-refresh |
+| 401, or 403 with `authentication_error` | Oauth: refresh once, else reauth; api_key: reauth now | Yes, post-refresh |
 | 403 `permission_error` | Model-scoped, one hour, reason permission; credential stays valid | Yes |
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |

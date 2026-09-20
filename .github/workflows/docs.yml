@@ -21,6 +21,7 @@ jobs:
       - run: zensical build --clean --strict
       - run: python3 scripts/check-docs.py links
       - run: python3 scripts/check-docs.py routes
+      - run: python3 scripts/check-docs.py client
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site

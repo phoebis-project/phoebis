@@ -124,8 +124,8 @@ opens a detail pane with its phase waterfall, and a Streams grid shows every str
 
 ### Quota
 
-A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, API-key accounts,
-and OAuth accounts. Below the cards, a reset timeline lays the same windows across a calendar, zoomable between a
+A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts,
+and API-key accounts. Below the cards, a reset timeline lays the same windows across a calendar, zoomable between a
 two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
@@ -212,7 +212,9 @@ resolved at once with `reason: restart` in its detail, since the router no longe
 live session reopens on its next request.
 
 **Session idle** opens once no request has arrived on the session for the rule's threshold in minutes, measured
-from the session's last request on any of its agents, and resolves on the next request.
+from the session's last request on any of its agents, and resolves on the next request. Resolving one by hand
+ends the event and leaves the session's record of the crossing as it was, so nothing reopens while the session
+stays idle; its next request arms the rule again.
 
 **Session parked** opens when the companion reports the main agent parked and resolves on the session's next
 request, or when the companion reports the agent busy or idle again; without a companion for the session neither
