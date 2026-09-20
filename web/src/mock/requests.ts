@@ -290,6 +290,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     }
     // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429.
     const lane = LANES.find((l) => l.keyId === r.keyId);
+    // One draw either way for this seed only: the chance the forced row skips comes up false here, and a seed where it came up true would spend a weighted draw as well and shift every later row.
     if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
       const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
       events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
