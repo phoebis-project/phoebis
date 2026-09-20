@@ -717,3 +717,52 @@ async fn a_rule_with_an_open_event_refuses_a_change_of_condition_until_it_resolv
         "the condition moves once nothing is open under it"
     );
 }
+
+#[tokio::test]
+async fn session_idle_takes_a_threshold_in_whole_minutes_and_the_other_kinds_take_none() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(
+        &parts.app,
+        "/admin/alerts/rules",
+        r#"{"kind":"session_idle","scope":{"type":"all"},"threshold":30,"webhook_url":"http://127.0.0.1:1/hook"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(json(created).await["threshold"].as_f64(), Some(30.0));
+    for (body, message) in [
+        (
+            r#"{"kind":"session_idle","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/h"}"#,
+            "session_idle needs a threshold of whole minutes between 1 and 10080",
+        ),
+        (
+            r#"{"kind":"session_idle","scope":{"type":"all"},"threshold":0.5,"webhook_url":"http://127.0.0.1:1/h"}"#,
+            "session_idle needs a threshold of whole minutes between 1 and 10080",
+        ),
+        (
+            r#"{"kind":"session_idle","scope":{"type":"all"},"threshold":30,"window":"7d","webhook_url":"http://127.0.0.1:1/h"}"#,
+            "only utilization_above takes a window",
+        ),
+        (
+            r#"{"kind":"session_active","scope":{"type":"all"},"threshold":5,"webhook_url":"http://127.0.0.1:1/h"}"#,
+            "only utilization_above and session_idle take a threshold",
+        ),
+        (
+            r#"{"kind":"session_parked","scope":{"type":"account","id":"business"},"webhook_url":"http://127.0.0.1:1/h"}"#,
+            "this kind does not take that scope",
+        ),
+        (
+            r#"{"kind":"subagent_idle","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/h"}"#,
+            "kind is one of the twelve alert kinds",
+        ),
+    ] {
+        let refused = post(&parts.app, "/admin/alerts/rules", body, Some(&cookie)).await;
+        let status = refused.status();
+        assert_eq!(
+            (status.as_u16(), json(refused).await["error"].as_str()),
+            (400, Some(message)),
+            "{body}"
+        );
+    }
+}

@@ -298,6 +298,20 @@ impl Store {
         Ok(landed > 0)
     }
 
+    /// `false` when the event is already resolved: what a resolved event's delivery carried is what it said,
+    /// and a later writer may not rewrite it.
+    pub fn update_alert_event_detail(
+        &self,
+        id: &str,
+        detail_json: &str,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        Ok(conn.execute(
+            "UPDATE alert_events SET detail_json = ?2 WHERE id = ?1 AND state = 'open'",
+            params![id, detail_json],
+        )? > 0)
+    }
+
     /// `false` when the event is already resolved, so a second resolver does not move the timestamp.
     pub fn resolve_alert_event(&self, id: &str, at: i64) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);

@@ -282,6 +282,7 @@ pub fn inputs(rig: &Rig, spent: BTreeMap<String, f64>) -> AlertInputs {
     AlertInputs {
         body_capture_max_hours: 168,
         bus: rig.bus.clone(),
+        lifecycle: None,
         router: rig.router.clone(),
         session_expiry: Duration::from_secs(3_600),
         spent_today: Arc::new(move || spent.clone()),

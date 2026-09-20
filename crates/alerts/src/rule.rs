@@ -14,11 +14,15 @@ pub enum Kind {
     PoolExhausted,
     ReauthRequired,
     RefreshFailed,
+    SessionActive,
+    SessionIdle,
+    SessionParked,
+    SubagentActive,
     UtilizationAbove,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 12] = [
         Kind::AskUserQuestion,
         Kind::ClientDrift,
         Kind::FundingRequired,
@@ -26,6 +30,10 @@ impl Kind {
         Kind::PoolExhausted,
         Kind::ReauthRequired,
         Kind::RefreshFailed,
+        Kind::SessionActive,
+        Kind::SessionIdle,
+        Kind::SessionParked,
+        Kind::SubagentActive,
         Kind::UtilizationAbove,
     ];
 
@@ -38,6 +46,10 @@ impl Kind {
             Kind::PoolExhausted => "pool_exhausted",
             Kind::ReauthRequired => "reauth_required",
             Kind::RefreshFailed => "refresh_failed",
+            Kind::SessionActive => "session_active",
+            Kind::SessionIdle => "session_idle",
+            Kind::SessionParked => "session_parked",
+            Kind::SubagentActive => "subagent_active",
             Kind::UtilizationAbove => "utilization_above",
         }
     }
@@ -67,7 +79,11 @@ pub struct Scope {
 pub fn allowed_scopes(kind: Kind) -> &'static [ScopeType] {
     use ScopeType::*;
     match kind {
-        Kind::AskUserQuestion => &[All, Key, Pool],
+        Kind::AskUserQuestion
+        | Kind::SessionActive
+        | Kind::SessionIdle
+        | Kind::SessionParked
+        | Kind::SubagentActive => &[All, Key, Pool],
         Kind::ClientDrift => &[All],
         Kind::FundingRequired | Kind::ReauthRequired | Kind::RefreshFailed => {
             &[Account, AnyAccount]

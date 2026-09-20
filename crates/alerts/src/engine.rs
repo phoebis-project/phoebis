@@ -205,6 +205,27 @@ impl Alerts {
         Ok(true)
     }
 
+    /// `resolve` with the event's detail replaced first, so the resolved delivery carries `detail`.
+    pub fn resolve_with_detail(
+        self: &Arc<Self>,
+        event_id: &str,
+        detail: serde_json::Value,
+    ) -> Result<bool, StoreError> {
+        let Some(mut event) = self.parts.store.alert_event(event_id)? else {
+            return Ok(false);
+        };
+        if event.state != "open" {
+            return Ok(false);
+        }
+        let detail_json = detail.to_string();
+        self.parts
+            .store
+            .update_alert_event_detail(event_id, &detail_json)?;
+        event.detail_json = Some(detail_json);
+        self.finish(event, (self.parts.clock)());
+        Ok(true)
+    }
+
     fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) {
         let transitions = self.transitions.lock().expect(TRANSITIONS_POISONED);
         match self.parts.store.resolve_alert_event(&event.id, now) {

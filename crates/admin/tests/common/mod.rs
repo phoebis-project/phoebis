@@ -640,6 +640,7 @@ async fn app_with_webhook_policy(
         bus: bus.clone(),
         clock: clock.clone(),
         ledger: ledger.clone(),
+        lifecycle: None,
         limits: KeepaliveLimits::default(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),

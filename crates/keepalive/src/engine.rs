@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, AccountSelected, Bus, Event as BusEvent, Outcome, Phase, RequestComplete,
-    RequestObserved, ResponseChunk, ResponseHead,
+    spawn_subscriber, AccountSelected, Bus, Event as BusEvent, LifecycleSender, Outcome, Phase,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
 };
 use phoebis_ledger::{Ledger, Metrics, Pricing};
 use phoebis_oauth::Clock;
@@ -165,6 +165,8 @@ pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
     pub ledger: Ledger,
+    /// Where the companion's reports reach the alert inputs; `None` when nothing is listening.
+    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
@@ -359,6 +361,7 @@ pub(crate) struct Settlement {
 }
 
 pub(crate) struct Inner {
+    pub lifecycle: Option<LifecycleSender>,
     pub sessions: BTreeMap<SessionKey, Session>,
     /// Request id to the agent following it.
     pub pending: HashMap<String, (SessionKey, String)>,
@@ -394,6 +397,7 @@ impl Engine {
     pub fn new(parts: EngineParts) -> Arc<Engine> {
         Arc::new(Engine {
             inner: Mutex::new(Inner {
+                lifecycle: parts.lifecycle.clone(),
                 sessions: BTreeMap::new(),
                 pending: HashMap::new(),
                 reasons: BTreeMap::new(),
@@ -474,6 +478,14 @@ impl Engine {
 }
 
 impl Inner {
+    /// A send never blocks and a closed receiver is the alerts having shut down first, which loses nothing worth
+    /// a log line.
+    pub(crate) fn emit(&self, event: SessionLifecycle) {
+        if let Some(tx) = &self.lifecycle {
+            let _ = tx.send(event);
+        }
+    }
+
     /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
     /// they show.
     pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
@@ -603,6 +615,10 @@ impl Inner {
             }
             self.agents -= agents.len();
             self.sessions.remove(&key);
+            self.emit(SessionLifecycle::SessionEnded {
+                key_id: key.0.clone(),
+                session_id: key.1.clone(),
+            });
         }
     }
 }

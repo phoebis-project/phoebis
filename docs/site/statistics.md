@@ -161,8 +161,9 @@ keepalive, listeners, the downstream client block, and an about panel.
 ## Alerts
 
 A rule names a kind, a scope, a webhook URL, an optional secret, and an enabled flag; only `utilization_above`
-also takes a threshold from 0 to 1 and a window of `5h`, `7d`, or `7d_oi`. `all` and `any_account` take no scope
-id; `account`, `key`, and `pool` each require one.
+also takes a threshold from 0 to 1 and a window of `5h`, `7d`, or `7d_oi`, and `session_idle` takes a threshold in
+whole minutes from 1 to 10080. `all` and `any_account` take no scope id; `account`, `key`, and `pool` each require
+one.
 
 | Kind | Label | Scopes |
 | --- | --- | --- |
@@ -173,6 +174,10 @@ id; `account`, `key`, and `pool` each require one.
 | `pool_exhausted` | Pool exhausted | `all`, `pool` |
 | `reauth_required` | Re-auth required | `account`, `any_account` |
 | `refresh_failed` | Credential refresh failed | `account`, `any_account` |
+| `session_active` | Session active | `all`, `key`, `pool` |
+| `session_idle` | Session idle | `all`, `key`, `pool` |
+| `session_parked` | Session parked | `all`, `key`, `pool` |
+| `subagent_active` | Subagent active | `all`, `key`, `pool` |
 | `utilization_above` | Utilization above threshold | `account`, `all`, `any_account`, `key`, `pool` |
 
 **Waiting for user input** fires when a response relayed to a client carries an AskUserQuestion tool call, so the
@@ -197,6 +202,22 @@ paired or verified again.
 
 **Credential refresh failed** fires when a credential refresh fails twice in a row and resolves on the next
 refresh that succeeds.
+
+**Session active** opens on a session's first request through the router, or on the keepalive companion's
+`session_start` when that comes first, and resolves on the companion's `session_end` or when the session has been
+silent for `sessions.expire_after_seconds`, checked every second. The opened and resolved deliveries are the start
+and the end of the session. After a restart every open lifecycle event is resolved at once with `reason: restart`
+in its detail, since the router no longer knows which sessions live; a live session reopens on its next request.
+
+**Session idle** opens once no request has arrived on the session for the rule's threshold in minutes, measured
+from the session's last request on any of its agents, and resolves on the next request.
+
+**Session parked** opens when the companion reports the main agent parked and resolves when it reports it busy or
+idle again; without a companion for the session neither happens.
+
+**Subagent active** opens on a subagent's first request, or on the companion's `agent_start`, and resolves when
+the companion releases the agent, when the session ends, or at the session's expiry. The detail names the parent
+agent when the client sent `x-claude-code-parent-agent-id`.
 
 **Utilization above threshold** fires when a usage sample for the chosen window reaches the threshold and
 resolves once a sample reads five points below it.

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use phoebis_alerts::{question_subject, BusArm, Kind, Poller, ScopeType};
+use phoebis_alerts::{question_subject, BusArm, Kind, Poller, ScopeType, Tracked};
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
 use phoebis_routing::{Report, UtilizationSample};
 use phoebis_store::{AccountState, AlertEventRow};
@@ -567,7 +567,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     rig.alerts.reload().unwrap();
     let mut spent = BTreeMap::new();
     spent.insert("main".to_string(), 1.5);
-    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, spent));
+    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, spent), Tracked::default());
     rig.store
         .set_state("business", AccountState::ReauthRequired)
         .unwrap();
@@ -673,7 +673,11 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
         },
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
     settled(&rig).await;
     assert!(
         !rig.store
@@ -803,7 +807,11 @@ async fn an_event_left_open_for_a_healthy_account_resolves_on_the_next_tick() {
         )
         .unwrap();
     rig.alerts.reload().unwrap();
-    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
     poller.tick().await;
     settled(&rig).await;
     // What a clear that failed against the store leaves behind: the account is healthy and the event is open.

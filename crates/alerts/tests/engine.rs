@@ -273,7 +273,7 @@ fn scopes_admit_what_the_spec_table_allows() {
         allowed_scopes(Kind::ReauthRequired).contains(&ScopeType::AnyAccount)
             && !allowed_scopes(Kind::ReauthRequired).contains(&ScopeType::Key)
     );
-    assert_eq!(Kind::ALL.len(), 8);
+    assert_eq!(Kind::ALL.len(), 12);
     assert_eq!(
         Kind::parse("keepalive_cost_cap"),
         Some(Kind::KeepaliveCostCap)

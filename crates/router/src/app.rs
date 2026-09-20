@@ -202,10 +202,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         .with_bus(bus.clone())
         .with_cache_diagnostics(config.compatibility.cache_diagnostics),
     );
+    // The companion's reports reach the alerts off the request bus, which drops under pressure while a
+    // session's start and end must not.
+    let (lifecycle_tx, lifecycle_rx) = phoebis_bus::lifecycle_channel();
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
         ledger: ledger.clone(),
+        lifecycle: Some(lifecycle_tx),
         limits: config.keepalive.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
@@ -233,6 +237,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         phoebis_alerts::AlertInputs {
             body_capture_max_hours: config.stats.body_capture_max_hours,
             bus: bus.clone(),
+            lifecycle: Some(lifecycle_rx),
             router: router_task.clone(),
             session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
             spent_today: Arc::new({

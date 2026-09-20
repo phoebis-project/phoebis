@@ -13,8 +13,8 @@ use axum::body::Body;
 use axum::http::Request;
 use bytes::Bytes;
 use phoebis_bus::{
-    AccountSelected, Bus, Event as BusEvent, Kind, Origin, Outcome, RequestComplete,
-    RequestObserved, ResponseChunk, Subscriber, Usage,
+    AccountSelected, Bus, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
+    RequestComplete, RequestObserved, ResponseChunk, Subscriber, Usage,
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
@@ -73,6 +73,7 @@ pub struct Rig {
 
 pub struct RigSpec {
     pub accounts: Vec<TestAccount>,
+    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
@@ -83,6 +84,7 @@ impl Default for RigSpec {
     fn default() -> Self {
         RigSpec {
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+            lifecycle: None,
             limits: KeepaliveLimits {
                 lease_seconds: 3_600,
                 ..KeepaliveLimits::default()
@@ -144,6 +146,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         bus: bus.clone(),
         clock,
         ledger: ledger.clone(),
+        lifecycle: spec.lifecycle,
         limits: spec.limits,
         metrics: metrics.clone(),
         pricing,

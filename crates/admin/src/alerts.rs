@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use phoebis_alerts::{allowed_scopes, ipv4_refusal, ipv6_refusal, Kind, ScopeType};
+use phoebis_alerts::{allowed_scopes, ipv4_refusal, ipv6_refusal, Kind, ScopeType, IDLE_MINUTES};
 use phoebis_store::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -141,7 +141,7 @@ fn destination_refusal(url: &Url) -> Option<&'static str> {
 fn validate(state: &AdminState, row: &AlertRuleRow) -> Result<(), Response> {
     let bad = |m: &str| Err(failure(StatusCode::BAD_REQUEST, m));
     let Some(kind) = Kind::parse(&row.kind) else {
-        return bad("kind is one of the eight alert kinds");
+        return bad("kind is one of the twelve alert kinds");
     };
     let Ok(scope) = serde_json::from_value::<ScopeType>(Value::String(row.scope_type.clone()))
     else {
@@ -170,18 +170,38 @@ fn validate(state: &AdminState, row: &AlertRuleRow) -> Result<(), Response> {
             }
         }
     }
-    if kind == Kind::UtilizationAbove {
-        if !row.threshold.is_some_and(|t| (0.0..=1.0).contains(&t)) {
-            return bad("utilization_above needs a threshold between 0 and 1");
+    match kind {
+        Kind::UtilizationAbove => {
+            if !row.threshold.is_some_and(|t| (0.0..=1.0).contains(&t)) {
+                return bad("utilization_above needs a threshold between 0 and 1");
+            }
+            if !matches!(
+                row.window.as_deref(),
+                Some("5h") | Some("7d") | Some("7d_oi")
+            ) {
+                return bad("utilization_above needs a window of 5h, 7d, or 7d_oi");
+            }
         }
-        if !matches!(
-            row.window.as_deref(),
-            Some("5h") | Some("7d") | Some("7d_oi")
-        ) {
-            return bad("utilization_above needs a window of 5h, 7d, or 7d_oi");
+        // The rule row's threshold carries the minutes, so an idle rule needs no column of its own.
+        Kind::SessionIdle => {
+            if !row
+                .threshold
+                .is_some_and(|t| IDLE_MINUTES.contains(&t) && t.fract() == 0.0)
+            {
+                return bad("session_idle needs a threshold of whole minutes between 1 and 10080");
+            }
+            if row.window.is_some() {
+                return bad("only utilization_above takes a window");
+            }
         }
-    } else if row.threshold.is_some() || row.window.is_some() {
-        return bad("only utilization_above takes a threshold and a window");
+        _ => {
+            if row.threshold.is_some() {
+                return bad("only utilization_above and session_idle take a threshold");
+            }
+            if row.window.is_some() {
+                return bad("only utilization_above takes a window");
+            }
+        }
     }
     let url = match Url::parse(&row.webhook_url) {
         Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => url,

@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 
+use phoebis_bus::SessionLifecycle;
+
 use crate::engine::{
     Agent, AgentState, Engine, Inner, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
 };
@@ -271,7 +273,12 @@ impl Inner {
                 session.ended = true;
                 session.sequence = ev.sequence;
                 session.last_report_at = now;
-                return Ok(acknowledge(session, session.agents.get(&agent_id)));
+                let ack = acknowledge(session, session.agents.get(&agent_id));
+                self.emit(SessionLifecycle::SessionEnded {
+                    key_id: key.0.clone(),
+                    session_id: key.1.clone(),
+                });
+                return Ok(ack);
             }
             "agent_start" => {
                 let existing = self.sessions[&key]
@@ -310,6 +317,13 @@ impl Inner {
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                     }
                 }
+                if agent_id != MAIN_AGENT {
+                    self.emit(SessionLifecycle::AgentStarted {
+                        key_id: key.0.clone(),
+                        session_id: key.1.clone(),
+                        agent_id: agent_id.clone(),
+                    });
+                }
             }
             "activity" | "state" => {
                 let Some(agent) = self.sessions[&key].agents.get(&agent_id) else {
@@ -321,6 +335,7 @@ impl Inner {
                 if agent.state == AgentState::Released {
                     return Err(err("agent_released", 409));
                 }
+                let was = agent.state;
                 if ev.event == "activity" {
                     let agent = self
                         .sessions
@@ -332,6 +347,12 @@ impl Inner {
                     agent.last_activity = now;
                     agent.idle_ticks = 0;
                     agent.state = AgentState::Busy;
+                    if agent_id == MAIN_AGENT && was == AgentState::Parked {
+                        self.emit(SessionLifecycle::MainResumed {
+                            key_id: key.0.clone(),
+                            session_id: key.1.clone(),
+                        });
+                    }
                 } else {
                     let state = ev
                         .state
@@ -356,6 +377,31 @@ impl Inner {
                             self.discard(&key, &agent_id, Reason::AgentUnknown, None)
                         }
                         _ => {}
+                    }
+                    // The main agent's park and its return are the session's, and a subagent's release is the
+                    // end of that agent; a report of the state it already held is no transition.
+                    let transition = match (agent_id == MAIN_AGENT, was, state) {
+                        (true, AgentState::Parked, AgentState::Busy | AgentState::Idle) => {
+                            Some(SessionLifecycle::MainResumed {
+                                key_id: key.0.clone(),
+                                session_id: key.1.clone(),
+                            })
+                        }
+                        (true, previous, AgentState::Parked) if previous != AgentState::Parked => {
+                            Some(SessionLifecycle::MainParked {
+                                key_id: key.0.clone(),
+                                session_id: key.1.clone(),
+                            })
+                        }
+                        (false, _, AgentState::Released) => Some(SessionLifecycle::AgentReleased {
+                            key_id: key.0.clone(),
+                            session_id: key.1.clone(),
+                            agent_id: agent_id.clone(),
+                        }),
+                        _ => None,
+                    };
+                    if let Some(transition) = transition {
+                        self.emit(transition);
                     }
                 }
             }
@@ -452,6 +498,10 @@ impl Inner {
         );
         self.agents += 1;
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
+        self.emit(SessionLifecycle::SessionStarted {
+            key_id: key.0.clone(),
+            session_id: key.1.clone(),
+        });
         let session = &self.sessions[&key];
         Ok(acknowledge(session, session.agents.get(MAIN_AGENT)))
     }
