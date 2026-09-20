@@ -460,6 +460,10 @@ impl Inner {
             return Err(err("agent_limit", 429));
         }
         if let Some(previous) = self.sessions.get(&key) {
+            let parked = previous
+                .agents
+                .get(MAIN_AGENT)
+                .is_some_and(|a| a.state == AgentState::Parked);
             let agents: Vec<String> = previous.agents.keys().cloned().collect();
             for agent in &agents {
                 self.discard(
@@ -477,6 +481,14 @@ impl Inner {
                         agent_id: agent.clone(),
                     });
                 }
+            }
+            // The replaced instance's main agent goes with it, and the new one starts busy, so whatever it
+            // reported parked is over.
+            if parked {
+                self.emit(SessionLifecycle::MainResumed {
+                    key_id: key.0.clone(),
+                    session_id: key.1.clone(),
+                });
             }
             self.agents -= agents.len();
         }

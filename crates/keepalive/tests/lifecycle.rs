@@ -125,7 +125,7 @@ async fn a_main_agent_released_while_parked_leaves_the_parked_state() {
 }
 
 #[tokio::test]
-async fn an_instance_replacement_releases_the_agents_it_discards() {
+async fn an_instance_replacement_releases_its_agents_and_ends_its_parked_state() {
     let (tx, mut rx) = lifecycle_channel();
     let mut r = rig(RigSpec {
         lifecycle: Some(tx),
@@ -140,6 +140,8 @@ async fn an_instance_replacement_releases_the_agents_it_discards() {
     })
     .unwrap();
     assert_eq!(drain(&mut rx), [agent("sub-1", true)]);
+    r.state("main", "parked");
+    assert_eq!(drain(&mut rx), [parked()]);
     r.sequence += 1;
     let sequence = r.sequence;
     r.engine
@@ -157,8 +159,8 @@ async fn an_instance_replacement_releases_the_agents_it_discards() {
         .unwrap();
     assert_eq!(
         drain(&mut rx),
-        [agent("sub-1", false), started()],
-        "the agents the replacement discarded are released before the new instance starts"
+        [agent("sub-1", false), resumed(), started()],
+        "the replacement releases the agents it discarded and ends the parked state it inherited"
     );
 }
 

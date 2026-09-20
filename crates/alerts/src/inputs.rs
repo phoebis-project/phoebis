@@ -114,14 +114,32 @@ impl SessionState {
     }
 }
 
-/// The session map the bus arm, the companion's arm and the poller read: a handle, so the three share one map
-/// and the enrichment workers that outlive their request keep reaching it.
+/// The session map the bus arm, the companion's arm and the poller read, and the order their store work runs
+/// in: a handle, so the three share one map and the enrichment workers that outlive their request keep
+/// reaching it.
 #[derive(Clone, Default)]
-pub struct Tracked(Arc<Mutex<TrackedInner>>);
+pub struct Tracked(Arc<Shared>);
+
+#[derive(Default)]
+struct Shared {
+    /// Taken before the map and held through the store work a decision produced, so the store sees the opens
+    /// and the clears in the order the map decided them. The three arms run on tasks of their own: without it
+    /// an open decided before a session's end could insert its row after that end's clear had run, and
+    /// nothing would ever resolve that row, because the map entry it belongs to is gone and the unique open
+    /// index refuses every later event of the same rule and subject.
+    order: Mutex<()>,
+    sessions: Mutex<TrackedInner>,
+}
 
 impl Tracked {
+    /// Hold this across a decision and the emits it produced, and never take it twice on one path: the guard
+    /// is a plain mutex, so a second take on the same thread would wait on itself.
+    fn ordered(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.0.order.lock().expect(SESSIONS_POISONED)
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, TrackedInner> {
-        self.0.lock().expect(SESSIONS_POISONED)
+        self.0.sessions.lock().expect(SESSIONS_POISONED)
     }
 }
 
@@ -207,25 +225,32 @@ fn clear_session(key: &str, session: &str, state: &mut SessionState) -> Vec<Emit
 /// drops the terminal timestamps older than that; run by the poller on every tick and by the arm before it
 /// reads.
 pub fn sweep_expired(tracked: &Tracked, alerts: &Arc<Alerts>, expiry_ms: i64, now: i64) {
-    let emits = {
-        let mut inner = tracked.lock();
-        inner.terminals.retain(|_, ended| now - *ended < expiry_ms);
-        let stale: Vec<(String, String)> = inner
-            .sessions
-            .iter()
-            .filter(|(_, s)| now - s.last_seen >= expiry_ms)
-            .map(|(pair, _)| pair.clone())
-            .collect();
-        let mut emits = Vec::new();
-        for pair in stale {
-            if let Some(((key, session), mut state)) = inner.sessions.remove_entry(&pair) {
-                emits.extend(clear_session(&key, &session, &mut state));
-            }
-        }
-        emits
-    };
-    // Outside the lock: a clear reads the open events and posts, which the other two arms must not wait on.
+    let ordered = tracked.ordered();
+    let emits = sweep_locked(&mut tracked.lock(), expiry_ms, now);
+    // Outside the map lock: a clear reads the open events and posts, which the other two arms must not wait
+    // on. The ordering guard is what keeps this batch ahead of every decision taken after it.
     emit_all(alerts, emits);
+    drop(ordered);
+}
+
+/// The sweep's decision half, for a caller that already holds the ordering guard and the map.
+fn sweep_locked(tracked: &mut TrackedInner, expiry_ms: i64, now: i64) -> Vec<Emit> {
+    tracked
+        .terminals
+        .retain(|_, ended| now - *ended < expiry_ms);
+    let stale: Vec<(String, String)> = tracked
+        .sessions
+        .iter()
+        .filter(|(_, s)| now - s.last_seen >= expiry_ms)
+        .map(|(pair, _)| pair.clone())
+        .collect();
+    let mut emits = Vec::new();
+    for pair in stale {
+        if let Some(((key, session), mut state)) = tracked.sessions.remove_entry(&pair) {
+            emits.extend(clear_session(&key, &session, &mut state));
+        }
+    }
+    emits
 }
 
 struct InFlight {
@@ -321,10 +346,13 @@ impl BusArm {
             alerts,
             in_flight: HashMap::new(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
-            tracked: Tracked(Arc::new(Mutex::new(TrackedInner {
-                sessions,
-                terminals: HashMap::new(),
-            }))),
+            tracked: Tracked(Arc::new(Shared {
+                order: Mutex::new(()),
+                sessions: Mutex::new(TrackedInner {
+                    sessions,
+                    terminals: HashMap::new(),
+                }),
+            })),
         }
     }
 
@@ -342,7 +370,7 @@ impl BusArm {
     /// Whether the pair's question is claimed, counting the moment the claiming section holds the map and
     /// nobody can read it. Public so a test can act from inside that section.
     pub fn question_claimed(&self, key: &str, session: &str) -> bool {
-        match self.tracked.0.try_lock() {
+        match self.tracked.0.sessions.try_lock() {
             Ok(tracked) => tracked
                 .sessions
                 .get(&(key.to_string(), session.to_string()))
@@ -385,7 +413,9 @@ impl BusArm {
             state.pool.clone_from(&o.pool_id);
         }
         let pool = state.pool.clone();
-        if !state.active_open {
+        // The flag says an event of this entry is open, so it is set only where a rule could have opened one:
+        // a rule enabled while the session runs still opens on that session's next request.
+        if !state.active_open && self.alerts.watches(Kind::SessionActive) {
             state.active_open = true;
             emits.push(Emit::Open(session_active_signal(
                 key,
@@ -422,13 +452,15 @@ impl BusArm {
         let now = (self.alerts.parts().clock)();
         self.in_flight
             .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
+        // One ordering guard for everything this event decides, so the sweep's clears and the opens below
+        // reach the store in that order and ahead of whatever the other two arms decide next.
+        let ordered = self.tracked.ordered();
         // An entry must outlive the question event it tracks, so a claim below ages it from when that event
         // opened rather than from the turn that asked, and the poller retires both at the same expiry.
-        sweep_expired(&self.tracked, &self.alerts, self.session_expiry_ms, now);
+        let mut emits = sweep_locked(&mut self.tracked.lock(), self.session_expiry_ms, now);
         match event {
             Event::RequestObserved(o) => {
                 let mut generation = 0;
-                let mut emits = Vec::new();
                 if let (Some(key), Some(session)) = (&o.key_id, &o.session_id) {
                     // Only the top-level agent's own next turn says the user answered: a keepalive probe
                     // replays the session, a token count precedes a turn, and a sub-agent's turn is the
@@ -440,7 +472,7 @@ impl BusArm {
                     let pair = (key.clone(), session.clone());
                     let mut tracked = self.tracked.lock();
                     if client_turn {
-                        emits = self.observe_lifecycle(&mut tracked, &o, now);
+                        emits.extend(self.observe_lifecycle(&mut tracked, &o, now));
                     }
                     // A request the session's end outran has no entry to answer against; the end took it.
                     if let Some(state) = tracked.sessions.get_mut(&pair) {
@@ -459,8 +491,6 @@ impl BusArm {
                         generation = state.generation;
                     }
                 }
-                // The map is free again: what the lifecycle side decided reaches the store now.
-                emit_all(&self.alerts, emits);
                 self.in_flight.insert(
                     o.request_id.clone(),
                     InFlight {
@@ -601,6 +631,9 @@ impl BusArm {
             }
             Event::AccountSelected(_) | Event::ResponseHead(_) => {}
         }
+        // The map is free again: what this event decided reaches the store now, in the order it was decided.
+        emit_all(&self.alerts, emits);
+        drop(ordered);
     }
 }
 
@@ -623,9 +656,12 @@ impl LifecycleArm {
 
     pub fn apply(&mut self, event: SessionLifecycle) {
         let now = (self.alerts.parts().clock)();
+        let ordered = self.tracked.ordered();
         let emits = self.decide(event, now);
-        // The map is free again: what the report decided reaches the store now.
+        // The map is free again: what the report decided reaches the store now, and the guard keeps it ahead
+        // of every decision the other two arms take after it.
         emit_all(&self.alerts, emits);
+        drop(ordered);
     }
 
     /// What the report changes in the session map, and what that leaves to signal once the map is free.
@@ -741,7 +777,7 @@ impl LifecycleArm {
                 if state.pool.is_none() {
                     state.pool = pool_of(&self.router, &key_id);
                 }
-                if state.active_open {
+                if state.active_open || !self.alerts.watches(Kind::SessionActive) {
                     return Vec::new();
                 }
                 state.active_open = true;
@@ -967,9 +1003,15 @@ impl Poller {
                 }
             }
         }
+        // One ordering guard for the tick's lifecycle half, so its clears and the idle opens below reach the
+        // store in the order the map decided them.
+        let ordered = self.tracked.ordered();
         // Before the idle rules read the map, so a session with no companion and no further traffic resolves
         // at its expiry rather than at its next request, which may never come.
-        sweep_expired(&self.tracked, &self.alerts, self.session_expiry_ms, now);
+        emit_all(
+            &self.alerts,
+            sweep_locked(&mut self.tracked.lock(), self.session_expiry_ms, now),
+        );
         for rule in self
             .alerts
             .rules()
@@ -1002,6 +1044,7 @@ impl Poller {
                 self.alerts.signal_rule(&rule.id, &signal);
             }
         }
+        drop(ordered);
         if let Ok(open) = parts.store.open_alert_events() {
             for event in open.into_iter().filter(|e| {
                 e.kind == Kind::AskUserQuestion.as_str()

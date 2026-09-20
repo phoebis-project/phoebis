@@ -3,6 +3,7 @@
 mod common;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_alerts::{
@@ -559,6 +560,91 @@ async fn open_lifecycle_events_from_before_a_restart_are_resolved_at_start_with_
         detail_of(&rig, Kind::SessionActive)["pool"],
         serde_json::json!("main"),
         "the request names the pool a pool-scoped rule would have to match"
+    );
+}
+
+/// The bus arm and the companion's arm on tasks of their own over one map, as the router runs them: whichever
+/// order the two reach the store in, a session's end leaves nothing open behind it, and a later request of
+/// that session still opens its own event rather than meeting a row nothing will ever resolve.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_racing_a_sessions_end_leaves_no_event_open_behind_it() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let arm = Arc::new(Mutex::new(BusArm::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+    )));
+    let tracked = arm.lock().unwrap().tracked();
+    let companion = Arc::new(Mutex::new(LifecycleArm::new(
+        rig.alerts.clone(),
+        rig.router.clone(),
+        tracked,
+    )));
+    for i in 0..50 {
+        let session = format!("s{i}");
+        let request = tokio::spawn({
+            let arm = arm.clone();
+            let session = session.clone();
+            async move {
+                arm.lock().unwrap().observe(main_turn("r", &session));
+            }
+        });
+        let end = tokio::spawn({
+            let companion = companion.clone();
+            async move {
+                companion
+                    .lock()
+                    .unwrap()
+                    .apply(SessionLifecycle::SessionEnded {
+                        key_id: KEY.into(),
+                        session_id: session,
+                    });
+            }
+        });
+        let (request, end) = tokio::join!(request, end);
+        request.unwrap();
+        end.unwrap();
+    }
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [],
+        "the end resolves what the request opened, and the request opens nothing after the end"
+    );
+    rig.clock.store(NOW + 1_000, Ordering::SeqCst);
+    arm.lock()
+        .unwrap()
+        .observe(turn("later", "s0", "main", None, NOW + 1_000));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s0"))],
+        "a row left open for the ended session would hold the rule and subject against this one"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request() {
+    let rig = rig().await;
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(main_turn("r1", "s1"));
+    settled(&rig).await;
+    assert_eq!(open(&rig), [], "no rule watches the kind yet");
+    install(
+        &rig,
+        &[rule(
+            "active",
+            Kind::SessionActive,
+            ScopeType::Key,
+            Some(KEY),
+        )],
+    );
+    arm.observe(main_turn("r2", "s1"));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        "the session was already running when the rule was enabled"
     );
 }
 
