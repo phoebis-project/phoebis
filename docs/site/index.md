@@ -30,13 +30,14 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 
 | Listener | Bootstrap key | Serves |
 | --- | --- | --- |
-| Proxy | `proxy.listen` | `/v1/messages` and its companions, plus the keepalive routes |
+| Proxy | `proxy.listen` | `/v1/messages` and its companions, the key's own usage page, plus the keepalive routes |
 | Admin | `admin.listen` | The console and `/admin/*` |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
-The proxy listener answers `HEAD /api/hello`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, and the two
-keepalive companion routes. A `GET /v1/models` on it answers 404 on purpose: model discovery would invite a
-client to pick a model from an account's entitlements rather than from its own configuration.
+The proxy listener answers `HEAD /api/hello`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET
+/v1/usage` for the key's own usage, and the two keepalive companion routes. A `GET /v1/models` on it answers 404
+on purpose: model discovery would invite a client to pick a model from an account's entitlements rather than
+from its own configuration.
 
 ## The console
 

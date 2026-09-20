@@ -73,7 +73,7 @@ without warming. Through a pool with a cache TTL policy the variable has no effe
 | HEAD | `/api/hello` | none | `200 OK` |
 | POST | `/v1/messages` | router key | relayed to the selected account |
 | POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop |
-| GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days |
+| GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | none | `404` |
 | GET | `/v1/models/{id}` | none | `404` |
 | GET | `/v0/resource/plugins/cache-keepalive/events` | router key | the companion's event report |
@@ -106,8 +106,19 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 
 ## Your key's usage
 
-`GET /v1/usage` on the proxy listener, behind the key itself, answers that key's own usage for the last 24
-hours and 7 days.
+`GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests,
+tokens, and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and
+pool. The figures are the router's hourly rollups under the key, probes left out, the same rollups the operator's
+analytics read. Nothing about the upstream accounts is answered, and the secret never is.
+
+```sh title="The document"
+curl -sS -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" https://<router host>/v1/usage | jq .windows.\"24h\"
+```
+
+With `Accept` preferring `text/html` (listed alone, or weighted above `application/json` as a browser sends
+it), the same route answers one self-contained page, so a browser extension or a `curl -H 'Accept: text/html'`
+saved to a file shows the figures without the console and without an admin login. A wrong or missing key is
+refused exactly as `/v1/messages` refuses it, in the Anthropic error shape.
 
 ## Headers and transport
 

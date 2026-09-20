@@ -367,3 +367,89 @@ async fn a_deleted_keys_usage_stays_with_it() {
         "the history stays under an id no key can present"
     );
 }
+
+async fn get_with_accept(
+    app: &axum::Router,
+    key: &str,
+    accept: Option<&str>,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let mut req = Request::builder()
+        .method("GET")
+        .uri("/v1/usage")
+        .header("authorization", format!("Bearer {key}"));
+    if let Some(accept) = accept {
+        req = req.header("accept", accept);
+    }
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+
+    let row = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "<b>Desk</b> & \"Co\"".into(),
+                ..row
+            },
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+
+    let (status, headers, body) = get_with_accept(
+        &app,
+        KEY,
+        Some("text/html,application/xhtml+xml,application/json;q=0.9"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(header(&headers, "content-type")
+        .unwrap()
+        .starts_with("text/html"));
+    assert_eq!(
+        header(&headers, "content-security-policy"),
+        Some("default-src 'none'; style-src 'unsafe-inline'")
+    );
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    let body = String::from_utf8(body).unwrap();
+    assert!(body.contains("&lt;b&gt;Desk&lt;/b&gt; &amp; &quot;Co&quot;"));
+    assert!(!body.contains("<b>Desk"));
+    assert!(body.contains("Last 24 hours"));
+    assert!(body.contains("Last 7 days"));
+    assert!(!body.contains("<script"));
+    assert!(!body.contains(KEY));
+
+    let (status, headers, _) =
+        get_with_accept(&app, KEY, Some("application/json, text/html")).await;
+    assert_eq!(status, 200);
+    assert!(header(&headers, "content-type")
+        .unwrap()
+        .starts_with("application/json"));
+
+    let (status, headers, _) = get_with_accept(&app, KEY, None).await;
+    assert_eq!(status, 200);
+    assert!(header(&headers, "content-type")
+        .unwrap()
+        .starts_with("application/json"));
+}

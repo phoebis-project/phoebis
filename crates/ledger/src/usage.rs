@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -150,6 +150,7 @@ fn no_store(mut response: Response) -> Response {
 async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> Response {
     let request_id = new_request_id();
     let now = (state.clock)();
+    let html = wants_html(request.headers().get(ACCEPT).and_then(|v| v.to_str().ok()));
     // The key is resolved exactly as `/v1/messages` resolves it, refusals included, so a wrong key learns
     // nothing here it would not learn there.
     let presented = match presented_key(request.headers()) {
@@ -186,6 +187,22 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         now,
         windows: Windows { day, week },
     };
+    if html {
+        return no_store(
+            (
+                StatusCode::OK,
+                [
+                    (CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (
+                        CONTENT_SECURITY_POLICY,
+                        "default-src 'none'; style-src 'unsafe-inline'",
+                    ),
+                ],
+                render_html(&answer),
+            )
+                .into_response(),
+        );
+    }
     no_store(
         (
             StatusCode::OK,
@@ -194,4 +211,126 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         )
             .into_response(),
     )
+}
+
+/// Whether the caller asked for the page rather than the document. The header is read as media ranges with
+/// their quality; a type's effective quality is that of the most specific range matching it (the type itself,
+/// then its `<kind>/*`, then `*/*`), and HTML is chosen only when `text/html` is worth more than zero and more
+/// than `application/json`. A tie, a missing header, or a wildcard-only header reads as JSON, so a script that
+/// sets nothing gets the document.
+fn wants_html(accept: Option<&str>) -> bool {
+    let Some(accept) = accept else {
+        return false;
+    };
+    // One media range per comma-separated member: the first `;` piece is the type (trimmed, lowercased, so
+    // `TEXT/HTML` is `text/html`), a `q=` parameter its quality, absent 1.0, unparsable 0.
+    let ranges: Vec<(String, f32)> = accept
+        .split(',')
+        .filter_map(|range| {
+            let mut pieces = range.split(';');
+            let media = pieces.next()?.trim().to_ascii_lowercase();
+            if media.is_empty() {
+                return None;
+            }
+            let quality = pieces
+                .map(str::trim)
+                .find_map(|p| p.strip_prefix("q=").or_else(|| p.strip_prefix("Q=")))
+                .map_or(1.0, |q| q.parse::<f32>().unwrap_or(0.0));
+            Some((media, quality))
+        })
+        .collect();
+    // The most specific matching range decides, as RFC 9110 orders them; an exact type is never matched by
+    // a substring, so `text/xhtml` says nothing about `text/html`.
+    let quality_of = |media: &str| -> f32 {
+        let kind = media.split_once('/').map_or(media, |(kind, _)| kind);
+        let wildcard = format!("{kind}/*");
+        [media, wildcard.as_str(), "*/*"]
+            .iter()
+            .find_map(|wanted| {
+                ranges
+                    .iter()
+                    .find(|(m, _)| m.as_str() == *wanted)
+                    .map(|(_, q)| *q)
+            })
+            .unwrap_or(0.0)
+    };
+    let html = quality_of("text/html");
+    html > 0.0 && html > quality_of("application/json")
+}
+
+/// The five characters HTML needs escaped, so a key label chosen by an operator never becomes markup.
+fn escape_html(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn window_html(title: &str, w: &KeyUsageWindow) -> String {
+    let mut rows = String::new();
+    for m in &w.models {
+        rows.push_str(&format!(
+            "<tr><td>{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">${:.4}</td></tr>",
+            escape_html(&m.model), m.requests, m.tokens.input, m.tokens.output, m.tokens.cache_read, m.tokens.cache_write, m.cost_usd
+        ));
+    }
+    format!(
+        "<section><h2>{title}</h2><p class=\"sum\">{} requests, {} succeeded, {} failed, ${:.4}</p>\
+         <table><thead><tr><th>Model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Cost</th></tr></thead>\
+         <tbody>{rows}</tbody></table></section>",
+        w.requests, w.succeeded, w.failed, w.cost_usd
+    )
+}
+
+fn render_html(answer: &UsageAnswer) -> String {
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <title>Usage of {label}</title>\
+         <style>body{{font:15px/1.45 system-ui,sans-serif;margin:2rem auto;max-width:56rem;padding:0 1rem;color:#1c1c1c;background:#fff}}\
+         h1{{font-size:1.5rem;margin:0 0 .25rem}}h2{{font-size:1.15rem;margin:1.5rem 0 .25rem}}\
+         .key{{color:#555;margin:0 0 1rem}}.sum{{margin:0 0 .5rem}}table{{border-collapse:collapse;width:100%}}\
+         th,td{{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left}}.n{{text-align:right;font-variant-numeric:tabular-nums}}\
+         @media (prefers-color-scheme:dark){{body{{color:#e6e6e6;background:#151515}}th,td{{border-color:#333}}.key{{color:#aaa}}}}</style></head>\
+         <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>; figures from the router's hourly rollups, probes left out</p>\
+         {day}{week}</body></html>",
+        label = escape_html(&answer.key.label),
+        id = escape_html(&answer.key.id),
+        pool = escape_html(&answer.key.pool_id),
+        day = window_html("Last 24 hours", &answer.windows.day),
+        week = window_html("Last 7 days", &answer.windows.week),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_html;
+
+    #[test]
+    fn wants_html_weighs_the_accept_headers_media_ranges() {
+        let cases: &[(Option<&str>, bool)] = &[
+            (None, false),
+            (Some("*/*"), false),
+            (Some("application/json"), false),
+            (Some("application/json, text/html"), false),
+            (Some("text/html"), true),
+            (Some("text/html, application/json;q=0.9"), true),
+            (Some("text/html;q=0, application/json"), false),
+            (Some("application/json;q=0.5, text/html"), true),
+            (Some("TEXT/HTML"), true),
+            (Some("text/xhtml"), false),
+            (Some("text/*"), true),
+            (Some("text/*;q=0.5, application/json"), false),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(wants_html(*input), *expected, "{input:?}");
+        }
+    }
 }

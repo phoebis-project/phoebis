@@ -36,7 +36,7 @@ the store or a socket. Installing as a service, and every setting of the file, i
 | Page | What it covers |
 | --- | --- |
 | [Installation](docs/site/installation.md) | The build, the service, the commands, and every bootstrap setting. |
-| [Downstream client](docs/site/client.md) | The client's environment block and what each variable changes. |
+| [Downstream client](docs/site/client.md) | The client's environment block, each variable, and the key's usage page. |
 | [Pairing an account](docs/site/pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](docs/site/routing.md) | Accounts, pools, keys, selection, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
