@@ -531,9 +531,6 @@ export class MockApi implements Api {
     const next: Pool = {
       ...current,
       ...input,
-      // The encoder sends neither field, so a save leaves the router's own answer for them alone.
-      cacheTtl: current.cacheTtl,
-      keepalive: { ...input.keepalive, warmSubagents: current.keepalive.warmSubagents },
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set.
       members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) ?? 'eligible' })),
       // The input carries the operator's flag alone, so the route resolves it against the strategy here.

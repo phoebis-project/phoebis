@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, MOCK, type PoolInput } from '@/api';
+import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -303,20 +303,24 @@ function PoolCard({
           <div className="pool__policy-wide">
             <dt>Cache TTL</dt>
             <dd>
-              {pool.cacheTtl?.enabled ? (
-                <span className="chips">
-                  <Badge tone="neutral">
-                    Main <span className="mono">{pool.cacheTtl.main}</span>
-                  </Badge>
-                  <Badge tone="neutral">
-                    Subagents <span className="mono">{pool.cacheTtl.subagent}</span>
-                  </Badge>
-                  {pool.cacheTtl.inOverage && <Badge tone="warning">{pool.cacheTtl.inOverage} in overage</Badge>}
-                  {pool.cacheTtl.models.length > 0 && <Badge tone="neutral">{pool.cacheTtl.models.length} model override{pool.cacheTtl.models.length === 1 ? '' : 's'}</Badge>}
-                </span>
-              ) : (
-                <span className="muted">off</span>
-              )}
+              <span className="chips">
+                {pool.cacheTtl.enabled ? (
+                  <>
+                    <Badge tone="neutral">
+                      Main <span className="mono">{pool.cacheTtl.main}</span>
+                    </Badge>
+                    <Badge tone="neutral">
+                      Subagents <span className="mono">{pool.cacheTtl.subagent}</span>
+                    </Badge>
+                    {pool.cacheTtl.inOverage && <Badge tone="warning">{pool.cacheTtl.inOverage} in overage</Badge>}
+                    {pool.cacheTtl.models.length > 0 && <Badge tone="neutral">{pool.cacheTtl.models.length} model override{pool.cacheTtl.models.length === 1 ? '' : 's'}</Badge>}
+                  </>
+                ) : (
+                  <span className="muted">off</span>
+                )}
+                {/* Outside the branch above: a pool that rewrites no breakpoint can still force diagnostics. */}
+                {pool.cacheDiagnostics !== null && <Badge tone="neutral">diagnostics {pool.cacheDiagnostics ? 'on' : 'off'}</Badge>}
+              </span>
             </dd>
           </div>
         </dl>
@@ -451,6 +455,7 @@ interface PoolForm {
   affinity: number;
   allowed: string[];
   apiKeySubStrategy: ApiKeySubStrategy;
+  cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
   capture: boolean;
@@ -476,6 +481,7 @@ const blankForm = (): PoolForm => ({
   affinity: 3_600,
   allowed: [],
   apiKeySubStrategy: 'priority_random',
+  cacheDiagnostics: null,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
   capture: false,
@@ -499,7 +505,8 @@ const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   allowed: pool.defaultAllowedModels ?? [],
   apiKeySubStrategy: pool.apiKeySubStrategy,
-  cacheTtl: pool.cacheTtl ? { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) } : { ...CACHE_TTL_DEFAULTS },
+  cacheDiagnostics: pool.cacheDiagnostics,
+  cacheTtl: { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
   captureHours: pool.bodyCaptureHours || 24,
@@ -529,7 +536,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     retrySeconds: pool.keepalive.retrySeconds,
     stopWhenNetNegative: pool.keepalive.stopWhenNetNegative,
   },
-  warmSubagents: pool.keepalive.warmSubagents ?? true,
+  warmSubagents: pool.keepalive.warmSubagents,
 });
 
 export function PoolDialog({
@@ -608,10 +615,6 @@ export function PoolDialog({
     () => (pool || pools.some((p) => p.id === draftPoolId) ? pools : [...pools, { bodyCaptureHours: draftCaptureHours, id: draftPoolId, name: draftName }]),
     [pool, pools, draftCaptureHours, draftPoolId, draftName],
   );
-  // A pool the router serves without these fields cannot take them back either, and on create no served pool
-  // has said yet whether it carries them, so only the mock preview offers them there.
-  const showCacheTtl = pool ? pool.cacheTtl !== null : MOCK;
-  const showWarmSubagents = pool ? pool.keepalive.warmSubagents !== null : MOCK;
   // Read from the strategy the form holds, so switching the select moves the toggle with it.
   const forced = sampleDriven(form.strategy);
   // Below five minutes a pin expires before the probe it scheduled can help.
@@ -664,6 +667,7 @@ export function PoolDialog({
       affinityTtlSeconds: form.affinity,
       apiKeySubStrategy: form.apiKeySubStrategy,
       bodyCaptureHours: form.capture ? form.captureHours : 0,
+      cacheDiagnostics: form.cacheDiagnostics,
       cacheTtl: form.cacheTtl,
       defaultAllowedModels: form.allowed.length ? form.allowed : null,
       keepalive: { ...form.tuning, costCapUsdPerDay: form.keepalive && form.capEnabled ? form.capUsd : null, enabled: form.keepalive && !keepaliveBlocked, warmSubagents: form.warmSubagents },
@@ -805,110 +809,121 @@ export function PoolDialog({
       label: 'Caching',
       body: (
         <>
-          {showCacheTtl && (
-            <>
-              <h3 className="section-title">Cache TTL</h3>
-              <div className="capture">
-                <div className="field--inline field">
-                  <span className="field__text">
-                    <span className="field__label">Set the cache TTL for this pool</span>
-                    <p className="field__hint">
-                      Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
-                      A request that carries no breakpoints is left alone.
-                    </p>
-                  </span>
-                  <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
+          <h3 className="section-title">Cache TTL</h3>
+          <div className="capture">
+            <div className="field--inline field">
+              <span className="field__text">
+                <span className="field__label">Set the cache TTL for this pool</span>
+                <p className="field__hint">
+                  Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
+                  A request that carries no breakpoints is left alone.
+                </p>
+              </span>
+              <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
+            </div>
+            {form.cacheTtl.enabled && (
+              <>
+                <div className="form-row">
+                  <Field label="Main conversation">
+                    <Select value={form.cacheTtl.main} onChange={(e) => setCacheTtl('main', e.target.value as CacheTtl)}>
+                      <option value="5m">5 minutes</option>
+                      <option value="1h">1 hour</option>
+                    </Select>
+                  </Field>
+                  <Field label="Subagents">
+                    <Select value={form.cacheTtl.subagent} onChange={(e) => setCacheTtl('subagent', e.target.value as CacheTtl)}>
+                      <option value="5m">5 minutes</option>
+                      <option value="1h">1 hour</option>
+                    </Select>
+                  </Field>
                 </div>
-                {form.cacheTtl.enabled && (
-                  <>
-                    <div className="form-row">
-                      <Field label="Main conversation">
-                        <Select value={form.cacheTtl.main} onChange={(e) => setCacheTtl('main', e.target.value as CacheTtl)}>
-                          <option value="5m">5 minutes</option>
-                          <option value="1h">1 hour</option>
-                        </Select>
-                      </Field>
-                      <Field label="Subagents">
-                        <Select value={form.cacheTtl.subagent} onChange={(e) => setCacheTtl('subagent', e.target.value as CacheTtl)}>
-                          <option value="5m">5 minutes</option>
-                          <option value="1h">1 hour</option>
-                        </Select>
-                      </Field>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <span className="field__label">Write cost</span>
+                  <CostReferenceLink />
+                </div>
+                <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
+                <Field label="In overage" hint="Applies while the upstream serving the request is in overage, where writes cost money rather than plan quota.">
+                  <Select value={form.cacheTtl.inOverage ?? ''} onChange={(e) => setCacheTtl('inOverage', (e.target.value || null) as CacheTtl | null)}>
+                    <option value="">Keep the rules above</option>
+                    <option value="5m">5 minutes</option>
+                    <option value="1h">1 hour</option>
+                  </Select>
+                </Field>
+                <div className="field">
+                  <span className="field__label">Per-model overrides</span>
+                  <p className="field__hint">A model absent here takes the pool rule above.</p>
+                  {form.cacheTtl.models.length > 0 && (
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Model</th>
+                            <th>Main conversation</th>
+                            <th>Subagents</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {form.cacheTtl.models.map((m) => (
+                            <tr key={m.model}>
+                              <td className="mono">{m.model}</td>
+                              <td>
+                                <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`Main conversation TTL for ${m.model}`}>
+                                  <option value="5m">5 minutes</option>
+                                  <option value="1h">1 hour</option>
+                                </Select>
+                              </td>
+                              <td>
+                                <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`Subagent TTL for ${m.model}`}>
+                                  <option value="5m">5 minutes</option>
+                                  <option value="1h">1 hour</option>
+                                </Select>
+                              </td>
+                              <td>
+                                <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
+                                  Remove
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                    <div className="row" style={{ justifyContent: 'space-between' }}>
-                      <span className="field__label">Write cost</span>
-                      <CostReferenceLink />
-                    </div>
-                    <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
-                    <Field label="In overage" hint="Applies while the upstream serving the request is in overage, where writes cost money rather than plan quota.">
-                      <Select value={form.cacheTtl.inOverage ?? ''} onChange={(e) => setCacheTtl('inOverage', (e.target.value || null) as CacheTtl | null)}>
-                        <option value="">Keep the rules above</option>
-                        <option value="5m">5 minutes</option>
-                        <option value="1h">1 hour</option>
-                      </Select>
-                    </Field>
-                    <div className="field">
-                      <span className="field__label">Per-model overrides</span>
-                      <p className="field__hint">A model absent here takes the pool rule above.</p>
-                      {form.cacheTtl.models.length > 0 && (
-                        <div className="table-wrap">
-                          <table className="table">
-                            <thead>
-                              <tr>
-                                <th>Model</th>
-                                <th>Main conversation</th>
-                                <th>Subagents</th>
-                                <th />
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {form.cacheTtl.models.map((m) => (
-                                <tr key={m.model}>
-                                  <td className="mono">{m.model}</td>
-                                  <td>
-                                    <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`Main conversation TTL for ${m.model}`}>
-                                      <option value="5m">5 minutes</option>
-                                      <option value="1h">1 hour</option>
-                                    </Select>
-                                  </td>
-                                  <td>
-                                    <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`Subagent TTL for ${m.model}`}>
-                                      <option value="5m">5 minutes</option>
-                                      <option value="1h">1 hour</option>
-                                    </Select>
-                                  </td>
-                                  <td>
-                                    <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
-                                      Remove
-                                    </Button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      <div className="row">
-                        <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label="Model to add a cache TTL override for" style={{ maxWidth: 260 }}>
-                          <option value="">Choose a model…</option>
-                          {models
-                            .filter((m) => !form.cacheTtl.models.some((x) => x.model === m.value))
-                            .map((m) => (
-                              <option key={m.value} value={m.value}>
-                                {m.label}
-                              </option>
-                            ))}
-                        </Select>
-                        <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
-                          Add
-                        </Button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
+                  )}
+                  <div className="row">
+                    <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label="Model to add a cache TTL override for" style={{ maxWidth: 260 }}>
+                      <option value="">Choose a model…</option>
+                      {models
+                        .filter((m) => !form.cacheTtl.models.some((x) => x.model === m.value))
+                        .map((m) => (
+                          <option key={m.value} value={m.value}>
+                            {m.label}
+                          </option>
+                        ))}
+                    </Select>
+                    <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
+                      Add
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <h3 className="section-title" style={{ marginTop: 12 }}>
+            Cache diagnostics
+          </h3>
+          <div className="capture">
+            <Field
+              label="Cache diagnostics"
+              hint="Forced diagnostics apply toward api.anthropic.com only, for key and subscription upstreams; a request to another host is never changed."
+            >
+              <Select value={form.cacheDiagnostics === null ? 'inherit' : form.cacheDiagnostics ? 'on' : 'off'} onChange={(e) => set('cacheDiagnostics', e.target.value === 'inherit' ? null : e.target.value === 'on')}>
+                <option value="inherit">Inherit the bootstrap setting</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </Select>
+            </Field>
+          </div>
           <h3 className="section-title" style={{ marginTop: 12 }}>
             Keep prompt caches warm
           </h3>
@@ -930,17 +945,15 @@ export function PoolDialog({
           </div>
           {!keepaliveBlocked && form.keepalive && (
             <>
-              {showWarmSubagents && (
-                <div className="capture">
-                  <div className="field--inline field">
-                    <span className="field__text">
-                      <span className="field__label">Also warm subagent caches</span>
-                      <p className="field__hint">Off probes the main conversation only; subagent recipes end with the subagent either way.</p>
-                    </span>
-                    <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" />
-                  </div>
+              <div className="capture">
+                <div className="field--inline field">
+                  <span className="field__text">
+                    <span className="field__label">Also warm subagent caches</span>
+                    <p className="field__hint">Off probes the main conversation only; subagent recipes end with the subagent either way.</p>
+                  </span>
+                  <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" />
                 </div>
-              )}
+              </div>
               <div className="capture">
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <label className="row">

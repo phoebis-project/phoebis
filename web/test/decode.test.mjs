@@ -106,8 +106,10 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.name, 'Main');
   assert.equal(p.strategy, 'least_utilized');
   assert.equal(p.keepalive.costCapUsdPerDay, 4);
-  assert.equal(p.keepalive.warmSubagents, null);
-  assert.equal(p.cacheTtl, null);
+  assert.equal(p.keepalive.warmSubagents, true);
+  assert.equal(p.cacheTtl.enabled, false);
+  assert.equal(p.cacheTtl.main, '1h');
+  assert.equal(p.cacheDiagnostics, null);
   assert.equal(p.status, 'active');
   assert.equal(p.traffic24h.length, 24);
   assert.ok(isIso(p.traffic24h[0].at));
@@ -127,6 +129,39 @@ test('a pool decodes round robin, both subscription flags, and the sub-strategy,
   const forced = d.decodePool({ ...fixture('pools').pools[0], strategy: 'least_utilized', prefer_subscription: false, prefer_subscription_effective: true });
   assert.deepEqual([forced.preferSubscription, forced.preferSubscriptionEffective], [false, true], 'the stored answer and the forced order are read apart');
   assert.equal(d.decodePool(fixture('pools').pools[0]).apiKeySubStrategy, 'priority_random', 'the recorded row carries the default');
+});
+
+test('a pool decodes its cache TTL policy, its diagnostics override, and warm_subagents, and encodes them back', () => {
+  const row = fixture('pools').pools[0];
+  const wire = {
+    ...row,
+    cache_ttl: { enabled: true, main: '5m', subagent: '1h', in_overage: '5m', models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }] },
+    cache_diagnostics: true,
+    keepalive: { ...row.keepalive, warm_subagents: false },
+  };
+  const p = d.decodePool(wire);
+  assert.deepEqual([p.cacheTtl.enabled, p.cacheTtl.main, p.cacheTtl.subagent, p.cacheTtl.inOverage], [true, '5m', '1h', '5m']);
+  assert.deepEqual(p.cacheTtl.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
+  assert.equal(p.cacheDiagnostics, true);
+  assert.equal(p.keepalive.warmSubagents, false);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.equal(back.cache_ttl.enabled, true);
+  assert.equal(back.cache_ttl.in_overage, '5m');
+  assert.equal(back.cache_ttl.models[0].model, 'claude-haiku-4-5-20251001');
+  assert.equal(back.cache_diagnostics, true);
+  assert.equal(back.keepalive.warm_subagents, false);
+  assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
+});
+
+test('a pool the route answers without a cache TTL policy decodes to the defaults', () => {
+  const wire = { ...fixture('pools').pools[0] };
+  delete wire.cache_ttl;
+  assert.deepEqual(d.decodePool(wire).cacheTtl, { enabled: false, inOverage: null, main: '1h', models: [], subagent: '5m' });
+  const partial = d.decodePool({ ...wire, cache_ttl: { enabled: true } });
+  assert.deepEqual([partial.cacheTtl.enabled, partial.cacheTtl.main, partial.cacheTtl.subagent, partial.cacheTtl.inOverage], [true, '1h', '5m', null], 'a field the route leaves out falls back one field at a time');
+  const keepalive = { ...wire.keepalive };
+  delete keepalive.warm_subagents;
+  assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');
 });
 
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {

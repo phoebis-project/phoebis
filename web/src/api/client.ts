@@ -78,6 +78,7 @@ export interface PoolInput {
   affinityTtlSeconds: number;
   apiKeySubStrategy: ApiKeySubStrategy;
   bodyCaptureHours: number;
+  cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   defaultAllowedModels: string[] | null;
   keepalive: PoolKeepalive;

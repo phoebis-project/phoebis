@@ -163,8 +163,8 @@ export interface PoolKeepalive {
   retrySeconds: number;
   /** Pause a recipe whose probes have cost more than the cache reads they bought. */
   stopWhenNetNegative: boolean;
-  /** Subagent recipes are probed too; off warms the main conversation only. Null where the router has no such rule. */
-  warmSubagents: boolean | null;
+  /** Subagent recipes are probed too; off warms the main conversation only. */
+  warmSubagents: boolean;
 }
 
 export type CacheTtl = '5m' | '1h';
@@ -198,8 +198,10 @@ export interface Pool {
   apiKeySubStrategy: ApiKeySubStrategy;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
-  /** Null where the router serves no cache-TTL rules for this pool. */
-  cacheTtl: PoolCacheTtl | null;
+  /** Null inherits the bootstrap option `compatibility.cache_diagnostics`; true or false overrides it for this pool. */
+  cacheDiagnostics: boolean | null;
+  /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
+  cacheTtl: PoolCacheTtl;
   cost24h: number;
   defaultAllowedModels: string[] | null;
   id: string;

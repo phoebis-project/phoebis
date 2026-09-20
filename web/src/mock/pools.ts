@@ -1,4 +1,4 @@
-import { KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
+import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
 import type { ApiKey, Pool, TrafficBucket } from '@/api/types';
 import { sampleDriven } from '@/lib/selection';
 import { createRng } from './rng';
@@ -37,6 +37,7 @@ const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
     migrateAboveUtilization: null,
     affinityTtlSeconds: 600,
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },
+    cacheDiagnostics: true,
     cacheTtl: {
       enabled: true,
       main: '1h',
@@ -67,8 +68,9 @@ const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
     overagePolicy: 'allow',
     migrateAboveUtilization: null,
     affinityTtlSeconds: 0,
-    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null, warmSubagents: null },
-    cacheTtl: null,
+    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    cacheDiagnostics: null,
+    cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     defaultAllowedModels: ['claude-haiku-4-5-20251001'],
     traffic24h: CODEX_TRAFFIC,

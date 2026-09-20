@@ -1,9 +1,9 @@
 import type {
-  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, CacheMissReason, CapturedBodies, CatalogModel,
+  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
-  PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
 } from './types';
-import type { KeyInput, PoolInput } from './client';
+import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
@@ -159,6 +159,19 @@ export function decodeKey(v: unknown): ApiKey {
 
 const ELIGIBILITY: MemberEligibility[] = ['cooldown', 'eligible', 'overage', 'unavailable'];
 const SUB_STRATEGIES: ApiKeySubStrategy[] = ['priority_random', 'round_robin'];
+const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
+
+/** Read field by field against the defaults, so a route that answers a partial rule never yields an empty TTL. */
+export function decodeCacheTtl(v: unknown): PoolCacheTtl {
+  const c = rec(v);
+  return {
+    enabled: bool(c.enabled, CACHE_TTL_DEFAULTS.enabled),
+    inOverage: c.in_overage === '1h' || c.in_overage === '5m' ? c.in_overage : CACHE_TTL_DEFAULTS.inOverage,
+    main: ttl(c.main, CACHE_TTL_DEFAULTS.main),
+    models: list(c.models).map(rec).map((m) => ({ main: ttl(m.main, CACHE_TTL_DEFAULTS.main), model: str(m.model), subagent: ttl(m.subagent, CACHE_TTL_DEFAULTS.subagent) })),
+    subagent: ttl(c.subagent, CACHE_TTL_DEFAULTS.subagent),
+  };
+}
 
 export function decodePool(v: unknown): Pool {
   const p = rec(v);
@@ -168,14 +181,15 @@ export function decodePool(v: unknown): Pool {
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     apiKeySubStrategy: SUB_STRATEGIES.find((x) => x === str(p.api_key_sub_strategy)) ?? 'priority_random',
     bodyCaptureHours: num(p.body_capture_hours),
-    cacheTtl: null,
+    cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
+    cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
     defaultAllowedModels: p.default_allowed_models === null || p.default_allowed_models === undefined ? null : strings(p.default_allowed_models),
     id: str(p.id),
     keepalive: {
       coldProbeLimit: num(k.cold_probe_limit), costCapUsdPerDay: numOrNull(k.probe_cost_cap_usd_per_day), enabled: bool(k.enabled), jitterSeconds1h: num(k.jitter_seconds_1h), jitterSeconds5m: num(k.jitter_seconds_5m),
       leadSeconds1h: num(k.lead_seconds_1h), leadSeconds5m: num(k.lead_seconds_5m), maxIdleSeconds: num(k.max_idle_seconds), maxIdleTicks: num(k.max_idle_ticks), netNegativeGraceProbes: num(k.net_negative_grace_probes),
-      retryMaxSeconds: num(k.retry_max_seconds), retrySeconds: num(k.retry_seconds), stopWhenNetNegative: bool(k.stop_when_net_negative), warmSubagents: null,
+      retryMaxSeconds: num(k.retry_max_seconds), retrySeconds: num(k.retry_seconds), stopWhenNetNegative: bool(k.stop_when_net_negative), warmSubagents: bool(k.warm_subagents, true),
     },
     // A row from before the router reported eligibility reads as not servable rather than as servable.
     members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
@@ -340,8 +354,10 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
 
 export const encodeKey = (i: KeyInput) => ({ allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId });
 export const encodePool = (i: PoolInput) => ({
-  affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
-  keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative },
+  affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
+  cache_ttl: { enabled: i.cacheTtl.enabled, in_overage: i.cacheTtl.inOverage, main: i.cacheTtl.main, models: i.cacheTtl.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: i.cacheTtl.subagent },
+  default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
+  keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
   // No `prefer_subscription_effective`: the route computes it from the stored flag and the strategy, and an input
   // that carried one could contradict the strategy it was saved with.

@@ -680,7 +680,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   edit?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/pools a pool without cache TTL rules hides the block', ok: !(dlg?.textContent ?? '').includes('Cache TTL'), missing: [(dlg?.textContent ?? '').includes('Cache TTL') ? 'still drawn' : ''] });
+  const caching = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Caching');
+  const ttlToggle = [...(caching?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
+  const diagnostics = [...(caching?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.textContent?.trim()).join('|') === 'Inherit the bootstrap setting|On|Off');
+  results.push({
+    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics override',
+    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'inherit',
+    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics ? '' : 'no diagnostics select', String(diagnostics?.value)],
+  });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }

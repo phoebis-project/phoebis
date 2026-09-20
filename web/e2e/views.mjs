@@ -127,6 +127,64 @@ async function poolChips(theme) {
 }
 
 /**
+ * The caching tab of a served pool: its TTL policy toggle, the diagnostics override, and the subagent switch
+ * the keepalive block carries, each reached the way an operator reaches it. The diagnostics select is measured
+ * against the "In overage" select beside it, since a control that reads a size smaller than its neighbours is
+ * the defect this dialog has produced before.
+ */
+async function poolCachingControls(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.getByRole('button', { name: 'Caching', exact: true }).click();
+  } catch (error) {
+    say(`the pool dialog never reached its caching tab (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const toggle = (label) => dialog.locator(`button[role="switch"][aria-label="${label}"]`);
+  const policy = toggle('Set the cache TTL for this pool');
+  if ((await policy.count()) !== 1) say('no cache TTL policy toggle');
+  const options = await dialog.evaluate((el) => [...el.querySelectorAll('select')].map((s) => [...s.options].map((o) => (o.textContent ?? '').trim()).join(', ')));
+  const diagnostics = options.filter((o) => o === 'Inherit the bootstrap setting, On, Off');
+  if (diagnostics.length !== 1) say(`${diagnostics.length} cache diagnostics selects among ${JSON.stringify(options)}`);
+  // The subagent switch sits inside the keepalive block, so a pool whose keepalive is off has to be turned on.
+  if ((await toggle('Also warm subagent caches').count()) === 0) {
+    const keepalive = toggle('Keep prompt caches warm');
+    if ((await keepalive.count()) === 1 && (await keepalive.isEnabled())) await keepalive.click();
+  }
+  if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle, with keepalive on');
+  // The in-overage select is drawn only while the policy is on, which is also the state the two are compared in.
+  if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
+  const pair = await dialog.evaluate((el) => {
+    const read = (select) => {
+      const style = getComputedStyle(select);
+      return {
+        border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
+        font: style.fontSize,
+        height: select.getBoundingClientRect().height,
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+      };
+    };
+    const labelled = (text) => [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('select');
+    const overage = labelled('In overage');
+    const diagnostics = labelled('Cache diagnostics');
+    return overage && diagnostics ? { diagnostics: read(diagnostics), overage: read(overage) } : null;
+  });
+  if (!pair) {
+    say('the diagnostics select and the in-overage select are not both drawn to compare');
+  } else {
+    measurements.push(`${theme} /pools cache diagnostics ${JSON.stringify(pair.diagnostics)}`);
+    measurements.push(`${theme} /pools in overage ${JSON.stringify(pair.overage)}`);
+    const differs = ['border', 'font', 'height', 'padding'].filter((key) => String(pair.diagnostics[key]) !== String(pair.overage[key]));
+    if (differs.length) say(`the cache diagnostics select's ${differs.join(', ')} differs from the in-overage select's`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
+/**
  * Both quota donuts against a registry with no subscription upstream: the seed has one API-key upstream, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
@@ -282,7 +340,10 @@ try {
       }
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') await costCapRows(theme);
-      if (view.path === '/pools') await poolChips(theme);
+      if (view.path === '/pools') {
+        await poolChips(theme);
+        await poolCachingControls(theme);
+      }
       if (view.path === '/analytics') await wastedProbeRows(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
