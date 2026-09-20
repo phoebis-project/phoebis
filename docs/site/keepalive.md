@@ -25,6 +25,10 @@ A pool's cache TTL policy applies to a probe the way it applies to the request i
 through the same edit path; the engine learns the TTL an entry was written with from the response's usage and
 from what the router sent, never from the marker the client wrote.
 
+Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
+cache-diagnosis beta and a `diagnostics.previous_message_id` of null, since a probe replays a request rather
+than continuing a turn. Its cache-miss reason lands in the request log like any other request's.
+
 ## The companion
 
 The engine learns which sessions are alive from `cc-cache-keepalive`, a Claude Code hook plugin that reports the

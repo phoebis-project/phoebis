@@ -32,7 +32,7 @@ use phoebis_transport::TransportError;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 
-use crate::billing::{entrypoint_of, Restore};
+use crate::billing::{entrypoint_of, restorable_version, Restore};
 use crate::casing::OriginalHead;
 use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
@@ -648,23 +648,28 @@ impl Relay {
         // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
         // has no line to fill.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
-            (Some(version), _) if trace.kind == Kind::Inference => Some(RestoreContext {
-                cli_version: version.to_string(),
-                entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
-                prompt_chars: facts.prompt_chars,
-                prompt_id: identity.session_id.as_deref().map(|session| {
-                    self.memory.prompt_id(
-                        &MemoryKey {
-                            key_id: key.id.clone(),
-                            session_id: session.into(),
-                            agent_id: identity.agent_id.clone(),
-                        },
-                        identity.parent_agent_id.as_deref(),
-                        facts.fresh_user_turn,
-                        received_at,
-                    )
-                }),
-            }),
+            // The version lands in a line this build signs, so one spelled any other way than the client's
+            // own restores nothing rather than a version guessed around whatever it carried.
+            (Some(version), _) if trace.kind == Kind::Inference => {
+                restorable_version(version).map(|version| RestoreContext {
+                    cli_version: version.to_string(),
+                    entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
+                    prompt_chars: facts.prompt_chars,
+                    prompt_id: identity.session_id.as_deref().map(|session| {
+                        self.memory.prompt_id(
+                            &MemoryKey {
+                                key_id: key.id.clone(),
+                                session_id: session.into(),
+                                agent_id: identity.agent_id.clone(),
+                            },
+                            identity.parent_agent_id.as_deref(),
+                            facts.fresh_user_turn,
+                            facts.prompt_id.as_deref(),
+                            received_at,
+                        )
+                    }),
+                })
+            }
             _ => None,
         };
         // A separate field from `restore`, gated on `restore` being `Some` (so never set for a probe, a raw

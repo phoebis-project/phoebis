@@ -63,6 +63,18 @@ pub fn cc_version(cli_version: &str, prompt_chars: [char; 3]) -> String {
     format!("{cli_version}.{}", &hex[0..3])
 }
 
+/// The version half of a `claude-cli/` user agent, accepted only as the client's own spelling of one: digits
+/// and dots. A header value admits `;` and `=`, so an unconstrained version could smuggle a `;`-separated
+/// field of its own choosing into the billing line this build then signs; anything else restores nothing
+/// rather than a guessed version.
+pub fn restorable_version(cli_version: &str) -> Option<&str> {
+    let spelled = !cli_version.is_empty()
+        && cli_version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+    spelled.then_some(cli_version)
+}
+
 /// `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`; `cli` when the agent carries no parenthesis, or
 /// when the parenthesized tail is not a bare lowercase-and-hyphen token (the client's own spellings: `cli`,
 /// `sdk-cli`, `claude-vscode`, and the like). Unsanitized, a forged User-Agent could smuggle a `;`-separated
@@ -409,6 +421,17 @@ mod tests {
             assert!(injected.is_empty(), "{line}");
             assert_eq!(body, before, "{line}");
         }
+    }
+
+    #[test]
+    fn a_version_carrying_a_separator_of_its_own_restores_nothing() {
+        assert_eq!(restorable_version("2.1.269"), Some("2.1.269"));
+        assert_eq!(restorable_version("2"), Some("2"));
+        assert_eq!(restorable_version("2.1.269;cc_prev_req=forged"), None);
+        assert_eq!(restorable_version("2.1.269=x"), None);
+        assert_eq!(restorable_version("2.1.269-beta"), None);
+        assert_eq!(restorable_version("2..1"), None);
+        assert_eq!(restorable_version(""), None);
     }
 
     #[test]

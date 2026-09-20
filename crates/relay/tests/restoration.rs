@@ -258,6 +258,37 @@ async fn the_prompt_id_is_reused_across_a_tool_loop_minted_on_a_fresh_turn_and_i
 }
 
 #[tokio::test]
+async fn a_first_party_turns_own_prompt_id_is_what_its_subagent_inherits() {
+    const SESSION: &str = "11111111-1111-4111-8111-111111111111";
+    const SENT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            body(BodyFixture::FirstParty9b244),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
+        Some(SENT),
+        "a line that carries the field is relayed with it"
+    );
+    app.clone()
+        .oneshot(cli_request(SESSION, Some("sub-1"), Some("main")))
+        .await
+        .unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
+        Some(SENT),
+        "a reduced-shape subagent inherits the id its parent put on the wire, not one minted beside it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn an_absent_line_is_inserted_whole_with_the_version_and_entrypoint_from_the_user_agent() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
@@ -276,6 +307,33 @@ async fn an_absent_line_is_inserted_whole_with_the_version_and_entrypoint_from_t
     assert_eq!(
         phoebis_cch::sign(&up.requests()[0].body).unwrap(),
         up.requests()[0].body
+    );
+    up.shutdown().await;
+}
+
+/// A version half that is not digits and dots is a forged User-Agent: the whole-line insert would sign a
+/// line carrying whatever `;`-separated field it named.
+#[tokio::test]
+async fn a_user_agent_whose_version_carries_a_field_of_its_own_restores_nothing() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let mut req = without_billing_line("s-1");
+    set_header(
+        &mut req,
+        "user-agent",
+        "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
+    );
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
+    let sent = &up.requests()[0];
+    let line = billing_line(&sent.body);
+    assert!(
+        !line.starts_with("x-anthropic-billing-header:"),
+        "no line was inserted: {line}"
+    );
+    assert_eq!(
+        header(sent, "x-client-request-id"),
+        None,
+        "and nothing else of the first-party shape is presented either"
     );
     up.shutdown().await;
 }

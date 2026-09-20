@@ -103,6 +103,14 @@ async fn the_companions_reports_become_the_lifecycle_events_the_alerts_read() {
     })
     .unwrap();
     assert_eq!(drain(&mut rx), [ended()]);
+    // The entry lives on past the report so a late result still finds it; the end was already told.
+    r.advance(86_401_000);
+    r.engine.expire();
+    assert_eq!(
+        drain(&mut rx),
+        [],
+        "a session the companion ended is not ended a second time by its expiry"
+    );
 }
 
 #[tokio::test]

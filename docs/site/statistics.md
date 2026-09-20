@@ -213,7 +213,9 @@ in its detail, since the router no longer knows which sessions live; a live sess
 from the session's last request on any of its agents, and resolves on the next request.
 
 **Session parked** opens when the companion reports the main agent parked and resolves when it reports it busy or
-idle again; without a companion for the session neither happens.
+idle again; without a companion for the session neither happens. Resolving one by hand ends the event and leaves
+the router's record of the park as it was, so nothing reopens while the session stays parked; the companion's next
+report of the agent busy or idle arms the condition again.
 
 **Subagent active** opens on a subagent's first request, or on the companion's `agent_start`, and resolves when
 the companion releases the agent, when the session ends, or at the session's expiry. The detail names the parent

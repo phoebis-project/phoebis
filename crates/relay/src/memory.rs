@@ -68,9 +68,6 @@ struct Entry {
     accounts: HashMap<String, AccountMemory>,
 }
 
-// `Latch` and `SessionMemory::{latch, refuses}` below are exercised by this module's own tests; the 400 rule
-// that calls them in the live request path is a later addition, so the compiler cannot see them as reachable yet.
-#[allow(dead_code)]
 struct Latch {
     incarnation: u64,
     revision: u64,
@@ -79,7 +76,6 @@ struct Latch {
 
 struct Inner {
     entries: HashMap<MemoryKey, Entry>,
-    #[allow(dead_code)]
     latches: HashMap<String, Latch>,
     last_purge: i64,
 }
@@ -101,14 +97,16 @@ impl SessionMemory {
         }
     }
 
-    /// The prompt id this request carries: inherited from `parent_agent` on an agent's first request, minted on
-    /// a fresh user turn, else the agent's current one (minted when it has none). Only a client's own inference
-    /// request reaches here: a probe replays the request as the client sent it.
+    /// The prompt id this request carries: the one its own line already names, else inherited from
+    /// `parent_agent` on an agent's first request, minted on a fresh user turn, or the agent's current one
+    /// (minted when it has none). Only a client's own inference request reaches here: a probe replays the
+    /// request as the client sent it.
     pub fn prompt_id(
         &self,
         key: &MemoryKey,
         parent_agent: Option<&str>,
         fresh_turn: bool,
+        carried: Option<&str>,
         now: i64,
     ) -> String {
         self.purge(now);
@@ -140,7 +138,11 @@ impl SessionMemory {
             accounts: HashMap::new(),
         });
         entry.last_seen = now;
-        if is_new && inherited.is_some() {
+        if let Some(id) = carried {
+            // What the wire says wins: a full-shape turn sends its own id, and a mint recorded beside it
+            // would be the one a reduced-shape subagent of that turn inherited.
+            entry.prompt_id = Some(id.to_string());
+        } else if is_new && inherited.is_some() {
             // The parent's id wins over a fresh-turn mint: a subagent's opening message reads as a fresh turn
             // of its own, but it is still the parent's turn the subagent was spawned to help with.
             entry.prompt_id = inherited;
@@ -193,7 +195,6 @@ impl SessionMemory {
     /// re-create under the same id moves the incarnation; a restart forgets it, since nothing here is persisted.
     /// Every other account write bumps the revision too (a pause, a rotation, a state flip), which clears the
     /// latch a round early; the cost is one more 400 before it is set again, and never a wrong skip.
-    #[allow(dead_code)]
     pub fn latch(&self, account: &AccountRow, item: Injected) {
         let mut inner = self.inner.lock().unwrap();
         let current = inner.latches.get(&account.id);
@@ -219,7 +220,6 @@ impl SessionMemory {
 
     /// A late 400 for an attempt made under an older row lands nowhere: `latch` records the row it was given,
     /// and `refuses` matches the current row's incarnation and revision exactly.
-    #[allow(dead_code)]
     pub fn refuses(&self, account: &AccountRow, item: Injected) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.latches.get(&account.id).is_some_and(|latch| {
@@ -333,11 +333,11 @@ mod tests {
     fn the_cap_evicts_the_least_recently_seen_entry() {
         let mem = SessionMemory::new(2);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        let id_a = mem.prompt_id(&a, None, false, 1_000);
-        mem.prompt_id(&b, None, false, 2_000);
+        let id_a = mem.prompt_id(&a, None, false, None, 1_000);
+        mem.prompt_id(&b, None, false, None, 2_000);
         // A third entry past the cap evicts `a`, the least recently seen of the two held.
-        mem.prompt_id(&c, None, false, 3_000);
-        let id_a_again = mem.prompt_id(&a, None, false, 4_000);
+        mem.prompt_id(&c, None, false, None, 3_000);
+        let id_a_again = mem.prompt_id(&a, None, false, None, 4_000);
         assert_ne!(
             id_a, id_a_again,
             "the evicted turn was forgotten, so a fresh id was minted"
@@ -348,8 +348,8 @@ mod tests {
     fn the_purge_drops_an_entry_idle_past_the_bound() {
         let mem = SessionMemory::new(10);
         let a = key("a");
-        let id = mem.prompt_id(&a, None, false, 0);
-        let id_after = mem.prompt_id(&a, None, false, MEMORY_IDLE_MS);
+        let id = mem.prompt_id(&a, None, false, None, 0);
+        let id_after = mem.prompt_id(&a, None, false, None, MEMORY_IDLE_MS);
         assert_ne!(
             id, id_after,
             "an entry idle the whole bound is purged before this call sees it"

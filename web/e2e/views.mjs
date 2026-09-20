@@ -130,7 +130,7 @@ async function poolChips(theme) {
  * The caching tab of a served pool: its TTL policy toggle, the diagnostics override, and the subagent switch
  * the keepalive block carries, each reached the way an operator reaches it. The diagnostics select is measured
  * against the "In overage" select beside it, since a control that reads a size smaller than its neighbours is
- * the defect this dialog has produced before.
+ * the defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);

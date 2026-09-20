@@ -2,7 +2,7 @@
 //! other parts of the process already keep, and one off the lifecycle channel the keepalive engine feeds from
 //! the companion's reports.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -79,6 +79,10 @@ struct SessionState {
     /// Turns the session's top-level agent has taken, so a question whose captured body is still being read
     /// can tell whether the user answered while it waited.
     generation: u64,
+    /// The idle rules already dispatched for the pair since its last request, by rule id. A crossing is one
+    /// condition however long it lasts, so the tick writes once for it rather than once a second per idle
+    /// session and rule; the next request empties the set, where the clear that resolves those events goes.
+    idle_open: BTreeSet<String>,
     /// The newest client request on any of the session's agents, which the idle rules measure from: a report
     /// about the session is not the session being used.
     last_request: i64,
@@ -105,6 +109,7 @@ impl SessionState {
             active_open: false,
             agents: BTreeMap::new(),
             generation: 0,
+            idle_open: BTreeSet::new(),
             last_request: now,
             last_seen: now,
             parked_open: false,
@@ -206,6 +211,7 @@ fn subagent_active_signal(
 /// not believe it still holds an event.
 fn clear_session(key: &str, session: &str, state: &mut SessionState) -> Vec<Emit> {
     state.active_open = false;
+    state.idle_open.clear();
     state.parked_open = false;
     let subject = question_subject(key, session);
     let mut emits: Vec<Emit> = [Kind::SessionActive, Kind::SessionIdle, Kind::SessionParked]
@@ -302,6 +308,7 @@ fn question_parties(event: &AlertEventRow) -> Option<(String, String)> {
 
 impl BusArm {
     pub fn new(alerts: Arc<Alerts>, inputs: &AlertInputs) -> BusArm {
+        let now = (alerts.parts().clock)();
         let mut sessions = HashMap::new();
         if let Ok(open) = alerts.parts().store.open_alert_events() {
             // A question opened before this arm existed is still waiting for the user, so the sessions holding
@@ -312,6 +319,10 @@ impl BusArm {
             {
                 if let Some(pair) = question_parties(event) {
                     let mut state = SessionState::new(event.opened_at, None);
+                    // The entry ages from the event it tracks, so the poller retires both together; the idle
+                    // rules measure from the restart instead, because no request of that session has reached
+                    // this process and its age says nothing about whether the user is still at the keyboard.
+                    state.last_request = now;
                     state.question_open = true;
                     sessions.insert(pair, state);
                 }
@@ -428,9 +439,11 @@ impl BusArm {
                 pool.as_deref(),
             )));
         }
-        // A request is the session in use, whatever an idle rule decided a moment before it arrived. Where no
-        // idle rule is enabled nothing can be open to resolve, and the clear reads every open event.
-        if self.alerts.watches(Kind::SessionIdle) {
+        // A request is the session in use, whatever an idle rule decided a moment before it arrived. The set
+        // names the rules that have something to resolve, so a session that never went idle costs no read of
+        // the open events, and the crossing is armed again for each of them.
+        if !state.idle_open.is_empty() {
+            state.idle_open.clear();
             emits.push(Emit::Clear(
                 Kind::SessionIdle,
                 question_subject(key, session),
@@ -1019,24 +1032,28 @@ impl Poller {
                 continue;
             };
             let idle_ms = (threshold * 60_000.0) as i64;
+            // The dispatched rules are recorded under the map, so the crossing is claimed before the guard is
+            // released and a tick a second later carries the store nothing it has already been handed.
             let idle: Vec<Signal> = {
-                let tracked = self.tracked.lock();
-                tracked
-                    .sessions
-                    .iter()
-                    .filter(|(_, s)| now - s.last_request >= idle_ms)
-                    .map(|((key, session), s)| Signal {
+                let mut tracked = self.tracked.lock();
+                let mut signals = Vec::new();
+                for ((key, session), s) in tracked.sessions.iter_mut() {
+                    if now - s.last_request < idle_ms || !s.idle_open.insert(rule.id.clone()) {
+                        continue;
+                    }
+                    signals.push(Signal {
                         kind: Kind::SessionIdle,
                         account_id: None,
                         key_id: Some(key.clone()),
                         pool_id: s.pool.clone(),
                         subject: question_subject(key, session),
                         detail: json!({ "idle_minutes": threshold, "key": key, "last_request_at": s.last_request, "pool": s.pool, "session": session }),
-                    })
-                    .collect()
+                    });
+                }
+                signals
             };
-            // The rule's own scope admits the session or does not, and the engine's one event per rule and
-            // subject makes a repeat a no-op, so two rules open at their own minute and neither opens twice.
+            // The rule's own scope admits the session or does not: the set says the rule was dispatched for
+            // the crossing, and the engine stays the one that decides what is open.
             for signal in idle {
                 self.alerts.signal_rule(&rule.id, &signal);
             }

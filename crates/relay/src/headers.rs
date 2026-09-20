@@ -63,7 +63,9 @@ pub struct OutboundHead {
 /// list is non-empty, a line holding exactly the injected entries is inserted after `anthropic-version` (else
 /// right before the credential slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a
 /// missing line stays missing, as today. `drop_betas` entries are removed from the caller's list,
-/// whether the caller sent them or an earlier attempt injected them.
+/// whether the caller sent them or an earlier attempt injected them. An `anthropic-beta` line that
+/// ends up empty emits no header at all, whether the caller sent it empty or a drop emptied it: the list is
+/// what the line says, and a line saying nothing is left out.
 #[allow(clippy::too_many_arguments)]
 pub fn outbound_headers(
     caller: &HeaderMap,

@@ -614,11 +614,15 @@ impl Inner {
                 );
             }
             self.agents -= agents.len();
-            self.sessions.remove(&key);
-            self.emit(SessionLifecycle::SessionEnded {
-                key_id: key.0.clone(),
-                session_id: key.1.clone(),
-            });
+            // A session whose companion reported its end was announced then; the entry outlives the report
+            // only so a result still in flight finds it, and the alerts resolve on one end, not two.
+            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
+            if !announced {
+                self.emit(SessionLifecycle::SessionEnded {
+                    key_id: key.0.clone(),
+                    session_id: key.1.clone(),
+                });
+            }
         }
     }
 }

@@ -345,6 +345,52 @@ async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request
     );
 }
 
+/// The tick's write rate: a rule that has opened for a session is not dispatched again until that session's
+/// next request, which an operator's own Resolve makes visible (the engine would take a repeat, so a second
+/// open would mean a second insert attempt against the store).
+#[tokio::test]
+async fn an_idle_rule_is_dispatched_once_per_crossing_and_the_next_request_arms_it_again() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        arm.tracked(),
+    );
+    arm.observe(main_turn("r1", "s1"));
+    settled(&rig).await;
+    rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    let opened = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "session_idle")
+        .expect("the threshold opened one");
+    rig.alerts.resolve(&opened.id).unwrap();
+    settled(&rig).await;
+    rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+        "a later tick over the same idle session dispatches the rule no second time"
+    );
+    rig.clock.store(NOW + 32 * 60_000, Ordering::SeqCst);
+    arm.observe(main_turn("r2", "s1"));
+    settled(&rig).await;
+    rig.clock.store(NOW + 62 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+        "the session's next request arms the rule for its next crossing"
+    );
+}
+
 #[tokio::test]
 async fn idle_rules_open_each_at_their_own_threshold_and_a_disjoint_scope_opens_nothing() {
     let rig = rig().await;
@@ -559,12 +605,26 @@ async fn open_lifecycle_events_from_before_a_restart_are_resolved_at_start_with_
             })
             .unwrap();
     }
+    // The restart lands past the idle rule's threshold and short of the session expiry, which is the window
+    // in which an entry restored from the question could be taken for an idle session.
+    rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     settled(&rig).await;
     assert_eq!(
         open(&rig),
         [("ask_user_question".to_string(), question_subject(KEY, "s1"))],
         "the question is still waiting for the user; the lifecycle events cannot be known to be"
+    );
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        arm.tracked(),
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+        "this process has seen no request of that session, so it cannot call it idle"
     );
     let posts = rig.webhook.posts();
     assert_eq!(posts.len(), 3, "one resolved delivery per lifecycle event");

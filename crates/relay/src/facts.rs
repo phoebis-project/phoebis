@@ -1,4 +1,5 @@
-//! What the restoration reads off the body in one parse: the turn boundary and the version suffix.
+//! What the restoration reads off the body in one parse: the turn boundary, the version suffix, and the
+//! prompt id a first-party line already carries.
 
 use serde_json::Value;
 
@@ -8,6 +9,9 @@ pub struct BodyFacts {
     /// Characters 4, 7, and 20 of the user's own prompt (the last `text` block of the first `user` message; the
     /// system-reminder blocks precede it), `'0'` where the text is shorter, for the version suffix.
     pub prompt_chars: [char; 3],
+    /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
+    /// from a value spelled any other way than the client spells one.
+    pub prompt_id: Option<String>,
 }
 
 impl BodyFacts {
@@ -16,6 +20,7 @@ impl BodyFacts {
             return BodyFacts {
                 fresh_user_turn: false,
                 prompt_chars: ['0'; 3],
+                prompt_id: None,
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
@@ -30,11 +35,36 @@ impl BodyFacts {
             .and_then(last_text)
             .map(prompt_chars_of)
             .unwrap_or(['0'; 3]);
+        let prompt_id = root
+            .get("system")
+            .and_then(Value::as_array)
+            .and_then(|blocks| blocks.first())
+            .and_then(|block| block.get("text"))
+            .and_then(Value::as_str)
+            .and_then(carried_prompt_id)
+            .map(String::from);
         BodyFacts {
             fresh_user_turn,
             prompt_chars,
+            prompt_id,
         }
     }
+}
+
+/// The `cc_prompt_id` of an attribution line, accepted only as the client's own spelling of an id: the value
+/// is recorded and then restored onto a later turn of the same session, in a line this build signs, so a
+/// separator smuggled into it would become a field of that line.
+fn carried_prompt_id(text: &str) -> Option<&str> {
+    let value = text
+        .strip_prefix("x-anthropic-billing-header: ")?
+        .split("; ")
+        .find_map(|field| field.strip_prefix("cc_prompt_id="))?
+        .trim_end_matches(';');
+    let spelled = !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    spelled.then_some(value)
 }
 
 fn is_fresh_user_turn(message: &Value) -> bool {
@@ -110,9 +140,9 @@ mod tests {
     fn the_last_text_block_of_the_first_user_message_is_read_past_system_reminders() {
         let body = br#"{"messages":[{"role":"user","content":[
             {"type":"text","text":"<system-reminder>ignored</system-reminder>"},
-            {"type":"text","text":"0123456789012345678901"}
+            {"type":"text","text":"01234567890123456789X1"}
         ]}]}"#;
-        assert_eq!(BodyFacts::read(body).prompt_chars, ['4', '7', '0']);
+        assert_eq!(BodyFacts::read(body).prompt_chars, ['4', '7', 'X']);
     }
 
     #[test]

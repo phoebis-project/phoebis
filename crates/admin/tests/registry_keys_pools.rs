@@ -872,6 +872,10 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
             "cache_ttl is not a policy object",
         ),
         (
+            r#"{"cache_ttl":{"models":[{"model":"","main":"5m","subagent":"5m"}]}}"#,
+            "cache_ttl.models[].model must be a model id",
+        ),
+        (
             r#"{"cache_ttl":{"models":[{"model":"m","main":"5m","subagent":"5m"},{"model":"m","main":"1h","subagent":"1h"}]}}"#,
             "cache_ttl.models lists m twice",
         ),
