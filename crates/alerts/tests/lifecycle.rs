@@ -7,9 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_alerts::{
-    agent_subject, question_subject, AlertInputs, BusArm, Kind, LifecycleArm, Poller, ScopeType,
+    agent_subject, question_subject, spawn_inputs, AlertInputs, BusArm, Kind, LifecycleArm, Poller,
+    ScopeType,
 };
-use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, RequestObserved, SessionLifecycle};
+use phoebis_bus::{
+    lifecycle_channel, Event, Kind as RequestKind, Origin, Outcome, RequestObserved,
+    SessionLifecycle,
+};
 use phoebis_store::{AlertEventRow, AlertRuleRow};
 use common::*;
 
@@ -749,6 +753,55 @@ async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request
         open(&rig),
         [("session_active".to_string(), question_subject(KEY, "s1"))],
         "the session was already running when the rule was enabled"
+    );
+}
+
+#[tokio::test]
+async fn a_session_end_enqueued_at_the_close_resolves_its_events_before_the_inputs_stop() {
+    let rig = rig().await;
+    install(
+        &rig,
+        &[rule(
+            "active",
+            Kind::SessionActive,
+            ScopeType::Key,
+            Some(KEY),
+        )],
+    );
+    let (tx, rx) = lifecycle_channel();
+    let handles = spawn_inputs(
+        rig.alerts.clone(),
+        AlertInputs {
+            lifecycle: Some(rx),
+            ..inputs(&rig, BTreeMap::new())
+        },
+    );
+    tx.send(started("s1")).unwrap();
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (open(&rig) == [("session_active".to_string(), question_subject(KEY, "s1"))]).then_some(())
+    })
+    .await;
+    // The end is queued and the sender dropped with no await point between them and the shutdown, the way the
+    // close leaves the channel: the consumer has not read the end when the teardown starts.
+    tx.send(SessionLifecycle::SessionEnded {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    })
+    .unwrap();
+    drop(tx);
+    handles.shutdown().await;
+    assert_eq!(
+        open(&rig),
+        [],
+        "the end the queue held resolved its event before the consumer stopped"
+    );
+    let events = rig.store.alert_events(None, 10).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| (e.kind.as_str(), e.state.as_str()))
+            .collect::<Vec<_>>(),
+        [("session_active", "resolved")]
     );
 }
 

@@ -11,8 +11,8 @@ pub use deliver::{body, deliver, signature, ReqwestWebhook, Sleeper, Webhook, BA
 pub use destination::{admitted, ipv4_refusal, ipv6_refusal, LINK_LOCAL, LOOPBACK, UNSPECIFIED};
 pub use engine::{AlertParts, AlertStats, Alerts, DeliveryResult, Transition};
 pub use inputs::{
-    agent_subject, question_subject, spawn_inputs, AlertInputs, BusArm, LifecycleArm, Poller,
-    SpendSource, Tracked, IDLE_MINUTES, LIFECYCLE_KINDS,
+    agent_subject, question_subject, spawn_inputs, AlertInputHandles, AlertInputs, BusArm,
+    LifecycleArm, Poller, SpendSource, Tracked, IDLE_MINUTES, LIFECYCLE_KINDS,
 };
 pub use question::{
     question_in_document, question_in_event, question_text, SseCutter, SSE_BUFFER_MAX,

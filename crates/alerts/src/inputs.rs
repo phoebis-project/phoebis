@@ -1220,40 +1220,65 @@ impl Poller {
     }
 }
 
-/// The bus arm, the companion's arm where a channel feeds it, and the ticker. All stop when their source
-/// closes or the handles are aborted.
-pub fn spawn_inputs(
-    alerts: Arc<Alerts>,
-    mut inputs: AlertInputs,
-) -> Vec<tokio::task::JoinHandle<()>> {
+/// The three input tasks, so the binary's teardown can drain the lifecycle consumer before aborting the rest.
+pub struct AlertInputHandles {
+    bus: tokio::task::JoinHandle<()>,
+    lifecycle: Option<tokio::task::JoinHandle<()>>,
+    poller: tokio::task::JoinHandle<()>,
+}
+
+impl AlertInputHandles {
+    /// The lifecycle consumer drains what the engine's close enqueued (its sender is gone, so the task ends
+    /// on its own once the queue is empty); the other two loop until aborted. Bounded so a consumer stuck on
+    /// a store write cannot hold the shutdown.
+    pub async fn shutdown(self) {
+        if let Some(mut lifecycle) = self.lifecycle {
+            if tokio::time::timeout(std::time::Duration::from_secs(5), &mut lifecycle)
+                .await
+                .is_err()
+            {
+                lifecycle.abort();
+            }
+        }
+        self.bus.abort();
+        self.poller.abort();
+    }
+}
+
+/// The bus arm, the companion's arm where a channel feeds it, and the ticker. The first and the last stop when
+/// aborted; the companion's stops when its channel ends or when aborted.
+pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputHandles {
     let subscriber = inputs.bus.subscribe("alerts");
     // The arm owns the session map and the other two read it, so it is built first.
     let mut arm = BusArm::new(alerts.clone(), &inputs);
     let tracked = arm.tracked();
-    let bus_task = spawn_subscriber(subscriber, move |mut subscriber| async move {
+    let bus = spawn_subscriber(subscriber, move |mut subscriber| async move {
         while let Some(event) = subscriber.events.recv().await {
             arm.observe(event);
         }
     });
-    let mut handles = vec![bus_task];
-    if let Some(mut lifecycle) = inputs.lifecycle.take() {
+    let lifecycle = inputs.lifecycle.take().map(|mut lifecycle| {
         let mut companion =
             LifecycleArm::new(alerts.clone(), inputs.router.clone(), tracked.clone());
-        handles.push(tokio::spawn(async move {
+        tokio::spawn(async move {
             while let Some(event) = lifecycle.recv().await {
                 companion.apply(event);
             }
-        }));
-    }
+        })
+    });
     let mut poller = Poller::new(alerts, &inputs, tracked);
     let tick = inputs.tick;
-    handles.push(tokio::spawn(async move {
+    let poller = tokio::spawn(async move {
         let mut interval = tokio::time::interval(tick);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
             poller.tick().await;
         }
-    }));
-    handles
+    });
+    AlertInputHandles {
+        bus,
+        lifecycle,
+        poller,
+    }
 }

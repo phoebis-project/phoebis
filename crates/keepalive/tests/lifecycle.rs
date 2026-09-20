@@ -190,6 +190,54 @@ async fn a_forgotten_session_ends_at_the_expiry() {
     assert_eq!(drain(&mut rx), [ended()]);
 }
 
+#[tokio::test]
+async fn a_close_ends_every_live_session_once_and_an_announced_one_not_again() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    // The rig's own session is live; a second one is started and ended through the companion's reports, so
+    // the close finds one session to end and one already announced.
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        drain(&mut rx),
+        [started(), ended()],
+        "the rig's session, started then ended"
+    );
+    r.engine
+        .apply_event(
+            "desktop",
+            Event {
+                session_id: "s2".into(),
+                instance_id: "i2".into(),
+                event: "session_start".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    drain(&mut rx);
+    r.engine.close();
+    let ends: Vec<SessionLifecycle> = drain(&mut rx)
+        .into_iter()
+        .filter(|e| matches!(e, SessionLifecycle::SessionEnded { .. }))
+        .collect();
+    assert_eq!(
+        ends,
+        [SessionLifecycle::SessionEnded {
+            key_id: KEY.into(),
+            session_id: "s2".into(),
+        }],
+        "the live session ends at the close; the announced one ended before it"
+    );
+}
+
 fn heartbeat() -> SessionLifecycle {
     SessionLifecycle::Heartbeat {
         key_id: KEY.into(),

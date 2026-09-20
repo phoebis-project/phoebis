@@ -424,10 +424,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Ok(())
         }
     };
-    // Every delivery of an event opened before the stop lands before the ledger and the bus close.
-    for handle in alert_inputs {
-        handle.abort();
-    }
+    // The lifecycle consumer resolves the ends the keepalive close enqueued before it stops; every delivery of
+    // an event opened before the stop then lands before the ledger and the bus close.
+    alert_inputs.shutdown().await;
     alerts.shutdown().await;
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();

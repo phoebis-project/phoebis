@@ -394,10 +394,12 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(parts: EngineParts) -> Arc<Engine> {
+    pub fn new(mut parts: EngineParts) -> Arc<Engine> {
+        // `Inner` holds the only sender, so `close` dropping it is the channel ending for the consumer.
+        let lifecycle = parts.lifecycle.take();
         Arc::new(Engine {
             inner: Mutex::new(Inner {
-                lifecycle: parts.lifecycle.clone(),
+                lifecycle,
                 sessions: BTreeMap::new(),
                 pending: HashMap::new(),
                 reasons: BTreeMap::new(),
@@ -468,7 +470,18 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
+            // The alerts resolve a session on one end, so one already announced by the companion gets none
+            // here; the rest end now, as they would at the expiry, since nothing will report for them again.
+            if !inner.sessions[&key].ended {
+                inner.emit(SessionLifecycle::SessionEnded {
+                    key_id: key.0.clone(),
+                    session_id: key.1.clone(),
+                });
+            }
         }
+        // The ends above are the channel's last messages: with the sender gone the consumer's `recv()` returns
+        // `None` once it has drained them, which is what the alert inputs' shutdown joins on.
+        inner.lifecycle = None;
         inner.sessions.clear();
         inner.pending.clear();
         inner.agents = 0;

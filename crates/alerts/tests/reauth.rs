@@ -110,8 +110,6 @@ async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpo
             .all(|d| d.status.is_none() && d.error.is_some()),
         "three failed attempts against a closed port: {rows:?}"
     );
-    for h in handles {
-        h.abort();
-    }
+    handles.shutdown().await;
     hook.shutdown().await;
 }
