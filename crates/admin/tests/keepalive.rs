@@ -175,6 +175,36 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
         201,
         "the default affinity of 3,600 admits an enabled policy at creation"
     );
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"typo","label":"Typo","strategy":"priority_random","keepalive":{"warm_subagents":1}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert!(json(refused).await["error"]
+        .as_str()
+        .unwrap()
+        .starts_with("keepalive is not a policy object"));
+    let quiet = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"quiet","label":"Quiet","strategy":"priority_random","keepalive":{"enabled":true,"warm_subagents":false}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(quiet.status(), 201);
+    assert_eq!(json(quiet).await["keepalive"]["warm_subagents"], false);
+    let untouched = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"loud","label":"Loud","strategy":"priority_random","keepalive":{}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(untouched.status(), 201);
+    assert_eq!(json(untouched).await["keepalive"]["warm_subagents"], true);
 }
 
 use phoebis_keepalive::Event;

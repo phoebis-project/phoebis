@@ -45,7 +45,7 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         OauthUnverified => ViewReason::OauthUnverified,
         Overage => ViewReason::Overage,
         Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut
-        | IneligibleCredential => ViewReason::Paused,
+        | IneligibleCredential | SubagentsOff => ViewReason::Paused,
         InvalidProbeUsage
         | MissingAccount
         | ProbeAuthenticationError

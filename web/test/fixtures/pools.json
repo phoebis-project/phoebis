@@ -28,7 +28,8 @@
           "probe_cost_cap_usd_per_day": 4.0,
           "retry_max_seconds": 300,
           "retry_seconds": 30,
-          "stop_when_net_negative": true
+          "stop_when_net_negative": true,
+          "warm_subagents": true
         },
         "cache_ttl": {
           "enabled": false,
@@ -39,8 +40,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1789829544740,
-        "updated_at": 1789829544740,
+        "created_at": 1789866286515,
+        "updated_at": 1789866286515,
         "members": [
           {
             "account_id": "business",
@@ -57,7 +58,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "LP9Dgxqw",
+            "prefix": "W5err5ae",
             "enabled": true
           }
         ],

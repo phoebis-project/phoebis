@@ -155,6 +155,7 @@ reasons! {
     SlowProbe => "slow_probe",
     StorageLimit => "storage_limit",
     StructuredOutput => "structured_output",
+    SubagentsOff => "subagents_off",
     UnexpectedOutput => "unexpected_output",
     UnsupportedProbe => "unsupported_probe",
     UnsupportedShape => "unsupported_shape",
@@ -751,6 +752,7 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let limits = self.parts.limits.clone();
+        let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
         if inner.closed {
             return;
@@ -784,6 +786,20 @@ impl Engine {
                 *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
                 return;
             }
+        }
+        let policy = match snapshot.key(&key.0) {
+            Some(row) => snapshot
+                .pool(&row.pool_id)
+                .map(|p| KeepalivePolicy::from_json(&p.keepalive_json))
+                .unwrap_or_default(),
+            None => KeepalivePolicy::default(),
+        };
+        if agent_id != MAIN_AGENT && !policy.warm_subagents {
+            // The session's last real time still moves: a subagent working is a session in use, which the main
+            // agent's idle limits read.
+            inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
+            inner.discard(&key, &agent_id, Reason::SubagentsOff, None);
+            return;
         }
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
         // observation: the kept-warm credit reads this and nothing on the agent.
@@ -1477,6 +1493,11 @@ pub(crate) fn gate(
     agent.pool_id = key.pool_id.clone();
     if !policy.enabled {
         return Some(Gate::Hold(Reason::KeepaliveOff));
+    }
+    // The operator's switch reaches a recipe armed before it was flipped, the way the key opt-out does: dropped
+    // rather than held, since nothing about a subagent may be probed again until the option comes back.
+    if agent.id != MAIN_AGENT && !policy.warm_subagents {
+        return Some(Gate::Drop(Reason::SubagentsOff, Wasted::Released));
     }
     // The pin is what the probe will follow, so the pin's account is the one to gate: a sibling agent's real
     // request may have moved it since this recipe last ran.

@@ -231,6 +231,39 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
 }
 
 #[tokio::test]
+async fn turning_warm_subagents_off_drops_an_armed_subagent_recipe_at_the_gate() {
+    let mut r = armed(RigSpec::default()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub-1".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("sub-1").await;
+    assert_eq!(r.status("sub-1").reason, Reason::Scheduled);
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
+        warm_subagents: false,
+        ..RigSpec::default().policy
+    })
+    .unwrap();
+    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("sub-1").reason, r.status("sub-1").probes),
+        (Reason::SubagentsOff, 0),
+        "dropped at the gate, no paid probe"
+    );
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the main agent's recipe is untouched"
+    );
+}
+
+#[tokio::test]
 async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     let mut r = armed(RigSpec::default()).await;
     r.advance(270_000);

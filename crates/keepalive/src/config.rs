@@ -116,6 +116,9 @@ pub struct KeepalivePolicy {
     pub retry_max_seconds: u64,
     pub retry_seconds: u64,
     pub stop_when_net_negative: bool,
+    /// Off retains no recipe for an agent other than `main`; a subagent's requests still count as real traffic
+    /// for the main agent's idle limits, since the session is alive.
+    pub warm_subagents: bool,
 }
 
 impl Default for KeepalivePolicy {
@@ -134,6 +137,7 @@ impl Default for KeepalivePolicy {
             retry_max_seconds: 300,
             retry_seconds: 30,
             stop_when_net_negative: true,
+            warm_subagents: true,
         }
     }
 }

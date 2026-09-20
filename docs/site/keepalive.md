@@ -62,7 +62,7 @@ collapsed "Probe tuning" group.
 
 ## Tuning fields
 
-The pool's `keepalive` object carries thirteen fields, each with its own default and bound:
+The pool's `keepalive` object carries fourteen fields, each with its own default and bound:
 
 | Field | Default | Accepts | What it does |
 | --- | --- | --- | --- |
@@ -79,6 +79,7 @@ The pool's `keepalive` object carries thirteen fields, each with its own default
 | `retry_max_seconds` | `300` | at least `retry_seconds` | Ceiling the retry backoff doubles up to. |
 | `retry_seconds` | `30` | 1 to 3600 | Base backoff after a failed probe, doubling each retry. |
 | `stop_when_net_negative` | `true` | | Pauses the recipe once probes cost more than they saved. |
+| `warm_subagents` | `true` | | Off retains only the main conversation's recipe; a subagent is never probed. |
 
 An out-of-range value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, except
 for two fields with their own message: `probe_cost_cap_usd_per_day` answers "keepalive.probe_cost_cap_usd_per_day
