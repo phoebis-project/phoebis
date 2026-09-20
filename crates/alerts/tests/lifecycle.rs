@@ -436,6 +436,35 @@ async fn the_expiry_sweep_resolves_every_lifecycle_event_of_a_forgotten_session(
 }
 
 #[tokio::test]
+async fn an_expired_sessions_events_resolve_on_an_event_the_arm_has_no_request_for() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    arm.observe(main_turn("r1", "s1"));
+    arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW));
+    settled(&rig).await;
+    assert_eq!(open(&rig).len(), 2, "the session and its subagent");
+    rig.clock.store(NOW + 3_601_000, Ordering::SeqCst);
+    // A completion of a request the arm never saw: the bus drops under pressure and an in-flight entry ages
+    // out, so a completion with nothing to match is the ordinary shape of both.
+    arm.observe(complete("ghost", Outcome::Succeeded, 200, None, None));
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        [],
+        "the sweep's clears reach the store whatever the event that carried them was"
+    );
+    assert_eq!(
+        posted(&rig)
+            .iter()
+            .filter(|(_, _, state)| state == "resolved")
+            .count(),
+        2,
+        "and a receiver is told of each"
+    );
+}
+
+#[tokio::test]
 async fn a_session_with_no_companion_and_no_further_traffic_expires_from_the_poller_alone() {
     let rig = rig().await;
     install(

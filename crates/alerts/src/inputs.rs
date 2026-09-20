@@ -221,20 +221,11 @@ fn clear_session(key: &str, session: &str, state: &mut SessionState) -> Vec<Emit
     emits
 }
 
-/// Resolves every open lifecycle event of a session past `expiry_ms` since its last request or report, and
-/// drops the terminal timestamps older than that; run by the poller on every tick and by the arm before it
-/// reads.
-pub fn sweep_expired(tracked: &Tracked, alerts: &Arc<Alerts>, expiry_ms: i64, now: i64) {
-    let ordered = tracked.ordered();
-    let emits = sweep_locked(&mut tracked.lock(), expiry_ms, now);
-    // Outside the map lock: a clear reads the open events and posts, which the other two arms must not wait
-    // on. The ordering guard is what keeps this batch ahead of every decision taken after it.
-    emit_all(alerts, emits);
-    drop(ordered);
-}
-
-/// The sweep's decision half, for a caller that already holds the ordering guard and the map.
-fn sweep_locked(tracked: &mut TrackedInner, expiry_ms: i64, now: i64) -> Vec<Emit> {
+/// Every open lifecycle event of a session past `expiry_ms` since its last request or report, to resolve, and
+/// the terminal timestamps older than that dropped; run by the poller on every tick and by the arm before it
+/// reads. The caller holds the ordering guard and the map and emits what this returns once it has released
+/// the map, as every other decision in this module does.
+fn sweep_expired(tracked: &mut TrackedInner, expiry_ms: i64, now: i64) -> Vec<Emit> {
     tracked
         .terminals
         .retain(|_, ended| now - *ended < expiry_ms);
@@ -453,11 +444,22 @@ impl BusArm {
         self.in_flight
             .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
         // One ordering guard for everything this event decides, so the sweep's clears and the opens below
-        // reach the store in that order and ahead of whatever the other two arms decide next.
-        let ordered = self.tracked.ordered();
+        // reach the store in that order and ahead of whatever the other two arms decide next. Held through a
+        // handle of its own, so reading the event below still has the arm to itself.
+        let tracked = self.tracked.clone();
+        let ordered = tracked.ordered();
         // An entry must outlive the question event it tracks, so a claim below ages it from when that event
         // opened rather than from the turn that asked, and the poller retires both at the same expiry.
-        let mut emits = sweep_locked(&mut self.tracked.lock(), self.session_expiry_ms, now);
+        let mut emits = sweep_expired(&mut self.tracked.lock(), self.session_expiry_ms, now);
+        // The event is read in a call of its own: an arm of it that returns early, as a completion with no
+        // request of ours does, must not carry the sweep's clears out of the function with it.
+        self.read(event, now, &mut emits);
+        // The map is free again: what this event decided reaches the store now, in the order it was decided.
+        emit_all(&self.alerts, emits);
+        drop(ordered);
+    }
+
+    fn read(&mut self, event: Event, now: i64, emits: &mut Vec<Emit>) {
         match event {
             Event::RequestObserved(o) => {
                 let mut generation = 0;
@@ -631,9 +633,6 @@ impl BusArm {
             }
             Event::AccountSelected(_) | Event::ResponseHead(_) => {}
         }
-        // The map is free again: what this event decided reaches the store now, in the order it was decided.
-        emit_all(&self.alerts, emits);
-        drop(ordered);
     }
 }
 
@@ -1008,10 +1007,8 @@ impl Poller {
         let ordered = self.tracked.ordered();
         // Before the idle rules read the map, so a session with no companion and no further traffic resolves
         // at its expiry rather than at its next request, which may never come.
-        emit_all(
-            &self.alerts,
-            sweep_locked(&mut self.tracked.lock(), self.session_expiry_ms, now),
-        );
+        let expired = sweep_expired(&mut self.tracked.lock(), self.session_expiry_ms, now);
+        emit_all(&self.alerts, expired);
         for rule in self
             .alerts
             .rules()
