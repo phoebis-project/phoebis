@@ -533,6 +533,8 @@ impl LiveKeys {
             return None;
         }
         match selector.rsplit_once('@') {
+            // The reserved id has no generation of its own; `-` alone names its rows.
+            Some((id, _)) if id == UNATTRIBUTED => None,
             Some((id, generation)) => generation.parse().ok().map(|g| (id, g)),
             None => self.0.get(selector).map(|g| (selector, *g)),
         }

@@ -29,7 +29,9 @@ Cache diagnostics apply to a probe the same way: with the option on for the pool
 cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
 account, the turn the probe keeps warm, so the upstream's report says whether that entry was still there. A
 probe's own answer is never remembered as a previous turn: the next probe and the next real request still name
-the last real answer. Its cache-miss reason lands in the request log like any other request's.
+the last real answer. Its cache-miss reason lands in the request log like any other request's. A probe's 400
+naming an injected item strips it and retries the probe but never latches the account, since only a real
+request's diagnostics latch; the next real request re-sends the item, takes its own 400, and latches.
 
 ## The companion
 

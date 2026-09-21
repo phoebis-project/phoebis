@@ -30,10 +30,11 @@ pub struct LiveKeyLifetime {
 /// per ledger. Answers how many rollup rows moved; 0 on every later start.
 ///
 /// The ledger cannot read the store, so the migration that added the column left every row at 0 and the binary
-/// brings the live keys here once both handles are open. Runs before the ledger task writes anything, so no
-/// row under a real generation exists yet and the primary key cannot collide. One transaction per key and the
-/// `meta` mark after the last: a start that fails between keys re-runs the remaining keys next time, and a
-/// re-run of a finished key finds no generation-0 row of its lifetime to move, so nothing folds twice.
+/// brings the live keys here once both handles are open. Runs before the ledger task writes anything, so the
+/// primary key may already hold a row under the live generation (folded rather than overwritten, see below).
+/// One transaction per key and the `meta` mark after the last: a start that fails between keys re-runs the
+/// remaining keys next time, and a re-run of a finished key finds no generation-0 row of its lifetime to move,
+/// so nothing folds twice.
 pub fn reconcile_key_generations(
     db: &LedgerDb,
     keys: &[LiveKeyLifetime],

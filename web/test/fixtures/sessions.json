@@ -17,7 +17,7 @@
         "companion_since": null,
         "agents": 1,
         "keepalive": {
-          "next_probe_at": 1235900,
+          "next_probe_at": 1236963,
           "state": "busy"
         }
       },

@@ -353,7 +353,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // the live key and the decoder sees the label.
     parts.ledger.record(Record::Request {
         request: request(
-            now - 40 * 86_400_000,
+            now - 60_000,
             "r-earlier-holder",
             hour_ago + 500,
             "desktop",

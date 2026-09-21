@@ -397,6 +397,11 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         1,
         "the reserved id selects the unattributed rows whatever their generation"
     );
+    assert_eq!(
+        sum(&["-@0"]),
+        0,
+        "the reserved id has no generation of its own; `-` alone names its rows"
+    );
     let totals = db.read(|c| key_request_totals(c, i64::MIN, &live)).unwrap();
     assert_eq!(
         totals.keys().collect::<Vec<_>>(),

@@ -253,7 +253,9 @@ With every account in the pool rate limited, `phoebis` answers `429` with `retry
 `Retry-After` is rendered as `five_hour`, because the client treats an unknown claim as no claim. The error code
 is `accounts_exhausted` and the message is `every account in this pool is rate limited`. For anything only an
 operator can clear, such as a pool whose accounts are all paused, `phoebis` answers `503` with error code
-`accounts_unavailable`, message `no account in this pool can serve requests`, and no `retry-after`.
+`accounts_unavailable`, message `no account in this pool can serve requests`, and no `retry-after`. A request
+admitted under a key that was deleted and created again before it was routed is answered the same way, since
+the registry it was admitted against no longer holds its key.
 
 Claude Code 2.1.269 resumes a subscriber session on its own, after a usage-limit reset, only when the `429`
 carried all three of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix
