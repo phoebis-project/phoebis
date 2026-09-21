@@ -57,10 +57,11 @@ const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
   all: () => 'all',
-  // An id the story holds no key for has nothing to compare a generation against, so it never gains a suffix.
   key: (r) => {
+    // What the router never attributed is one group whatever the generation column says.
+    if (r.keyId === '-') return r.keyId;
     const live = keyById.get(r.keyId);
-    return live && Date.parse(live.createdAt) !== r.keyGeneration ? `${r.keyId}@${r.keyGeneration}` : r.keyId;
+    return live && Date.parse(live.createdAt) === r.keyGeneration ? r.keyId : `${r.keyId}@${r.keyGeneration}`;
   },
   kind: (r) => r.kind,
   model: (r) => r.model,
@@ -160,8 +161,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   };
 }
 
-/** The key dimension alone carries a generation in its group key, so it is the only one whose label differs from it. */
-const labelOf = (key: string, groupBy: AnalyticsGroupBy) => (groupBy === 'key' && key.includes('@') ? `${key.split('@')[0]} (deleted)` : key);
+/** The key dimension alone carries a generation in its group key; the reserved id reads out in every dimension. */
+const labelOf = (key: string, groupBy: AnalyticsGroupBy) => (key === '-' ? 'unattributed' : groupBy === 'key' && key.includes('@') ? `${key.split('@')[0]} (deleted)` : key);
 
 function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = GROUP_KEY[q.groupBy];

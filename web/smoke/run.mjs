@@ -1120,7 +1120,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const deletedOnly = await pick('desktop (deleted)');
     results.push({
       name: '/analytics each desktop option selects its own rows',
-      ok: liveOnly.get('desktop') === unfiltered.get('desktop') && !liveOnly.has('desktop (deleted)') && deletedOnly.get('desktop (deleted)') === unfiltered.get('desktop (deleted)') && !deletedOnly.has('desktop'),
+      // A table that never rendered answers undefined on both sides, which would compare equal and prove nothing.
+      ok: typeof unfiltered.get('desktop') === 'number' && typeof unfiltered.get('desktop (deleted)') === 'number' && liveOnly.get('desktop') === unfiltered.get('desktop') && !liveOnly.has('desktop (deleted)') && deletedOnly.get('desktop (deleted)') === unfiltered.get('desktop (deleted)') && !deletedOnly.has('desktop'),
       missing: [`live ${[...liveOnly.entries()].join(';')}`, `deleted ${[...deletedOnly.entries()].join(';')}`],
     });
     range('24h')?.click();
