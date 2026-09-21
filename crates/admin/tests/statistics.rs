@@ -83,6 +83,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
             "inference",
         );
         row.user_agent = Some(if i % 2 == 0 { SDK_CLI } else { NEWER_CLI }.into());
+        row.effort = (i % 3 == 0).then(|| "high".into());
         parts
             .db
             .insert_request(
@@ -295,6 +296,129 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     assert_eq!(
         groups, [NEWER_CLI; 3],
         "the series holds that build's three requests and nothing else"
+    );
+    let same_three = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=user_agent\
+             &user_agents=claude-cli%2F2.1.3*",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let groups: Vec<&str> = same_three["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap())
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        groups, [NEWER_CLI; 3],
+        "a pattern with no exact match still selects that build's three requests"
+    );
+    let grouped = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=user_agent\
+             &user_agent_groups=claude-cli%2F2.1.3*%0Aclaude-cli%2F*",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let by_group: std::collections::BTreeMap<&str, u64> = grouped["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["key"].as_str().unwrap(), r["requests"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        by_group,
+        std::collections::BTreeMap::from([
+            ("claude-cli/2.1.3*", 3),
+            ("claude-cli/*", 3),
+            ("other", 1)
+        ]),
+        "a pattern list names one group per pattern and files the rest under other"
+    );
+    let by_effort = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=effort",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let effort_rows = by_effort["rows"].as_array().unwrap();
+    assert_eq!(
+        (
+            effort_rows
+                .iter()
+                .map(|r| r["key"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            effort_rows
+                .iter()
+                .map(|r| r["requests"].as_u64().unwrap())
+                .sum::<u64>()
+        ),
+        (vec!["high", "none"], 7),
+        "the seeded rows split by effort and sum to the total"
+    );
+    let too_many_patterns = get(
+        &parts.app,
+        &format!(
+            "/admin/analytics/breakdown?range=24h&user_agents={}",
+            vec!["claude-cli/*"; 33].join("%0A")
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(too_many_patterns.status(), 400);
+    assert_eq!(
+        json(too_many_patterns).await["error"],
+        "user agent patterns are at most 256 characters, at most 32 of them"
+    );
+    let one_long_pattern = get(
+        &parts.app,
+        &format!(
+            "/admin/analytics/breakdown?range=24h&user_agents={}",
+            "a".repeat(257)
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        one_long_pattern.status(),
+        400,
+        "a single pattern past the length bound"
+    );
+    let long_agent = get(
+        &parts.app,
+        &format!("/admin/requests?user_agent={}&limit=500", "a".repeat(257)),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        long_agent.status(),
+        400,
+        "the request log bounds its one pattern the same way"
+    );
+    let at_the_bound = get(
+        &parts.app,
+        &format!(
+            "/admin/analytics/breakdown?range=24h&user_agents={}",
+            vec!["a".repeat(256); 32].join("%0A")
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        at_the_bound.status(),
+        200,
+        "32 patterns of 256 characters each is still within bounds"
     );
     let accounts = json(
         get(
@@ -598,7 +722,7 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     let agent = json(
         get(
             &parts.app,
-            "/admin/requests?user_agent=2.1.300&limit=500",
+            "/admin/requests?user_agent=%2A2.1.300%2A&limit=500",
             Some(&cookie),
         )
         .await,
@@ -607,7 +731,21 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     assert_eq!(
         agent["requests"].as_array().unwrap().len(),
         30,
-        "a substring of the agent filters the log"
+        "a pattern around the version filters the log"
+    );
+    let exact = json(
+        get(
+            &parts.app,
+            "/admin/requests?user_agent=claude-cli/2.1.300%20(external,%20cli)&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        exact["requests"].as_array().unwrap().len(),
+        30,
+        "no wildcard is an exact match"
     );
     let window = json(
         get(

@@ -96,8 +96,7 @@ pub struct RequestFilter {
     pub kinds: Vec<String>,
     pub statuses: Vec<u16>,
     pub outcomes: Vec<String>,
-    /// Matched as a substring, because a client's agent carries a build and a platform around the version an
-    /// operator is usually looking for.
+    /// A pattern under the wildcard grammar of `crate::pattern`; a value with no wildcard matches in full.
     pub user_agent: Option<String>,
     pub from: Option<i64>,
     pub to: Option<i64>,
@@ -234,8 +233,14 @@ pub fn list_requests(
         }
     }
     if let Some(agent) = filter.user_agent.as_deref().filter(|a| !a.is_empty()) {
-        args.push(Box::new(format!("%{agent}%")));
-        clauses.push(format!("user_agent LIKE ?{}", args.len()));
+        let (like, escape) = crate::pattern::to_like(agent);
+        args.push(Box::new(like));
+        let at_like = args.len();
+        args.push(Box::new(escape.to_string()));
+        clauses.push(format!(
+            "user_agent LIKE ?{at_like} ESCAPE ?{}",
+            at_like + 1
+        ));
     }
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
         clauses.push("kind != 'probe'".into());
@@ -354,7 +359,10 @@ pub struct TokenSplit {
     pub cache_write_1h: u64,
     pub cache_write_5m: u64,
     pub output: u64,
+    pub thinking: u64,
     pub uncached_input: u64,
+    pub web_fetch: u64,
+    pub web_search: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -466,8 +474,11 @@ pub struct RollupFilter {
     pub accounts: Vec<String>,
     pub models: Vec<String>,
     pub kinds: Vec<String>,
-    /// Matched in full, the way accounts are: an analytics drill-down comes from a group the breakdown named.
+    /// Patterns under the wildcard grammar; a row matches when any pattern matches its agent in full.
     pub user_agents: Vec<String>,
+    /// Under `group_by=user_agent`, each pattern names a group and a row falls in the first that matches it;
+    /// a row no pattern matches groups under `other`. Empty means every agent is its own group.
+    pub user_agent_groups: Vec<String>,
     pub include_probes: bool,
 }
 
@@ -482,12 +493,16 @@ impl RollupFilter {
 pub const GROUP_BYS: &[&str] = &[
     "account",
     "all",
+    "effort",
     "key",
     "kind",
     "model",
     "pool",
     "user_agent",
 ];
+
+/// The group a pattern list files an agent under when no pattern matches.
+pub const OTHER_AGENTS: &str = "other";
 
 /// The live keys' generations by id, from the registry snapshot: what tells a row of the current holder from a
 /// row of an earlier one wherever a figure is attributed to a key.
@@ -553,14 +568,29 @@ impl LiveKeys {
     }
 }
 
-pub fn group_of(row: &RollupRow, group_by: &str, live: &LiveKeys) -> String {
+pub fn group_of(
+    row: &RollupRow,
+    group_by: &str,
+    live: &LiveKeys,
+    agent_groups: &[String],
+) -> String {
     match group_by {
         "key" => live.key_of(row),
         "pool" => row.pool_id.clone(),
         "account" => row.account_id.clone(),
         "model" => row.canonical_model.clone(),
         "kind" => row.kind.clone(),
-        "user_agent" => row.user_agent.clone(),
+        "effort" => row.effort.clone(),
+        "user_agent" => {
+            if agent_groups.is_empty() {
+                return row.user_agent.clone();
+            }
+            agent_groups
+                .iter()
+                .find(|pattern| crate::pattern::matches(pattern, &row.user_agent))
+                .cloned()
+                .unwrap_or_else(|| OTHER_AGENTS.into())
+        }
         _ => "all".into(),
     }
 }
@@ -583,7 +613,12 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter, live: &LiveKeys) -> 
         .filter(|r| f.accounts.is_empty() || f.accounts.contains(&r.account_id))
         .filter(|r| lower.is_empty() || lower.contains(&r.canonical_model))
         .filter(|r| f.kinds.is_empty() || f.kinds.contains(&r.kind))
-        .filter(|r| f.user_agents.is_empty() || f.user_agents.contains(&r.user_agent))
+        .filter(|r| {
+            f.user_agents.is_empty()
+                || f.user_agents
+                    .iter()
+                    .any(|p| crate::pattern::matches(p, &r.user_agent))
+        })
         .collect()
 }
 
@@ -615,7 +650,10 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
             cache_write_1h: sum.cache_write_1h_tokens,
             cache_write_5m: sum.cache_write_5m_tokens,
             output: sum.output_tokens,
+            thinking: sum.thinking_tokens,
             uncached_input: sum.input_tokens,
+            web_fetch: sum.web_fetch_requests,
+            web_search: sum.web_search_requests,
         },
         cost: CostSplitJson {
             cache_read: sum.cache_read_usd,
@@ -667,12 +705,13 @@ fn sum_groups(
     group_by: &str,
     probes_counted: bool,
     live: &LiveKeys,
+    agent_groups: &[String],
 ) -> Vec<GroupRow> {
     // Two sums per group: the request side, which a probe row joins only when probes count as requests, and
     // the probe rows on their own, which the derived probe counts and the probe side of the savings read.
     let mut sums: BTreeMap<String, (RollupRow, RollupRow)> = BTreeMap::new();
     for row in rows {
-        let key = group_of(row, group_by, live);
+        let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
                 RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
@@ -701,6 +740,7 @@ fn sum_groups(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn series(
     rows: &[RollupRow],
     from: i64,
@@ -709,6 +749,7 @@ pub fn series(
     group_by: &str,
     probes_counted: bool,
     live: &LiveKeys,
+    agent_groups: &[String],
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
@@ -727,7 +768,7 @@ pub fn series(
             .collect();
         points.push(SeriesPoint {
             at: at * 1_000,
-            groups: sum_groups(&in_bucket, group_by, probes_counted, live),
+            groups: sum_groups(&in_bucket, group_by, probes_counted, live, agent_groups),
         });
         at += bucket_seconds;
     }
@@ -739,12 +780,14 @@ pub fn breakdown(
     group_by: &str,
     probes_counted: bool,
     live: &LiveKeys,
+    agent_groups: &[String],
 ) -> Vec<GroupRow> {
     sum_groups(
         &rows.iter().collect::<Vec<_>>(),
         group_by,
         probes_counted,
         live,
+        agent_groups,
     )
 }
 

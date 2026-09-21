@@ -354,6 +354,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         "key",
         true,
         &live,
+        &[],
     );
     assert_eq!(
         groups
@@ -373,6 +374,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         "user_agent",
         true,
         &live,
+        &[],
     );
     let ops = agents
         .iter()

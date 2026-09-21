@@ -29,7 +29,7 @@ fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
 }
 
 /// The same list, split on newlines instead of commas: every measured client agent carries a comma
-/// (`claude-cli/2.1.269 (external, sdk-cli)`), and a header value can never carry a newline.
+/// (`claude-cli/2.1.269 (external, sdk-cli)`), and a pattern of the wildcard grammar carries no newline either.
 fn agent_list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
         .map(|v| {
@@ -53,13 +53,21 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
         models: list(q, "models"),
         kinds: list(q, "kinds"),
         user_agents: agent_list(q, "user_agents"),
+        user_agent_groups: agent_list(q, "user_agent_groups"),
         include_probes: flag(q, "include_probes"),
     }
 }
 
 /// The range in Unix milliseconds, the group-by, whether probe rows count as requests, the rows under the
-/// filter, and the live keys' generations the key dimension is read against.
-type Selection = ((i64, i64), String, bool, Vec<RollupRow>, LiveKeys);
+/// filter, the live keys' generations the key dimension is read against, and the agent pattern groups.
+type Selection = (
+    (i64, i64),
+    String,
+    bool,
+    Vec<RollupRow>,
+    LiveKeys,
+    Vec<String>,
+);
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
@@ -72,7 +80,16 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, key, kind, model, pool, or user_agent",
+            "group_by is account, all, effort, key, kind, model, pool, or user_agent",
+        ));
+    }
+    let filter = filter_of(q);
+    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
+        || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
+    {
+        return Err(failure(
+            StatusCode::BAD_REQUEST,
+            phoebis_ledger::PATTERNS_TOO_LONG,
         ));
     }
     let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
@@ -82,14 +99,17 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
         .read(move |c| read_rollups(c, from_hour, to_hour))
         .await
         .map_err(ledger_failure)?;
-    let filter = filter_of(q);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
+    // Cloned before `apply_filter` consumes the filter: the group list is the `Selection`'s own member, not
+    // read back off a filter the handlers no longer hold.
+    let agent_groups = filter.user_agent_groups.clone();
     Ok((
         (from, to),
         group_by,
         filter.probes_counted(),
         apply_filter(rows, &filter, &live),
         live,
+        agent_groups,
     ))
 }
 
@@ -102,13 +122,22 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q).await {
-        Ok(x) => x,
-        Err(r) => return r,
-    };
+    let ((from, to), group_by, probes_counted, rows, live, agent_groups) =
+        match rows_for(&state, &q).await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
     let bucket = bucket_seconds(from, to);
-    let points = match phoebis_ledger::series(&rows, from, to, bucket, &group_by, probes_counted, &live)
-    {
+    let points = match phoebis_ledger::series(
+        &rows,
+        from,
+        to,
+        bucket,
+        &group_by,
+        probes_counted,
+        &live,
+        &agent_groups,
+    ) {
         Ok(p) => p,
         Err(e) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
     };
@@ -119,11 +148,12 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q).await {
-        Ok(x) => x,
-        Err(r) => return r,
-    };
-    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted, &live) })).into_response()
+    let ((from, to), group_by, probes_counted, rows, live, agent_groups) =
+        match rows_for(&state, &q).await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
+    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted, &live, &agent_groups) })).into_response()
 }
 
 pub(crate) async fn accounts(

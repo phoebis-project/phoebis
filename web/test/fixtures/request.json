@@ -27,12 +27,30 @@
       "kept_warm": false,
       "captured_bodies": false,
       "user_agent": "claude-cli/2.1.269 (external, cli)",
+      "shape": {
+        "context_edits": [
+          "clear_thinking_20251015"
+        ],
+        "effort": "high",
+        "max_tokens": 32000,
+        "message_count": 1,
+        "requested_service_tier": null,
+        "requested_speed": null,
+        "system_blocks": 4,
+        "temperature": null,
+        "thinking_budget": 31999,
+        "thinking_type": "enabled",
+        "tool_count": 12
+      },
       "usage": {
         "cache_read": 500,
         "cache_write_1h": 0,
         "cache_write_5m": 200,
         "input": 1000,
-        "output": 100
+        "output": 100,
+        "thinking": 40,
+        "web_fetch": 0,
+        "web_search": 0
       },
       "cost_usd": 0.0072,
       "attempts": [
@@ -63,7 +81,17 @@
           ],
           "overage_in_use": null,
           "estimated_usd": 0.0036,
-          "pricing_version": "2026-09-08"
+          "pricing_version": "2026-09-08",
+          "response": {
+            "cleared_input_tokens": null,
+            "inference_geo": "us",
+            "refusal_category": null,
+            "refusal_recommended_model": null,
+            "served_model": null,
+            "speed": "standard",
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
         },
         {
           "index": 2,
@@ -89,7 +117,17 @@
           ],
           "overage_in_use": null,
           "estimated_usd": 0.0036,
-          "pricing_version": "2026-09-08"
+          "pricing_version": "2026-09-08",
+          "response": {
+            "cleared_input_tokens": null,
+            "inference_geo": "us",
+            "refusal_category": null,
+            "refusal_recommended_model": null,
+            "served_model": null,
+            "speed": "standard",
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          }
         }
       ]
     },

@@ -1,7 +1,7 @@
 {
   "route": "POST /admin/pricing/import",
   "body": {
-    "token": "imp_d65a499c081014d29065691e73878c19",
+    "token": "imp_812d6b1fe4fb9d8277cfa6048cf5cb58",
     "format": "litellm",
     "in_file": 1,
     "served": 1,

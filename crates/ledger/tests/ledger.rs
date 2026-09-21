@@ -257,8 +257,22 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
         .0
         .len()
     };
-    assert_eq!(matched("2.1.300"), 1, "a substring of the agent matches");
-    assert_eq!(matched("2.1.269"), 0, "another build does not");
+    assert_eq!(
+        matched("*2.1.300*"),
+        1,
+        "a pattern around the version matches"
+    );
+    assert_eq!(matched("*2.1.269*"), 0, "another build does not");
+    assert_eq!(
+        matched("claude-cli/2.1.300 (external, cli)"),
+        1,
+        "no wildcard is an exact match"
+    );
+    assert_eq!(
+        matched("2.1.300"),
+        0,
+        "a bare substring is no longer enough"
+    );
     up.shutdown().await;
 }
 

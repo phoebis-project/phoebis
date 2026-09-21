@@ -31,7 +31,14 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
         "user_agent": r.user_agent,
-        "usage": { "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens), "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens), "output": tokens(|a| a.output_tokens) },
+        "shape": {
+            "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),
+            "effort": r.effort, "max_tokens": r.max_tokens, "message_count": r.message_count,
+            "requested_service_tier": r.requested_service_tier, "requested_speed": r.requested_speed,
+            "system_blocks": r.system_blocks, "temperature": r.temperature, "thinking_budget": r.thinking_budget,
+            "thinking_type": r.thinking_type, "tool_count": r.tool_count,
+        },
+        "usage": { "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens), "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens), "output": tokens(|a| a.output_tokens), "thinking": tokens(|a| a.thinking_tokens), "web_fetch": tokens(|a| a.web_fetch_requests), "web_search": tokens(|a| a.web_search_requests) },
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
@@ -66,6 +73,11 @@ fn attempt_json(a: &AttemptRecord) -> Value {
         "cooldown_set": a.cooldown_scope.as_ref().map(|scope| json!({ "reason": scope, "until": a.cooldown_until })),
         "windows": windows,
         "overage_in_use": a.overage_in_use, "estimated_usd": a.estimated_usd, "pricing_version": a.pricing_version,
+        "response": {
+            "cleared_input_tokens": a.cleared_input_tokens, "inference_geo": a.inference_geo,
+            "refusal_category": a.refusal_category, "refusal_recommended_model": a.refusal_recommended_model,
+            "served_model": a.served_model, "speed": a.speed, "stop_reason": a.stop_reason, "stop_sequence": a.stop_sequence,
+        },
     })
 }
 
@@ -118,6 +130,9 @@ pub(crate) async fn list(
             .get("include_probes")
             .is_some_and(|v| v == "true" || v == "1"),
     };
+    if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice()) {
+        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
+    }
     let limit = q
         .get("limit")
         .and_then(|l| l.parse::<usize>().ok())

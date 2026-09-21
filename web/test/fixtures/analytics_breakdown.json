@@ -25,7 +25,10 @@
           "cache_write_1h": 0,
           "cache_write_5m": 600,
           "output": 300,
-          "uncached_input": 3000
+          "thinking": 120,
+          "uncached_input": 3000,
+          "web_fetch": 0,
+          "web_search": 0
         },
         "cost": {
           "cache_read": 0.0004,
@@ -370,7 +373,10 @@
           "cache_write_1h": 0,
           "cache_write_5m": 200,
           "output": 100,
-          "uncached_input": 1000
+          "thinking": 40,
+          "uncached_input": 1000,
+          "web_fetch": 0,
+          "web_search": 0
         },
         "cost": {
           "cache_read": 0.0001,
