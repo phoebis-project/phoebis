@@ -82,6 +82,7 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
 }
 
 fn request(
+    key_generation: i64,
     id: &str,
     at: i64,
     key: &str,
@@ -94,6 +95,7 @@ fn request(
         received_at: at,
         finished_at: Some(at + 900),
         key_id: Some(key.into()),
+        key_generation,
         pool_id: Some("main".into()),
         session_id: Some(session.into()),
         agent_id: Some("main".into()),
@@ -190,6 +192,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .as_str()
         .expect("a created key answers its secret once")
         .to_string();
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     // The alert rule seeded below signs with this, and the guard reads every planted secret from here on.
     let rule_secret = "s3cret";
     let planted = planted(access_token, refresh_token, &key_secret, rule_secret);
@@ -248,7 +252,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             attempts: 2,
-            ..request("r-failover", hour_ago, "desktop", "s1", 200, "succeeded")
+            ..request(
+                key_generation,
+                "r-failover",
+                hour_ago,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
         },
         attempts: vec![
             AttemptRecord {
@@ -293,6 +305,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request: RequestRecord {
             bodies_captured: true,
             ..request(
+                key_generation,
                 "r-captured",
                 now - 60_000,
                 "desktop",
@@ -317,7 +330,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }),
     });
     parts.ledger.record(Record::Request {
-        request: request("r-failed", now - 120_000, "desktop", "s2", 502, "failed"),
+        request: request(
+            key_generation,
+            "r-failed",
+            now - 120_000,
+            "desktop",
+            "s2",
+            502,
+            "failed",
+        ),
         attempts: vec![attempt(
             "r-failed",
             1,
@@ -341,7 +362,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation: 0, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, received_at: now }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {

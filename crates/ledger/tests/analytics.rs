@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{
-    bucket_index, delta_of, read_account_rollups, read_rollups, AttemptRecord, Histogram, LedgerDb,
-    RequestRecord, RollupRow, UNATTRIBUTED,
+    apply_filter, breakdown, bucket_index, delta_of, key_request_totals, read_account_rollups,
+    read_rollups, AttemptRecord, Histogram, LedgerDb, LiveKeys, RequestRecord, RollupFilter,
+    RollupRow, UNATTRIBUTED,
 };
 use rand::{RngExt, SeedableRng};
 
@@ -293,6 +294,106 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
             );
         }
     }
+}
+
+#[test]
+fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, key: Option<&str>, generation: i64, agent: Option<&str>| {
+        let (mut request, mut attempts) = synthetic_day(1).swap_remove(0);
+        request.id = id.into();
+        request.key_id = key.map(String::from);
+        request.key_generation = generation;
+        request.received_at = 1_000;
+        request.kind = "inference".into();
+        request.user_agent = agent.map(String::from);
+        for attempt in &mut attempts {
+            attempt.request_id = id.into();
+        }
+        db.insert_request(&request, &attempts, None).unwrap();
+    };
+    plant("r1", Some("k1"), 1_000, None);
+    plant("r2", Some("k1"), 1_000, None);
+    plant("r3", Some("k1"), 2_000, None);
+    plant("r4", Some("k2"), 0, None);
+    // A client whose agent carries `@`, and a request the router never attributed.
+    plant(
+        "r5",
+        Some("k2"),
+        0,
+        Some("my-client/1.0 (ops@example.invalid)"),
+    );
+    plant("r6", None, 0, None);
+    let live = LiveKeys(BTreeMap::from([
+        ("k1".to_string(), 2_000),
+        ("k2".to_string(), 0),
+    ]));
+    let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let groups = breakdown(
+        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        "key",
+        true,
+        &live,
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| (g.key.as_str(), g.label.as_str(), g.requests))
+            .collect::<Vec<_>>(),
+        vec![
+            ("k1", "k1", 1),
+            ("k1@1000", "k1 (deleted)", 2),
+            ("k2", "k2", 2),
+            ("-", "unattributed", 1)
+        ],
+        "groups sort by label; the reserved id keeps its label and no suffix"
+    );
+    let agents = breakdown(
+        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        "user_agent",
+        true,
+        &live,
+    );
+    let ops = agents
+        .iter()
+        .find(|g| g.key == "my-client/1.0 (ops@example.invalid)")
+        .expect("the agent is its own group");
+    assert_eq!(
+        ops.label, "my-client/1.0 (ops@example.invalid)",
+        "an agent carrying `@` is labelled verbatim: only a key group is parsed for a generation"
+    );
+    let sum = |keys: &[&str]| -> u64 {
+        apply_filter(
+            rows.clone(),
+            &RollupFilter {
+                keys: keys.iter().map(|k| k.to_string()).collect(),
+                ..Default::default()
+            },
+            &live,
+        )
+        .iter()
+        .map(|r| r.requests)
+        .sum()
+    };
+    assert_eq!(sum(&["k1"]), 1, "a bare id is the live generation");
+    assert_eq!(sum(&["k1@1000"]), 2, "the earlier holder is named in full");
+    assert_eq!(
+        sum(&["k3"]),
+        0,
+        "an id no live key holds selects nothing bare"
+    );
+    assert_eq!(
+        sum(&["-"]),
+        1,
+        "the reserved id selects the unattributed rows whatever their generation"
+    );
+    let totals = db.read(|c| key_request_totals(c, i64::MIN, &live)).unwrap();
+    assert_eq!(
+        totals.keys().collect::<Vec<_>>(),
+        vec!["k1", "k2"],
+        "the keys list never carries an earlier holder's row"
+    );
+    assert_eq!(totals["k1"].requests, 1);
 }
 
 /// One request the replace path rewrites, always under the same id.

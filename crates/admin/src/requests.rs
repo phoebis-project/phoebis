@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use phoebis_ledger::{
-    list_requests, request_by_id, request_events, AttemptRecord, RequestFilter, RequestRecord,
+    list_requests, request_by_id, request_events, AttemptRecord, LiveKeys, RequestFilter,
+    RequestRecord,
 };
 use serde_json::{json, Value};
 
@@ -129,7 +130,12 @@ pub(crate) async fn list(
     }) {
         return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>");
     }
-    match state.ledger.db().read(|c| list_requests(c, &filter, cursor.as_deref(), limit)) {
+    let live = LiveKeys::from_snapshot(&state.router.snapshot());
+    match state
+        .ledger
+        .db()
+        .read(|c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
+    {
         Ok((rows, next)) => Json(json!({ "requests": rows.iter().map(|(r, a)| request_summary(r, a)).collect::<Vec<_>>(), "next_cursor": next })).into_response(),
         Err(e) => ledger_failure(e),
     }

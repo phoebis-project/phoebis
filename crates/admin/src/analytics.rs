@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
     apply_filter, bucket_seconds, hour_ceil, hour_of, parse_range, read_account_rollups,
-    read_rollups, AccountRollupRow, RollupFilter, RollupRow, GROUP_BYS,
+    read_rollups, AccountRollupRow, LiveKeys, RollupFilter, RollupRow, GROUP_BYS,
 };
 use serde_json::json;
 
@@ -57,9 +57,9 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     }
 }
 
-/// The range in Unix milliseconds, the group-by, whether probe rows count as requests, and the rows under
-/// the filter.
-type Selection = ((i64, i64), String, bool, Vec<RollupRow>);
+/// The range in Unix milliseconds, the group-by, whether probe rows count as requests, the rows under the
+/// filter, and the live keys' generations the key dimension is read against.
+type Selection = ((i64, i64), String, bool, Vec<RollupRow>, LiveKeys);
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
@@ -81,11 +81,13 @@ fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection
         .read(|c| read_rollups(c, hour_of(from), hour_ceil(to)))
         .map_err(ledger_failure)?;
     let filter = filter_of(q);
+    let live = LiveKeys::from_snapshot(&state.router.snapshot());
     Ok((
         (from, to),
         group_by,
         filter.probes_counted(),
-        apply_filter(rows, &filter),
+        apply_filter(rows, &filter, &live),
+        live,
     ))
 }
 
@@ -98,12 +100,13 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
-    let points = match phoebis_ledger::series(&rows, from, to, bucket, &group_by, probes_counted) {
+    let points = match phoebis_ledger::series(&rows, from, to, bucket, &group_by, probes_counted, &live)
+    {
         Ok(p) => p,
         Err(e) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
     };
@@ -114,11 +117,11 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q) {
         Ok(x) => x,
         Err(r) => return r,
     };
-    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted) })).into_response()
+    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted, &live) })).into_response()
 }
 
 pub(crate) async fn accounts(

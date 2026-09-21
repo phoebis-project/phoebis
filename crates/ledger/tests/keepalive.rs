@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use phoebis_ledger::{
     fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
-    Record, RequestRecord,
+    LiveKeys, Record, RequestRecord,
 };
 use common::*;
 use fake_upstream::FakeUpstream;
@@ -231,10 +231,13 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         include_probes: true,
         ..Default::default()
     };
+    // The rows above carry the generation a record defaults to, so that is what holds the id here.
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
     let groups = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(rows.clone(), &with_probes),
+        &phoebis_ledger::apply_filter(rows.clone(), &with_probes, &live),
         "key",
         with_probes.probes_counted(),
+        &live,
     );
     let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -252,9 +255,10 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     );
     let default = phoebis_ledger::RollupFilter::default();
     let without = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(rows, &default),
+        &phoebis_ledger::apply_filter(rows, &default, &live),
         "key",
         default.probes_counted(),
+        &live,
     );
     let desktop = without.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(

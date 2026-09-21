@@ -887,18 +887,23 @@ pub(crate) fn read_rollups_of_key_generation(
 
 /// What the keyed read narrows by, spelled once so the plan test explains the predicate the read runs and not
 /// a copy of it that could drift from it.
-pub const KEY_RANGE_PREDICATE: &str = "key_id = ?1 AND hour >= ?2 AND hour < ?3";
+pub const KEY_RANGE_PREDICATE: &str =
+    "key_id = ?1 AND key_generation = ?2 AND hour >= ?3 AND hour < ?4";
 
 /// The rows of one key over a range, narrowed by SQLite rather than in memory: a reader that wants a single
 /// key pays for that key's rows and not for every key's.
 pub fn read_rollups_for_key(
     conn: &Connection,
     key_id: &str,
+    key_generation: i64,
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
     let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent"))?;
-    let rows = stmt.query_map(params![key_id, from_hour, to_hour], row_to_rollup)?;
+    let rows = stmt.query_map(
+        params![key_id, key_generation, from_hour, to_hour],
+        row_to_rollup,
+    )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 

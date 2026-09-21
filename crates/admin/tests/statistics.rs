@@ -1,7 +1,7 @@
 //! The analytics, request-log, and dashboard routes over rows written straight into the ledger.
 mod common;
 use phoebis_ledger::{AttemptRecord, BodyRecord, RequestRecord};
-use common::{get, json, login};
+use common::{get, json, login, post};
 
 const HOUR: i64 = 3_600_000;
 
@@ -684,6 +684,94 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
             .await
             .status(),
         200
+    );
+}
+
+#[tokio::test]
+async fn the_request_log_reads_a_key_selector_by_lifetime() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    let live = parts.store.api_key("desktop").unwrap().unwrap().created_at;
+    let earlier = live - 60_000;
+    for (id, generation) in [("r-live", live), ("r-earlier", earlier)] {
+        parts
+            .db
+            .insert_request(
+                &RequestRecord {
+                    key_generation: generation,
+                    ..request(
+                        id,
+                        now - 60_000,
+                        Some("desktop"),
+                        "claude-sonnet-5",
+                        "succeeded",
+                        200,
+                        "inference",
+                    )
+                },
+                &[attempt(id, "direct", 200)],
+                None,
+            )
+            .unwrap();
+    }
+    let ids = |body: serde_json::Value| -> Vec<String> {
+        body["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let bare = json(
+        get(
+            &parts.app,
+            "/admin/requests?keys=desktop&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(bare),
+        vec!["r-live"],
+        "a bare id is the live generation"
+    );
+    let named = json(
+        get(
+            &parts.app,
+            &format!("/admin/requests?keys=desktop@{earlier}&limit=500"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        ids(named),
+        vec!["r-earlier"],
+        "the earlier holder is named in full"
+    );
+    let none = json(
+        get(
+            &parts.app,
+            "/admin/requests?keys=laptop&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        ids(none).is_empty(),
+        "an id no live key holds selects nothing"
     );
 }
 

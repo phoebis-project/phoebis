@@ -146,12 +146,13 @@ found: account cooled, window spent, upstream paused, pin idle past the affinity
 
 ### Analytics
 
-A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups
-every chart and table by client, key, kind, model, pool, or upstream. Traffic reports request volume by outcome
-and the error rate; Latency reports percentiles read from the merged per-hour histograms; Cache reports the hit
-ratio, tokens that expired between turns, and the share of input served from cache; Cost reports the estimated
-spend for the range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak
-utilization, ineligible time, and pin churn per upstream.
+A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
+and table by client, key, kind, model, pool, or upstream. A key deleted and created again under the same id appears
+twice under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures stay with the key that
+spent them. Traffic reports request volume by outcome and the error rate; Latency reports percentiles read from the
+merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, and the share of input
+served from cache; Cost reports the estimated spend for the range; Cache warming reports what probes cost against what
+they saved; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
 
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)

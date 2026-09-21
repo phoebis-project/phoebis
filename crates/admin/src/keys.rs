@@ -114,11 +114,12 @@ async fn totals(
 ) {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    let live = phoebis_ledger::LiveKeys::from_snapshot(&state.router.snapshot());
     let read = state.ledger.db().read(|c| {
         Ok((
-            phoebis_ledger::request_totals(c, "key_id", hour - 7 * 24 * 3_600)?,
+            phoebis_ledger::key_request_totals(c, hour - 7 * 24 * 3_600, &live)?,
             // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-            phoebis_ledger::request_totals(c, "key_id", i64::MIN)?,
+            phoebis_ledger::key_request_totals(c, i64::MIN, &live)?,
         ))
     });
     match read {

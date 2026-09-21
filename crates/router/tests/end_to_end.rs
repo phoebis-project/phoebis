@@ -1470,7 +1470,15 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     server.await.unwrap().unwrap();
     let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
     let (rows, _) = ledger
-        .read(|c| phoebis_ledger::list_requests(c, &phoebis_ledger::RequestFilter::default(), None, 10))
+        .read(|c| {
+            phoebis_ledger::list_requests(
+                c,
+                &phoebis_ledger::RequestFilter::default(),
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
+        })
         .unwrap();
     assert_eq!(
         rows.len(),

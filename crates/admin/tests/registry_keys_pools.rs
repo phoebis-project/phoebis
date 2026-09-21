@@ -577,6 +577,8 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         Some(&cookie),
     )
     .await;
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
         parts.ledger.record(Record::Request {
             request: RequestRecord {
@@ -584,6 +586,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
                 received_at: at,
                 finished_at: Some(at + 100),
                 key_id: Some("desktop".into()),
+                key_generation,
                 pool_id: Some("main".into()),
                 model: "claude-sonnet-5".into(),
                 canonical_model: "claude-sonnet-5".into(),

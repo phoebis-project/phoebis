@@ -176,6 +176,7 @@ async fn a_probe_preserves_routing_and_constraints() {
                         include_probes: true,
                         ..Default::default()
                     },
+                    &phoebis_ledger::LiveKeys::default(),
                     None,
                     10,
                 )

@@ -249,10 +249,12 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
             user_agent: Some(agent.into()),
             ..Default::default()
         };
-        h.db.read(|c| phoebis_ledger::list_requests(c, &filter, None, 10))
-            .unwrap()
-            .0
-            .len()
+        h.db.read(|c| {
+            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .len()
     };
     assert_eq!(matched("2.1.300"), 1, "a substring of the agent matches");
     assert_eq!(matched("2.1.269"), 0, "another build does not");

@@ -31,11 +31,11 @@ pub use pricing::{
     PriceTable, Pricing,
 };
 pub use query::{
-    apply_filter, breakdown, bucket_seconds, dashboard, group_of, hour_ceil, latest_extra_usage,
-    latest_quota, list_requests, parse_range, pool_traffic, request_by_id, request_events,
-    request_totals, series, session_activity, Dashboard, GroupRow, ProbeCounts, RequestFilter,
-    RollupFilter, SeriesPoint, SessionActivity, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS,
-    MAX_RANGE_MS,
+    apply_filter, breakdown, bucket_seconds, dashboard, group_of, hour_ceil, key_request_totals,
+    latest_extra_usage, latest_quota, list_requests, parse_range, pool_traffic, request_by_id,
+    request_events, request_totals, series, session_activity, Dashboard, GroupRow, LiveKeys,
+    ProbeCounts, RequestFilter, RollupFilter, SeriesPoint, SessionActivity, Totals, TrafficBucket,
+    GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};
 pub use record::{

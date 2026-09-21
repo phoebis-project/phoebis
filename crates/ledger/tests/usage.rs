@@ -1,5 +1,5 @@
 //! A window sums one key's rollups alone, probes left out, and the route it backs answers only the caller's
-//! own key, a deleted key's usage staying with the retired id.
+//! own key, a deleted key's rows staying under its own generation.
 mod common;
 
 use std::sync::atomic::Ordering;
@@ -111,9 +111,10 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     )
     .unwrap();
 
-    // Rows an hour old and an id whose holder is its first, so the day window is every row under the id.
+    // Rows an hour old, planted under the generation the builders stamp, so the day window is every row the
+    // reading key filed under the id.
     let day = |id: &str| {
-        db.read(|c| key_usage_windows(c, id, None, 10_000))
+        db.read(|c| key_usage_windows(c, id, 0, 10_000))
             .map(|(day, _)| day)
             .unwrap()
     };
@@ -172,8 +173,7 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
             .unwrap();
     }
 
-    // No floor: this id's holder is its first, so neither window is narrowed.
-    let (day, week) = db.read(|c| key_usage_windows(c, "k1", None, now)).unwrap();
+    let (day, week) = db.read(|c| key_usage_windows(c, "k1", 0, now)).unwrap();
     assert_eq!(
         (day.requests, week.requests),
         (1, 2),
@@ -189,45 +189,36 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
 }
 
 #[test]
-fn the_windows_leave_out_the_hour_the_key_was_created_in() {
+fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_name_says() {
     let db = LedgerDb::open_in_memory().unwrap();
     let now = 30 * DAY_MS + HOUR_MS + 1_234;
-    // Two hours under one id: the earlier one is the bucket a recreated key would share with the holder
-    // before it, the later one is wholly the new key's.
-    for (id, at) in [("r1", now - 2 * HOUR_MS), ("r2", now - HOUR_MS)] {
-        db.insert_request(&request_at(id, "k1", at), &[used(id)], None)
-            .unwrap();
-    }
-
-    let (day, week) = db
-        .read(|c| key_usage_windows(c, "k1", Some(now), now))
-        .unwrap();
-    assert_eq!(
-        (day.requests, week.requests),
-        (0, 0),
-        "a holder created after every row under its id holds none of them"
-    );
-
-    let (day, week) = db.read(|c| key_usage_windows(c, "k1", None, now)).unwrap();
-    assert_eq!(
-        (day.requests, week.requests),
-        (2, 2),
-        "an id whose holder is its first reads both hours, the one it was created in included"
-    );
-
-    let created = now - 2 * HOUR_MS + 60_000;
-    let (day, week) = db
-        .read(|c| key_usage_windows(c, "k1", Some(created), now))
-        .unwrap();
+    // Two holders of one id inside one hour: the earlier one's row and the current one's.
+    let earlier = RequestRecord {
+        key_generation: 1_000,
+        ..request_at("r1", "k1", now - 2 * HOUR_MS)
+    };
+    let current = RequestRecord {
+        key_generation: 2_000,
+        ..request_at("r2", "k1", now - 2 * HOUR_MS)
+    };
+    db.insert_request(&earlier, &[used("r1")], None).unwrap();
+    db.insert_request(&current, &[used("r2")], None).unwrap();
+    let (day, week) = db.read(|c| key_usage_windows(c, "k1", 2_000, now)).unwrap();
     assert_eq!(
         (day.requests, week.requests),
         (1, 1),
-        "the hour the key was created in is left out whole, the hour after it is the key's own"
+        "the current holder reads its own row and not the earlier one's"
     );
+    let hour_floor = |ms: i64| ms - ms.rem_euclid(HOUR_MS);
     assert_eq!(
         (day.from, week.from),
-        (hour_ceil_ms(created), hour_ceil_ms(created)),
-        "each window reports the bound it started at"
+        (hour_floor(now - DAY_MS), hour_floor(now - 7 * DAY_MS)),
+        "nothing is left out of the window: the row it shares an hour with is another generation's"
+    );
+    let (day, _) = db.read(|c| key_usage_windows(c, "k1", 1_000, now)).unwrap();
+    assert_eq!(
+        day.requests, 1,
+        "the earlier holder's row still answers to its own generation"
     );
 }
 
@@ -239,7 +230,7 @@ fn the_keyed_read_is_planned_on_an_index_that_starts_with_the_key() {
             let mut stmt = c.prepare(&format!(
                 "EXPLAIN QUERY PLAN SELECT hour FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE}"
             ))?;
-            let rows = stmt.query_map(("k1", 0_i64, 1_i64), |r| r.get::<_, String>(3))?;
+            let rows = stmt.query_map(("k1", 0_i64, 0_i64, 1_i64), |r| r.get::<_, String>(3))?;
             Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
         })
         .unwrap();
@@ -463,10 +454,10 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
     assert_eq!(laptop["windows"]["24h"]["requests"], 1);
 }
 
-/// The hour boundary at or after `ms`, in milliseconds: the bound a window reports when the key's own
-/// creation is where it starts.
-fn hour_ceil_ms(ms: i64) -> i64 {
-    (ms.div_euclid(HOUR_MS) + i64::from(ms.rem_euclid(HOUR_MS) != 0)) * HOUR_MS
+/// The generation the store stamped the harness's key with: `insert_api_key` stamps the wall clock and ignores
+/// the row's `created_at`, so a planted row that is to read as the live key's carries this and not `NOW`.
+fn generation_of(store: &Store, id: &str) -> i64 {
+    store.api_key(id).unwrap().unwrap().created_at
 }
 
 /// The key row the suite's harness seeds, rebuilt for an id that is being created a second time.
@@ -491,7 +482,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
 }
 
 #[tokio::test]
-async fn the_route_reads_no_further_back_than_the_holder_that_presented_the_secret() {
+async fn the_route_reads_the_generation_of_the_key_that_presented_the_secret() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -509,13 +500,22 @@ async fn the_route_reads_no_further_back_than_the_holder_that_presented_the_secr
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
 
     let now = h.clock.load(Ordering::SeqCst);
-    h.db.insert_request(&request_at("r1", "desktop", now), &[used("r1")], None)
-        .unwrap();
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    let first = generation_of(&h.store, "desktop");
+    h.db.insert_request(
+        &RequestRecord {
+            key_generation: first,
+            ..request_at("r1", "desktop", now)
+        },
+        &[used("r1")],
+        None,
+    )
+    .unwrap();
     let (status, _, body) = get(&app, Some(KEY)).await;
     assert_eq!(status, 200);
     assert_eq!(
         body["windows"]["24h"]["requests"], 1,
-        "the first holder of an id reads the hour it was created in: {body}"
+        "the holder that filed the row reads it: {body}"
     );
 
     // The one way a live key shares an id with an earlier holder: a database written before a delete
@@ -526,6 +526,9 @@ async fn the_route_reads_no_further_back_than_the_holder_that_presented_the_secr
         .unwrap()
         .execute("DELETE FROM api_key_tombstones WHERE id = 'desktop'", [])
         .unwrap();
+    // The store stamps a key from the wall clock, and the read below is only meaningful where the second
+    // holder's generation differs from the first's.
+    std::thread::sleep(Duration::from_millis(2));
     h.store
         .insert_api_key(&desktop_row(&h.store), "test")
         .unwrap();
@@ -537,16 +540,21 @@ async fn the_route_reads_no_further_back_than_the_holder_that_presented_the_secr
         body["key"]["id"], "desktop",
         "the secret still authenticates: {body}"
     );
+    let second = generation_of(&h.store, "desktop");
+    assert!(
+        second > first,
+        "the store stamped the new holder past the old"
+    );
     assert_eq!(
         body["windows"]["24h"]["requests"], 0,
         "what the id spent before this holder existed is not this holder's: {body}"
     );
     assert_eq!(body["windows"]["7d"]["requests"], 0, "{body}");
-    let created_at = h.store.api_key("desktop").unwrap().unwrap().created_at;
+    let hour_floor = |ms: i64| ms - ms.rem_euclid(HOUR_MS);
     assert_eq!(
         body["windows"]["7d"]["from"],
-        hour_ceil_ms(created_at),
-        "the window says it starts where this holder does: {body}"
+        hour_floor(now - 7 * DAY_MS),
+        "the window starts where its name says; the earlier holder's row is another generation's: {body}"
     );
 }
 
@@ -559,6 +567,8 @@ async fn a_deleted_keys_usage_stays_with_it() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    let first = generation_of(&h.store, "desktop");
 
     let resp = h
         .app
@@ -605,7 +615,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
 
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.db.read(|c| key_usage_windows(c, "desktop", None, now + 1))
+        h.db.read(|c| key_usage_windows(c, "desktop", first, now + 1))
             .unwrap()
             .1
             .requests,
@@ -700,9 +710,11 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
 
     // A model name is operator-visible text like the label, and the table body is where the page renders it.
     let now = h.clock.load(Ordering::SeqCst);
+    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     h.db.insert_request(
         &RequestRecord {
             canonical_model: "claude-<b>5</b>".into(),
+            key_generation: generation_of(&h.store, "desktop"),
             ..request_at("m1", "desktop", now)
         },
         &[used("m1")],

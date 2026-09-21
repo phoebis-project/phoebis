@@ -139,9 +139,49 @@ fn in_list_or_null(
     clauses.push(format!("({} OR {column} IS NULL)", inner.remove(0)));
 }
 
+/// The request log reads a `keys` selector as the analytics do: a bare id is the live generation,
+/// `<id>@<generation>` that one, and the reserved id reaches the NULL it stands for. A bare id no live key holds
+/// selects nothing, as `LiveKeys::selects` answers it, so a filter made of such ids answers no row.
+fn key_lifetimes(
+    selectors: &[String],
+    live: &LiveKeys,
+    args: &mut Vec<Box<dyn ToSql>>,
+    clauses: &mut Vec<String>,
+) {
+    if selectors.is_empty() {
+        return;
+    }
+    let mut parts = Vec::new();
+    for selector in selectors {
+        if selector == UNATTRIBUTED {
+            args.push(Box::new(selector.clone()));
+            parts.push(format!("key_id = ?{} OR key_id IS NULL", args.len()));
+            continue;
+        }
+        let Some((id, generation)) = live.lifetime_of(selector) else {
+            continue;
+        };
+        args.push(Box::new(id.to_string()));
+        let at_id = args.len();
+        args.push(Box::new(generation));
+        parts.push(format!(
+            "(key_id = ?{at_id} AND key_generation = ?{})",
+            at_id + 1
+        ));
+    }
+    clauses.push(if parts.is_empty() {
+        "0".into()
+    } else {
+        format!("({})", parts.join(" OR "))
+    });
+}
+
+/// The request log's key filter reads the selectors the analytics do, against the row's `(key_id,
+/// key_generation)`; `live` says which generation a bare id names.
 pub fn list_requests(
     conn: &Connection,
     filter: &RequestFilter,
+    live: &LiveKeys,
     cursor: Option<&str>,
     limit: usize,
 ) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
@@ -152,7 +192,7 @@ pub fn list_requests(
         let n = args.len();
         clauses.push(format!("(id LIKE ?{n} OR session_id LIKE ?{n} OR key_id LIKE ?{n} OR model LIKE ?{n} OR error_code LIKE ?{n} OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id LIKE ?{n}))"));
     }
-    in_list_or_null("key_id", &filter.keys, &mut args, &mut clauses);
+    key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
     in_list(
         "canonical_model",
@@ -419,6 +459,8 @@ pub struct SeriesPoint {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RollupFilter {
+    /// A value is a key id, which names the rows of the key holding it now, or `<id>@<generation>`, which
+    /// names an earlier holder's.
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     pub accounts: Vec<String>,
@@ -447,9 +489,71 @@ pub const GROUP_BYS: &[&str] = &[
     "user_agent",
 ];
 
-pub fn group_of(row: &RollupRow, group_by: &str) -> String {
+/// The live keys' generations by id, from the registry snapshot: what tells a row of the current holder from a
+/// row of an earlier one wherever a figure is attributed to a key.
+#[derive(Clone, Debug, Default)]
+pub struct LiveKeys(pub BTreeMap<String, i64>);
+
+impl LiveKeys {
+    pub fn from_snapshot(snapshot: &phoebis_routing::RegistrySnapshot) -> LiveKeys {
+        LiveKeys(
+            snapshot
+                .keys()
+                .map(|k| (k.id.clone(), k.created_at))
+                .collect(),
+        )
+    }
+
+    /// The group a rollup row falls in under `group_by=key`: the id alone for the live generation,
+    /// `<id>@<generation>` for any other, the reserved id as itself.
+    pub fn key_of(&self, row: &RollupRow) -> String {
+        if row.key_id == UNATTRIBUTED || self.0.get(&row.key_id) == Some(&row.key_generation) {
+            return row.key_id.clone();
+        }
+        format!("{}@{}", row.key_id, row.key_generation)
+    }
+
+    /// The label of a key group alone (every other dimension keeps its group key as its label): the id,
+    /// `<id> (deleted)` for a generation no live key holds, `unattributed` for the reserved id.
+    pub fn label_of(&self, key: &str) -> String {
+        if key == UNATTRIBUTED {
+            return "unattributed".into();
+        }
+        // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
+        match key.rsplit_once('@') {
+            Some((id, _)) => format!("{id} (deleted)"),
+            None => key.into(),
+        }
+    }
+
+    /// The lifetime a `keys=` selector names: a bare id is `(id, the live generation)`, `<id>@<generation>` is
+    /// that pair; `None` for a bare id no live key holds, a malformed generation, or the reserved id.
+    pub fn lifetime_of<'s>(&self, selector: &'s str) -> Option<(&'s str, i64)> {
+        if selector == UNATTRIBUTED {
+            return None;
+        }
+        match selector.rsplit_once('@') {
+            Some((id, generation)) => generation.parse().ok().map(|g| (id, g)),
+            None => self.0.get(selector).map(|g| (selector, *g)),
+        }
+    }
+
+    /// Whether a `keys=` selector names the row: the lifetime `lifetime_of` answers, or every row of the
+    /// reserved id for a bare `-`, whatever its generation.
+    pub fn selects(&self, selector: &str, row: &RollupRow) -> bool {
+        // The reserved id has no lifetime: what the router never attributed is one group whatever the
+        // generation column says.
+        if selector == UNATTRIBUTED {
+            return row.key_id == UNATTRIBUTED;
+        }
+        self.lifetime_of(selector)
+            .is_some_and(|(id, generation)| row.key_id == id && row.key_generation == generation)
+    }
+}
+
+pub fn group_of(row: &RollupRow, group_by: &str, live: &LiveKeys) -> String {
     match group_by {
-        "key" => row.key_id.clone(),
+        "key" => live.key_of(row),
         "pool" => row.pool_id.clone(),
         "account" => row.account_id.clone(),
         "model" => row.canonical_model.clone(),
@@ -469,10 +573,10 @@ fn label_of(key: &str) -> String {
 
 /// The rows a query selects, probe rows among them: whether those count as requests is `probes_counted`,
 /// which the sums take, so a probe's cost reaches the savings panel under every filter.
-pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
+pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter, live: &LiveKeys) -> Vec<RollupRow> {
     let lower: Vec<String> = f.models.iter().map(|m| m.to_ascii_lowercase()).collect();
     rows.into_iter()
-        .filter(|r| f.keys.is_empty() || f.keys.contains(&r.key_id))
+        .filter(|r| f.keys.is_empty() || f.keys.iter().any(|k| live.selects(k, r)))
         .filter(|r| f.pools.is_empty() || f.pools.contains(&r.pool_id))
         .filter(|r| f.accounts.is_empty() || f.accounts.contains(&r.account_id))
         .filter(|r| lower.is_empty() || lower.contains(&r.canonical_model))
@@ -481,7 +585,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
         .collect()
 }
 
-fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow) -> GroupRow {
+fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> GroupRow {
     let expired = sum
         .cache_miss_reasons
         .get("expired_between_turns")
@@ -491,7 +595,7 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow) -> GroupRow {
     reasons.remove("expired_between_turns");
     GroupRow {
         key: key.into(),
-        label: label_of(key),
+        label,
         requests: sum.requests,
         succeeded: sum.succeeded,
         rate_limited: sum.rate_limited,
@@ -556,12 +660,17 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow) -> GroupRow {
     }
 }
 
-fn sum_groups(rows: &[&RollupRow], group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
+fn sum_groups(
+    rows: &[&RollupRow],
+    group_by: &str,
+    probes_counted: bool,
+    live: &LiveKeys,
+) -> Vec<GroupRow> {
     // Two sums per group: the request side, which a probe row joins only when probes count as requests, and
     // the probe rows on their own, which the derived probe counts and the probe side of the savings read.
     let mut sums: BTreeMap<String, (RollupRow, RollupRow)> = BTreeMap::new();
     for row in rows {
-        let key = group_of(row, group_by);
+        let key = group_of(row, group_by, live);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
                 RollupRow::key(0, &key, 0, "", "", "", "", ""),
@@ -577,7 +686,14 @@ fn sum_groups(rows: &[&RollupRow], group_by: &str, probes_counted: bool) -> Vec<
     }
     let mut out: Vec<GroupRow> = sums
         .iter()
-        .map(|(k, (sum, probes))| group_row(k, sum, probes))
+        .map(|(k, (sum, probes))| {
+            let label = if group_by == "key" {
+                live.label_of(k)
+            } else {
+                label_of(k)
+            };
+            group_row(k, sum, probes, label)
+        })
         .collect();
     out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
     out
@@ -590,6 +706,7 @@ pub fn series(
     bucket_seconds: i64,
     group_by: &str,
     probes_counted: bool,
+    live: &LiveKeys,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
@@ -608,15 +725,25 @@ pub fn series(
             .collect();
         points.push(SeriesPoint {
             at: at * 1_000,
-            groups: sum_groups(&in_bucket, group_by, probes_counted),
+            groups: sum_groups(&in_bucket, group_by, probes_counted, live),
         });
         at += bucket_seconds;
     }
     Ok(points)
 }
 
-pub fn breakdown(rows: &[RollupRow], group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
-    sum_groups(&rows.iter().collect::<Vec<_>>(), group_by, probes_counted)
+pub fn breakdown(
+    rows: &[RollupRow],
+    group_by: &str,
+    probes_counted: bool,
+    live: &LiveKeys,
+) -> Vec<GroupRow> {
+    sum_groups(
+        &rows.iter().collect::<Vec<_>>(),
+        group_by,
+        probes_counted,
+        live,
+    )
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -675,7 +802,13 @@ pub fn dashboard(conn: &Connection, now: i64) -> Result<Dashboard, LedgerError> 
     }
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
-    let (recent, _) = list_requests(conn, &RequestFilter::default(), None, 20)?;
+    let (recent, _) = list_requests(
+        conn,
+        &RequestFilter::default(),
+        &LiveKeys::default(),
+        None,
+        20,
+    )?;
     Ok(Dashboard {
         requests_24h: requests,
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
@@ -738,7 +871,7 @@ pub struct Totals {
     pub tokens: u64,
 }
 
-/// Request, token, and cost totals per key, pool, or account since an hour, probe rows left out. One aggregate
+/// Request, token, and cost totals per pool or account since an hour, probe rows left out. One aggregate
 /// query rather than a rollup read, because the account list asks three times per call. A caller wanting every
 /// row the rollups hold passes a value at or below the earliest hour they can carry.
 pub fn request_totals(
@@ -746,9 +879,9 @@ pub fn request_totals(
     column: &str,
     since_hour: i64,
 ) -> Result<BTreeMap<String, Totals>, LedgerError> {
-    // The column is one of three identifiers this function names, never a caller's string.
+    // The column is one of the two identifiers this function names, never a caller's string.
     assert!(
-        matches!(column, "account_id" | "key_id" | "pool_id"),
+        matches!(column, "account_id" | "pool_id"),
         "request_totals column"
     );
     let mut stmt = conn.prepare(&format!("SELECT {column}, SUM(requests), SUM(input_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens + output_tokens), SUM(estimated_usd) FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 GROUP BY {column}"))?;
@@ -763,6 +896,35 @@ pub fn request_totals(
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
+}
+
+/// Request, token, and cost totals per live key since an hour, probe rows left out: the pair is grouped in
+/// SQL and only the live generation of each id is answered, so a key's row never carries an earlier holder's.
+pub fn key_request_totals(
+    conn: &Connection,
+    since_hour: i64,
+    live: &LiveKeys,
+) -> Result<BTreeMap<String, Totals>, LedgerError> {
+    let mut stmt = conn.prepare("SELECT key_id, key_generation, SUM(requests), SUM(input_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens + output_tokens), SUM(estimated_usd) FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 GROUP BY key_id, key_generation")?;
+    let rows = stmt.query_map(params![since_hour], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            Totals {
+                requests: r.get::<_, i64>(2)? as u64,
+                tokens: r.get::<_, i64>(3)? as u64,
+                cost_usd: r.get::<_, f64>(4)?,
+            },
+        ))
+    })?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (id, generation, totals) = row?;
+        if live.0.get(&id) == Some(&generation) {
+            out.insert(id, totals);
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Debug, PartialEq)]

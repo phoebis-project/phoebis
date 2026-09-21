@@ -20,7 +20,7 @@ use phoebis_routing::RouterHandle;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::query::{group_of, hour_ceil};
+use crate::query::hour_ceil;
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError};
 
@@ -74,24 +74,17 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// this route may show is that one argument. The ledger files what it could not attribute under `-`, which
 /// the admin API's slug rule (`[a-z0-9][a-z0-9-]{0,63}`) cannot produce, so no key ever matches it.
 ///
-/// `floor` is where the reading key's own lifetime begins, for an id that had a holder before it; a rollup
-/// names no holder of its own, so without that line the earlier holder's models, tokens, and cost would
-/// answer to the current secret. The hour the key was created in can hold both holders' traffic, so it is
-/// left out whole rather than split, and each window reports the bound it started at. An id whose holder is
-/// its first passes `None` and reads its own first hour.
+/// The generation is the presenting key's own `created_at`, so an id an earlier key used answers only what
+/// this key spent, whole hours included: nothing is left out and each window starts where its name says.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
-    floor: Option<i64>,
+    key_generation: i64,
     now: i64,
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
-    let start = |window: i64| match floor {
-        Some(created) => window.max(hour_ceil(created)),
-        None => window,
-    };
-    let day_hour = start(hour_of(now - DAY_MS));
-    let week_hour = start(hour_of(now - 7 * DAY_MS));
-    let rows = read_rollups_for_key(conn, key_id, week_hour, hour_ceil(now))?;
+    let day_hour = hour_of(now - DAY_MS);
+    let week_hour = hour_of(now - 7 * DAY_MS);
+    let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
     Ok((
         window(rows.iter().filter(|r| r.hour >= day_hour), day_hour, now),
         window(rows.iter(), week_hour, now),
@@ -120,7 +113,7 @@ fn window<'a>(
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.cost_usd += row.estimated_usd;
         add(&mut out.tokens, row);
-        let model = group_of(row, "model");
+        let model = row.canonical_model.clone();
         let entry = models.entry(model.clone()).or_insert_with(|| ModelUsage {
             model,
             ..ModelUsage::default()
@@ -186,17 +179,23 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
         Err(error) => return no_store(auth_error_response(&error, &request_id)),
     };
     let snapshot = state.router.snapshot();
+    let generation;
     let key = match snapshot.authenticate(presented, now) {
-        Ok(key) => KeyView {
-            id: key.id.clone(),
-            label: key.label.clone(),
-            pool_id: key.pool_id.clone(),
-        },
+        Ok(row) => {
+            generation = row.created_at;
+            KeyView {
+                id: row.id.clone(),
+                label: row.label.clone(),
+                pool_id: row.pool_id.clone(),
+            }
+        }
         Err(refusal) => return no_store(key_refusal_response(&refusal, &request_id)),
     };
     let key_id = key.id.clone();
-    let floor = snapshot.usage_floor(&key_id);
-    let (day, week) = match state.db.read(|c| key_usage_windows(c, &key_id, floor, now)) {
+    let (day, week) = match state
+        .db
+        .read(|c| key_usage_windows(c, &key_id, generation, now))
+    {
         Ok(windows) => windows,
         Err(error) => {
             tracing::warn!(%error, "the usage route could not read the ledger");
