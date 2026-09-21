@@ -18,7 +18,8 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let (board, quota) = match state
         .ledger
         .db()
-        .read(|c| Ok((dashboard(c, now)?, latest_quota(c, now)?)))
+        .read(move |c| Ok((dashboard(c, now)?, latest_quota(c, now)?)))
+        .await
     {
         Ok(x) => x,
         Err(e) => return ledger_failure(e),

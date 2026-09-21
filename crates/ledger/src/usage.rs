@@ -194,7 +194,8 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
     let key_id = key.id.clone();
     let (day, week) = match state
         .db
-        .read(|c| key_usage_windows(c, &key_id, generation, now))
+        .read(move |c| key_usage_windows(c, &key_id, generation, now))
+        .await
     {
         Ok(windows) => windows,
         Err(error) => {

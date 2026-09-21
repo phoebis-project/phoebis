@@ -698,9 +698,9 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let uptime = (now - state.started_at).max(0) / 1_000;
     let stats = state.ledger.stats();
     let load = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
-    let read = state.ledger.db().read(|c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
+    let read = state.ledger.db().read(move |c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
         .query_map(rusqlite::params![now - 86_400_000], |r| Ok(phoebis_ledger::EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? }))?
-        .collect::<rusqlite::Result<Vec<_>>>()?));
+        .collect::<rusqlite::Result<Vec<_>>>()?)).await;
     let gaps = match read {
         Ok(gaps) => gaps,
         // The gap counter in the same response is whatever the writer reached, so an empty list from a read
@@ -717,7 +717,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "uptime_seconds": uptime,
         "storage_ok": state.store.accounts().is_ok(),
         "ledger": {
-            "schema_version": state.ledger.db().schema_version().ok(),
+            "schema_version": state.ledger.db().schema_version().await.ok(),
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
@@ -858,16 +858,20 @@ pub(crate) struct AccountContext {
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    let ledger = state.ledger.db().read(|c| {
-        Ok((
-            phoebis_ledger::latest_quota(c, now)?,
-            phoebis_ledger::latest_extra_usage(c, now)?,
-            phoebis_ledger::request_totals(c, "account_id", hour - 24 * 3_600)?,
-            phoebis_ledger::request_totals(c, "account_id", hour - 7 * 24 * 3_600)?,
-            // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
-            phoebis_ledger::request_totals(c, "account_id", i64::MIN)?,
-        ))
-    });
+    let ledger = state
+        .ledger
+        .db()
+        .read(move |c| {
+            Ok((
+                phoebis_ledger::latest_quota(c, now)?,
+                phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::request_totals(c, "account_id", hour - 24 * 3_600)?,
+                phoebis_ledger::request_totals(c, "account_id", hour - 7 * 24 * 3_600)?,
+                // Lifetime: `i64::MIN` sits at or below the earliest hour the rollups can hold, so every row clears it.
+                phoebis_ledger::request_totals(c, "account_id", i64::MIN)?,
+            ))
+        })
+        .await;
     let (quota, extra, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {

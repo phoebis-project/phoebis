@@ -7,6 +7,18 @@ use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage}
 use phoebis_keepalive::{AgentState, Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use common::*;
 
+/// The ledger row for a request, once the writer has landed it.
+async fn landed(r: &Rig, id: &str) {
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    while r.db.request(id).await.unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 fn usage(read: u64, write_5m: u64) -> Usage {
     Usage {
         cache_read_tokens: Some(read),
@@ -37,7 +49,7 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
     assert!(r.engine.stats().retained_bytes > 0);
     // The ledger writes on its own subscriber task, a step behind the engine's, so the row lands a moment
     // after `observe` already saw the completion.
-    wait_for(Duration::from_secs(5), || r.db.request(&id).unwrap()).await;
+    landed(&r, &id).await;
     // The engine's own probe, published under origin keepalive, changes nothing.
     let resp =
         r.h.relay
@@ -182,7 +194,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
     r.pump(Some(&id)).await;
     // The ledger writes on its own subscriber task, a step behind the engine's, so the row lands a moment
     // after the completion `pump` already observed.
-    wait_for(Duration::from_secs(5), || r.db.request(&id).unwrap()).await;
+    landed(&r, &id).await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
         (Reason::AwaitingRequest, None)

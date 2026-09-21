@@ -89,13 +89,21 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
     let bucket = phoebis_ledger::bucket_of(NOW);
-    let header = wait_for(Duration::from_secs(5), || {
-        let rows = h.db.quota_samples("a", bucket, bucket + 300).unwrap();
-        rows.iter()
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let header = loop {
+        let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
+        if rows
+            .iter()
             .any(|r| r.window == "5h" && r.source == "header")
-            .then_some(rows)
-    })
-    .await;
+        {
+            break rows;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     let five = header.iter().find(|r| r.window == "5h").unwrap();
     assert_eq!(
         (five.utilization, five.reset_at, five.bucket),
@@ -104,7 +112,10 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     assert!(header
         .iter()
         .any(|r| r.window == "7d" && r.utilization == Some(0.2)));
-    let extra = h.db.extra_usage_samples("a", bucket, bucket + 300).unwrap();
+    let extra =
+        h.db.extra_usage_samples("a", bucket, bucket + 300)
+            .await
+            .unwrap();
     assert_eq!(
         (
             extra[0].source.as_str(),
@@ -116,12 +127,19 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     );
     // The poll lands in the same bucket (the clock is frozen at NOW): the header rows stay, the poll adds its
     // own windows beside them, and the credits arrive.
-    wait_for(Duration::from_secs(5), || {
-        let rows = h.db.quota_samples("a", bucket, bucket + 300).unwrap();
-        rows.iter().any(|r| r.window == "fable").then_some(rows)
-    })
-    .await;
-    let rows = h.db.quota_samples("a", bucket, bucket + 300).unwrap();
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
+        if rows.iter().any(|r| r.window == "fable") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
     let five = rows.iter().find(|r| r.window == "5h").unwrap();
     assert_eq!(
         (five.source.as_str(), five.utilization),
@@ -138,7 +156,10 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     assert!(rows
         .iter()
         .any(|r| r.window == "five_hour" && r.utilization == Some(0.125)));
-    let extra = h.db.extra_usage_samples("a", bucket, bucket + 300).unwrap();
+    let extra =
+        h.db.extra_usage_samples("a", bucket, bucket + 300)
+            .await
+            .unwrap();
     assert_eq!(extra.len(), 1, "one extra-usage row per bucket");
     assert_eq!(
         (extra[0].source.as_str(), extra[0].used_credits),
@@ -148,11 +169,21 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     h.clock
         .store(NOW + 300_000, std::sync::atomic::Ordering::SeqCst);
     let next = bucket + 300;
-    let extra = wait_for(Duration::from_secs(5), || {
-        let rows = h.db.extra_usage_samples("a", next, next + 300).unwrap();
-        (!rows.is_empty()).then_some(rows)
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let extra = loop {
+        let rows =
+            h.db.extra_usage_samples("a", next, next + 300)
+                .await
+                .unwrap();
+        if !rows.is_empty() {
+            break rows;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     assert_eq!(
         (
             extra[0].source.as_str(),
@@ -185,18 +216,34 @@ async fn a_paused_oauth_account_receives_hourly_samples_and_an_unpaired_one_does
         .unwrap();
     h.router.reload().await.unwrap();
     let bucket = phoebis_ledger::bucket_of(NOW);
-    wait_for(Duration::from_secs(5), || {
-        (!h.db
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if !h
+            .db
             .quota_samples("a", bucket, bucket + 300)
+            .await
             .unwrap()
-            .is_empty())
-        .then_some(())
-    })
-    .await;
-    stays_for(Duration::from_millis(500), || {
-        h.db.quota_samples("b", 0, i64::MAX).unwrap().is_empty()
-    })
-    .await;
+            .is_empty()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let until = std::time::Instant::now() + Duration::from_millis(500);
+    while std::time::Instant::now() < until {
+        assert!(
+            h.db.quota_samples("b", 0, i64::MAX)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the state moved within 500ms"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let polls = up
         .requests()
         .iter()

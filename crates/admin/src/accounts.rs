@@ -520,11 +520,16 @@ pub(crate) async fn quota(
     };
     let (from_bucket, to_bucket) = (from / 1_000, to / 1_000 + 300);
     let (quota, extra) = match (
-        state.ledger.db().quota_samples(&id, from_bucket, to_bucket),
         state
             .ledger
             .db()
-            .extra_usage_samples(&id, from_bucket, to_bucket),
+            .quota_samples(&id, from_bucket, to_bucket)
+            .await,
+        state
+            .ledger
+            .db()
+            .extra_usage_samples(&id, from_bucket, to_bucket)
+            .await,
     ) {
         (Ok(q), Ok(e)) => (q, e),
         (Err(e), _) | (_, Err(e)) => return crate::analytics::ledger_failure(e),

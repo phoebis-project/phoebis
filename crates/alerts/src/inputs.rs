@@ -701,11 +701,7 @@ impl BusArm {
                                 for _ in 0..10 {
                                     let db = alerts.parts().ledger.db().clone();
                                     let request = id.clone();
-                                    // The read holds the ledger's reader lock, so it goes off the runtime's
-                                    // workers rather than parking one for its duration.
-                                    let read =
-                                        tokio::task::spawn_blocking(move || db.bodies(&request));
-                                    if let Ok(Ok(Some(b))) = read.await {
+                                    if let Ok(Some(b)) = db.bodies(&request).await {
                                         signal.detail["question"] = json!(b
                                             .response_body
                                             .as_deref()

@@ -23,9 +23,9 @@ fn delta(at: i64, kind: &str) -> KeepaliveDelta {
     }
 }
 
-#[test]
-fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
-    let db = LedgerDb::open_in_memory().unwrap();
+#[tokio::test]
+async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let at = 1_700_000_000_000;
     db.insert_request(
         &RequestRecord {
@@ -107,7 +107,7 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     })
     .unwrap();
     let rows = db
-        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
         .unwrap();
     let inference = rows
         .iter()
@@ -138,7 +138,7 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         probe.wasted_probe_reasons.get("idle_limit").copied(),
         Some(3)
     );
-    let (row, _) = db.request("r1").unwrap().unwrap();
+    let (row, _) = db.request("r1").await.unwrap().unwrap();
     assert!(row.kept_warm, "the request row carries the mark");
     // The mark can land before the row: a request inserted later under a marked id is kept warm.
     db.write(|c| {
@@ -171,7 +171,7 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         None,
     )
     .unwrap();
-    assert!(db.request("r2").unwrap().unwrap().0.kept_warm);
+    assert!(db.request("r2").await.unwrap().unwrap().0.kept_warm);
     // The derived probe counts.
     db.insert_request(
         &RequestRecord {
@@ -225,7 +225,7 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     )
     .unwrap();
     let rows = db
-        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
         .unwrap();
     let with_probes = phoebis_ledger::RollupFilter {
         include_probes: true,
@@ -365,7 +365,7 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     )
     .unwrap();
     let rows = db
-        .read(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
         .unwrap();
     let credited = rows
         .iter()
@@ -389,8 +389,8 @@ fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     );
 }
 
-#[test]
-fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_file() {
+#[tokio::test]
+async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     {
@@ -400,8 +400,8 @@ fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_
         // to go for the replay to reach migration five's work.
         db.write(|c| { c.execute_batch("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
     }
-    let db = LedgerDb::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 7);
+    let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 7);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
@@ -416,7 +416,7 @@ fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_
     })
     .unwrap();
     assert_eq!(
-        db.read(|c| read_rollups(c, 0, 3_600)).unwrap()[0].probes_skipped,
+        db.read_blocking(|c| read_rollups(c, 0, 3_600)).unwrap()[0].probes_skipped,
         1
     );
 }
@@ -430,7 +430,9 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
         ..delta(NOW, "probe")
     }));
     let rows = wait_for(Duration::from_secs(5), || {
-        let rows = h.db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows =
+            h.db.read_blocking(|c| read_rollups(c, 0, i64::MAX))
+                .unwrap();
         (!rows.is_empty()).then_some(rows)
     })
     .await;

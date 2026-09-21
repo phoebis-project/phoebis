@@ -922,6 +922,7 @@ pub fn read_account_rollups(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::read_version;
     use crate::record::*;
 
     /// The rollup columns as version 2 held them, which is the shape a stored database still has when the
@@ -965,8 +966,8 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
-        let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(db.read_blocking(read_version).unwrap(), 7);
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
             (
@@ -1003,7 +1004,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 7);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1013,7 +1014,9 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap()[0].cooldown_seconds,
+            db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+                .unwrap()[0]
+                .cooldown_seconds,
             20,
             "the interval folds on a ledger that predates the table it is kept in"
         );
@@ -1197,7 +1200,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        db.read(|c| read_account_rollups(c, 0, i64::MAX))
+        db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
             .unwrap()
             .iter()
             .map(|r| r.cooldown_seconds)
@@ -1276,12 +1279,14 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = delta_of(&req, &attempts);
         expected.add(&delta_of(&req2, &attempts2));
         assert_eq!(rows[0], expected, "two requests, two contributions");
-        let accounts = db.read(|c| read_account_rollups(c, 0, i64::MAX)).unwrap();
+        let accounts = db
+            .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap();
         assert_eq!(
             (
                 accounts[0].account_id.as_str(),
@@ -1305,7 +1310,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         let mut expected = delta_of(&req2, &attempts2);
         expected.add(&delta_of(&req, &more));
         assert_eq!(

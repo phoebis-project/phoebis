@@ -34,7 +34,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     let activity = match state
         .ledger
         .db()
-        .read(|c| phoebis_ledger::session_activity(c, cutoff))
+        .read(move |c| phoebis_ledger::session_activity(c, cutoff))
+        .await
     {
         Ok(a) => a,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),

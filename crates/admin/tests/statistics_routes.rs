@@ -149,10 +149,14 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     parts
         .ledger
         .record(record("before", now - HOUR, "claude-sonnet-5", "s1"));
-    fake_upstream::wait_for(Duration::from_secs(5), || {
-        parts.db.request("before").unwrap()
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    while parts.db.request("before").await.unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let confirmed = post(
         &parts.app,
         "/admin/pricing/import/confirm",
@@ -189,10 +193,17 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     parts
         .ledger
         .record(record("after", now, "claude-sonnet-4-5", "s1"));
-    let (_, attempts) = fake_upstream::wait_for(Duration::from_secs(5), || {
-        parts.db.request("after").unwrap()
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let (_, attempts) = loop {
+        if let Some(found) = parts.db.request("after").await.unwrap() {
+            break found;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     assert!(attempts[0]
         .pricing_version
         .as_deref()
@@ -201,7 +212,7 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     assert!(
         (attempts[0].estimated_usd.unwrap() - (1_000.0 * 3.0 + 100.0 * 15.0) / 1e6).abs() < 1e-12
     );
-    let (_, before) = parts.db.request("before").unwrap().unwrap();
+    let (_, before) = parts.db.request("before").await.unwrap().unwrap();
     assert_eq!(
         before[0].pricing_version.as_deref(),
         Some("2026-09-08"),
@@ -393,7 +404,14 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             &format!("s{}", i % 2),
         ));
     }
-    fake_upstream::wait_for(Duration::from_secs(5), || parts.db.request("t4").unwrap()).await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    while parts.db.request("t4").await.unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let traffic = json(
         get(
             &parts.app,
@@ -498,7 +516,14 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
             "served",
         ));
     }
-    fake_upstream::wait_for(Duration::from_secs(5), || parts.db.request("p2").unwrap()).await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    while parts.db.request("p2").await.unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |session: &str| {
         sessions["sessions"]

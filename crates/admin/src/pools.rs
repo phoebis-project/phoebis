@@ -434,15 +434,17 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
+    let pool_id = row.id.clone();
     let (day, traffic) = state
         .ledger
         .db()
-        .read(|c| {
+        .read(move |c| {
             Ok((
                 phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600)?,
-                phoebis_ledger::pool_traffic(c, &row.id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
+                phoebis_ledger::pool_traffic(c, &pool_id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
             ))
         })
+        .await
         .unwrap_or_default();
     let cooldowns = state.router.cooldowns().await.unwrap_or_default();
     let overages = state.router.overages().await.unwrap_or_default();
@@ -530,15 +532,21 @@ pub(crate) async fn traffic(
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
     let bucket = phoebis_ledger::bucket_seconds(from, to);
-    match state.ledger.db().read(|c| {
-        phoebis_ledger::pool_traffic(
-            c,
-            &id,
-            phoebis_ledger::hour_of(from),
-            phoebis_ledger::hour_ceil(to),
-            bucket,
-        )
-    }) {
+    let pool_id = id.clone();
+    match state
+        .ledger
+        .db()
+        .read(move |c| {
+            phoebis_ledger::pool_traffic(
+                c,
+                &pool_id,
+                phoebis_ledger::hour_of(from),
+                phoebis_ledger::hour_ceil(to),
+                bucket,
+            )
+        })
+        .await
+    {
         Ok(buckets) => Json(json!({ "pool_id": id, "from": from, "to": to, "bucket_seconds": bucket, "buckets": buckets })).into_response(),
         Err(e) => crate::analytics::ledger_failure(e),
     }

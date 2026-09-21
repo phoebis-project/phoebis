@@ -21,10 +21,12 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let day = hour_of(now) - 24 * 3_600;
     let week = hour_of(now) - 7 * 24 * 3_600;
+    let to = hour_of(now) + 3_600;
     let rows = match state
         .ledger
         .db()
-        .read(|c| read_rollups(c, week, hour_of(now) + 3_600))
+        .read(move |c| read_rollups(c, week, to))
+        .await
     {
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),

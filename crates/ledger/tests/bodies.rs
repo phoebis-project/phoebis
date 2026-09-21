@@ -78,7 +78,7 @@ async fn a_pool_with_capture_stores_both_bodies_for_a_key_without_an_override() 
     let (id, body) = one_request(&h).await;
     let (row, _) = ledgered(&h, &id).await;
     assert!(row.bodies_captured);
-    let bodies = h.db.bodies(&id).unwrap().expect("captured");
+    let bodies = h.db.bodies(&id).await.unwrap().expect("captured");
     assert!(
         bodies
             .request_body
@@ -112,7 +112,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
     let (row, _) = ledgered(&off, &id).await;
     assert!(!row.bodies_captured);
     assert!(
-        off.db.bodies(&id).unwrap().is_none(),
+        off.db.bodies(&id).await.unwrap().is_none(),
         "a key override of 0 stores nothing while its pool captures"
     );
     let six = harness(
@@ -127,6 +127,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
     let bodies = six
         .db
         .bodies(&id)
+        .await
         .unwrap()
         .expect("captured under the key's own hours");
     assert_eq!(bodies.expires_at, row.finished_at.unwrap() + 6 * 3_600_000);
@@ -151,9 +152,9 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
             ..Purged::default()
         }
     );
-    assert!(six.db.bodies(&id).unwrap().is_none());
+    assert!(six.db.bodies(&id).await.unwrap().is_none());
     assert!(
-        six.db.request(&id).unwrap().is_some(),
+        six.db.request(&id).await.unwrap().is_some(),
         "the request row outlives its bodies"
     );
     up.shutdown().await;
@@ -238,11 +239,14 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_k
             ..Purged::default()
         }
     );
-    assert!(h.db.request("old").unwrap().is_none() && h.db.request("fresh").unwrap().is_some());
-    assert_eq!(h.db.events(0, i64::MAX, 10).unwrap().len(), 1);
-    assert_eq!(h.db.quota_samples("a", 0, i64::MAX).unwrap().len(), 1);
+    assert!(
+        h.db.request("old").await.unwrap().is_none()
+            && h.db.request("fresh").await.unwrap().is_some()
+    );
+    assert_eq!(h.db.events(0, i64::MAX, 10).await.unwrap().len(), 1);
+    assert_eq!(h.db.quota_samples("a", 0, i64::MAX).await.unwrap().len(), 1);
     let rollups =
-        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        h.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
             .unwrap();
     assert_eq!(rollups.len(), 2, "rollups outlive their raw rows");
     let purged = run_retention(&h.db, &LedgerConfig::default(), 401 * day).unwrap();

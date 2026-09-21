@@ -169,7 +169,7 @@ async fn a_probe_preserves_routing_and_constraints() {
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let (rows, _) =
-            r.db.read(|c| {
+            r.db.read_blocking(|c| {
                 phoebis_ledger::list_requests(
                     c,
                     &phoebis_ledger::RequestFilter {

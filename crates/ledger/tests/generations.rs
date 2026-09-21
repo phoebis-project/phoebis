@@ -71,7 +71,7 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
         .unwrap();
     let moved = reconcile_key_generations(&db, &[first("k1", 5_000)]).unwrap();
     assert_eq!(moved, 1, "one rollup row of k1 stood at generation 0");
-    let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
     let by_key: Vec<(&str, i64, u64)> = rows
         .iter()
         .map(|r| (r.key_id.as_str(), r.key_generation, r.requests))
@@ -82,7 +82,7 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
         "k1's two unstamped requests joined the row r4 opened; k2 has no live key and stays at 0"
     );
     let stamped_requests: i64 = db
-        .read(|c| {
+        .read_blocking(|c| {
             Ok(c.query_row(
                 "SELECT COUNT(*) FROM requests WHERE key_id = 'k1' AND key_generation = 5000",
                 [],
@@ -97,7 +97,7 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
         "a second start stamps nothing, whatever keys it brings"
     );
     let marked: Option<String> = db
-        .read(|c| {
+        .read_blocking(|c| {
             Ok(c.query_row(
                 "SELECT value FROM meta WHERE key = ?1",
                 [GENERATIONS_RECONCILED_KEY],
@@ -128,7 +128,7 @@ fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_hold
         moved, 2,
         "the two hours at or after the first whole hour of the live key's life"
     );
-    let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
     let by_hour: Vec<(i64, i64)> = rows
         .iter()
         .map(|r| (r.hour / 3_600, r.key_generation))
@@ -139,7 +139,7 @@ fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_hold
         "the earlier holder's hours and the mixed creation hour stay at 0; the later hours are the live key's"
     );
     let stamped_requests: Vec<String> = db
-        .read(|c| {
+        .read_blocking(|c| {
             let mut stmt = c.prepare(
                 "SELECT id FROM requests WHERE key_id = 'k1' AND key_generation = ?1 ORDER BY id",
             )?;
@@ -175,7 +175,7 @@ fn a_key_with_more_rows_than_one_page_has_every_row_moved() {
     let moved = reconcile_key_generations(&db, &[first("k1", 5_000)]).unwrap();
     assert_eq!(moved, 1_250);
     let left: i64 = db
-        .read(|c| {
+        .read_blocking(|c| {
             Ok(c.query_row(
                 "SELECT COUNT(*) FROM rollups_hourly WHERE key_id = 'k1' AND key_generation = 0",
                 [],
@@ -185,7 +185,7 @@ fn a_key_with_more_rows_than_one_page_has_every_row_moved() {
         .unwrap();
     assert_eq!(left, 0, "no row is left behind by the page boundary");
     let stamped: i64 = db
-        .read(|c| {
+        .read_blocking(|c| {
             Ok(c.query_row(
                 "SELECT COUNT(*) FROM rollups_hourly WHERE key_id = 'k1' AND key_generation = 5000",
                 [],

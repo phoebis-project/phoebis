@@ -56,6 +56,8 @@ pub enum LedgerError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("the ledger read was cancelled before it ran")]
+    ReadCancelled,
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("pricing table: {0}")]

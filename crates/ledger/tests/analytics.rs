@@ -164,7 +164,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
     for (request, attempts) in &rows {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let rollups = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rollups = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
     assert!(
         rollups.iter().all(|r| r.account_id != "z"),
         "a replace that moves a request to another account leaves no row at all for the vacated key"
@@ -328,7 +328,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         ("k1".to_string(), 2_000),
         ("k2".to_string(), 0),
     ]));
-    let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
     let groups = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default(), &live),
         "key",
@@ -402,7 +402,9 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         0,
         "the reserved id has no generation of its own; `-` alone names its rows"
     );
-    let totals = db.read(|c| key_request_totals(c, i64::MIN, &live)).unwrap();
+    let totals = db
+        .read_blocking(|c| key_request_totals(c, i64::MIN, &live))
+        .unwrap();
     assert_eq!(
         totals.keys().collect::<Vec<_>>(),
         vec!["k1", "k2"],
@@ -445,7 +447,7 @@ fn reading(id: &str, account: &str, utilization: f64) -> AttemptRecord {
 }
 
 fn peak(db: &LedgerDb, account: &str) -> Option<f64> {
-    db.read(|c| read_account_rollups(c, 0, i64::MAX))
+    db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
         .unwrap()
         .into_iter()
         .find(|r| r.account_id == account)
@@ -489,7 +491,7 @@ fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles()
     for (request, attempts) in &rows {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let rollups = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rollups = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
     let exact = |values: &mut Vec<f64>, p: f64| {
         values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         values[(((p * values.len() as f64).ceil() as usize).max(1)) - 1]

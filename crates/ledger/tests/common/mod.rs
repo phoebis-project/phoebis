@@ -354,7 +354,17 @@ pub async fn ledgered(
     h: &Harness,
     id: &str,
 ) -> (phoebis_ledger::RequestRecord, Vec<phoebis_ledger::AttemptRecord>) {
-    wait_for(Duration::from_secs(5), || h.db.request(id).unwrap()).await
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(found) = h.db.request(id).await.unwrap() {
+            return found;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 pub fn json_200() -> fake_upstream::Respond {

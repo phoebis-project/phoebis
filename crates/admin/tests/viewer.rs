@@ -108,10 +108,14 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
             expires_at: common::NOW + 1,
         }),
     });
-    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        (parts.db.bodies("cap").unwrap().is_some()).then_some(())
-    })
-    .await;
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while parts.db.bodies("cap").await.unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 
     let viewer = login(&parts.app, "viewer-secret").await;
     let deliveries = format!("/admin/alerts/events/{event_id}/deliveries");

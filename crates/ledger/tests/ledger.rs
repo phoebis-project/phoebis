@@ -249,7 +249,7 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
             user_agent: Some(agent.into()),
             ..Default::default()
         };
-        h.db.read(|c| {
+        h.db.read_blocking(|c| {
             phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
         })
         .unwrap()
@@ -300,13 +300,23 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
     );
     hold_tx.send(()).unwrap();
     holder.join().unwrap();
-    let gap = wait_for(Duration::from_secs(5), || {
-        h.db.events(0, i64::MAX, 10_000)
-            .unwrap()
-            .into_iter()
-            .find(|e| e.kind == "ledger_gap")
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let gap = loop {
+        if let Some(gap) =
+            h.db.events(0, i64::MAX, 10_000)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|e| e.kind == "ledger_gap")
+        {
+            break gap;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     let detail: serde_json::Value = serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
     assert_eq!(
         detail["dropped"].as_u64().unwrap(),
@@ -315,6 +325,7 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
     );
     let written =
         h.db.events(0, i64::MAX, 10_000)
+            .await
             .unwrap()
             .iter()
             .filter(|e| e.kind == "cooldown_set")
@@ -335,7 +346,7 @@ async fn shutdown_writes_everything_the_channel_held() {
         }));
     }
     h.ledger.clone().shutdown().await.unwrap();
-    assert_eq!(h.db.events(0, i64::MAX, 10_000).unwrap().len(), 500);
+    assert_eq!(h.db.events(0, i64::MAX, 10_000).await.unwrap().len(), 500);
     assert!(
         h.ledger.clone().shutdown().await.is_err(),
         "a second shutdown finds no task"
@@ -376,7 +387,7 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
         ("probe", "keepalive", Some("desktop"), 1)
     );
     let rollups =
-        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        h.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
             .unwrap();
     assert!(
         rollups.iter().any(|r| r.kind == "probe" && r.requests == 1),

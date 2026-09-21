@@ -106,11 +106,18 @@ async fn a_signal_opens_one_event_per_matching_rule_and_subject_and_a_clear_reso
         ),
         (Some("resolved"), Some(NOW + 60_000))
     );
-    let events = fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        let rows = rig.db.events(0, i64::MAX, 100).unwrap();
-        (rows.iter().filter(|e| e.kind == "alert_resolved").count() == 2).then_some(rows)
-    })
-    .await;
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let events = loop {
+        let rows = rig.db.events(0, i64::MAX, 100).await.unwrap();
+        if rows.iter().filter(|e| e.kind == "alert_resolved").count() == 2 {
+            break rows;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
     assert_eq!(
         events.iter().filter(|e| e.kind == "alert_opened").count(),
         3
@@ -184,11 +191,18 @@ async fn two_concurrent_openers_of_one_subject_land_one_event_and_one_delivery()
         1,
         "the opener whose insert did not land posts nothing"
     );
-    let events = fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        let rows = rig.db.events(0, i64::MAX, 100).unwrap();
-        (!rows.is_empty()).then_some(rows)
-    })
-    .await;
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let events = loop {
+        let rows = rig.db.events(0, i64::MAX, 100).await.unwrap();
+        if !rows.is_empty() {
+            break rows;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
     assert_eq!(
         events.iter().filter(|e| e.kind == "alert_opened").count(),
         1

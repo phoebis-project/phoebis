@@ -215,13 +215,10 @@ impl Engine {
         let now = self.now();
         let day_start = now.div_euclid(86_400_000) * 86_400_000 / 1_000;
         let db = self.parts.ledger.db().clone();
-        let rows = tokio::task::spawn_blocking(move || {
-            db.read(|c| phoebis_ledger::read_rollups(c, day_start, day_start + 86_400))
-        })
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_default();
+        let rows = db
+            .read(move |c| phoebis_ledger::read_rollups(c, day_start, day_start + 86_400))
+            .await
+            .unwrap_or_default();
         let mut spent = BTreeMap::new();
         for row in rows.into_iter().filter(|r| r.kind == "probe") {
             *spent.entry(row.pool_id).or_insert(0.0) += row.probe_cost_usd;

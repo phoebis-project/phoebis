@@ -134,7 +134,8 @@ pub(crate) async fn list(
     match state
         .ledger
         .db()
-        .read(|c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
+        .read(move |c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
+        .await
     {
         Ok((rows, next)) => Json(json!({ "requests": rows.iter().map(|(r, a)| request_summary(r, a)).collect::<Vec<_>>(), "next_cursor": next })).into_response(),
         Err(e) => ledger_failure(e),
@@ -142,13 +143,17 @@ pub(crate) async fn list(
 }
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    let found = state.ledger.db().read(|c| {
-        let Some((r, a)) = request_by_id(c, &id)? else {
-            return Ok(None);
-        };
-        let events = request_events(c, &r)?;
-        Ok(Some((r, a, events)))
-    });
+    let found = state
+        .ledger
+        .db()
+        .read(move |c| {
+            let Some((r, a)) = request_by_id(c, &id)? else {
+                return Ok(None);
+            };
+            let events = request_events(c, &r)?;
+            Ok(Some((r, a, events)))
+        })
+        .await;
     match found {
         Ok(Some((r, a, events))) => Json(json!({ "request": request_summary(&r, &a), "events": events.iter().map(event_json).collect::<Vec<_>>() })).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no such request"),
@@ -190,7 +195,7 @@ pub(crate) async fn bodies(
         serde_json::from_slice::<Value>(bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))
     };
-    match state.ledger.db().bodies(&id) {
+    match state.ledger.db().bodies(&id).await {
         Ok(Some(b)) => Json(json!({ "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text), "expires_at": b.expires_at })).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => ledger_failure(e),

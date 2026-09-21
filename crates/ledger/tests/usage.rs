@@ -114,7 +114,7 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     // Rows an hour old, planted under the generation the builders stamp, so the day window is every row the
     // reading key filed under the id.
     let day = |id: &str| {
-        db.read(|c| key_usage_windows(c, id, 0, 10_000))
+        db.read_blocking(|c| key_usage_windows(c, id, 0, 10_000))
             .map(|(day, _)| day)
             .unwrap()
     };
@@ -173,7 +173,9 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
             .unwrap();
     }
 
-    let (day, week) = db.read(|c| key_usage_windows(c, "k1", 0, now)).unwrap();
+    let (day, week) = db
+        .read_blocking(|c| key_usage_windows(c, "k1", 0, now))
+        .unwrap();
     assert_eq!(
         (day.requests, week.requests),
         (1, 2),
@@ -203,7 +205,9 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
     };
     db.insert_request(&earlier, &[used("r1")], None).unwrap();
     db.insert_request(&current, &[used("r2")], None).unwrap();
-    let (day, week) = db.read(|c| key_usage_windows(c, "k1", 2_000, now)).unwrap();
+    let (day, week) = db
+        .read_blocking(|c| key_usage_windows(c, "k1", 2_000, now))
+        .unwrap();
     assert_eq!(
         (day.requests, week.requests),
         (1, 1),
@@ -215,7 +219,9 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
         (hour_floor(now - DAY_MS), hour_floor(now - 7 * DAY_MS)),
         "nothing is left out of the window: the row it shares an hour with is another generation's"
     );
-    let (day, _) = db.read(|c| key_usage_windows(c, "k1", 1_000, now)).unwrap();
+    let (day, _) = db
+        .read_blocking(|c| key_usage_windows(c, "k1", 1_000, now))
+        .unwrap();
     assert_eq!(
         day.requests, 1,
         "the earlier holder's row still answers to its own generation"
@@ -226,7 +232,7 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
 fn the_keyed_read_is_planned_on_an_index_that_starts_with_the_key() {
     let db = LedgerDb::open_in_memory().unwrap();
     let plan = db
-        .read(|c| {
+        .read_blocking(|c| {
             let mut stmt = c.prepare(&format!(
                 "EXPLAIN QUERY PLAN SELECT hour FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE}"
             ))?;
@@ -604,7 +610,8 @@ async fn a_deleted_keys_usage_stays_with_it() {
 
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.db.read(|c| key_usage_windows(c, "desktop", first, now + 1))
+        h.db.read(move |c| key_usage_windows(c, "desktop", first, now + 1))
+            .await
             .unwrap()
             .1
             .requests,

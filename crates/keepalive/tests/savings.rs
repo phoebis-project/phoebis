@@ -14,7 +14,7 @@ use fake_upstream::Respond;
 async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow> {
     wait_for(Duration::from_secs(5), || {
         let rows =
-            r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
                 .unwrap();
         want(&rows).then_some(rows)
     })
@@ -82,10 +82,17 @@ fn cold_answer() -> Respond {
 
 /// The request row, once the ledger landed it; a missing row is a failure, never a pass by absence.
 async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
-    wait_for(Duration::from_secs(5), || {
-        r.db.request(id).unwrap().map(|(row, _)| row)
-    })
-    .await
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some((row, _)) = r.db.request(id).await.unwrap() {
+            return row;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]
@@ -574,7 +581,7 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             // asserts is that no row lands at all.
             r.ledger.clone().shutdown().await.unwrap();
             let rows =
-                r.db.read(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+                r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
                     .unwrap();
             let probe = probe_rows(&rows);
             assert_eq!(

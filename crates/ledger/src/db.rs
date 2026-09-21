@@ -2,7 +2,7 @@
 //! connection the admin routes share through `read`, WAL so the two never wait on each other.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
@@ -66,8 +66,8 @@ impl LedgerDb {
         })
     }
 
-    pub fn schema_version(&self) -> Result<u32, LedgerError> {
-        self.read(read_version)
+    pub async fn schema_version(self: &Arc<Self>) -> Result<u32, LedgerError> {
+        self.read(read_version).await
     }
 
     pub fn write<T>(
@@ -78,7 +78,21 @@ impl LedgerDb {
         f(&mut conn)
     }
 
-    pub fn read<T>(
+    /// Runs `f` on a blocking worker under the shared reader connection, so a slow read never parks the runtime
+    /// thread that serves proxy traffic; the reader mutex still serialises the reads themselves.
+    pub async fn read<T: Send + 'static>(
+        self: &Arc<Self>,
+        f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
+    ) -> Result<T, LedgerError> {
+        let db = Arc::clone(self);
+        tokio::task::spawn_blocking(move || db.read_blocking(f))
+            .await
+            .map_err(|_| LedgerError::ReadCancelled)?
+    }
+
+    /// The same read on the calling thread, for the ledger task's own thread and for tests that hold no runtime
+    /// worker to spare.
+    pub fn read_blocking<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
@@ -115,15 +129,17 @@ impl LedgerDb {
         })
     }
 
-    pub fn request(
-        &self,
+    pub async fn request(
+        self: &Arc<Self>,
         id: &str,
     ) -> Result<Option<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
-        self.read(|conn| request_by_id(conn, id))
+        let id = id.to_string();
+        self.read(move |conn| request_by_id(conn, &id)).await
     }
 
-    pub fn bodies(&self, id: &str) -> Result<Option<BodyRecord>, LedgerError> {
-        self.read(|conn| {
+    pub async fn bodies(self: &Arc<Self>, id: &str) -> Result<Option<BodyRecord>, LedgerError> {
+        let id = id.to_string();
+        self.read(move |conn| {
             Ok(conn
                 .query_row(
                     "SELECT request_id, request_body, response_body, expires_at FROM bodies WHERE request_id = ?1",
@@ -131,22 +147,22 @@ impl LedgerDb {
                     |r| Ok(BodyRecord { request_id: r.get(0)?, request_body: r.get(1)?, response_body: r.get(2)?, expires_at: r.get(3)? }),
                 )
                 .optional()?)
-        })
+        }).await
     }
 
-    pub fn events(
-        &self,
+    pub async fn events(
+        self: &Arc<Self>,
         from: i64,
         to: i64,
         limit: usize,
     ) -> Result<Vec<EventRecord>, LedgerError> {
-        self.read(|conn| {
+        self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3")?;
             let rows = stmt.query_map(params![from, to, limit as i64], |r| {
                 Ok(EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
+        }).await
     }
 
     pub fn insert_samples(
@@ -157,13 +173,14 @@ impl LedgerDb {
         self.write(|conn| insert_samples_in(conn, quota, extra))
     }
 
-    pub fn quota_samples(
-        &self,
+    pub async fn quota_samples(
+        self: &Arc<Self>,
         account_id: &str,
         from: i64,
         to: i64,
     ) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
-        self.read(|conn| {
+        let account_id = account_id.to_string();
+        self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT account_id, bucket, window, utilization, reset_at, source FROM quota_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY window, bucket")?;
             let rows = stmt.query_map(params![account_id, from, to], |r| {
                 Ok(QuotaSampleRecord {
@@ -176,16 +193,17 @@ impl LedgerDb {
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
+        }).await
     }
 
-    pub fn extra_usage_samples(
-        &self,
+    pub async fn extra_usage_samples(
+        self: &Arc<Self>,
         account_id: &str,
         from: i64,
         to: i64,
     ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
-        self.read(|conn| {
+        let account_id = account_id.to_string();
+        self.read(move |conn| {
             let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket")?;
             let rows = stmt.query_map(params![account_id, from, to], |r| {
                 Ok(ExtraUsageSampleRecord {
@@ -203,7 +221,7 @@ impl LedgerDb {
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
+        }).await
     }
 }
 
@@ -430,7 +448,7 @@ fn prepare(conn: &mut Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
-fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
+pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
     let stored: Option<String> = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -518,13 +536,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
+    #[tokio::test]
+    async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let db = LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
+        let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
+        assert_eq!(db.read_blocking(read_version).unwrap(), 7);
         let mode: String = db
-            .read(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
+            .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
         assert_eq!(mode, "wal");
         let bodies = BodyRecord {
@@ -552,7 +570,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let (row, attempts) = db.request("r1").unwrap().unwrap();
+        let (row, attempts) = db.request("r1").await.unwrap().unwrap();
         assert_eq!(row, request("r1"));
         assert_eq!(
             attempts,
@@ -561,8 +579,8 @@ mod tests {
                 attempt("r1", 2, "b", "succeeded")
             ]
         );
-        assert_eq!(db.bodies("r1").unwrap().unwrap(), bodies);
-        assert!(db.request("nope").unwrap().is_none());
+        assert_eq!(db.bodies("r1").await.unwrap().unwrap(), bodies);
+        assert!(db.request("nope").await.unwrap().is_none());
         db.insert_event(&EventRecord {
             at: 5,
             kind: "ledger_gap".into(),
@@ -577,12 +595,12 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let events = db.events(0, 10, 10).unwrap();
+        let events = db.events(0, 10, 10).await.unwrap();
         assert_eq!(
             events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
             ["ledger_gap", "cooldown_set"]
         );
-        assert_eq!(db.events(6, 10, 10).unwrap().len(), 1);
+        assert_eq!(db.events(6, 10, 10).await.unwrap().len(), 1);
         let mode = std::fs::metadata(dir.path().join("data").join("ledger.sqlite"))
             .unwrap()
             .permissions();
@@ -590,10 +608,22 @@ mod tests {
         assert_eq!(mode.mode() & 0o777, 0o600);
     }
 
-    #[test]
-    fn an_in_memory_ledger_serves_reads_and_writes_from_one_connection() {
-        let db = LedgerDb::open_in_memory().unwrap();
+    #[tokio::test]
+    async fn an_in_memory_ledger_serves_reads_and_writes_from_one_connection() {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         db.insert_request(&request("r1"), &[], None).unwrap();
-        assert!(db.request("r1").unwrap().is_some());
+        assert!(db.request("r1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_read_runs_off_the_runtime_thread_and_answers_on_it() {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let caller = std::thread::current().id();
+        let (worker, version) = db
+            .read(move |c| Ok((std::thread::current().id(), read_version(c)?)))
+            .await
+            .unwrap();
+        assert_ne!(worker, caller, "the closure ran on a blocking worker");
+        assert_eq!(version, 7, "and answered what the connection holds");
     }
 }

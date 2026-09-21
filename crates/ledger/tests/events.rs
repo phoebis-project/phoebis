@@ -53,13 +53,18 @@ async fn a_failover_writes_cooldown_set_and_pin_migrated_and_the_account_rollup_
         .unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
-    let events = wait_for(Duration::from_secs(5), || {
-        let rows = h.db.events(0, i64::MAX, 100).unwrap();
-        rows.iter()
-            .any(|e| e.kind == "pin_migrated")
-            .then_some(rows)
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let events = loop {
+        let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
+        if rows.iter().any(|e| e.kind == "pin_migrated") {
+            break rows;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
     assert_eq!(kinds, ["pin_created", "cooldown_set", "pin_migrated"]);
     assert_eq!(
@@ -73,7 +78,7 @@ async fn a_failover_writes_cooldown_set_and_pin_migrated_and_the_account_rollup_
     let hour = phoebis_ledger::hour_of(NOW);
     let rollups = wait_for(Duration::from_secs(5), || {
         let rows =
-            h.db.read(|c| phoebis_ledger::read_account_rollups(c, hour, hour + 3_600))
+            h.db.read_blocking(|c| phoebis_ledger::read_account_rollups(c, hour, hour + 3_600))
                 .unwrap();
         (rows.len() == 2).then_some(rows)
     })
@@ -103,10 +108,14 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
     )
     .await;
     // Seeded rows are before the mirror's watermark: nothing is replayed.
-    stays_for(Duration::from_millis(200), || {
-        h.db.events(0, i64::MAX, 100).unwrap().is_empty()
-    })
-    .await;
+    let until = std::time::Instant::now() + Duration::from_millis(200);
+    while std::time::Instant::now() < until {
+        assert!(
+            h.db.events(0, i64::MAX, 100).await.unwrap().is_empty(),
+            "the state moved within 200ms"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     h.store
         .update_account(
             "a",
@@ -115,13 +124,23 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
             "admin:abc",
         )
         .unwrap();
-    let event = wait_for(Duration::from_secs(5), || {
-        h.db.events(0, i64::MAX, 100)
-            .unwrap()
-            .into_iter()
-            .find(|e| e.kind == "registry_changed")
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let event = loop {
+        if let Some(event) =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|e| e.kind == "registry_changed")
+        {
+            break event;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     assert_eq!(event.actor.as_deref(), Some("admin:abc"));
     let detail: serde_json::Value = serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
     assert_eq!(
@@ -141,13 +160,18 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
     h.store
         .set_state("a", phoebis_store::AccountState::ReauthRequired)
         .unwrap();
-    let kinds = wait_for(Duration::from_secs(5), || {
-        let rows = h.db.events(0, i64::MAX, 100).unwrap();
-        rows.iter()
-            .any(|e| e.kind == "reauth_required")
-            .then(|| rows.iter().map(|e| e.kind.clone()).collect::<Vec<_>>())
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let kinds = loop {
+        let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
+        if rows.iter().any(|e| e.kind == "reauth_required") {
+            break rows.iter().map(|e| e.kind.clone()).collect::<Vec<_>>();
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     assert!(
         kinds.contains(&"refresh_failed".to_string())
             && kinds.contains(&"reauth_required".to_string())
@@ -161,13 +185,23 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
             "scheduler",
         )
         .unwrap();
-    wait_for(Duration::from_secs(5), || {
-        h.db.events(0, i64::MAX, 100)
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if h.db
+            .events(0, i64::MAX, 100)
+            .await
             .unwrap()
             .into_iter()
-            .find(|e| e.kind == "catalog_synced" && e.account_id.as_deref() == Some("a"))
-    })
-    .await;
+            .any(|e| e.kind == "catalog_synced" && e.account_id.as_deref() == Some("a"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     up.shutdown().await;
 }
 
@@ -191,18 +225,28 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
     h.store
         .update_pool(&h.store.pool("main").unwrap().unwrap(), "test")
         .unwrap();
-    let row = wait_for(Duration::from_secs(5), || {
-        h.db.events(0, i64::MAX, 100)
-            .unwrap()
-            .into_iter()
-            .find(|e| {
-                e.kind == "registry_changed"
-                    && e.detail
-                        .as_deref()
-                        .is_some_and(|d| d.contains("pool_updated"))
-            })
-    })
-    .await;
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    let row = loop {
+        if let Some(row) =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|e| {
+                    e.kind == "registry_changed"
+                        && e.detail
+                            .as_deref()
+                            .is_some_and(|d| d.contains("pool_updated"))
+                })
+        {
+            break row;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the expected state never arrived within 5s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
     assert!(
         detail["diff"].is_object(),

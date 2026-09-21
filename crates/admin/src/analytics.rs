@@ -65,7 +65,7 @@ type Selection = ((i64, i64), String, bool, Vec<RollupRow>, LiveKeys);
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
+async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
     let (from, to) = parse_range(q.get("range").map(String::as_str), (state.clock)())
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
     let group_by = q.get("group_by").cloned().unwrap_or_else(|| "all".into());
@@ -75,10 +75,12 @@ fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection
             "group_by is account, all, key, kind, model, pool, or user_agent",
         ));
     }
+    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
     let rows = state
         .ledger
         .db()
-        .read(|c| read_rollups(c, hour_of(from), hour_ceil(to)))
+        .read(move |c| read_rollups(c, from_hour, to_hour))
+        .await
         .map_err(ledger_failure)?;
     let filter = filter_of(q);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
@@ -100,7 +102,7 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -117,7 +119,7 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q) {
+    let ((from, to), group_by, probes_counted, rows, live) = match rows_for(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -135,7 +137,8 @@ pub(crate) async fn accounts(
     let rows = match state
         .ledger
         .db()
-        .read(|c| read_account_rollups(c, hour_of(from), hour_ceil(to)))
+        .read(move |c| read_account_rollups(c, hour_of(from), hour_ceil(to)))
+        .await
     {
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
