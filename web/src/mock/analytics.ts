@@ -1,6 +1,7 @@
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestKind, WastedProbeReason } from '@/api/types';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { keyById } from './pools';
 import { DAY, HOUR } from './time';
 
 /**
@@ -28,6 +29,8 @@ export interface HourlyRollup {
   /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
   keptWarm: { requests: number; tokens: number };
   keyId: string;
+  /** The `created_at` of the key the row belongs to; the live key's for a current row, an earlier one's for a deleted holder's. */
+  keyGeneration: number;
   kind: RequestKind;
   /** Session pins moved to another member during the hour. */
   migrations: number;
@@ -54,13 +57,28 @@ const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
   all: () => 'all',
-  key: (r) => r.keyId,
+  // An id the story holds no key for has nothing to compare a generation against, so it never gains a suffix.
+  key: (r) => {
+    const live = keyById.get(r.keyId);
+    return live && Date.parse(live.createdAt) !== r.keyGeneration ? `${r.keyId}@${r.keyGeneration}` : r.keyId;
+  },
   kind: (r) => r.kind,
   model: (r) => r.model,
   pool: (r) => r.poolId,
   // The fixture rollups carry no user agent, so every row falls under the one key.
   user_agent: () => 'unknown',
 };
+
+/**
+ * The route's selector rule: `<id>@<generation>` names one lifetime, a bare id the live key's, and `-` the rows
+ * the router never attributed. A bare id the story does not hold selects nothing, as the route answers it.
+ */
+function selectsKey(selector: string, r: HourlyRollup): boolean {
+  if (selector === '-') return r.keyId === '-';
+  if (selector.includes('@')) return `${r.keyId}@${r.keyGeneration}` === selector;
+  const live = keyById.get(selector);
+  return live !== undefined && r.keyId === selector && Date.parse(live.createdAt) === r.keyGeneration;
+}
 
 const METRICS: (keyof LatencyHistograms)[] = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'];
 const PERCENTILES = { p50: 0.5, p90: 0.9, p95: 0.95, p99: 0.99 };
@@ -70,7 +88,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
   const hour = Date.parse(r.hour);
   if (hour < fromMs || hour > toMs) return false;
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
-  if (q.keyIds?.length && !q.keyIds.includes(r.keyId)) return false;
+  if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
   if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
@@ -81,7 +99,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
  * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read.
  */
-function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
+function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
@@ -122,7 +140,7 @@ function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean): Ana
     histograms,
     keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens: sum(counted, (r) => r.keptWarm.tokens) },
     key,
-    label: key,
+    label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
     probes: { failed: sum(probeRows, (r) => r.probes.failed), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     rateLimited,
@@ -142,11 +160,14 @@ function groupOf(key: string, rows: HourlyRollup[], includeProbes: boolean): Ana
   };
 }
 
+/** The key dimension alone carries a generation in its group key, so it is the only one whose label differs from it. */
+const labelOf = (key: string, groupBy: AnalyticsGroupBy) => (groupBy === 'key' && key.includes('@') ? `${key.split('@')[0]} (deleted)` : key);
+
 function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
-  return [...buckets.entries()].map(([key, list]) => groupOf(key, list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  return [...buckets.entries()].map(([key, list]) => groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {

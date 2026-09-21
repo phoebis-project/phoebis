@@ -349,6 +349,28 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // A row an earlier key under the same id spent, so the key grouping answers the deleted holder beside
+    // the live key and the decoder sees the label.
+    parts.ledger.record(Record::Request {
+        request: request(
+            now - 40 * 86_400_000,
+            "r-earlier-holder",
+            hour_ago + 500,
+            "desktop",
+            "s0",
+            200,
+            "succeeded",
+        ),
+        attempts: vec![attempt(
+            "r-earlier-holder",
+            1,
+            "business",
+            200,
+            "succeeded",
+            hour_ago + 500,
+        )],
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -406,7 +428,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )
         .unwrap();
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 3
+        v["requests"].as_array().unwrap().len() == 4
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);

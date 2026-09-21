@@ -15,7 +15,7 @@
         "cooldown_seconds": 0,
         "pins": {
           "created": 0,
-          "migrated_in": 0,
+          "migrated_in": 1,
           "migrated_out": 0
         },
         "hours": [
@@ -27,7 +27,7 @@
             "overage_seconds": 0,
             "cooldown_seconds": 0,
             "pins_created": 0,
-            "pins_migrated_in": 0,
+            "pins_migrated_in": 1,
             "pins_migrated_out": 0
           },
           {
@@ -55,7 +55,7 @@
         "pins": {
           "created": 0,
           "migrated_in": 0,
-          "migrated_out": 0
+          "migrated_out": 1
         },
         "hours": [
           {
@@ -67,7 +67,7 @@
             "cooldown_seconds": 0,
             "pins_created": 0,
             "pins_migrated_in": 0,
-            "pins_migrated_out": 0
+            "pins_migrated_out": 1
           }
         ]
       }

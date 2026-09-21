@@ -7,7 +7,7 @@ import { priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, iso, startOfHour } from './time';
+import { DAY, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 
@@ -375,6 +375,7 @@ function rollups(): HourlyRollup[] {
     out.push({
       hour,
       keyId,
+      keyGeneration: Date.parse(keyById.get(keyId)!.createdAt),
       kind,
       poolId,
       accountId,
@@ -446,6 +447,10 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
   return { cacheMissReasons, expiredBetweenTurns: Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0) };
 }
 
+/** A holder of `desktop` created long before the live one and deleted before it, so the two never overlap. */
+const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
+const DELETED_HOLDER_DAY = new Date(NOW - 9 * DAY).toDateString();
+
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
   // A separate stream so the reason split does not shift the rest of the hour's draws.
@@ -484,9 +489,10 @@ function historicalRollups(): HourlyRollup[] {
       const duration = sampled(h, ok, big ? 14_000 : 6_000, 0.6);
       const keptRequests = warmsCaches(lane.keyId, lane.poolId) ? Math.round(ok * h.float(0.2, 0.45)) : 0;
       const keptTokens = Math.round((cacheRead / Math.max(1, ok)) * keptRequests);
-      out.push({
+      const inference: HourlyRollup = {
         hour: iso(t),
         keyId: lane.keyId,
+        keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
         kind: 'inference',
         poolId: lane.poolId,
         accountId,
@@ -513,7 +519,13 @@ function historicalRollups(): HourlyRollup[] {
         probeMigrated: 0,
         savings: { grossUsd: keptWarmSaving(model, keptTokens), probeCostUsd: 0 },
         ...ZERO_WASTE,
-      });
+      };
+      out.push(inference);
+      // The hours an earlier holder of `desktop` spent, deleted before the live key was created: one day of
+      // the second week back, so the month answers the pair of key groups and the shorter ranges do not.
+      if (lane.keyId === 'desktop' && daylight === 1 && hourOfDay < 11 && new Date(t).toDateString() === DELETED_HOLDER_DAY) {
+        out.push({ ...inference, keyGeneration: DELETED_HOLDER_GENERATION });
+      }
       // Keepalive probes ride on the pinned key; one row per lane-hour keeps
       // the "include probes" toggle meaningful across the longer ranges.
       if (warmsCaches(lane.keyId, lane.poolId) && daylight === 1) {
@@ -524,6 +536,7 @@ function historicalRollups(): HourlyRollup[] {
         out.push({
           hour: iso(t),
           keyId: lane.keyId,
+          keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
           kind: 'probe',
           poolId: lane.poolId,
           accountId,

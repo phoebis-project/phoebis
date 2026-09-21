@@ -40,8 +40,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1789866286515,
-        "updated_at": 1789866286515,
+        "created_at": 1789966787748,
+        "updated_at": 1789966787748,
         "members": [
           {
             "account_id": "business",
@@ -58,13 +58,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "W5err5ae",
+            "prefix": "rlJ6m3v-",
             "enabled": true
           }
         ],
         "status": "active",
-        "requests_24h": 3,
-        "cost_24h": 0.0144,
+        "requests_24h": 4,
+        "cost_24h": 0.018,
         "active_pins": 0,
         "traffic_24h": [
           {
@@ -223,10 +223,10 @@
           },
           {
             "at": -3600000,
-            "requests": 1,
+            "requests": 2,
             "failed": 0,
-            "tokens": 1800,
-            "cost_usd": 0.0072
+            "tokens": 3600,
+            "cost_usd": 0.0108
           },
           {
             "at": 0,

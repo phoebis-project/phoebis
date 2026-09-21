@@ -1092,6 +1092,41 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     await m.settle(700);
   }
   {
+    // The earlier holder of `desktop` spent its hours in the second week back, so the month is the range that
+    // holds both groups; the later checks read the day, which it is put back to at the end.
+    const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
+    range('30d')?.click();
+    await m.settle(700);
+    const trafficRows = () => {
+      const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'));
+      return new Map([...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', Number(tr.children[1]?.textContent?.trim().replace(/,/g, '') ?? -1)]));
+    };
+    const unfiltered = trafficRows();
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group', ok: unfiltered.has('desktop (deleted)') && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
+    const pick = async (label) => {
+      keyFilter?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+      [...(keyFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === label)?.click();
+      await m.settle(700);
+      const rows = trafficRows();
+      keyFilter?.querySelector('.mselect__clear')?.click();
+      await m.settle(400);
+      // Clearing leaves the list open, so the trigger closes it and the next pick opens it again.
+      keyFilter?.querySelector('.mselect__trigger')?.click();
+      return rows;
+    };
+    const liveOnly = await pick('desktop');
+    const deletedOnly = await pick('desktop (deleted)');
+    results.push({
+      name: '/analytics each desktop option selects its own rows',
+      ok: liveOnly.get('desktop') === unfiltered.get('desktop') && !liveOnly.has('desktop (deleted)') && deletedOnly.get('desktop (deleted)') === unfiltered.get('desktop (deleted)') && !deletedOnly.has('desktop'),
+      missing: [`live ${[...liveOnly.entries()].join(';')}`, `deleted ${[...deletedOnly.entries()].join(';')}`],
+    });
+    range('24h')?.click();
+    await m.settle(700);
+  }
+  {
     const legend = [...m.container.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '');
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
     results.push({

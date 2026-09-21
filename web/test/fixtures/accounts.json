@@ -72,9 +72,9 @@
           }
         ],
         "requests": {
-          "last_24h": 3,
-          "last_7d": 3,
-          "lifetime": 3
+          "last_24h": 4,
+          "last_7d": 4,
+          "lifetime": 4
         },
         "served_models": [
           {

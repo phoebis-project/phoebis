@@ -20,7 +20,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.windows[0].utilization, 0.62, 'the five_hour sample is the 5h window');
   assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
-  assert.equal(a.requests.lifetime, 3);
+  assert.equal(a.requests.lifetime, 4);
   assert.ok(a.servedModels.some((m) => m.id === 'claude-sonnet-5' && m.selected));
   assert.equal(a.status, 'ready');
   assert.equal(a.email, 'test@example.invalid');
@@ -191,6 +191,9 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   const rows = fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup);
   const desktop = rows.find((g) => g.key === 'desktop');
   assert.equal(desktop.requests, 3);
+  const earlier = rows.find((g) => g.key.startsWith('desktop@'));
+  assert.equal(earlier.label, 'desktop (deleted)');
+  assert.equal(earlier.requests, 1);
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 3);
@@ -205,18 +208,20 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 3);
-  assert.equal(all.succeeded, 2);
+  assert.equal(all.requests, 4);
+  assert.equal(all.succeeded, 3);
   assert.equal(all.failed, 1);
-  assert.equal(all.attempts, 4);
+  assert.equal(all.attempts, 5);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 1500);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 3);
-  assert.equal(all.cacheMissReasons.none, 3);
+  assert.equal(all.tokens.cacheRead, 2000);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 4);
+  assert.equal(all.cacheMissReasons.none, 4);
   assert.equal(all.probes.ok, 0);
   const byKey = d.foldGroups(page.requests, 'key');
-  assert.deepEqual(byKey.map((g) => g.key), ['desktop']);
-  const points = d.foldRequests(page.requests, 3_600_000, page.requests[2].at, page.requests[0].at);
+  assert.deepEqual(byKey.map((g) => g.key), ['desktop'], 'a log row carries no generation, so a reused id is one group here');
+  const oldest = page.requests.find((r) => r.id === 'r-failover');
+  const newest = page.requests.find((r) => r.id === 'r-captured');
+  const points = d.foldRequests(page.requests, 3_600_000, oldest.at, newest.at);
   assert.ok(points.length >= 1 && points.every((p) => p.groups.length === 1));
 });
 
@@ -273,19 +278,19 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 3, 'both pages folded');
+    assert.equal(requests.length, 4, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 6);
+    assert.equal(requests.length, 8);
   });
 });
 
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);
-  assert.equal(o.requests24h, 3);
+  assert.equal(o.requests24h, 4);
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.equal(s1.companion, 'reporting');

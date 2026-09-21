@@ -17,7 +17,7 @@
         "companion_since": null,
         "agents": 1,
         "keepalive": {
-          "next_probe_at": 1238289,
+          "next_probe_at": 1235900,
           "state": "busy"
         }
       },
@@ -30,6 +30,25 @@
         "created_at": null,
         "last_used_at": null,
         "last_request_at": 880000,
+        "requests": 1,
+        "pinned": false,
+        "companion": "none",
+        "companion_since": null,
+        "agents": 0,
+        "keepalive": {
+          "next_probe_at": null,
+          "state": null
+        }
+      },
+      {
+        "key_id": "desktop",
+        "session_id": "s0",
+        "model": "claude-sonnet-5",
+        "account_id": "business",
+        "epoch": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_request_at": -2599500,
         "requests": 1,
         "pinned": false,
         "companion": "none",
