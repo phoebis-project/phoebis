@@ -63,7 +63,7 @@ const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   pairing: 'upstream pairing',
   paused: 'upstream paused',
   reauth_required: 'needs re-auth',
-  released: 'move found no destination',
+  released: 'nothing else stood against the upstream',
   spent: 'window spent',
   unpaired: 'upstream unpaired',
   unserved: 'model no longer served here',
