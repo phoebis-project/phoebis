@@ -1,4 +1,6 @@
-//! Pinned wire constants of Claude Code 2.1.269 on Linux x64 and the fixture files measured from it.
+//! Pinned wire constants of Claude Code 2.1.269 on Linux x64 and the fixture files measured from it. The
+//! inference and control fixtures are that build's; the `count_*` fixtures were measured from 2.1.278, the build
+//! installed when the client's own token count was recorded.
 
 pub mod catalog;
 pub mod fixtures;

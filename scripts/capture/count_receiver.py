@@ -40,7 +40,8 @@ def handle(c):
             open(os.path.join(OUT,'clean_body_%d.json'%len(reqs)),'wb').write(rest)
             reqs.append({'t':round(time.time(),2),'request_line':line,'headers':[l.decode() for l in lines[1:]],'body':rest.decode('utf8','replace')})
             dump()
-            first=line.split(' ')[1].split('?')[0]=='/v1/messages' and not answered[0]
+            parts=line.split(' ')
+            first=len(parts)>1 and parts[0]=='POST' and parts[1].split('?')[0]=='/v1/messages' and not answered[0]
             if first: answered[0]=True
         if first:
             body=tool_use_answer()

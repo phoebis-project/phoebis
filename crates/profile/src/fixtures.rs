@@ -1,5 +1,11 @@
 //! Typed access to the measured fixture files embedded at compile time.
 
+/// The request heads `inference_head` answers. The count heads were measured from client 2.1.278 where the
+/// inference heads are 2.1.269's, so the build and the request path vary together and no difference between the
+/// two belongs to the count path alone. Every count head carries no `X-Stainless-Timeout` and none of the
+/// `extended-cache-ttl-2025-04-11`, `prompt-caching-scope-2026-01-05`, and `thinking-token-count-2026-05-13`
+/// betas, the first-party one also none of `advanced-tool-use-2025-11-20` and `cache-diagnosis-2026-04-07`, and
+/// all three append `token-counting-2024-11-01`.
 pub enum FixtureKind {
     OauthNonFirstParty,
     OauthFirstParty,

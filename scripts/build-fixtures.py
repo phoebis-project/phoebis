@@ -219,6 +219,12 @@ def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
             raise SystemExit(f"{src}/{mode}/clean_modes.json holds {len(counts)} count_tokens entries, want 1")
         idx, entry = counts[0]
         body = (src / mode / f"clean_body_{idx}.json").read_bytes()
+        declared = declared_length(entry)
+        if declared != len(body):
+            raise SystemExit(
+                f"{src}/{mode}/clean_modes.json declares Content-Length {declared} on its count_tokens entry, "
+                f"but the body captured beside it is {len(body)} bytes"
+            )
         (out / f"{mode}.json").write_bytes(body)
         (out / f"{mode}.http").write_bytes(head(entry, len(body)))
 
@@ -337,7 +343,7 @@ def _count_capture(root: pathlib.Path, session: bytes) -> pathlib.Path:
             {"request_line": "POST /v1/messages?beta=true HTTP/1.1", "headers": ["Content-Length: 2"], "body": "{}"},
             {
                 "request_line": "POST /v1/messages/count_tokens?beta=true HTTP/1.1",
-                "headers": ["Host: 127.0.0.1:48444", f"Content-Length: {len(body)}"],
+                "headers": ["Host: 127.0.0.1:48442", f"Content-Length: {len(body)}"],
                 "body": body.decode(),
             },
         ]
@@ -385,7 +391,21 @@ def _self_test_capture_partition() -> None:
             status = check_count(capture, tree)
         if status == 0 or "count_apikey.http" not in report.getvalue():
             raise AssertionError(f"check_count passed with a count fixture missing: {report.getvalue()!r}")
-    print("self-test passed: check_count requires every count fixture and names the one that is gone")
+        print("self-test passed: check_count requires every count fixture and names the one that is gone")
+
+        # A recapture whose head and body disagree on the length must stop the build rather than write a short
+        # fixture, the rule the inference build already carries.
+        modes = json.loads((capture / "count_apikey" / "clean_modes.json").read_text())
+        modes[1]["headers"][1] = "Content-Length: 1"
+        (capture / "count_apikey" / "clean_modes.json").write_text(json.dumps(modes))
+        try:
+            build_count(capture, tree)
+        except SystemExit as e:
+            if "count_apikey" not in str(e) or "Content-Length" not in str(e):
+                raise AssertionError(f"build_count refused for the wrong reason: {e}") from e
+            print("self-test passed:", e)
+        else:
+            raise AssertionError("build_count wrote a count body its declared Content-Length does not describe")
 
 
 def _self_test_mask_hello() -> None:
