@@ -280,6 +280,19 @@ impl RoutingState {
         }
     }
 
+    /// Every live cooldown row of one account, whatever its scope, in no particular order. `cooldown` answers
+    /// the one row that blocks a model; this is for a reader asking whether anything on the account is still
+    /// standing.
+    pub fn cooldowns_of<'a>(
+        &'a self,
+        account_id: &'a str,
+        now: i64,
+    ) -> impl Iterator<Item = &'a CooldownRow> + 'a {
+        self.cooldowns
+            .values()
+            .filter(move |row| row.account_id == account_id && row.until > now)
+    }
+
     pub fn cooldowns(&self) -> Vec<CooldownRow> {
         let mut v: Vec<_> = self.cooldowns.values().cloned().collect();
         v.sort_by(|a, b| (&a.account_id, &a.scope).cmp(&(&b.account_id, &b.scope)));

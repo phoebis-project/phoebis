@@ -1044,13 +1044,7 @@ impl Task {
                 .sampled_at
                 .get(&candidate.account_id)
                 .is_none_or(|at| now - at >= ttl);
-            let needs = needs_sample(
-                pool,
-                &self.state,
-                &candidate.account_id,
-                &request.canonical_model,
-                now,
-            );
+            let needs = needs_sample(pool, &self.state, &candidate.account_id, now);
             if !oauth || !stale || !needs {
                 continue;
             }
@@ -1087,18 +1081,19 @@ impl Task {
     }
 }
 
-/// Whether a selection has to read a candidate's usage. The pool's own reasons stand, and a candidate under a
-/// live rate-limit cooldown is read whatever the strategy: while the account is cooled no response head of its
-/// own can show the window the upstream reset ahead of the deadline it announced. A candidate whose latest
-/// sample spent its model-scoped window is read for the same reason: selection excludes it on that reading,
-/// so no request of its own will ever bring a fresher one. The kind order is a third: it reads overage
-/// evidence to put an account in the second group, and nothing but a sample retires that evidence, so without
-/// one a recovered account would sit below its plan-funded siblings until the process restarts.
+/// Whether a selection has to read a candidate's usage. The pool's own reasons stand, and a candidate with a
+/// live rate-limit cooldown row of any scope is read whatever the strategy: while the account is cooled no
+/// response head of its own can show the window the upstream reset ahead of the deadline it announced, and the
+/// one row `cooldown` answers for the model can be a permission row standing over a rate-limit row, or miss a
+/// rate-limit row on another model's scope. A candidate whose latest sample spent its model-scoped window is
+/// read for the same reason: selection excludes it on that reading, so no request of its own will ever bring a
+/// fresher one. The kind order is a third: it reads overage evidence to put an account in the second group, and
+/// nothing but a sample retires that evidence, so without one a recovered account would sit below its
+/// plan-funded siblings until the process restarts.
 fn needs_sample(
     pool: &phoebis_store::PoolRow,
     state: &RoutingState,
     account_id: &str,
-    canonical_model: &str,
     now: i64,
 ) -> bool {
     pool.kind_ordered()
@@ -1106,8 +1101,8 @@ fn needs_sample(
         || pool.select_below_utilization.is_some()
         || pool.overage_policy != phoebis_store::OveragePolicy::Allow
         || state
-            .cooldown(account_id, canonical_model, now)
-            .is_some_and(|row| row.reason == "rate_limit")
+            .cooldowns_of(account_id, now)
+            .any(|row| row.reason == "rate_limit")
         || state
             .sample(account_id)
             .is_some_and(|s| s.fable.unwrap_or(0.0) >= 1.0)
@@ -1211,7 +1206,7 @@ mod tests {
             },
         );
         assert!(
-            needs_sample(&plain_pool(), &spent, "a", "claude-sonnet-5", 2_000),
+            needs_sample(&plain_pool(), &spent, "a", 2_000),
             "selection excludes on this reading, so nothing but another sample can undo it"
         );
     }
@@ -1220,9 +1215,7 @@ mod tests {
     fn a_candidate_under_a_live_rate_limit_cooldown_is_sampled_whatever_the_strategy() {
         let pool = plain_pool();
         let quiet = RoutingState::from_load(RoutingLoad::default());
-        let needs = |pool: &PoolRow, state: &RoutingState| {
-            needs_sample(pool, state, "a", "claude-sonnet-5", 1_000)
-        };
+        let needs = |pool: &PoolRow, state: &RoutingState| needs_sample(pool, state, "a", 1_000);
         assert!(!needs(&pool, &quiet), "nothing in this pool reads usage");
         assert!(
             needs(&pool, &cooled(2_000, "rate_limit")),
@@ -1247,6 +1240,50 @@ mod tests {
     }
 
     #[test]
+    fn a_live_rate_limit_row_of_any_scope_is_read_past_the_row_the_selector_answers_for_the_model()
+    {
+        let pool = plain_pool();
+        let rows = |rows: &[(&str, i64, &str)]| {
+            RoutingState::from_load(RoutingLoad {
+                cooldowns: rows
+                    .iter()
+                    .map(|(scope, until, reason)| CooldownRow {
+                        account_id: "a".into(),
+                        scope: (*scope).into(),
+                        until: *until,
+                        set_at: 0,
+                        reason: (*reason).into(),
+                        window: "five_hour".into(),
+                        source_request_id: None,
+                    })
+                    .collect(),
+                ..RoutingLoad::default()
+            })
+        };
+        let needs = |state: &RoutingState| needs_sample(&pool, state, "a", 1_000);
+        // The model row is a permission row with the later deadline, the one `cooldown` answers; the
+        // account-wide rate-limit row under it is the one a sample can release.
+        assert!(
+            needs(&rows(&[
+                ("account", 2_000, "rate_limit"),
+                ("model:claude-sonnet-5", 3_000, "permission"),
+            ])),
+            "a later permission row on the model does not hide a live rate-limit row on the account"
+        );
+        assert!(
+            needs(&rows(&[("model:claude-fable-5-1", 2_000, "rate_limit")])),
+            "a rate-limit row on another model's scope is still this account's window to re-read"
+        );
+        assert!(
+            !needs(&rows(&[
+                ("model:claude-fable-5-1", 500, "rate_limit"),
+                ("account", 3_000, "permission"),
+            ])),
+            "an expired rate-limit row and a live permission row leave nothing a sample could release"
+        );
+    }
+
+    #[test]
     fn a_kind_ordered_pool_is_sampled_even_when_nothing_else_reads_usage() {
         let quiet = RoutingState::from_load(RoutingLoad::default());
         let kind_ordered = PoolRow {
@@ -1254,11 +1291,11 @@ mod tests {
             ..plain_pool()
         };
         assert!(
-            !needs_sample(&plain_pool(), &quiet, "a", "claude-sonnet-5", 1_000),
+            !needs_sample(&plain_pool(), &quiet, "a", 1_000),
             "the same pool without the preference reads no usage at all"
         );
         assert!(
-            needs_sample(&kind_ordered, &quiet, "a", "claude-sonnet-5", 1_000),
+            needs_sample(&kind_ordered, &quiet, "a", 1_000),
             "the kind order reads overage evidence, and only a sample retires it"
         );
         let mut recovered = RoutingState::from_load(RoutingLoad::default());
@@ -1273,7 +1310,7 @@ mod tests {
             },
         );
         assert!(
-            needs_sample(&kind_ordered, &recovered, "a", "claude-sonnet-5", 1_000),
+            needs_sample(&kind_ordered, &recovered, "a", 1_000),
             "an account already in the second group is exactly the one whose evidence has to be refreshed"
         );
     }
