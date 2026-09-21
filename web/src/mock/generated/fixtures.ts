@@ -3547,6 +3547,21 @@ export const FIXTURES: Record<string, Fixture> = {
             "epoch": 2,
             "reason": "spent"
           }
+        },
+        {
+          "at": -2599800,
+          "kind": "pin_expired",
+          "account_id": "business",
+          "key_id": "desktop",
+          "session_id": "s1",
+          "model": "claude-sonnet-5",
+          "actor": null,
+          "detail": {
+            "reasons": [
+              "cooldown",
+              "spent"
+            ]
+          }
         }
       ]
     }

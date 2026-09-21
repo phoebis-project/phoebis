@@ -137,6 +137,93 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: Window, now: 
     }
 }
 
+/// The pool's affinity in milliseconds, saturating for a value no clock reaches.
+fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
+    i64::try_from(pool.affinity_ttl_seconds)
+        .ok()
+        .and_then(|s| s.checked_mul(1_000))
+        .unwrap_or(i64::MAX)
+}
+
+fn state_name(state: AccountState) -> Option<&'static str> {
+    match state {
+        AccountState::Ready | AccountState::Refreshing => None,
+        AccountState::Disconnected => Some("disconnected"),
+        AccountState::FundingRequired => Some("funding_required"),
+        AccountState::Pairing => Some("pairing"),
+        AccountState::ReauthRequired => Some("reauth_required"),
+        AccountState::Unpaired => Some("unpaired"),
+    }
+}
+
+/// The facts a selection finds against a pinned account, in the order it evaluates them, for the event that
+/// says why a pin was released without a migration: `expired` (idle past the pool's affinity TTL), `unserved`
+/// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
+/// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
+/// account's state when it cannot serve (`disconnected`, `funding_required`, `pairing`, `reauth_required`,
+/// `unpaired`), `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy
+/// other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the
+/// request's window). Never empty: a pin released by a move whose destination then answered nothing carries
+/// `released`, the one fact the list above does not evaluate.
+pub fn release_reasons(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pin: &PinRow,
+    request: &SelectRequest,
+) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    let pool = snapshot
+        .key(&request.key_id)
+        .and_then(|k| snapshot.pool(&k.pool_id));
+    if pool.is_some_and(|pool| request.now - pin.last_used_at > affinity_ttl_ms(pool)) {
+        reasons.push("expired");
+    }
+    let serves = request
+        .candidates
+        .iter()
+        .any(|c| c.account_id == pin.account_id);
+    if pool.is_none() || !serves {
+        reasons.push("unserved");
+    }
+    match snapshot.account(&pin.account_id) {
+        None => reasons.push("deleted"),
+        Some(account) => {
+            if !account.enabled {
+                reasons.push("paused");
+            }
+            if let Some(name) = state_name(account.state) {
+                reasons.push(name);
+            }
+        }
+    }
+    if state
+        .cooldown(&pin.account_id, &request.canonical_model, request.now)
+        .is_some()
+    {
+        reasons.push("cooldown");
+    }
+    if pool.is_some_and(|p| p.overage_policy != OveragePolicy::Allow)
+        && state.in_overage(&pin.account_id)
+    {
+        reasons.push("overage");
+    }
+    if request.attempted.contains(&pin.account_id) {
+        reasons.push("attempted");
+    }
+    if !holds_allowance(
+        state,
+        &pin.account_id,
+        window_of(&request.canonical_model),
+        request.now,
+    ) {
+        reasons.push("spent");
+    }
+    if reasons.is_empty() {
+        reasons.push("released");
+    }
+    reasons
+}
+
 pub fn select(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -150,10 +237,7 @@ pub fn select(
     else {
         return (SelectResult::Exhausted(Exhaustion::Untimed), writes);
     };
-    let ttl_ms = i64::try_from(pool.affinity_ttl_seconds)
-        .ok()
-        .and_then(|s| s.checked_mul(1_000))
-        .unwrap_or(i64::MAX);
+    let ttl_ms = affinity_ttl_ms(pool);
     let session = request.session_id.as_deref().filter(|_| ttl_ms > 0);
 
     // Step 1: the pin, expired when idle past the TTL or when its account can no longer serve the model here. A

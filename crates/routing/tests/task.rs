@@ -909,7 +909,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         "the purge tick reached the deadline the rejection announced"
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, .. } if session_id == "s2"),
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s2" && reasons == vec!["expired"]),
         "and the idle pin went with it"
     );
     // Last, because a fresh reading below the limit releases the rate-limit cooldown the assertions above
@@ -984,6 +984,69 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
     assert!(
         matches!(event, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
     );
+}
+
+#[tokio::test]
+async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_with_both_facts() {
+    use phoebis_routing::{Report, RouterEvent, UtilizationSample};
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let a = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let b = if a == "a" { "b" } else { "a" };
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
+    let spent = |at: i64| UtilizationSample {
+        fable: None,
+        fable_reset: None,
+        five_hour: Some(1.0),
+        five_hour_reset: Some(at + 3_600_000),
+        seven_day: Some(0.1),
+        seven_day_reset: Some(at + 7 * 86_400_000),
+        observed_at: at,
+    };
+    handle.report(cooled(
+        &a,
+        "account",
+        1_000 + HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { .. }
+    ));
+    handle.report(Report::Sample {
+        account_id: a.clone(),
+        sample: spent(1_500),
+    });
+    handle.report(Report::Sample {
+        account_id: b.into(),
+        sample: spent(1_500),
+    });
+    let second = handle
+        .select(request(&handle, Some("s1"), 2_000))
+        .await
+        .unwrap();
+    assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == a && reasons == vec!["cooldown", "spent"]),
+        "no sibling holds allowance, so the spent rule names no destination and the cooled pin expires"
+    );
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
 }
 
 /// A rejection as the relay reports it, with the clock deciding the row's set time.

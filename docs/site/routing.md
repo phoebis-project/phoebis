@@ -177,8 +177,12 @@ sibling in overage does not receive a spent pin, whether or not the pinned accou
 the overage rule would hand the session back on the next request. With no sibling holding allowance the session
 stays and the upstream's answer decides.
 
-Any move records a `pin_migrated` event with reason `overage`, `spent`, or `utilization`. Releasing a session by
-hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+Any move records a `pin_migrated` event with reason `overage`, `spent`, or `utilization`. A pin released without a move
+records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`, `cooldown`,
+`deleted`, `expired`, `overage`, `paused`, `spent`, `unserved`, the account's state when it cannot serve
+(`disconnected`, `funding_required`, `pairing`, `reauth_required`, `unpaired`), or `released` when a move's destination
+answered nothing. Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`,
+expires its pin the same way.
 
 ## Cooldowns and failover
 

@@ -76,7 +76,8 @@ pub enum StateWrite {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Purged {
     pub cooldowns: Vec<(String, String)>,
-    pub pins: Vec<(String, String, String)>,
+    /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
+    pub pins: Vec<((String, String, String), &'static str)>,
 }
 
 /// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; 0, priority,
@@ -140,7 +141,7 @@ impl RoutingState {
         e
     }
 
-    pub(crate) fn pin(&self, key_id: &str, session_id: &str, model: &str) -> Option<&PinRow> {
+    pub fn pin(&self, key_id: &str, session_id: &str, model: &str) -> Option<&PinRow> {
         self.pins.get(&(
             key_id.to_string(),
             session_id.to_string(),
@@ -433,9 +434,9 @@ impl RoutingState {
         let pins: Vec<_> = self
             .pins
             .iter()
-            .filter(|(_, p)| {
+            .filter_map(|(k, p)| {
                 if gone(&p.account_id) {
-                    return true;
+                    return Some((k.clone(), "deleted"));
                 }
                 let ttl = snapshot
                     .key(&p.key_id)
@@ -447,14 +448,16 @@ impl RoutingState {
                             .unwrap_or(i64::MAX)
                     });
                 match ttl {
-                    None => true,
-                    Some(0) => true,
-                    Some(ttl) => now - p.last_used_at > ttl,
+                    // No key or no pool: nothing serves the pin any more.
+                    None => Some((k.clone(), "unserved")),
+                    // A zero affinity is a TTL every pin is past: the pool keeps no session on an account.
+                    Some(0) => Some((k.clone(), "expired")),
+                    Some(ttl) if now - p.last_used_at > ttl => Some((k.clone(), "expired")),
+                    Some(_) => None,
                 }
             })
-            .map(|(k, _)| k.clone())
             .collect();
-        for key in &pins {
+        for (key, _) in &pins {
             self.pins.remove(key);
         }
         // None of the three needs a deletion written: the overage row cascades with the account, and samples

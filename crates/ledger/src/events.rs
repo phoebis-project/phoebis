@@ -93,6 +93,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             session_id,
             model,
             account_id,
+            reasons,
             at,
         } => EventRecord {
             at: *at,
@@ -101,6 +102,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
+            detail: Some(json!({ "reasons": reasons }).to_string()),
             ..Default::default()
         },
         RouterEvent::PinMigrated {
@@ -358,6 +360,7 @@ mod tests {
                     session_id: "s".into(),
                     model: "m".into(),
                     account_id: "a".into(),
+                    reasons: vec!["expired"],
                     at: 1,
                 },
                 "pin_expired",
@@ -375,5 +378,18 @@ mod tests {
         ] {
             assert_eq!(event_of(&event).kind, kind);
         }
+        let row = event_of(&RouterEvent::PinExpired {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            reasons: vec!["cooldown", "spent"],
+            at: 1,
+        });
+        assert_eq!(
+            row.detail.as_deref(),
+            Some(r#"{"reasons":["cooldown","spent"]}"#),
+            "the facts travel in the selection's order"
+        );
     }
 }

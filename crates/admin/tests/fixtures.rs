@@ -279,6 +279,16 @@ async fn every_route_is_captured_and_holds_its_shape() {
         actor: None,
         detail: Some(j!({ "from_account": "direct", "epoch": 2, "reason": "spent" }).to_string()),
     }));
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 200,
+        kind: "pin_expired".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-sonnet-5".into()),
+        actor: None,
+        detail: Some(j!({ "reasons": ["cooldown", "spent"] }).to_string()),
+    }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,

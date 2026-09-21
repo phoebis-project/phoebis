@@ -11,7 +11,9 @@ use phoebis_store::{AccountState, CooldownRow, PinRow, Store, StoreError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::select::{select, Exhaustion, MigrateReason, SelectRequest, SelectResult};
+use crate::select::{
+    release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
+};
 use crate::state::{
     EvidenceSource, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
 };
@@ -65,6 +67,8 @@ pub enum RouterEvent {
         session_id: String,
         model: String,
         account_id: String,
+        /// What the selection found against the account, in its own order; see `release_reasons`.
+        reasons: Vec<&'static str>,
         at: i64,
     },
     PinMigrated {
@@ -527,6 +531,11 @@ impl Task {
                 let before = triple
                     .as_ref()
                     .and_then(|(k, s, m)| self.state.pin(k, s, m).cloned());
+                // The facts are read against the state the selection runs on, before it moves anything.
+                let released = before
+                    .as_ref()
+                    .map(|old| release_reasons(&self.state, &snapshot, old, &request))
+                    .unwrap_or_default();
                 let (result, writes) =
                     select(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
@@ -577,6 +586,7 @@ impl Task {
                                     session_id: s.clone(),
                                     model: m.clone(),
                                     account_id: old.account_id.clone(),
+                                    reasons: released.clone(),
                                     at: now,
                                 });
                                 self.emit(RouterEvent::PinCreated {
@@ -605,6 +615,7 @@ impl Task {
                             session_id: s.clone(),
                             model: m.clone(),
                             account_id: old.account_id.clone(),
+                            reasons: released,
                             at: now,
                         }),
                         _ => {}
@@ -992,13 +1003,14 @@ impl Task {
                 at: now,
             });
         }
-        for triple in &purged.pins {
+        for (triple, reason) in &purged.pins {
             if let Some(account_id) = held.get(triple) {
                 self.emit(RouterEvent::PinExpired {
                     key_id: triple.0.clone(),
                     session_id: triple.1.clone(),
                     model: triple.2.clone(),
                     account_id: account_id.clone(),
+                    reasons: vec![*reason],
                     at: now,
                 });
             }
@@ -1012,7 +1024,7 @@ impl Task {
             purged
                 .pins
                 .into_iter()
-                .map(|(k, s, m)| StateWrite::DeletePin(k, s, m)),
+                .map(|((k, s, m), _)| StateWrite::DeletePin(k, s, m)),
         );
         self.write(writes);
     }

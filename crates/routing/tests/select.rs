@@ -1,7 +1,7 @@
 use phoebis_routing::{
-    resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence, PinRef,
-    RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample,
-    MIGRATE_DWELL_MS,
+    release_reasons, resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence,
+    PinRef, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
+    UtilizationSample, MIGRATE_DWELL_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelSource, OveragePolicy,
@@ -154,14 +154,24 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
-/// `s` rebuilt with `id` entirely missing from `accounts`, the way a deleted account leaves the registry.
+/// `s` rebuilt with `id` entirely missing from `accounts`, the way a deleted account leaves the registry. The
+/// remaining accounts keep the served models `snapshot_with` gave them, so a candidate list built through
+/// `resolve` still finds them.
 fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
     let load = RegistryLoad {
         accounts: s.accounts().filter(|a| a.id != id).cloned().collect(),
         credential_generations: Vec::new(),
         keys: s.keys().cloned().collect(),
         members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
-        models: Vec::new(),
+        models: s
+            .accounts()
+            .filter(|a| a.id != id)
+            .flat_map(|a| {
+                ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+                    .into_iter()
+                    .filter_map(|m| s.served(&a.id, m).cloned())
+            })
+            .collect(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -2165,6 +2175,95 @@ fn a_spent_pin_stays_when_its_only_sibling_is_cooled() {
             .iter()
             .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id != "a")),
         "the pin was moved off a: {writes:?}"
+    );
+}
+
+#[test]
+fn a_pin_on_a_cooled_account_whose_window_is_spent_still_moves_with_reason_spent() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    st.record_cooldown(cooled("a", "account", 2_000 + HOUR, "five_hour"));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "the spent move stands whatever else the selection found against the pinned account"
+    );
+}
+
+#[test]
+fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selections_order() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = |now: i64, attempted: &[&str]| {
+        request(&s, Some("s1"), "claude-sonnet-5", true, attempted, now)
+    };
+    assert_eq!(
+        picked(&select(&mut st, &s, &req(1_000, &[]), &mut rng()).0),
+        "a"
+    );
+    let pin = st.pin("k", "s1", "claude-sonnet-5").cloned().unwrap();
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(2_000, &[])),
+        vec!["released"],
+        "nothing stands against a live pin on a serving account"
+    );
+    st.record_cooldown(cooled("a", "account", 2_000 + HOUR, "five_hour"));
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(2_000, &[])),
+        vec!["cooldown", "spent"]
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(2_000, &["a"])),
+        vec!["cooldown", "attempted", "spent"]
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(1_000 + 3_600_001, &[])),
+        vec!["expired", "cooldown", "spent"],
+        "the idle pin is expired first, and the facts behind it still follow"
+    );
+    let paused = snapshot_with(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        &[("a", false, AccountState::ReauthRequired)],
+    );
+    let quiet = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        release_reasons(&quiet, &paused, &pin, &request(&paused, Some("s1"), "claude-sonnet-5", true, &[], 2_000)),
+        vec!["paused", "reauth_required"],
+        "a disabled account in a state that cannot serve names both facts, still resolved as a candidate"
+    );
+    let gone = without_account(&s, "a");
+    assert_eq!(
+        release_reasons(
+            &quiet,
+            &gone,
+            &pin,
+            &request(&gone, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+        ),
+        vec!["unserved", "deleted"]
     );
 }
 
