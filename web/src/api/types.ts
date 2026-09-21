@@ -327,6 +327,10 @@ export interface CapturedBodies {
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
 export type PinMigrationReason = 'cooldown' | 'mark' | 'overage' | 'spent' | 'utilization';
 
+/** Why the router released a session's pin without a move: the `reasons` of a `pin_expired` event, in the
+ * order the selection found them. */
+export type PinReleaseReason = 'attempted' | 'cooldown' | 'deleted' | 'disconnected' | 'expired' | 'funding_required' | 'overage' | 'pairing' | 'paused' | 'reauth_required' | 'released' | 'spent' | 'unpaired' | 'unserved';
+
 /** One event of a request's window, as `GET /admin/requests/{id}` lists them beside the summary. */
 export interface RequestEvent {
   accountId: string | null;

@@ -138,7 +138,8 @@ TTFB, tokens, and cost. One row is one client request however many attempts it t
 as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. Filters narrow
 the table, and selecting a row opens a drawer with the request's detail. When the session moved during the request,
 the drawer says from which upstream to which and why: rate limited, upstream marked, overage, window spent, or
-utilization.
+utilization. When its pin was released without a move, the drawer says from which upstream and every reason the router
+found: account cooled, window spent, upstream paused, pin idle past the affinity window, and the rest.
 
 ![The Request logs view: the filterable table and the request drawer](assets/requests-light.png#only-light)
 ![The Request logs view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)

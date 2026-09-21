@@ -279,6 +279,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   const out = new Map<string, RequestEvent[]>();
   // The smoke checks and the drawer need a row that moved for a spent window, so the first eligible row carries one rather than leaving it to the draw below.
   let spentOwed = true;
+  let releaseOwed = true;
   for (const r of REQUESTS) {
     if (r.sessionId === null || r.kind === 'probe') continue;
     const events: RequestEvent[] = [];
@@ -297,6 +298,12 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
       events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
       spentOwed = false;
+    }
+    // One release for the drawer and the smoke checks: a pin that expired on a cooled account whose window was
+    // spent, with no sibling holding allowance to move to.
+    if (events.length === 0 && releaseOwed && r.status === 200 && lane && lane.accountIds.length > 1) {
+      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { reasons: ['cooldown', 'spent'] }, kind: 'pin_expired' });
+      releaseOwed = false;
     }
     if (events.length) out.set(r.id, events);
   }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, PinMigrationReason, RequestEvent, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import type { Attempt, CapturedBodies, PinMigrationReason, PinReleaseReason, RequestEvent, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
@@ -51,6 +51,24 @@ const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   spent: 'window spent',
   utilization: 'utilization',
 };
+
+const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
+  attempted: 'already tried by this request',
+  cooldown: 'account cooled',
+  deleted: 'upstream deleted',
+  disconnected: 'upstream disconnected',
+  expired: 'pin idle past the affinity window',
+  funding_required: 'funding required',
+  overage: 'in overage',
+  pairing: 'upstream pairing',
+  paused: 'upstream paused',
+  reauth_required: 'needs re-auth',
+  released: 'move found no destination',
+  spent: 'window spent',
+  unpaired: 'upstream unpaired',
+  unserved: 'model no longer served here',
+};
+const releaseLabel = (reasons: unknown): string => (Array.isArray(reasons) ? reasons : []).map((r) => PIN_RELEASE_LABEL[r as PinReleaseReason] ?? String(r)).join(', ');
 
 // A fixed three-slot readout: a plan that serves no Fable reports two windows in
 // its headers, and the empty third slot is the point rather than a gap to hide.
@@ -329,9 +347,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
   const events = useAsync<{ events: RequestEvent[]; requestId: string } | null>(() => (r ? api.listRequestEvents(r.id).then((list) => ({ events: list, requestId: r.id })) : Promise.resolve(null)), [r?.id]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, the guard the
-  // captured bodies apply above; and the route lists the session's events by time alone, so a move belongs
-  // to this request only when it is the same pin's, keyed by key, session, and canonical model.
-  const migrations = r === null || events.data?.requestId !== r.id ? [] : events.data.events.filter((e) => e.kind === 'pin_migrated' && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
+  // captured bodies apply above; and the route lists the session's events by time alone, so a move or a
+  // release belongs to this request only when it is the same pin's, keyed by key, session, and canonical model.
+  const migrations = r === null || events.data?.requestId !== r.id ? [] : events.data.events.filter((e) => (e.kind === 'pin_migrated' || e.kind === 'pin_expired') && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -423,6 +441,13 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               ))}
             </ol>
             {migrations.map((e) => {
+              if (e.kind === 'pin_expired') {
+                return (
+                  <p className="attempt__migration" key={`${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
+                    Session released from {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
+                  </p>
+                );
+              }
               const reason = String(e.detail?.reason ?? '') as PinMigrationReason;
               const from = String(e.detail?.from_account ?? '-');
               return (
