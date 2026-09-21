@@ -197,6 +197,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 6: a key holder reads its own usage, which asks for one key's hours. The rollup key starts with
 /// the hour, so that read walked every key's entries for the week and held the shared reader for as long as
 /// everyone else's history was; an index that starts with the key narrows it to the rows the answer sums.
+///
+/// Version 7: a key's generation joins the rollup key and the request row, so a deleted key's id can be
+/// created again and the new key's rows never sum with the earlier holder's; SQLite cannot alter a primary
+/// key, so the table is rebuilt as version 3 rebuilt it, and the index of version 6 is rebuilt with the
+/// generation between the key and the hour.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -275,5 +280,60 @@ CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_
     (
         6,
         "CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, hour);",
+    ),
+    (
+        7,
+        "ALTER TABLE requests ADD COLUMN key_generation INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE rollups_hourly_next (
+  hour INTEGER NOT NULL,
+  key_id TEXT NOT NULL,
+  key_generation INTEGER NOT NULL DEFAULT 0,
+  pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  canonical_model TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  requests INTEGER NOT NULL,
+  succeeded INTEGER NOT NULL,
+  rate_limited INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  exhausted INTEGER NOT NULL,
+  rejected INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  failovers INTEGER NOT NULL,
+  cache_hits INTEGER NOT NULL,
+  cache_misses INTEGER NOT NULL,
+  uncached_requests INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_write_5m_tokens INTEGER NOT NULL,
+  cache_write_1h_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  estimated_usd REAL NOT NULL,
+  input_usd REAL NOT NULL,
+  cache_read_usd REAL NOT NULL,
+  cache_write_usd REAL NOT NULL,
+  output_usd REAL NOT NULL,
+  kept_warm_requests INTEGER NOT NULL,
+  kept_warm_tokens INTEGER NOT NULL,
+  saved_usd_gross REAL NOT NULL,
+  probe_cost_usd REAL NOT NULL,
+  probe_migrated INTEGER NOT NULL,
+  wasted_probes INTEGER NOT NULL,
+  wasted_probe_usd REAL NOT NULL,
+  wasted_probe_reasons_json TEXT NOT NULL,
+  probes_skipped INTEGER NOT NULL DEFAULT 0,
+  ttfb_hist BLOB NOT NULL,
+  ttfc_hist BLOB NOT NULL,
+  duration_hist BLOB NOT NULL,
+  output_tps_hist BLOB NOT NULL,
+  errors_json TEXT NOT NULL,
+  cache_miss_reasons_json TEXT NOT NULL,
+  PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent)
+);
+INSERT INTO rollups_hourly_next (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json) SELECT hour, key_id, 0, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json FROM rollups_hourly;
+DROP TABLE rollups_hourly;
+ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
+CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);",
     ),
 ];

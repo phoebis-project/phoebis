@@ -284,10 +284,10 @@ pub(crate) fn insert_request_in(
         .is_some();
     let kept_warm = request.kept_warm || marked;
     tx.execute(
-        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
-            request.id, request.received_at, request.finished_at, request.key_id, request.pool_id, request.session_id, request.agent_id,
+            request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
             request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
             request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
             request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
@@ -330,7 +330,7 @@ pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), 
     Ok(())
 }
 
-pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent FROM requests";
+pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent FROM requests";
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, pricing_version FROM attempts";
 
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
@@ -339,27 +339,28 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         received_at: r.get(1)?,
         finished_at: r.get(2)?,
         key_id: r.get(3)?,
-        pool_id: r.get(4)?,
-        session_id: r.get(5)?,
-        agent_id: r.get(6)?,
-        parent_agent_id: r.get(7)?,
-        model: r.get(8)?,
-        canonical_model: r.get(9)?,
-        stream: r.get(10)?,
-        kind: r.get(11)?,
-        origin: r.get(12)?,
-        status: r.get::<_, Option<i64>>(13)?.map(|n| n as u16),
-        outcome: r.get(14)?,
-        attempts: r.get(15)?,
-        request_bytes: r.get::<_, Option<i64>>(16)?.map(|n| n as u64),
-        response_bytes: r.get::<_, Option<i64>>(17)?.map(|n| n as u64),
-        ttfb_ms: r.get(18)?,
-        ttfc_ms: r.get(19)?,
-        duration_ms: r.get(20)?,
-        error_code: r.get(21)?,
-        kept_warm: r.get(22)?,
-        bodies_captured: r.get(23)?,
-        user_agent: r.get(24)?,
+        key_generation: r.get(4)?,
+        pool_id: r.get(5)?,
+        session_id: r.get(6)?,
+        agent_id: r.get(7)?,
+        parent_agent_id: r.get(8)?,
+        model: r.get(9)?,
+        canonical_model: r.get(10)?,
+        stream: r.get(11)?,
+        kind: r.get(12)?,
+        origin: r.get(13)?,
+        status: r.get::<_, Option<i64>>(14)?.map(|n| n as u16),
+        outcome: r.get(15)?,
+        attempts: r.get(16)?,
+        request_bytes: r.get::<_, Option<i64>>(17)?.map(|n| n as u64),
+        response_bytes: r.get::<_, Option<i64>>(18)?.map(|n| n as u64),
+        ttfb_ms: r.get(19)?,
+        ttfc_ms: r.get(20)?,
+        duration_ms: r.get(21)?,
+        error_code: r.get(22)?,
+        kept_warm: r.get(23)?,
+        bodies_captured: r.get(24)?,
+        user_agent: r.get(25)?,
     })
 }
 
@@ -451,6 +452,7 @@ mod tests {
             received_at: 1_000,
             finished_at: Some(1_500),
             key_id: Some("k".into()),
+            key_generation: 0,
             pool_id: Some("p".into()),
             session_id: Some("s".into()),
             agent_id: Some("main".into()),
@@ -520,7 +522,7 @@ mod tests {
     fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 6);
+        assert_eq!(db.schema_version().unwrap(), 7);
         let mode: String = db
             .read(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();

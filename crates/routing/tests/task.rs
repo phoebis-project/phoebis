@@ -109,6 +109,7 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
     let s = handle.snapshot();
     SelectRequest {
         key_id: "k".into(),
+        key_generation: s.key("k").unwrap().created_at,
         session_id: session.map(String::from),
         canonical_model: "claude-sonnet-5".into(),
         candidates: resolve(&s, s.key("k").unwrap(), "claude-sonnet-5").unwrap(),

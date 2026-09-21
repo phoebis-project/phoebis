@@ -1,5 +1,5 @@
-//! The hourly fold: each completed request adds one delta to the row for its hour and its six-part key, in the
-//! same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
+//! The hourly fold: each completed request adds one delta to the row for its hour and its seven-part key, in
+//! the same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +53,9 @@ impl CostSplit {
 pub struct RollupRow {
     pub hour: i64,
     pub key_id: String,
+    /// The `created_at` of the key the row belongs to, 0 for a row written before the column existed and never
+    /// reconciled, or for the unattributed key.
+    pub key_generation: i64,
     pub pool_id: String,
     pub account_id: String,
     pub canonical_model: String,
@@ -98,9 +101,11 @@ pub struct RollupRow {
 }
 
 impl RollupRow {
+    #[allow(clippy::too_many_arguments)]
     pub fn key(
         hour: i64,
         key_id: &str,
+        key_generation: i64,
         pool_id: &str,
         account_id: &str,
         canonical_model: &str,
@@ -110,6 +115,7 @@ impl RollupRow {
         RollupRow {
             hour,
             key_id: key_id.into(),
+            key_generation,
             pool_id: pool_id.into(),
             account_id: account_id.into(),
             canonical_model: canonical_model.into(),
@@ -264,6 +270,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
     let mut d = RollupRow::key(
         hour_of(request.received_at),
         request.key_id.as_deref().unwrap_or(UNATTRIBUTED),
+        request.key_generation,
         request.pool_id.as_deref().unwrap_or(UNATTRIBUTED),
         last.map(|a| a.account_id.as_str()).unwrap_or(UNATTRIBUTED),
         &request.canonical_model,
@@ -420,6 +427,7 @@ pub fn fold_request(
         RollupRow::key(
             delta.hour,
             &delta.key_id,
+            delta.key_generation,
             &delta.pool_id,
             &delta.account_id,
             &delta.canonical_model,
@@ -500,6 +508,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
     let key = RollupRow::key(
         hour_of(delta.at),
         &delta.key_id,
+        delta.key_generation,
         &delta.pool_id,
         &delta.account_id,
         &delta.canonical_model,
@@ -722,34 +731,37 @@ fn take_span(
     Ok(span)
 }
 
-const COLUMNS: &str = "hour, key_id, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out FROM account_rollups_hourly";
 
-fn read_rollup(conn: &Connection, key: &RollupRow) -> Result<Option<RollupRow>, LedgerError> {
+pub(crate) fn read_rollup(
+    conn: &Connection,
+    key: &RollupRow,
+) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation],
             row_to_rollup,
         )
         .optional()?)
 }
 
-fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
+pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation],
     )?;
     Ok(())
 }
 
-fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
+pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44)"),
         params![
-            r.hour, r.key_id, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.estimated_usd, r.input_usd, r.cache_read_usd, r.cache_write_usd, r.output_usd, r.kept_warm_requests as i64, r.kept_warm_tokens as i64,
@@ -761,57 +773,64 @@ fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), LedgerError> {
 }
 
 fn row_to_rollup(r: &rusqlite::Row<'_>) -> rusqlite::Result<RollupRow> {
-    let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(i)? as u64) };
+    row_to_rollup_at(r, 0)
+}
+
+/// The row's columns read from `offset`, so a select that puts something of its own in front of `COLUMNS`
+/// needs no second mapper.
+fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<RollupRow> {
+    let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(offset + i)? as u64) };
     let counts = |i: usize| -> rusqlite::Result<BTreeMap<String, u64>> {
-        Ok(serde_json::from_str(&r.get::<_, String>(i)?).unwrap_or_default())
+        Ok(serde_json::from_str(&r.get::<_, String>(offset + i)?).unwrap_or_default())
     };
     let hist = |i: usize| -> rusqlite::Result<Histogram> {
-        Ok(Histogram::from_le_bytes(&r.get::<_, Vec<u8>>(i)?))
+        Ok(Histogram::from_le_bytes(&r.get::<_, Vec<u8>>(offset + i)?))
     };
     Ok(RollupRow {
-        hour: r.get(0)?,
-        key_id: r.get(1)?,
-        pool_id: r.get(2)?,
-        account_id: r.get(3)?,
-        canonical_model: r.get(4)?,
-        kind: r.get(5)?,
-        user_agent: r.get(6)?,
-        requests: u(7)?,
-        succeeded: u(8)?,
-        rate_limited: u(9)?,
-        failed: u(10)?,
-        exhausted: u(11)?,
-        rejected: u(12)?,
-        attempts: u(13)?,
-        failovers: u(14)?,
-        cache_hits: u(15)?,
-        cache_misses: u(16)?,
-        uncached_requests: u(17)?,
-        input_tokens: u(18)?,
-        cache_read_tokens: u(19)?,
-        cache_write_5m_tokens: u(20)?,
-        cache_write_1h_tokens: u(21)?,
-        output_tokens: u(22)?,
-        estimated_usd: r.get(23)?,
-        input_usd: r.get(24)?,
-        cache_read_usd: r.get(25)?,
-        cache_write_usd: r.get(26)?,
-        output_usd: r.get(27)?,
-        kept_warm_requests: u(28)?,
-        kept_warm_tokens: u(29)?,
-        saved_usd_gross: r.get(30)?,
-        probe_cost_usd: r.get(31)?,
-        probe_migrated: u(32)?,
-        wasted_probes: u(33)?,
-        wasted_probe_usd: r.get(34)?,
-        wasted_probe_reasons: counts(35)?,
-        probes_skipped: u(36)?,
-        ttfb_hist: hist(37)?,
-        ttfc_hist: hist(38)?,
-        duration_hist: hist(39)?,
-        output_tps_hist: hist(40)?,
-        errors: counts(41)?,
-        cache_miss_reasons: counts(42)?,
+        hour: r.get(offset)?,
+        key_id: r.get(offset + 1)?,
+        key_generation: r.get(offset + 2)?,
+        pool_id: r.get(offset + 3)?,
+        account_id: r.get(offset + 4)?,
+        canonical_model: r.get(offset + 5)?,
+        kind: r.get(offset + 6)?,
+        user_agent: r.get(offset + 7)?,
+        requests: u(8)?,
+        succeeded: u(9)?,
+        rate_limited: u(10)?,
+        failed: u(11)?,
+        exhausted: u(12)?,
+        rejected: u(13)?,
+        attempts: u(14)?,
+        failovers: u(15)?,
+        cache_hits: u(16)?,
+        cache_misses: u(17)?,
+        uncached_requests: u(18)?,
+        input_tokens: u(19)?,
+        cache_read_tokens: u(20)?,
+        cache_write_5m_tokens: u(21)?,
+        cache_write_1h_tokens: u(22)?,
+        output_tokens: u(23)?,
+        estimated_usd: r.get(offset + 24)?,
+        input_usd: r.get(offset + 25)?,
+        cache_read_usd: r.get(offset + 26)?,
+        cache_write_usd: r.get(offset + 27)?,
+        output_usd: r.get(offset + 28)?,
+        kept_warm_requests: u(29)?,
+        kept_warm_tokens: u(30)?,
+        saved_usd_gross: r.get(offset + 31)?,
+        probe_cost_usd: r.get(offset + 32)?,
+        probe_migrated: u(33)?,
+        wasted_probes: u(34)?,
+        wasted_probe_usd: r.get(offset + 35)?,
+        wasted_probe_reasons: counts(36)?,
+        probes_skipped: u(37)?,
+        ttfb_hist: hist(38)?,
+        ttfc_hist: hist(39)?,
+        duration_hist: hist(40)?,
+        output_tps_hist: hist(41)?,
+        errors: counts(42)?,
+        cache_miss_reasons: counts(43)?,
     })
 }
 
@@ -835,8 +854,34 @@ pub fn read_rollups(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, pool_id, account_id, canonical_model, kind, user_agent"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent"))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// One page of one key's rows at one generation, for the startup stamp that moves the unstamped rows of a
+/// live key: `rollups_hourly` is a rowid table, so the page after `after_rowid` is the next `limit` rows in
+/// rowid order and the caller carries the last rowid forward. `from_hour` narrows to the rows at or after an
+/// hour, for an id whose earlier holder's rows sit under the same generation.
+pub(crate) fn read_rollups_of_key_generation(
+    conn: &Connection,
+    key_id: &str,
+    key_generation: i64,
+    from_hour: Option<i64>,
+    after_rowid: i64,
+    limit: usize,
+) -> Result<Vec<(i64, RollupRow)>, LedgerError> {
+    let mut stmt = conn.prepare(&format!("SELECT rowid, {COLUMNS} FROM rollups_hourly WHERE key_id = ?1 AND key_generation = ?2 AND hour >= ?3 AND rowid > ?4 ORDER BY rowid LIMIT ?5"))?;
+    let rows = stmt.query_map(
+        params![
+            key_id,
+            key_generation,
+            from_hour.unwrap_or(i64::MIN),
+            after_rowid,
+            limit as i64
+        ],
+        |r| Ok((r.get::<_, i64>(0)?, row_to_rollup_at(r, 1)?)),
+    )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -880,6 +925,7 @@ mod tests {
         COLUMNS
             .replace(", user_agent", "")
             .replace(", probes_skipped", "")
+            .replace(", key_generation", "")
     }
 
     /// One row per version-2 column, in that order.
@@ -914,7 +960,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 6);
+        assert_eq!(db.schema_version().unwrap(), 7);
         let rows = db.read(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -952,7 +998,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 6);
+        assert_eq!(db.schema_version().unwrap(), 7);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;

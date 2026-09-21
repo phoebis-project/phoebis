@@ -189,6 +189,7 @@ fn request(
 ) -> SelectRequest {
     SelectRequest {
         key_id: "k".into(),
+        key_generation: s.key("k").unwrap().created_at,
         session_id: session.map(String::from),
         canonical_model: model.into(),
         candidates: resolve(s, s.key("k").unwrap(), model).unwrap(),

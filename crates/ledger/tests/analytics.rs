@@ -87,6 +87,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
             received_at,
             finished_at: Some(received_at + duration.unwrap_or(5)),
             key_id: (!unattributed).then(|| keys[rng.random_range(0..3)].into()),
+            key_generation: i64::from(i % 4 == 0),
             pool_id: (!unattributed).then(|| pools[rng.random_range(0..2)].into()),
             model: models[i as usize % 3].into(),
             canonical_model: models[i as usize % 3].into(),
@@ -185,6 +186,10 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
     #[allow(clippy::type_complexity)]
     let groups: Vec<(&str, Box<dyn Fn(&RollupRow) -> String>)> = vec![
         ("key", Box::new(|r| r.key_id.clone())),
+        (
+            "key_generation",
+            Box::new(|r| format!("{}@{}", r.key_id, r.key_generation)),
+        ),
         ("pool", Box::new(|r| r.pool_id.clone())),
         ("account", Box::new(|r| r.account_id.clone())),
         ("model", Box::new(|r| r.canonical_model.clone())),

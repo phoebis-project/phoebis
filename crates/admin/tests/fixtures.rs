@@ -341,7 +341,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation: 0, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, received_at: now }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -542,6 +542,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         origin: Origin::Client,
         kind: Kind::Inference,
         key_id: Some("desktop".into()),
+        key_generation: 0,
         pool_id: Some("main".into()),
         session_id: Some("s1".into()),
         agent_id: Some("main".into()),

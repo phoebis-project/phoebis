@@ -296,6 +296,7 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         origin: Origin::Client,
         kind: RequestKind::Inference,
         key_id: Some(key.into()),
+        key_generation: 0,
         pool_id: Some(pool.into()),
         session_id: Some(session.into()),
         agent_id: Some("main".into()),

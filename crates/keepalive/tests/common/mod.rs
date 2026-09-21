@@ -319,6 +319,7 @@ impl Rig {
             origin: Origin::Client,
             kind: Kind::Inference,
             key_id: Some("desktop".into()),
+            key_generation: self.h.store.api_key("desktop").unwrap().unwrap().created_at,
             pool_id: Some("main".into()),
             session_id: Some("session".into()),
             agent_id: Some(agent.into()),

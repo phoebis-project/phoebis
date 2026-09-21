@@ -130,6 +130,7 @@ mod tests {
             origin: Origin::Client,
             kind: Kind::Inference,
             key_id: Some("k".into()),
+            key_generation: 0,
             pool_id: Some("p".into()),
             session_id: None,
             agent_id: Some("main".into()),

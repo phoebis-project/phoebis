@@ -26,6 +26,7 @@ fn observed(id: &str, at: i64, capture_hours: u32) -> phoebis_bus::Event {
         origin: phoebis_bus::Origin::Client,
         kind: phoebis_bus::Kind::Inference,
         key_id: Some("desktop".into()),
+        key_generation: 0,
         pool_id: Some("main".into()),
         session_id: Some("s".into()),
         agent_id: Some("main".into()),

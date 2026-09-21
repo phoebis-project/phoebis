@@ -11,6 +11,9 @@ use crate::{Candidate, RegistrySnapshot, ResolveError};
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRequest {
     pub key_id: String,
+    /// The authenticated key's `created_at` at admission. The id is reusable, so the lifetime is the identity: a
+    /// stale-revision re-authentication that finds another generation under the id refuses the request.
+    pub key_generation: i64,
     pub session_id: Option<String>,
     pub canonical_model: String,
     pub candidates: Vec<Candidate>,

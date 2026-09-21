@@ -52,6 +52,7 @@ pub(crate) fn probe_cost(
 fn delta(
     at: i64,
     key: &SessionKey,
+    key_generation: i64,
     pool_id: &str,
     account: Option<&str>,
     canonical_model: &str,
@@ -60,6 +61,7 @@ fn delta(
     KeepaliveDelta {
         at,
         key_id: key.0.clone(),
+        key_generation,
         pool_id: pool_id.to_string(),
         account_id: account
             .filter(|a| !a.is_empty())
@@ -78,6 +80,7 @@ impl Engine {
         let mut d = delta(
             now,
             &record.key,
+            record.key_generation,
             &record.pool_id,
             Some(&record.account),
             &record.canonical_model,
@@ -97,6 +100,7 @@ impl Engine {
         &self,
         at: i64,
         key: &SessionKey,
+        key_generation: i64,
         pool_id: &str,
         account: Option<&str>,
         canonical_model: &str,
@@ -104,7 +108,15 @@ impl Engine {
         tokens: u64,
         saving: f64,
     ) {
-        let mut d = delta(at, key, pool_id, account, canonical_model, "inference");
+        let mut d = delta(
+            at,
+            key,
+            key_generation,
+            pool_id,
+            account,
+            canonical_model,
+            "inference",
+        );
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         d.kept_warm_tokens = tokens;
@@ -116,6 +128,7 @@ impl Engine {
         let mut d = delta(
             at,
             &settlement.key,
+            settlement.key_generation,
             &settlement.pool_id,
             settlement.account.as_deref(),
             &settlement.canonical_model,
@@ -132,11 +145,20 @@ impl Engine {
         &self,
         at: i64,
         key: &SessionKey,
+        key_generation: i64,
         pool_id: &str,
         account: Option<&str>,
         canonical_model: &str,
     ) {
-        let mut d = delta(at, key, pool_id, account, canonical_model, "probe");
+        let mut d = delta(
+            at,
+            key,
+            key_generation,
+            pool_id,
+            account,
+            canonical_model,
+            "probe",
+        );
         d.probes_skipped = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
@@ -148,7 +170,8 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<(SessionKey, String, String, Option<String>, String)> = Vec::new();
+            let mut skipped: Vec<(SessionKey, String, i64, String, Option<String>, String)> =
+                Vec::new();
             for (key, agent_id) in queued {
                 let Some(agent) = inner
                     .sessions
@@ -160,6 +183,7 @@ impl Engine {
                 skipped.push((
                     key,
                     agent_id,
+                    agent.key_generation,
                     agent.pool_id.clone(),
                     agent.account.clone(),
                     agent.canonical_model.clone(),
@@ -170,8 +194,15 @@ impl Engine {
         for settlement in settlements {
             self.record_settlement(now, settlement);
         }
-        for (key, _, pool_id, account, model) in skipped {
-            self.record_skipped(now, &key, &pool_id, account.as_deref(), &model);
+        for (key, _, key_generation, pool_id, account, model) in skipped {
+            self.record_skipped(
+                now,
+                &key,
+                key_generation,
+                &pool_id,
+                account.as_deref(),
+                &model,
+            );
         }
     }
 
@@ -231,7 +262,8 @@ mod tests {
     #[test]
     fn a_delta_without_an_account_takes_the_ledgers_reserved_id() {
         let key = ("desktop".to_string(), "session".to_string());
-        let of = |account| delta(0, &key, "main", account, "claude-sonnet-5", "probe").account_id;
+        let of =
+            |account| delta(0, &key, 0, "main", account, "claude-sonnet-5", "probe").account_id;
         assert_eq!(of(None), UNATTRIBUTED, "a recipe with no account");
         assert_eq!(of(Some("")), UNATTRIBUTED, "a probe record that named none");
         assert_eq!(of(Some("a")), "a");

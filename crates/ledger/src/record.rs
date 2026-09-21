@@ -6,6 +6,7 @@ pub struct RequestRecord {
     pub received_at: i64,
     pub finished_at: Option<i64>,
     pub key_id: Option<String>,
+    pub key_generation: i64,
     pub pool_id: Option<String>,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
@@ -121,6 +122,7 @@ pub struct ExtraUsageSampleRecord {
 pub struct KeepaliveDelta {
     pub at: i64,
     pub key_id: String,
+    pub key_generation: i64,
     pub pool_id: String,
     pub account_id: String,
     pub canonical_model: String,

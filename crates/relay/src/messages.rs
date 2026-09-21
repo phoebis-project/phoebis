@@ -128,6 +128,9 @@ pub struct RelayOutcome {
 #[derive(Clone, Debug)]
 pub struct Probe {
     pub key_id: String,
+    /// The generation of the key the recipe was retained under; the relay refuses a probe whose key now carries
+    /// another one, so no probe crosses into a replacement key's pool.
+    pub key_generation: i64,
     pub allow_oauth: bool,
 }
 
@@ -215,6 +218,7 @@ pub(crate) struct Trace {
     pub received_at: i64,
     origin: Origin,
     kind: Kind,
+    probe_generation: Option<i64>,
 }
 
 impl Trace {
@@ -251,6 +255,11 @@ impl Trace {
             origin: self.origin,
             kind: self.kind,
             key_id: key.map(|k| k.id.clone()),
+            // A probe's row files under the generation its recipe was retained under, the same one its
+            // keepalive deltas carry, so the two never disagree about whose probe it was.
+            key_generation: self
+                .probe_generation
+                .unwrap_or_else(|| key.map_or(0, |k| k.created_at)),
             pool_id: key.map(|k| k.pool_id.clone()),
             session_id: identity.and_then(|i| i.session_id.clone()),
             agent_id: identity.map(|i| i.agent_id.clone()),
@@ -522,6 +531,7 @@ impl Relay {
             } else {
                 Kind::Inference
             },
+            probe_generation: probe.as_ref().map(|p| p.key_generation),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -753,6 +763,7 @@ impl Relay {
                 .router
                 .select(SelectRequest {
                     key_id: key.id.clone(),
+                    key_generation: key.created_at,
                     session_id: identity.session_id.clone(),
                     canonical_model: identity.canonical_model.clone(),
                     candidates: candidates.clone(),

@@ -905,6 +905,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
         .probe(
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
                 allow_oauth: true,
             },
             req,
@@ -952,6 +953,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     // An unknown, revoked, or disabled id is the relay's 401 with nothing sent upstream.
     let probe = |key: &str| phoebis_relay::Probe {
         key_id: key.into(),
+        key_generation: 0,
         allow_oauth: true,
     };
     let refused = h
@@ -1037,6 +1039,7 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
             .probe(
                 phoebis_relay::Probe {
                     key_id: "desktop".into(),
+                    key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
                     allow_oauth,
                 },
                 request_for(KEY, "claude-sonnet-4-5", "s1"),
@@ -1082,6 +1085,7 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
         .probe(
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
                 allow_oauth: true,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
@@ -1121,11 +1125,13 @@ async fn a_mid_request_reload_still_only_serves_a_probe_an_eligible_account() {
     )
     .await;
     let relay = h.relay.clone();
+    let generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
     let pending = tokio::spawn(async move {
         relay
             .probe(
                 phoebis_relay::Probe {
                     key_id: "desktop".into(),
+                    key_generation: generation,
                     allow_oauth: false,
                 },
                 request_for(KEY, "claude-sonnet-4-5", "s1"),

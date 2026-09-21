@@ -206,6 +206,9 @@ pub(crate) struct Agent {
     pub id: String,
     /// The session's key, repeated here so a gate over one agent needs no session lookup.
     pub key_id: String,
+    /// The generation of the key the recipe was retained under, off the observed request; a probe's and a
+    /// settlement's rows file under it.
+    pub key_generation: i64,
     /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
     /// worker that started on the old one must not touch the new one's bookkeeping.
     pub incarnation: u64,
@@ -262,6 +265,7 @@ impl Agent {
         Agent {
             id: id.into(),
             key_id: key_id.into(),
+            key_generation: 0,
             incarnation,
             state: AgentState::Busy,
             generation: 0,
@@ -353,6 +357,7 @@ pub(crate) struct Observation {
 /// written to the ledger by the engine once the lock is released.
 pub(crate) struct Settlement {
     pub key: SessionKey,
+    pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
     pub account: Option<String>,
@@ -553,6 +558,7 @@ impl Inner {
         if let (Some(label), false) = (wasted, costs.is_empty()) {
             let settlement = Settlement {
                 key: key.clone(),
+                key_generation: agent.key_generation,
                 pool_id: agent.pool_id.clone(),
                 canonical_model: agent.canonical_model.clone(),
                 account: agent.account.clone(),
@@ -867,6 +873,7 @@ impl Engine {
         agent.hold_counted = false;
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
+        agent.key_generation = observed.key_generation;
         // A real request grants the grace budget again while the net is negative: the net only rises on a
         // request that lands warm, which needs a probe first.
         if agent.net_usd < 0.0 {
@@ -1093,6 +1100,7 @@ impl Engine {
                         || {
                             (
                                 read,
+                                agent.key_generation,
                                 agent.pool_id.clone(),
                                 agent.account.clone(),
                                 agent.canonical_model.clone(),
@@ -1101,7 +1109,7 @@ impl Engine {
                     )
                 })
         };
-        if let Some((read, pool_id, account, model)) = credit {
+        if let Some((read, key_generation, pool_id, account, model)) = credit {
             if let Some(saving) = gross_saving(&self.parts.pricing.current(), &model, read) {
                 inner
                     .sessions
@@ -1111,7 +1119,7 @@ impl Engine {
                     .get_mut(&agent_id)
                     .unwrap()
                     .net_usd += saving;
-                credited = Some((read, pool_id, account, model, saving));
+                credited = Some((read, key_generation, pool_id, account, model, saving));
             }
         }
         let (ready, armed) = inner.sessions[&key]
@@ -1163,10 +1171,11 @@ impl Engine {
             }
         }
         drop(inner);
-        if let Some((read, pool_id, account, model, saving)) = credited {
+        if let Some((read, key_generation, pool_id, account, model, saving)) = credited {
             self.record_kept_warm(
                 now,
                 &key,
+                key_generation,
                 &pool_id,
                 account.as_deref(),
                 &model,
@@ -1357,6 +1366,7 @@ impl Engine {
                 let observation = agent.current.as_ref().unwrap();
                 let job = ProbeJob {
                     key: key.clone(),
+                    key_generation: agent.key_generation,
                     agent_id: agent_id.clone(),
                     incarnation: agent.incarnation,
                     observation_id: observation.id.clone(),

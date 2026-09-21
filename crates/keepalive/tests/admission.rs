@@ -42,7 +42,11 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
     let resp =
         r.h.relay
             .probe(
-                phoebis_keepalive::probe_marker(&r.engine, "desktop"),
+                phoebis_keepalive::probe_marker(
+                    &r.engine,
+                    "desktop",
+                    r.h.store.api_key("desktop").unwrap().unwrap().created_at,
+                ),
                 r.request("main"),
             )
             .await;

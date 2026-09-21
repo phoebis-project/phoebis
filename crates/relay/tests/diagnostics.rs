@@ -738,6 +738,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
     // The probe replays the turn's own headers, session id among them.
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
         allow_oauth: false,
     };
     let resp = h

@@ -147,6 +147,8 @@ pub struct RequestObserved {
     pub origin: Origin,
     pub kind: Kind,
     pub key_id: Option<String>,
+    /// The key's `created_at`, the generation every rollup row of this request is filed under; 0 with no key.
+    pub key_generation: i64,
     pub pool_id: Option<String>,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,

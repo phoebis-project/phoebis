@@ -564,8 +564,8 @@ fn sum_groups(rows: &[&RollupRow], group_by: &str, probes_counted: bool) -> Vec<
         let key = group_of(row, group_by);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, "", "", "", "", ""),
-                RollupRow::key(0, &key, "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", ""),
             )
         });
         if row.kind == "probe" {

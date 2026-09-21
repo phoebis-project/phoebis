@@ -739,6 +739,7 @@ mod tests {
             origin: Origin::Client,
             kind: Kind::Inference,
             key_id: None,
+            key_generation: 0,
             pool_id: None,
             session_id: None,
             agent_id: None,

@@ -5,6 +5,7 @@ mod assemble;
 mod bodies;
 mod db;
 mod events;
+mod generations;
 mod histogram;
 mod metrics;
 mod pricing;
@@ -20,6 +21,7 @@ pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS};
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
+pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
     gather, metrics_router, KeepaliveAgents, KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,

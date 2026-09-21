@@ -26,6 +26,7 @@ pub const PROBE_DEADLINE: Duration = Duration::from_secs(300);
 
 pub(crate) struct ProbeJob {
     pub key: SessionKey,
+    pub key_generation: i64,
     pub agent_id: String,
     pub incarnation: u64,
     pub observation_id: String,
@@ -95,6 +96,7 @@ pub struct ProbeRecord {
     pub canonical_model: String,
     pub cost_usd: f64,
     pub key: SessionKey,
+    pub key_generation: i64,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
@@ -146,7 +148,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let request = request
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(job.recipe.body.clone()));
-    let marker = crate::probe_marker(&engine, &job.key.0);
+    let marker = crate::probe_marker(&engine, &job.key.0, job.key_generation);
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,
@@ -230,6 +232,7 @@ impl Inner {
             canonical_model: job.canonical_model.clone(),
             cost_usd: 0.0,
             key: job.key.clone(),
+            key_generation: job.key_generation,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -329,6 +332,7 @@ impl Inner {
             };
             self.settlements.push(crate::engine::Settlement {
                 key: key.clone(),
+                key_generation: job.key_generation,
                 pool_id: job.pool_id.clone(),
                 canonical_model: job.canonical_model.clone(),
                 account: Some(record.account.clone()),

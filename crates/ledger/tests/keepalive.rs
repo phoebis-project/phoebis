@@ -391,10 +391,13 @@ fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version_four_
     let path = dir.path().join("ledger.sqlite");
     {
         let db = LedgerDb::open(&path).unwrap();
-        db.write(|c| { c.execute_batch("ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
+        // The rollup table keeps the generation column it cannot drop (it is in the primary key); the rebuild
+        // that replays over it names its own columns and never reads that one, so only the request row's has
+        // to go for the replay to reach migration five's work.
+        db.write(|c| { c.execute_batch("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
     }
     let db = LedgerDb::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 6);
+    assert_eq!(db.schema_version().unwrap(), 7);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
