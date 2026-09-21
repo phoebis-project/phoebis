@@ -932,3 +932,69 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let (app, _up, store, _router) = common::admin_parts_on(store).await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let first = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(first.status(), 201);
+    assert_eq!(
+        delete(&app, "/admin/keys/desktop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    // The first holder's create is moved a minute past the wall clock: the state the second create sees when
+    // it lands inside the first's millisecond, pinned rather than raced for.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE registry_changes SET at = at + 60000 WHERE target = 'desktop' AND kind = 'key_created'",
+        [],
+    )
+    .unwrap();
+    let previous: i64 = conn
+        .query_row(
+            "SELECT MAX(at) FROM registry_changes WHERE target = 'desktop' AND kind = 'key_created'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    let second = json(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            second["created_at"].as_i64(),
+            store.api_key("desktop").unwrap().unwrap().created_at
+        ),
+        (Some(previous + 1), previous + 1),
+        "the answer carries the generation the store stamped, not the route's clock"
+    );
+}

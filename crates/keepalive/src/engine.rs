@@ -187,6 +187,9 @@ pub struct EngineStats {
 /// One companion registration, or one session a request revealed before any registration.
 pub(crate) struct Session {
     pub key_id: String,
+    /// The generation of the key that registered the session, so a key id created again reaches none of the
+    /// previous holder's sessions: the companion identity is the pair, never the id alone.
+    pub key_generation: i64,
     pub session_id: String,
     pub instance: String,
     pub sequence: u64,
@@ -635,6 +638,39 @@ impl Inner {
             self.agents -= agents.len();
             // A session whose companion reported its end was announced then; the entry outlives the report
             // only so a result still in flight finds it, and the alerts resolve on one end, not two.
+            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
+            if !announced {
+                self.emit(SessionLifecycle::SessionEnded {
+                    key_id: key.0.clone(),
+                    session_id: key.1.clone(),
+                });
+            }
+        }
+    }
+
+    /// Ends every session whose key the registry no longer holds under the generation that registered it: a
+    /// deletion, or the same id created again, takes the previous holder's sessions and recipes with it rather
+    /// than leaving them to the session expiry.
+    pub(crate) fn drop_sessions_of_dead_keys(&mut self, snapshot: &RegistrySnapshot) {
+        let dead: Vec<SessionKey> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| {
+                snapshot.key(&s.key_id).map(|k| k.created_at) != Some(s.key_generation)
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in dead {
+            let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
+            for agent in &agents {
+                self.discard(
+                    &key,
+                    agent,
+                    Reason::SessionEnded,
+                    Some(Wasted::SessionEnded),
+                );
+            }
+            self.agents -= agents.len();
             let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
             if !announced {
                 self.emit(SessionLifecycle::SessionEnded {
@@ -1256,6 +1292,7 @@ impl Engine {
                 return;
             }
             inner.expire(now, expiry);
+            inner.drop_sessions_of_dead_keys(&view.snapshot);
             inner.roll_day(now);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner

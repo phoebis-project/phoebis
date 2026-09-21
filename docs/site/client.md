@@ -86,7 +86,8 @@ The client probes `/api/hello` before it sends anything, and ignores the answer.
 refuse on purpose: answering them would let a client pick a model from an account's entitlements rather than
 from its own configuration. Every refusal above, including the wrong-method and unknown-path answers, carries an
 Anthropic-shaped error body. The two keepalive companion routes are covered on the [Keepalive](keepalive.md)
-page.
+page; each session they report belongs to the key generation that registered it, so a key id created again
+reaches none of the sessions its previous holder left behind.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message, and the `cache_control` markers it carries take the pool's cache TTL policy the way a message's do:

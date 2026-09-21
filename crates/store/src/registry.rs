@@ -583,7 +583,9 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<(), StoreError> {
+    /// Answers the `created_at` it stamped: a caller's own clock is not the generation, and a selector or a
+    /// response built from the row would name the wrong holder after a re-create.
+    pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<i64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if tx.query_row(
@@ -625,7 +627,7 @@ impl Store {
         )?;
         record_change(&tx, now, actor, "key_created", &row.id, &key_diff(row))?;
         tx.commit()?;
-        Ok(())
+        Ok(now)
     }
 
     pub fn update_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<(), StoreError> {

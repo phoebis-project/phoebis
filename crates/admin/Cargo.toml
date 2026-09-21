@@ -36,5 +36,6 @@ phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 futures = { workspace = true }
 http-body-util = { workspace = true }
+tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tower = { workspace = true }

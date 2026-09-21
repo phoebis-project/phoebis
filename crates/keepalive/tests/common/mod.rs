@@ -183,13 +183,25 @@ impl Rig {
         self.clock.fetch_add(ms, Ordering::SeqCst);
     }
 
+    /// The generation the store stamped for `key_id`: a companion session belongs to the pair, so every call
+    /// that names a key names its generation beside it. A key the store never held answers 0.
+    pub fn generation(&self, key_id: &str) -> i64 {
+        self.h
+            .store
+            .api_key(key_id)
+            .unwrap()
+            .map(|k| k.created_at)
+            .unwrap_or_default()
+    }
+
     /// A lifecycle event for the rig's one session and instance, under the harness key, with the next sequence.
     pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
         self.sequence += 1;
         event.sequence = self.sequence;
         event.session_id = "session".into();
         event.instance_id = "instance".into();
-        self.engine.apply_event("desktop", event)
+        self.engine
+            .apply_event("desktop", self.generation("desktop"), event)
     }
 
     pub fn state(&mut self, agent: &str, state: &str) {
@@ -206,7 +218,7 @@ impl Rig {
 
     pub fn agent(&self, id: &str) -> phoebis_keepalive::SnapshotAgent {
         self.engine
-            .snapshot("desktop")
+            .snapshot("desktop", self.generation("desktop"))
             .sessions
             .into_iter()
             .flat_map(|s| s.agents)
@@ -319,7 +331,7 @@ impl Rig {
             origin: Origin::Client,
             kind: Kind::Inference,
             key_id: Some("desktop".into()),
-            key_generation: self.h.store.api_key("desktop").unwrap().unwrap().created_at,
+            key_generation: self.generation("desktop"),
             pool_id: Some("main".into()),
             session_id: Some("session".into()),
             agent_id: Some(agent.into()),

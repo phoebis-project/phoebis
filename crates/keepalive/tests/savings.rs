@@ -496,7 +496,7 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
         match sweep {
             "expire" => r.engine.expire(),
             _ => {
-                r.engine.snapshot("desktop");
+                r.engine.snapshot("desktop", r.generation("desktop"));
             }
         }
         let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
@@ -553,6 +553,7 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
                 r.engine
                     .apply_event(
                         "desktop",
+                        r.generation("desktop"),
                         Event {
                             event: "session_start".into(),
                             session_id: "session".into(),

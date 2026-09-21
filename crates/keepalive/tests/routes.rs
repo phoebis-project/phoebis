@@ -163,6 +163,82 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
 }
 
 #[tokio::test]
+async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
+    let r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    let (status, _, body) = get(&app, SNAPSHOT_PATH, "", Some(KEY)).await;
+    assert_eq!(
+        (status, body["sessions"][0]["instance_id"].as_str()),
+        (200, Some("instance")),
+        "the registered session is the first holder's to see"
+    );
+    r.h.store.delete_api_key("desktop", "test").unwrap();
+    r.h.store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "desktop".into(),
+                label: "desktop".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                allowed_models: None,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: r.h.store.api_key_digest(OTHER_KEY).to_vec(),
+                prefix: phoebis_store::key_prefix(OTHER_KEY),
+                created_at: NOW,
+                rotated_at: None,
+                last_used_at: None,
+            },
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    assert_eq!(
+        get(&app, SNAPSHOT_PATH, "", Some(KEY)).await.0,
+        401,
+        "the deleted secret is refused outright"
+    );
+    let (status, _, body) = get(&app, SNAPSHOT_PATH, "", Some(OTHER_KEY)).await;
+    assert_eq!(
+        (status, body["sessions"].as_array().map(Vec::len)),
+        (200, Some(0)),
+        "and the replacement holder sees no session of the previous one"
+    );
+    let (status, _, body) = get(
+        &app,
+        EVENTS_PATH,
+        "event=session_end&session_id=session&instance_id=instance&sequence=9",
+        Some(OTHER_KEY),
+    )
+    .await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (409, Some("unknown_instance")),
+        "an instance of the previous holder reads as one that was never registered"
+    );
+    let (status, _, body) = get(
+        &app,
+        EVENTS_PATH,
+        "event=session_start&session_id=session&instance_id=fresh&sequence=1",
+        Some(OTHER_KEY),
+    )
+    .await;
+    assert_eq!((status, body["instance_id"].as_str()), (200, Some("fresh")));
+    let (_, _, body) = get(&app, SNAPSHOT_PATH, "", Some(OTHER_KEY)).await;
+    assert_eq!(
+        (
+            body["sessions"].as_array().map(Vec::len),
+            body["sessions"][0]["instance_id"].as_str()
+        ),
+        (Some(1), Some("fresh")),
+        "the replacement registers the same session id under its own generation"
+    );
+}
+
+#[tokio::test]
 async fn acks_and_errors_keep_the_go_contract() {
     let r = rig(RigSpec::default()).await;
     let app = companion_router(r.engine.clone());

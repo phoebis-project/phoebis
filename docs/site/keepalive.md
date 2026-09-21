@@ -38,12 +38,14 @@ request's diagnostics latch; the next real request re-sends the item, takes its 
 The engine learns which sessions are alive from `cc-cache-keepalive`, a Claude Code hook plugin that reports the
 session lifecycle to two routes on the proxy listener, `GET /v0/resource/plugins/cache-keepalive/events` and
 `GET /v0/resource/plugins/cache-keepalive/snapshot`, under the same key the client sends for model traffic. A
-session is scoped to the key that reports it.
+session is scoped to the key that reports it, and to the generation that key was created under: an id deleted
+and created again reads and drives none of the previous holder's sessions.
 
 The companion holds a lease over the session, `keepalive.lease_seconds` long (90 seconds by default). Once the
 lease lapses, the session keeps being probed under the pool's idle limits until they run out. A `session_end`
-event, a replacement registration, the session's own expiry, or an operator's release discards its recipes at
-once.
+event, a replacement registration, the deletion of the key that registered it, the session's own expiry, or an
+operator's release discards its recipes at once; a deleted key's sessions end within a second of the deletion
+rather than at their expiry.
 
 The Sessions view names the companion's state two ways for a session it is watching: reporting, meaning "a
 cache-keepalive companion is registered for this session and its agents are reporting their lifecycle," and

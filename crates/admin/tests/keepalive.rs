@@ -226,6 +226,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         .keepalive
         .apply_event(
             "desktop",
+            common::generation(&parts.store, "desktop"),
             Event {
                 event: "session_start".into(),
                 session_id: "s1".into(),
@@ -488,7 +489,11 @@ async fn an_ended_session_is_listed_without_a_companion() {
     };
     parts
         .keepalive
-        .apply_event("desktop", start(1, "session_start"))
+        .apply_event(
+            "desktop",
+            common::generation(&parts.store, "desktop"),
+            start(1, "session_start"),
+        )
         .unwrap();
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
@@ -501,7 +506,11 @@ async fn an_ended_session_is_listed_without_a_companion() {
     );
     parts
         .keepalive
-        .apply_event("desktop", start(2, "session_end"))
+        .apply_event(
+            "desktop",
+            common::generation(&parts.store, "desktop"),
+            start(2, "session_end"),
+        )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]

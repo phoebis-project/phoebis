@@ -192,6 +192,12 @@ fn full_from(parts: Parts) -> Full {
     }
 }
 
+/// The generation the store stamped for `key_id`. A companion session belongs to the key and the generation
+/// that registered it, so every engine call names the pair.
+pub fn generation(store: &Store, key_id: &str) -> i64 {
+    store.api_key(key_id).unwrap().unwrap().created_at
+}
+
 pub async fn admin_app() -> (Router, FakeUpstream) {
     let parts = app_with(None, ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up)

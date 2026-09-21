@@ -190,7 +190,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     match state.store.insert_api_key(&row, ACTOR) {
-        Ok(()) => {}
+        // The store stamps the generation, moving a create that lands inside the previous holder's millisecond
+        // one past it; an `<id>@<generation>` selector built from this answer has to name that stamp.
+        Ok(created_at) => row.created_at = created_at,
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }

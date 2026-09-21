@@ -156,6 +156,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
     r.engine
         .apply_event(
             "desktop",
+            r.generation("desktop"),
             Event {
                 event: "session_start".into(),
                 session_id: "session".into(),
@@ -245,6 +246,7 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     r.engine.observe(r.observed("new", "main", BODY));
     let stale = r.engine.apply_event(
         "desktop",
+        r.generation("desktop"),
         Event {
             event: "state".into(),
             session_id: "session".into(),
@@ -370,7 +372,11 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     r.engine.observe(r.selected("req", "a"));
     r.engine
         .observe(r.complete("req", Outcome::Succeeded, Some(usage(0, 2_000))));
-    let encoded = format!("{:?}{:?}", r.status("main"), r.engine.snapshot("desktop"));
+    let encoded = format!(
+        "{:?}{:?}",
+        r.status("main"),
+        r.engine.snapshot("desktop", r.generation("desktop"))
+    );
     assert!(
         !encoded.contains("private prompt")
             && !encoded.contains(KEY)

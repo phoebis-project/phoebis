@@ -375,6 +375,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .keepalive
         .apply_event(
             "desktop",
+            common::generation(&parts.store, "desktop"),
             phoebis_keepalive::Event {
                 event: "session_start".into(),
                 session_id: "s1".into(),

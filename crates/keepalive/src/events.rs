@@ -155,9 +155,14 @@ fn acknowledge(session: &Session, agent: Option<&Agent>) -> Ack {
 }
 
 impl Engine {
-    /// `key_id` is the authenticated key, never a field of the event: a session is scoped to the key that
-    /// reports it, and no query field can name another.
-    pub fn apply_event(&self, key_id: &str, event: Event) -> Result<Ack, EventError> {
+    /// `key_id` and `key_generation` are the authenticated key's, never fields of the event: a session is
+    /// scoped to the holder that reports it, and no query field can name another.
+    pub fn apply_event(
+        &self,
+        key_id: &str,
+        key_generation: i64,
+        event: Event,
+    ) -> Result<Ack, EventError> {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let lease = self.parts.limits.lease_ms();
@@ -170,6 +175,7 @@ impl Engine {
             inner.expire(now, expiry);
             inner.apply(
                 key_id,
+                key_generation,
                 event,
                 now,
                 lease,
@@ -181,7 +187,7 @@ impl Engine {
         acked
     }
 
-    pub fn snapshot(&self, key_id: &str) -> Snapshot {
+    pub fn snapshot(&self, key_id: &str, key_generation: i64) -> Snapshot {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let snapshot = {
@@ -191,7 +197,7 @@ impl Engine {
                 sessions: inner
                     .sessions
                     .values()
-                    .filter(|s| s.key_id == key_id)
+                    .filter(|s| s.key_id == key_id && s.key_generation == key_generation)
                     .map(|s| SnapshotSession {
                         agents: s
                             .agents
@@ -216,9 +222,11 @@ impl Engine {
 }
 
 impl Inner {
+    #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         key_id: &str,
+        key_generation: i64,
         ev: Event,
         now: i64,
         lease_ms: i64,
@@ -227,11 +235,24 @@ impl Inner {
     ) -> Result<Ack, EventError> {
         let key: SessionKey = (key_id.to_string(), ev.session_id.clone());
         if ev.event == "session_start" {
-            return self.start(key, ev, now, lease_ms, max_sessions, max_agents);
+            return self.start(
+                key,
+                key_generation,
+                ev,
+                now,
+                lease_ms,
+                max_sessions,
+                max_agents,
+            );
         }
         let Some(session) = self.sessions.get(&key) else {
             return Err(err("unknown_instance", 409));
         };
+        // A session the previous holder of this key id registered answers as one that was never registered, so
+        // a replacement holder learns nothing about it: not its instance, not its sequence, not its state.
+        if session.key_generation != key_generation {
+            return Err(err("unknown_instance", 409));
+        }
         if session.instance != ev.instance_id {
             return Err(err("unknown_instance", 409));
         }
@@ -420,16 +441,25 @@ impl Inner {
         Ok(acknowledge(session, session.agents.get(&agent_id)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         key: SessionKey,
+        key_generation: i64,
         ev: Event,
         now: i64,
         lease_ms: i64,
         max_sessions: usize,
         max_agents: usize,
     ) -> Result<Ack, EventError> {
-        if let Some(session) = self.sessions.get_mut(&key) {
+        // What a previous holder of this key id left under the same session id is not this caller's to
+        // re-adopt or to conflict with; the start below replaces it whole, as it replaces an instance.
+        let mine = self
+            .sessions
+            .get(&key)
+            .is_some_and(|s| s.key_generation == key_generation);
+        if mine {
+            let session = self.sessions.get_mut(&key).expect("the session just read");
             if session.instance == ev.instance_id {
                 // A same-instance start after a lapse re-adopts the session: the companion may only have been
                 // silent, and the recipes it left are still the ones its next request needs.
@@ -456,7 +486,9 @@ impl Inner {
             if ev.previous_instance_id.is_some() {
                 return Err(err("unknown_previous_instance", 409));
             }
-            if self.sessions.len() >= max_sessions {
+            // A start that replaces a previous holder's session takes the entry it already holds, so the
+            // bound only refuses one that would add an entry.
+            if !self.sessions.contains_key(&key) && self.sessions.len() >= max_sessions {
                 return Err(err("session_limit", 429));
             }
         }
@@ -497,7 +529,13 @@ impl Inner {
             }
             self.agents -= agents.len();
         }
-        let last_real_at = self.sessions.get(&key).and_then(|s| s.last_real_at);
+        // A previous holder's traffic says nothing about this key's session, so only a start of the same
+        // generation inherits when the session last carried a real request.
+        let last_real_at = if mine {
+            self.sessions.get(&key).and_then(|s| s.last_real_at)
+        } else {
+            None
+        };
         let mut agents = BTreeMap::new();
         let incarnation = self.incarnation();
         agents.insert(
@@ -508,6 +546,7 @@ impl Inner {
             key.clone(),
             Session {
                 key_id: key.0.clone(),
+                key_generation,
                 session_id: key.1.clone(),
                 instance: ev.instance_id.clone(),
                 sequence: ev.sequence,

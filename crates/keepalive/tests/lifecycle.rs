@@ -155,6 +155,7 @@ async fn an_instance_replacement_releases_its_agents_and_ends_its_parked_state()
     r.engine
         .apply_event(
             KEY,
+            r.generation(KEY),
             Event {
                 event: "session_start".into(),
                 instance_id: "instance-2".into(),
@@ -213,6 +214,7 @@ async fn a_close_ends_every_live_session_once_and_an_announced_one_not_again() {
     r.engine
         .apply_event(
             "desktop",
+            r.generation("desktop"),
             Event {
                 session_id: "s2".into(),
                 instance_id: "i2".into(),
@@ -303,6 +305,7 @@ async fn an_accepted_heartbeat_says_the_session_is_still_there() {
     r.engine
         .apply_event(
             KEY,
+            r.generation(KEY),
             Event {
                 event: "heartbeat".into(),
                 instance_id: "instance".into(),
@@ -317,4 +320,39 @@ async fn an_accepted_heartbeat_says_the_session_is_still_there() {
         [],
         "a heartbeat the engine refused says nothing about the session"
     );
+}
+
+#[tokio::test]
+async fn a_deleted_keys_sessions_end_at_the_next_tick() {
+    let (tx, mut rx) = lifecycle_channel();
+    let mut r = rig(RigSpec {
+        lifecycle: Some(tx),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(drain(&mut rx), [started()]);
+    r.observe("main").await;
+    assert!(
+        !r.engine.recipes_for(KEY, SESSION).is_empty(),
+        "the request retained a recipe for the session"
+    );
+    r.h.store.delete_api_key(KEY, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.step().await;
+    assert_eq!(
+        drain(&mut rx),
+        [ended()],
+        "the key is gone, so the session it held ends without waiting for its expiry"
+    );
+    let stats = r.engine.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents, stats.retained_bytes),
+        (0, 0, 0),
+        "and its agents and their recipes go with it"
+    );
+    assert!(r
+        .engine
+        .snapshot(KEY, r.generation(KEY))
+        .sessions
+        .is_empty());
 }

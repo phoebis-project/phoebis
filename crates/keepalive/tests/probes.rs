@@ -151,7 +151,7 @@ async fn a_probe_preserves_routing_and_constraints() {
         r.now() - 270_000,
         "a probe does not renew activity"
     );
-    let snapshot = r.engine.snapshot("desktop");
+    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
     assert!(!snapshot.sessions[0].ended);
     let ack = r
         .event(Event {
@@ -303,13 +303,17 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
         "a lapsed lease keeps the recipe"
     );
     assert!(
-        r.engine.snapshot("desktop").sessions[0].ended,
+        r.engine
+            .snapshot("desktop", r.generation("desktop"))
+            .sessions[0]
+            .ended,
         "the companion sees an ended instance"
     );
     assert_eq!(
         r.engine
             .apply_event(
                 "desktop",
+                r.generation("desktop"),
                 Event {
                     event: "heartbeat".into(),
                     session_id: "session".into(),
@@ -441,6 +445,7 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
     r.engine
         .apply_event(
             "desktop",
+            r.generation("desktop"),
             Event {
                 event: "session_start".into(),
                 session_id: "session".into(),

@@ -26,6 +26,7 @@ async fn query_events_match_the_contract() {
         .engine
         .apply_event(
             "desktop",
+            r.generation("desktop"),
             decode_query_event(
                 "event=heartbeat&session_id=session&instance_id=instance&sequence=99",
             )
@@ -124,6 +125,7 @@ async fn query_events_match_the_contract() {
         r.engine
             .apply_event(
                 "desktop",
+                r.generation("desktop"),
                 Event {
                     event: "bogus".into(),
                     session_id: "session".into(),
@@ -142,6 +144,7 @@ async fn query_events_match_the_contract() {
         r.engine
             .apply_event(
                 "desktop",
+                r.generation("desktop"),
                 Event {
                     event: "state".into(),
                     session_id: "session".into(),
@@ -165,6 +168,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     let mut r = rig(RigSpec::default()).await;
     let stale = r.engine.apply_event(
         "desktop",
+        r.generation("desktop"),
         Event {
             event: "heartbeat".into(),
             session_id: "session".into(),
@@ -182,6 +186,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     let other = r.engine.apply_event(
         "desktop",
+        r.generation("desktop"),
         Event {
             event: "heartbeat".into(),
             session_id: "session".into(),
@@ -199,6 +204,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     let conflict = r.engine.apply_event(
         "desktop",
+        r.generation("desktop"),
         Event {
             event: "session_start".into(),
             session_id: "session".into(),
@@ -217,6 +223,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     let orphan = r.engine.apply_event(
         "desktop",
+        r.generation("desktop"),
         Event {
             event: "session_start".into(),
             session_id: "fresh".into(),
@@ -360,7 +367,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (Some("worker"), AgentState::Busy)
     );
     // The failed events did not advance the sequence: the next accepted one is one past the last accepted.
-    let snapshot = r.engine.snapshot("desktop");
+    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
     assert_eq!(snapshot.sessions[0].sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
     r.event(Event {
@@ -368,8 +375,16 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         ..Default::default()
     })
     .unwrap();
-    assert!(r.engine.snapshot("desktop").sessions[0].ended);
-    assert!(r.engine.snapshot("desktop").sessions[0]
+    assert!(
+        r.engine
+            .snapshot("desktop", r.generation("desktop"))
+            .sessions[0]
+            .ended
+    );
+    assert!(r
+        .engine
+        .snapshot("desktop", r.generation("desktop"))
+        .sessions[0]
         .agents
         .iter()
         .all(|a| a.state == AgentState::Released));
@@ -389,6 +404,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .engine
         .apply_event(
             "desktop",
+            r.generation("desktop"),
             Event {
                 event: "session_start".into(),
                 session_id: "session".into(),
@@ -403,7 +419,11 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (
             replaced.instance_id.as_str(),
             replaced.request_generation,
-            r.engine.snapshot("desktop").sessions[0].agents.len()
+            r.engine
+                .snapshot("desktop", r.generation("desktop"))
+                .sessions[0]
+                .agents
+                .len()
         ),
         ("next", 0, 1)
     );
@@ -425,6 +445,7 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
     r.engine
         .apply_event(
             "laptop",
+            r.generation("laptop"),
             Event {
                 event: "session_start".into(),
                 session_id: "session".into(),
@@ -434,16 +455,29 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
             },
         )
         .unwrap();
-    assert_eq!(r.engine.snapshot("desktop").sessions.len(), 1);
     assert_eq!(
-        r.engine.snapshot("laptop").sessions[0].instance_id,
+        r.engine
+            .snapshot("desktop", r.generation("desktop"))
+            .sessions
+            .len(),
+        1
+    );
+    assert_eq!(
+        r.engine.snapshot("laptop", r.generation("laptop")).sessions[0].instance_id,
         "elsewhere"
     );
-    assert_eq!(r.engine.snapshot("nobody").sessions.len(), 0);
+    assert_eq!(
+        r.engine
+            .snapshot("nobody", r.generation("nobody"))
+            .sessions
+            .len(),
+        0
+    );
     assert_eq!(
         r.engine
             .apply_event(
                 "desktop",
+                r.generation("desktop"),
                 Event {
                     event: "session_start".into(),
                     session_id: "third".into(),
@@ -500,7 +534,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     );
     r.advance(90_000);
     r.engine.expire();
-    let session = &r.engine.snapshot("desktop").sessions[0];
+    let session = &r
+        .engine
+        .snapshot("desktop", r.generation("desktop"))
+        .sessions[0];
     assert!(
         session.ended,
         "the companion sees an ended instance and re-registers"
@@ -528,7 +565,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         .unwrap();
     assert_eq!(again.instance_id, "instance");
     assert!(
-        !r.engine.snapshot("desktop").sessions[0].ended,
+        !r.engine
+            .snapshot("desktop", r.generation("desktop"))
+            .sessions[0]
+            .ended,
         "the same instance re-adopted the session"
     );
     let counts = r.engine.reasons();
@@ -547,7 +587,8 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
         ..Default::default()
     })
     .unwrap();
-    let encoded = serde_json::to_string(&r.engine.snapshot("desktop")).unwrap();
+    let encoded =
+        serde_json::to_string(&r.engine.snapshot("desktop", r.generation("desktop"))).unwrap();
     for forbidden in [
         "account",
         "usage",
@@ -565,7 +606,7 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
             "snapshot leaks {forbidden}: {encoded}"
         );
     }
-    let snapshot = r.engine.snapshot("desktop");
+    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
     assert_eq!(
         (
             snapshot.sessions.len(),

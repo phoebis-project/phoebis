@@ -25,17 +25,19 @@ pub fn companion_router(engine: Arc<Engine>) -> Router {
         .with_state(engine)
 }
 
-/// The key the request presents, resolved exactly as `/v1/messages` resolves it; the refusal bodies are the
-/// relay's, so a companion pointed at the wrong port sees the same 401 the client would.
+/// The key the request presents, resolved exactly as `/v1/messages` resolves it, with the generation it was
+/// created under: a session belongs to the pair, so a key id created again reaches none of the previous
+/// holder's. The refusal bodies are the relay's, so a companion pointed at the wrong port sees the same 401
+/// the client would.
 #[allow(clippy::result_large_err)]
-fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<String, Response> {
+fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64), Response> {
     let request_id = new_request_id();
     let presented = presented_key(request.headers())
         .map_err(|error| no_store(auth_error_response(&error, &request_id)))?;
     let snapshot = engine.parts.router.snapshot();
     snapshot
         .authenticate(presented, engine.now())
-        .map(|key| key.id.clone())
+        .map(|key| (key.id.clone(), key.created_at))
         .map_err(|refusal| no_store(key_refusal_response(&refusal, &request_id)))
 }
 
@@ -57,15 +59,15 @@ fn event_error(error: EventError) -> Response {
 }
 
 async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {
-    let key_id = match authenticate(&engine, &request) {
-        Ok(key_id) => key_id,
+    let (key_id, key_generation) = match authenticate(&engine, &request) {
+        Ok(key) => key,
         Err(refused) => return refused,
     };
     let event = match decode_query_event(request.uri().query().unwrap_or("")) {
         Ok(event) => event,
         Err(error) => return event_error(error),
     };
-    match engine.apply_event(&key_id, event) {
+    match engine.apply_event(&key_id, key_generation, event) {
         Ok(ack) => json(
             StatusCode::OK,
             serde_json::to_string(&ack).unwrap_or_default(),
@@ -75,12 +77,12 @@ async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Re
 }
 
 async fn snapshot(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {
-    let key_id = match authenticate(&engine, &request) {
-        Ok(key_id) => key_id,
+    let (key_id, key_generation) = match authenticate(&engine, &request) {
+        Ok(key) => key,
         Err(refused) => return refused,
     };
     json(
         StatusCode::OK,
-        serde_json::to_string(&engine.snapshot(&key_id)).unwrap_or_default(),
+        serde_json::to_string(&engine.snapshot(&key_id, key_generation)).unwrap_or_default(),
     )
 }
