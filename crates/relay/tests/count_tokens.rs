@@ -1,4 +1,5 @@
-//! A token count takes the cache TTL rewrite and the restamp as an inference request does, and nothing else.
+//! A token count's own cache markers take the cache TTL rewrite and the restamp an inference request's do,
+//! and nothing else about its body changes.
 mod common;
 use common::*;
 
@@ -12,6 +13,8 @@ const OA: &str = "sk-ant-oat01-AAAA0001";
 
 const COUNT_OK: &[u8] = br#"{"input_tokens":7}"#;
 
+const REFUSED_TTL_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `extended-cache-ttl-2025-04-11` for the `anthropic-beta` header."}}"#;
+
 /// Ahead of any `/v1/messages` rule in a test that serves both, since the count path matches that prefix too.
 fn count_rule() -> Rule {
     Rule {
@@ -21,6 +24,14 @@ fn count_rule() -> Rule {
             headers: vec![],
             body: COUNT_OK.to_vec(),
         },
+    }
+}
+
+fn json_400(message: &str) -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: message.as_bytes().to_vec(),
     }
 }
 
@@ -48,9 +59,39 @@ fn beta_list(r: &fake_upstream::RecordedRequest) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The recorded count with its one message turned into a marked text block: the shape the client would send if
+/// it ever cached a count. The recorded bodies carry no marker at all, so nothing else can prove the rewrite.
+fn marked_count(fixture: BodyFixture) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(body(fixture)).unwrap();
+    let message = &mut value["messages"][0];
+    let text = message["content"]
+        .as_str()
+        .expect("the recorded count holds one text message")
+        .to_string();
+    message["content"] = serde_json::json!([
+        {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+    ]);
+    serde_json::to_vec(&value).unwrap()
+}
+
+/// The same body with its five-minute marker read as the hour, which is the whole edit the policy owes a count.
+fn hour_marked(body: &[u8]) -> Vec<u8> {
+    String::from_utf8(body.to_vec())
+        .unwrap()
+        .replace(
+            r#"{"type":"ephemeral"}"#,
+            r#"{"type":"ephemeral","ttl":"1h"}"#,
+        )
+        .into_bytes()
+}
+
 /// The recorded count as the client sent it, under the router's key.
 fn count_request(kind: FixtureKind, fixture: BodyFixture) -> axum::http::Request<axum::body::Body> {
     request_from_fixture(inference_head(kind), body(fixture), KEY)
+}
+
+fn count_request_with(kind: FixtureKind, body: &[u8]) -> axum::http::Request<axum::body::Body> {
+    request_from_fixture(inference_head(kind), body, KEY)
 }
 
 #[tokio::test]
@@ -68,9 +109,8 @@ async fn under_the_defaults_the_recorded_count_reaches_the_upstream_as_the_clien
         .unwrap();
     assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
-    assert_eq!(
-        sent.body,
-        body(BodyFixture::CountApiKey),
+    assert!(
+        sent.body == body(BodyFixture::CountApiKey),
         "no edit under the defaults"
     );
     assert!(sent.line.starts_with("POST /v1/messages/count_tokens"));
@@ -85,16 +125,8 @@ async fn under_the_defaults_the_recorded_count_reaches_the_upstream_as_the_clien
 }
 
 #[tokio::test]
-async fn under_the_policy_the_counts_markers_take_the_ttl_and_the_beta_follows_as_on_an_inference_request(
-) {
-    let up = FakeUpstream::start(vec![
-        count_rule(),
-        Rule {
-            path_prefix: "/v1/messages".into(),
-            respond: json_200(),
-        },
-    ])
-    .await;
+async fn under_the_policy_the_recorded_count_travels_as_sent_since_it_carries_no_marker() {
+    let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
@@ -116,14 +148,62 @@ async fn under_the_policy_the_counts_markers_take_the_ttl_and_the_beta_follows_a
         markers(body(BodyFixture::CountApiKey)).is_empty(),
         "the client sends a count with no marker of its own"
     );
+    assert!(
+        sent.body == body(BodyFixture::CountApiKey),
+        "the count endpoint gets no top-level member the client never sent"
+    );
+    assert!(
+        !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "no beta for an hour the body does not carry"
+    );
+    assert!(
+        phoebis_cch::object_member_span(&sent.body, &["diagnostics"]).is_none(),
+        "nothing to diagnose on a count"
+    );
+    assert!(
+        phoebis_cch::string_member_span(&sent.body, &["metadata", "user_id"]).is_none(),
+        "no identity slot on a count"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_inference_request() {
+    let up = FakeUpstream::start(vec![
+        count_rule(),
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+    ])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"main":"1h"}"#),
+    )
+    .await;
+    let marked = marked_count(BodyFixture::CountApiKey);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(count_request_with(FixtureKind::CountApiKey, &marked))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
     assert_eq!(
         markers(&sent.body),
         vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
-        "a count with no marker gets the top-level one the policy gives an inference body with none"
+        "the marker the count carries reads the policy's hour"
     );
     assert_eq!(
         beta_list(sent).last().map(String::as_str),
         Some(EXTENDED_TTL_BETA)
+    );
+    assert!(
+        sent.body == hour_marked(&marked),
+        "the marker is the whole edit: a count carries no cch to restamp"
     );
     assert!(
         phoebis_cch::object_member_span(&sent.body, &["diagnostics"]).is_none(),
@@ -155,7 +235,7 @@ async fn under_the_policy_the_counts_markers_take_the_ttl_and_the_beta_follows_a
 }
 
 #[tokio::test]
-async fn a_count_under_an_oauth_key_takes_the_same_rule_and_no_restoration() {
+async fn a_marked_count_under_an_oauth_key_takes_the_same_rule_and_no_restoration() {
     let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(
         &up,
@@ -176,7 +256,7 @@ async fn a_count_under_an_oauth_key_takes_the_same_rule_and_no_restoration() {
         let resp = h
             .app
             .clone()
-            .oneshot(count_request(kind, fixture))
+            .oneshot(count_request_with(kind, &marked_count(fixture)))
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
@@ -202,5 +282,71 @@ async fn a_count_under_an_oauth_key_takes_the_same_rule_and_no_restoration() {
             "no identity slot on a count"
         );
     }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_400_on_a_count_strips_the_beta_for_that_leg_and_leaves_the_account_unlatched() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", json_400(REFUSED_TTL_BETA));
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"main":"1h"}"#),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(count_request_with(
+            FixtureKind::CountApiKey,
+            &marked_count(BodyFixture::CountApiKey),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        up.requests().len(),
+        2,
+        "the strip retry corrects the count's own edit on the same leg"
+    );
+    assert!(beta_list(&up.requests()[0])
+        .iter()
+        .any(|b| b == EXTENDED_TTL_BETA));
+    assert_eq!(
+        markers(&up.requests()[1].body),
+        vec![r#"{"type":"ephemeral"}"#.to_string()],
+        "the retry rewrites the count's marker to five minutes"
+    );
+    assert!(!beta_list(&up.requests()[1])
+        .iter()
+        .any(|b| b == EXTENDED_TTL_BETA));
+
+    // What the count endpoint refused says nothing about the inference requests the account serves.
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::ApiKey),
+            body(BodyFixture::ApiKey),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(up.requests().len(), 3);
+    let inference = &up.requests()[2];
+    assert!(
+        markers(&inference.body)
+            .iter()
+            .all(|m| m.contains(r#""ttl":"1h""#)),
+        "the account was never latched, so the hour still reaches an inference body"
+    );
+    assert!(
+        beta_list(inference).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "and its beta with it"
+    );
     up.shutdown().await;
 }

@@ -55,7 +55,7 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, CacheTtl, CacheTtlPolicy, DriftGuard,
-    NativeEdit, RelayError, EXTENDED_TTL_BETA,
+    Markerless, NativeEdit, RelayError, EXTENDED_TTL_BETA,
 };
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
@@ -424,6 +424,13 @@ fn restore_with<'a>(
         restore_cch: true,
         skip: skip.iter().copied().collect(),
     })
+}
+
+/// Whether a 400 on this request says anything about the account past this leg. A `count_tokens` request is
+/// answered by a schema of its own, so what that endpoint refuses is no reason to strip an item from the
+/// inference requests the account serves; the strip retry still corrects this leg's own edit.
+fn latches(trace: &Trace) -> bool {
+    trace.kind == Kind::Inference
 }
 
 /// The wire value a coupled TTL dispatches as, for the bus and the outcome; `None` when the body went as sent.
@@ -912,14 +919,20 @@ impl Relay {
             // overage.
             let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
-            // retry reuses this body rather than pricing again. A count is priced too: its markers and its
-            // hash follow the inference request's under the same policy, or the count would read an entry
-            // the inference request wrote under another TTL.
+            // retry reuses this body rather than pricing again. A count is priced too: the markers it
+            // carries follow the inference request's under the same policy, or the count would read an
+            // entry the inference request wrote under another TTL.
             let priced = admitted.cache_ttl_policy.ttl_for(
                 canonical_model,
                 admitted.identity.agent_id == "main",
                 writes_cost_money,
             );
+            // Only the markers a count already carries: the `count_tokens` schema is not documented to
+            // accept a top-level member the client never sent, and a 400 naming one has no strip path.
+            let markerless = match admitted.trace.kind {
+                Kind::CountTokens => Markerless::GoesAsSent,
+                Kind::Inference | Kind::Probe => Markerless::TakesTheMember,
+            };
             // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
             // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
             // minutes and reports that.
@@ -945,12 +958,17 @@ impl Relay {
                         restore: restore_with(&admitted.restore, &previous, skip),
                         diagnostics,
                         cache_ttl: ttl,
+                        markerless,
                     },
                 )?;
                 body_injected.extend(edits.restored);
                 // A body whose markers the rewrite could not reach went as it arrived, so this leg claims
-                // nothing about its TTL: no beta for it, none dropped for it, and none reported.
-                if edits.cache_ttl_refused {
+                // nothing about its TTL: no beta for it, none dropped for it, and none reported. A count
+                // the rewrite found nothing to edit in went as it arrived too, and a beta naming an hour
+                // its body does not carry would be the relay's to answer for on a 400.
+                if edits.cache_ttl_refused
+                    || (markerless == Markerless::GoesAsSent && !edits.cache_ttl_edited)
+                {
                     ttl = None;
                 }
                 if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
@@ -1361,7 +1379,7 @@ impl Relay {
         }
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
-        if !ctx.can_strip && head.status == 400 {
+        if !ctx.can_strip && head.status == 400 && latches(ctx.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
             // Gated on the same error type the strip path itself requires, so a 400 of another kind that
@@ -1448,8 +1466,11 @@ impl Relay {
             // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
             // it the same 400 classifies as `Commit` and is forwarded as any other.
             Verdict::StripInjected(items) => {
-                for item in &items {
-                    self.memory.latch(ctx.account, *item);
+                // The retry itself still runs whatever the request is: it corrects this leg's own edit.
+                if latches(ctx.trace) {
+                    for item in &items {
+                        self.memory.latch(ctx.account, *item);
+                    }
                 }
                 return Next::Strip(items);
             }

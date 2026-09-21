@@ -19,6 +19,16 @@ pub struct BodyEdits {
     pub cache_ttl_refused: bool,
 }
 
+/// What a body carrying no `cache_control` marker of its own does under a cache TTL policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Markerless {
+    /// The API's top-level member is added, so the policy's TTL reaches a message the client left unmarked.
+    TakesTheMember,
+    /// The body travels as sent. The `count_tokens` schema is not documented to accept a member the client
+    /// never sent, and a 400 naming one has no strip path to fall back on.
+    GoesAsSent,
+}
+
 /// What a TTL rewrite did to the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TtlEdit {
@@ -38,8 +48,10 @@ pub struct NativeEdit<'a> {
     /// Outer `None` leaves the body alone; the inner option is the previous `message_start` id on this account,
     /// `None` writing a JSON `null` for a first turn, a migration, or a failover.
     pub diagnostics: Option<Option<&'a str>>,
-    /// `None` leaves every marker as sent; `Some` rewrites every marker (or adds the top-level one) to this TTL.
+    /// `None` leaves every marker as sent; `Some` rewrites every marker the body carries to this TTL.
     pub cache_ttl: Option<CacheTtl>,
+    /// What the TTL rewrite does to a body carrying no marker at all.
+    pub markerless: Markerless,
 }
 
 /// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
@@ -137,7 +149,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         }
     }
     let cache_ttl = match edit.cache_ttl {
-        Some(ttl) => set_cache_ttl(body, ttl)?,
+        Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
         None => TtlEdit::Applied(false),
     };
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
@@ -156,9 +168,13 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
 /// decoder reads it through its escapes, so a body spelling the key any other way carries a marker the rewrite
 /// never reaches: its hour would outlive a five-minute policy, unenforced and unreported. Where the two
 /// readings disagree the edit is undone, and the body travels with the TTL it arrived with.
-pub fn set_cache_ttl(body: &mut Vec<u8>, ttl: CacheTtl) -> Result<TtlEdit, RelayError> {
+pub fn set_cache_ttl(
+    body: &mut Vec<u8>,
+    ttl: CacheTtl,
+    markerless: Markerless,
+) -> Result<TtlEdit, RelayError> {
     let as_sent = body.clone();
-    let changed = rewrite_cache_ttl(body, ttl)?;
+    let changed = rewrite_cache_ttl(body, ttl, markerless)?;
     let enforced = match (schema_markers(body), phoebis_cch::cache_control_spans(body)) {
         (Some(decoded), Ok(walked)) => decoded == walked.len(),
         _ => false,
@@ -216,10 +232,17 @@ fn schema_markers(body: &[u8]) -> Option<usize> {
 /// Rewrites every ephemeral marker to `ttl`: `1h` writes `"ttl":"1h"` right after `"type":"ephemeral"`, `5m`
 /// removes the `ttl` member, and every other member of the marker keeps its place. A marker whose `type` is not
 /// `ephemeral` is left as sent. A body with no marker anywhere gets the top-level `cache_control` member with
-/// the TTL, before `stream`. Returns whether any byte changed.
-fn rewrite_cache_ttl(body: &mut Vec<u8>, ttl: CacheTtl) -> Result<bool, RelayError> {
+/// the TTL, before `stream`, where `markerless` allows it. Returns whether any byte changed.
+fn rewrite_cache_ttl(
+    body: &mut Vec<u8>,
+    ttl: CacheTtl,
+    markerless: Markerless,
+) -> Result<bool, RelayError> {
     let spans = phoebis_cch::cache_control_spans(body)?;
     if spans.is_empty() {
+        if markerless == Markerless::GoesAsSent {
+            return Ok(false);
+        }
         add_top_level_cache_control(body, ttl);
         return Ok(true);
     }
@@ -421,6 +444,7 @@ mod tests {
                 restore: None,
                 diagnostics: None,
                 cache_ttl: None,
+                markerless: Markerless::TakesTheMember,
             },
         )
         .expect("a JSON object is editable");
@@ -442,6 +466,7 @@ mod tests {
                     restore: None,
                     diagnostics: None,
                     cache_ttl: None,
+                    markerless: Markerless::TakesTheMember,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -460,6 +485,7 @@ mod tests {
                     restore: None,
                     diagnostics: None,
                     cache_ttl: None,
+                    markerless: Markerless::TakesTheMember,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -477,6 +503,7 @@ mod tests {
                     restore: None,
                     diagnostics: None,
                     cache_ttl: None,
+                    markerless: Markerless::TakesTheMember,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -494,6 +521,7 @@ mod tests {
                 restore: None,
                 diagnostics: None,
                 cache_ttl: None,
+                markerless: Markerless::TakesTheMember,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -511,6 +539,7 @@ mod tests {
                 restore: None,
                 diagnostics: None,
                 cache_ttl: None,
+                markerless: Markerless::TakesTheMember,
             },
         )
         .expect("a JSON object is editable");
@@ -533,6 +562,7 @@ mod tests {
                     restore: None,
                     diagnostics: None,
                     cache_ttl: None,
+                    markerless: Markerless::TakesTheMember,
                 },
             ),
             Err(RelayError::NotAnObject)
@@ -567,7 +597,7 @@ mod tests {
     fn set_cache_ttl_rewrites_a_bare_marker_both_ways() {
         let mut to_hour = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut to_hour, CacheTtl::OneHour).unwrap(),
+            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
             TtlEdit::Applied(true)
         );
         assert_eq!(
@@ -577,7 +607,12 @@ mod tests {
 
         let mut stays_five = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut stays_five, CacheTtl::FiveMinutes).unwrap(),
+            set_cache_ttl(
+                &mut stays_five,
+                CacheTtl::FiveMinutes,
+                Markerless::TakesTheMember
+            )
+            .unwrap(),
             TtlEdit::Applied(false),
             "already the requested shape"
         );
@@ -589,7 +624,12 @@ mod tests {
         let mut to_five =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut to_five, CacheTtl::FiveMinutes).unwrap(),
+            set_cache_ttl(
+                &mut to_five,
+                CacheTtl::FiveMinutes,
+                Markerless::TakesTheMember
+            )
+            .unwrap(),
             TtlEdit::Applied(true)
         );
         assert_eq!(
@@ -600,7 +640,7 @@ mod tests {
         let mut to_hour =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut to_hour, CacheTtl::OneHour).unwrap(),
+            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
             TtlEdit::Applied(false),
             "already an hour"
         );
@@ -610,7 +650,7 @@ mod tests {
     fn set_cache_ttl_leaves_a_marker_of_another_type_as_sent() {
         let mut body = br#"{"cache_control":{"type":"persistent"}}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut body, CacheTtl::OneHour).unwrap(),
+            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
             TtlEdit::Applied(false)
         );
         assert_eq!(body, br#"{"cache_control":{"type":"persistent"}}"#);
@@ -620,7 +660,12 @@ mod tests {
     fn set_cache_ttl_adds_the_top_level_member_before_stream_when_no_marker_is_present() {
         let mut with_stream = br#"{"model":"m","stream":true}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut with_stream, CacheTtl::OneHour).unwrap(),
+            set_cache_ttl(
+                &mut with_stream,
+                CacheTtl::OneHour,
+                Markerless::TakesTheMember
+            )
+            .unwrap(),
             TtlEdit::Applied(true)
         );
         assert_eq!(
@@ -630,7 +675,12 @@ mod tests {
 
         let mut without_stream = br#"{"model":"m"}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut without_stream, CacheTtl::FiveMinutes).unwrap(),
+            set_cache_ttl(
+                &mut without_stream,
+                CacheTtl::FiveMinutes,
+                Markerless::TakesTheMember
+            )
+            .unwrap(),
             TtlEdit::Applied(true)
         );
         assert_eq!(
@@ -640,12 +690,22 @@ mod tests {
     }
 
     #[test]
+    fn set_cache_ttl_leaves_a_body_with_no_marker_as_sent_where_the_member_is_not_accepted() {
+        let mut body = br#"{"model":"m","messages":[],"tools":[]}"#.to_vec();
+        assert_eq!(
+            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::GoesAsSent).unwrap(),
+            TtlEdit::Applied(false)
+        );
+        assert_eq!(body, br#"{"model":"m","messages":[],"tools":[]}"#);
+    }
+
+    #[test]
     fn set_cache_ttl_rewrites_every_wire_position_and_keeps_the_marker_count() {
         // No fixture body carries a marker inside `tools[]`; this synthetic body covers all three container
         // positions in one pass.
         let mut body = br#"{"system":[{"type":"text","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","cache_control":{"type":"ephemeral"}}]}]}"#.to_vec();
         assert_eq!(
-            set_cache_ttl(&mut body, CacheTtl::OneHour).unwrap(),
+            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
             TtlEdit::Applied(true)
         );
         let spans = phoebis_cch::cache_control_spans(&body).unwrap();
