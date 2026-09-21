@@ -1,7 +1,7 @@
 //! The keepalive policy on a pool: typed on the way in, whole on the way out, and gated by affinity; the
 //! sessions, recipes, and overview views the admin API renders from the engine.
 mod common;
-use common::{get, json, login, patch, post};
+use common::{delete, get, json, login, patch, post};
 
 #[tokio::test]
 async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
@@ -592,6 +592,94 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
         ),
         (Some(true), Some("none"), Some(0)),
         "a release reaches the live generation alone; the historical row is untouched"
+    );
+}
+
+/// A deleted key's session outlives the key in the engine until the idle sweep clears it: the row must read as
+/// historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
+/// it directly.
+#[tokio::test]
+async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_is_refused() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let g = common::generation(&parts.store, "desktop");
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            g,
+            Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1")
+    })
+    .await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .expect("the registered session is listed while the key is live");
+    assert_eq!(
+        (row["historical"].as_bool(), row["companion"].as_str()),
+        (Some(false), Some("reporting")),
+        "live before the key is deleted"
+    );
+    assert_eq!(
+        delete(&parts.app, "/admin/keys/desktop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .expect(
+            "the ledger and the engine both still remember the session the deleted key left behind",
+        );
+    assert_eq!(
+        (
+            row["historical"].as_bool(),
+            row["companion"].as_str(),
+            row["agents"].as_u64(),
+            row["keepalive"]["state"].is_null()
+        ),
+        (Some(true), Some("none"), Some(0), true),
+        "the deleted key's session outlives it in the engine, but the row reads as historical and read-only"
+    );
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/sessions/desktop/s1/release",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        404,
+        "the console cannot release a historical row by naming it directly"
     );
 }
 

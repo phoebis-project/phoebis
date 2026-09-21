@@ -153,6 +153,13 @@ async fn recent_activity(state: &AdminState, now: i64) -> Vec<phoebis_ledger::Se
     }
 }
 
+/// Whether the row's rotation is still inside the grace the previous secret keeps authenticating for; a row
+/// outside it, or never rotated, contributes nothing a session-activity read could answer.
+fn in_rotation_grace(row: &ApiKeyRow, now: i64) -> bool {
+    row.rotated_at
+        .is_some_and(|at| now < at + ROTATION_GRACE_MS)
+}
+
 // Live sessions whose newest request presented the retired secret of this rotation, while its grace lasts;
 // the console says how many sessions still need to switch before the old secret stops working. A session
 // last seen on the secret an earlier rotation retired is not on this one: that secret no longer
@@ -183,7 +190,12 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
         Ok(rows) => {
             let (week, lifetime) = totals(&state).await;
             let now = (state.clock)();
-            let activity = recent_activity(&state, now).await;
+            // Every count is 0 without a key inside its grace, so the grouped read is worth running only then.
+            let activity = if rows.iter().any(|row| in_rotation_grace(row, now)) {
+                recent_activity(&state, now).await
+            } else {
+                Vec::new()
+            };
             let mut out = Vec::new();
             for row in rows {
                 let count = sessions_on_retired_secret(&row, &activity, now);
@@ -253,9 +265,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     let (week, lifetime) = totals(&state).await;
-    let activity = recent_activity(&state, now).await;
-    let count = sessions_on_retired_secret(&row, &activity, now);
-    match key_json(&state, &row, &week, &lifetime, count) {
+    // A row this route just created has never been rotated, so no session can be on a secret of its yet to
+    // exist: the grouped read would answer nothing worth its cost.
+    match key_json(&state, &row, &week, &lifetime, 0) {
         Ok(mut v) => {
             v["secret"] = json!(secret);
             (StatusCode::CREATED, Json(v)).into_response()

@@ -212,6 +212,9 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// under `none`.
 ///
 /// Version 10: a captured body records the length each side ran to, so a cut body says how much was dropped.
+///
+/// Version 11: a request says whether it presented a retired secret and under which rotation, so the count of
+/// sessions still on the previous secret is scoped to the rotation whose grace is running.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -436,8 +439,6 @@ ALTER TABLE bodies ADD COLUMN response_len_seen INTEGER NOT NULL DEFAULT 0;",
     ),
     (
         11,
-        // A request says whether it presented a retired secret and under which rotation, so the count of
-        // sessions still on the previous secret is scoped to the rotation whose grace is running.
         "ALTER TABLE requests ADD COLUMN presented_retired INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE requests ADD COLUMN rotation_at INTEGER;",
     ),

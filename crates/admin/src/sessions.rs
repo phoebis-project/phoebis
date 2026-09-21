@@ -113,10 +113,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         entry["keepalive"] = json!(view.keepalive);
     }
     // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
-    // under the live generation alone and cannot belong to it, so it carries no companion or recipe.
+    // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
+    // deleted key's session outlives the key in the engine until the idle sweep or a release clears it, so
+    // the clearing is on `historical` as well as on the engine's own map, not on the map alone.
     for (key, entry) in rows.iter_mut() {
-        entry["historical"] = json!(live.get(&key.0) != Some(&key.1));
-        if !engine.contains_key(key) {
+        let historical = live.get(&key.0) != Some(&key.1);
+        entry["historical"] = json!(historical);
+        if historical || !engine.contains_key(key) {
             entry["companion"] = json!("none");
             entry["companion_since"] = json!(null);
             entry["agents"] = json!(0);
@@ -176,6 +179,11 @@ pub(crate) async fn release(
     State(state): State<Arc<AdminState>>,
     Path((key, session)): Path<(String, String)>,
 ) -> Response {
+    // A historical row's key id is not the live snapshot's: the console never offers the action on it, and a
+    // deleted key's session lingering in the engine must not be reachable by naming it directly either.
+    if state.router.snapshot().key(&key).is_none() {
+        return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
+    }
     let pins = match state.router.release_session(&key, &session).await {
         Ok(n) => n,
         Err(_) => {
