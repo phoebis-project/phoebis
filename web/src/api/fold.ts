@@ -1,5 +1,6 @@
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
 
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
@@ -28,30 +29,44 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   requests: 0,
   savings: { grossUsd: 0, probeCostUsd: 0, wastedProbeReasons: emptyWastedProbeReasons(), wastedProbeUsd: 0, wastedProbes: 0 },
   succeeded: 0,
-  tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput: 0 },
+  tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
   uncached: 0,
 });
 
-const keyOf = (r: RequestLog, by: AnalyticsGroupBy): string => {
+const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
+  if (by === 'effort') return r.shape.effort ?? 'none';
   if (by === 'key') return r.keyId ?? '-';
   if (by === 'kind') return r.kind;
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
-  // The rollups file a row that named no client under 'unknown'; a fold over request rows says the same.
-  if (by === 'user_agent') return r.userAgent ?? 'unknown';
+  if (by === 'user_agent') {
+    // The rollups file a row that named no client under 'unknown'; under a pattern list it falls with every
+    // other unmatched client under 'other', as the breakdown route files it.
+    if (agentGroups.length === 0) return r.userAgent ?? 'unknown';
+    return agentGroups.find((p) => matchesPattern(p, r.userAgent ?? '')) ?? 'other';
+  }
   return 'all';
 };
+
+export interface FoldOptions {
+  /** Patterns naming the groups under `user_agent`; a row falls in the first that matches, the rest under `other`. */
+  agentGroups?: string[];
+  /** Patterns a row's client must match one of; a row with no client matches none. */
+  agentPatterns?: string[];
+}
 
 /** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */
 const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.ttftMs !== null && r.durationMs - r.ttftMs > 0 && r.usage.output > 0 ? r.usage.output / ((r.durationMs - r.ttftMs) / 1000) : null);
 
 /** Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session. */
-export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy): AnalyticsGroup[] {
+export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}): AnalyticsGroup[] {
   const groups = new Map<string, AnalyticsGroup>();
   const lists = new Map<string, RequestLog[]>();
-  for (const r of rows) {
-    const key = keyOf(r, by);
+  const patterns = options.agentPatterns ?? [];
+  const kept = patterns.length ? rows.filter((r) => patterns.some((p) => matchesPattern(p, r.userAgent ?? ''))) : rows;
+  for (const r of kept) {
+    const key = keyOf(r, by, options.agentGroups ?? []);
     const g = groups.get(key) ?? empty(key, key === '-' ? 'unattributed' : key);
     groups.set(key, g);
     const list = lists.get(key) ?? [];
@@ -72,7 +87,10 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy): AnalyticsG
     g.tokens.cacheWrite1h += r.usage.cacheWrite1h;
     g.tokens.cacheWrite5m += r.usage.cacheWrite5m;
     g.tokens.output += r.usage.output;
+    g.tokens.thinking += r.usage.thinking;
     g.tokens.uncachedInput += r.usage.input;
+    g.tokens.webFetch += r.usage.webFetch;
+    g.tokens.webSearch += r.usage.webSearch;
     g.costUsd += r.costUsd;
     // The ledger classifies by tokens: a read is a hit, a write without a read is a miss, neither is uncached.
     // The diagnosed reason is a breakdown of its own and decides nothing here.
@@ -92,7 +110,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy): AnalyticsG
   return [...groups.values()].sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }
 
-export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all'): AnalyticsPoint[] {
+export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}): AnalyticsPoint[] {
   const end = Date.parse(to);
   const points: AnalyticsPoint[] = [];
   // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too.
@@ -101,7 +119,7 @@ export function foldRequests(rows: RequestLog[], bucketMs: number, from: string,
       const t = Date.parse(r.at);
       return t >= at && t < at + bucketMs;
     });
-    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by) });
+    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by, options) });
   }
   return points;
 }
@@ -125,7 +143,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   for (const g of groups) {
     for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached'] as const) out[k] += g[k];
     for (const k of ['cacheRead', 'cacheWrite', 'input', 'output'] as const) out.cost[k] += g.cost[k];
-    for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'uncachedInput'] as const) out.tokens[k] += g.tokens[k];
+    for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = (out.errors[code] ?? 0) + n;
     for (const reason of CACHE_MISS_REASONS) out.cacheMissReasons[reason] += g.cacheMissReasons[reason];
     out.keptWarm.requests += g.keptWarm.requests;

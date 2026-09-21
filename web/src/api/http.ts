@@ -79,7 +79,8 @@ const qs = (params: Record<string, string | number | boolean | string[] | undefi
   return s ? `?${s}` : '';
 };
 const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to)}`;
-const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to) });
+// `qs` joins a list with commas, which a pattern may hold; both pattern lists travel joined by newline instead.
+const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
 
 export class HttpApi implements Api {
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);

@@ -8,7 +8,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { StatusBadge } from './DashboardPage';
 
@@ -161,7 +161,7 @@ export function RequestsPage() {
           <MultiSelect label="Upstreams" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
           <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
           {/* `.mono` shrinks the text to 0.92em, which would leave this control shorter than the rest of the bar. */}
-          <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Client contains" aria-label="Client contains" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+          <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
           <MultiSelect
             label="Status"
             options={[
@@ -400,6 +400,21 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
           </section>
 
           <section>
+            <h3 className="section-title">Request shape</h3>
+            <KeyValue
+              rows={[
+                { label: 'Effort', value: r.shape.effort ?? <span className="muted">not sent</span>, mono: Boolean(r.shape.effort) },
+                { label: 'Thinking', value: r.shape.thinkingType ? `${r.shape.thinkingType}${r.shape.thinkingBudget !== null ? `, budget ${fmtInt(r.shape.thinkingBudget)}` : ''}` : <span className="muted">not sent</span> },
+                { label: 'Max tokens', value: r.shape.maxTokens !== null ? fmtInt(r.shape.maxTokens) : <span className="muted">not sent</span> },
+                { label: 'Tools, system blocks, messages', value: `${fmtInt(r.shape.toolCount)}, ${fmtInt(r.shape.systemBlocks)}, ${fmtInt(r.shape.messageCount)}` },
+                { label: 'Context edits', value: r.shape.contextEdits.length ? r.shape.contextEdits.join(', ') : <span className="muted">none</span>, mono: r.shape.contextEdits.length > 0 },
+                { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
+                { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
+              ]}
+            />
+          </section>
+
+          <section>
             <h3 className="section-title">Attempts</h3>
             <ol className="attempts">
               {r.attempts.map((a) => (
@@ -429,6 +444,15 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                       })}
                     <CacheRow attempt={a} usage={r.usage} />
                   </ul>
+                  {(a.response.stopReason || a.response.servedModel || a.response.clearedInputTokens !== null) && (
+                    <div className="attempt__response secondary">
+                      {a.response.stopReason && <span>stopped: {a.response.stopReason}{a.response.refusalCategory ? ` (${a.response.refusalCategory}${a.response.refusalRecommendedModel ? `, try ${a.response.refusalRecommendedModel}` : ''})` : ''}</span>}
+                      {a.response.servedModel && <span className="mono">served by {a.response.servedModel}</span>}
+                      {a.response.speed && <span>{a.response.speed}</span>}
+                      {a.response.inferenceGeo && <span>{a.response.inferenceGeo}</span>}
+                      {a.response.clearedInputTokens !== null && <span>{fmtInt(a.response.clearedInputTokens)} tokens cleared by context edits</span>}
+                    </div>
+                  )}
                   {a.cooldownSet && (
                     <div className="attempt__cooldown">
                       <Badge tone="warning">cooldown set</Badge>
@@ -480,8 +504,18 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                   <td className="right num">{fmtInt(r.usage.cacheWrite1h)}</td>
                 </tr>
                 <tr>
-                  <td>Output</td>
-                  <td className="right num">{fmtInt(r.usage.output)}</td>
+                  <td>Output, thinking</td>
+                  <td className="right num">{fmtInt(r.usage.thinking)}</td>
+                </tr>
+                <tr>
+                  <td>Output, plain</td>
+                  <td className="right num">{fmtInt(Math.max(0, r.usage.output - r.usage.thinking))}</td>
+                </tr>
+                <tr>
+                  <td>Server tool calls</td>
+                  <td className="right num">
+                    {fmtInt(r.usage.webSearch)} search, {fmtInt(r.usage.webFetch)} fetch
+                  </td>
                 </tr>
                 <tr>
                   <td>
@@ -507,8 +541,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               <Skeleton height={120} />
             ) : bodies.data ? (
               <div className="bodies">
-                <BodyBlock label="Request" value={bodies.data.request} />
-                <BodyBlock label="Response" value={bodies.data.response} />
+                <BodyBlock label="Request" value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock label="Response" value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -542,12 +576,13 @@ function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   );
 }
 
-function BodyBlock({ label, value }: { label: string; value: unknown }) {
+function BodyBlock({ label, value, dropped }: { dropped?: number; label: string; value: unknown }) {
   const text = JSON.stringify(value, null, 2);
   return (
     <div className="body-block">
       <div className="body-block__head">
         <span>{label}</span>
+        {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
         <CopyButton text={text} />
       </div>
       <pre className="body-block__pre">{text}</pre>

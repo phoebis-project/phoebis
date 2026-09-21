@@ -174,6 +174,11 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failover.status, 200);
   assert.equal(failover.transport, 'sse');
   assert.equal(failover.usage.cacheRead, 500);
+  assert.equal(failover.usage.thinking, 40);
+  assert.equal(failover.shape.effort, 'high');
+  assert.equal(failover.shape.toolCount, 12);
+  assert.equal(failover.attempts[1].response.stopReason, 'end_turn');
+  assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
   assert.equal(failed.errorCode, 'upstream_error');
   assert.equal(failed.outcome, 'failed');
@@ -184,7 +189,23 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.ok(isIso(moved[0].at));
   assert.deepEqual([moved[1].kind, moved[1].accountId, moved[1].detail.reasons], ['pin_expired', 'business', ['cooldown', 'spent']]);
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5');
-  assert.equal(d.decodeBodies(fixture('request_bodies')).request.model, 'claude-sonnet-5');
+});
+
+test('a captured body carries the bytes the route counted, never the bytes the drawer would measure', () => {
+  const whole = d.decodeBodies(fixture('request_bodies'));
+  assert.equal(whole.request.model, 'claude-sonnet-5');
+  assert.equal(whole.requestBytesStored, whole.requestBytesSeen, 'nothing was cut, so both sides read the same count');
+  assert.equal(whole.responseTruncated, false);
+  // A stream is stored as its own text: rendering it back through JSON.stringify adds the escapes, and a
+  // length measured there would answer less than the stored count rather than the ten bytes that were cut.
+  const stream = d.decodeBodies({ request_id: 'r-cut', response: 'event: message_start\ndata: {"type":"message_start"}\n\n', response_bytes_stored: 8_388_608, response_bytes_seen: 8_388_618, response_truncated: true });
+  assert.equal(d.bytesDropped(stream.responseBytesSeen, stream.responseBytesStored), 10);
+  const multibyte = d.decodeBodies({ request_id: 'r-utf8', request: { text: 'héllo' }, request_bytes_stored: 17, request_bytes_seen: 17 });
+  assert.equal(multibyte.requestBytesStored, 17, 'the seventeen bytes the body encodes to, not its sixteen characters');
+  assert.equal(d.bytesDropped(multibyte.requestBytesSeen, multibyte.requestBytesStored), 0);
+  const cut = d.decodeBodies({ request_id: 'r-json', response: '{"content":[{"type":"text","text":"aaa', response_bytes_stored: 8_388_608, response_bytes_seen: 8_389_632, response_truncated: true });
+  assert.equal(cut.responseTruncated, true);
+  assert.equal(d.bytesDropped(cut.responseBytesSeen, cut.responseBytesStored), 1_024);
 });
 
 test('analytics groups and points keep the histograms and reasons whole', () => {
@@ -197,6 +218,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 3);
+  assert.equal(typeof desktop.tokens.thinking, 'number');
   assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
   assert.equal(desktop.errors.upstream_error, 1);
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
@@ -217,8 +239,15 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 4);
   assert.equal(all.cacheMissReasons.none, 4);
   assert.equal(all.probes.ok, 0);
+  const captured = page.requests.find((r) => r.id === 'r-captured');
+  const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
+  assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
+  assert.equal(busy.webFetch, 1 + captured.usage.webFetch);
   const byKey = d.foldGroups(page.requests, 'key');
   assert.deepEqual(byKey.map((g) => g.key), ['desktop'], 'a log row carries no generation, so a reused id is one group here');
+  // No captured breakdown groups on effort, so the fold is where the dimension is proven.
+  assert.deepEqual(d.foldGroups(page.requests, 'effort').map((g) => g.key), ['high']);
+  assert.deepEqual(d.foldGroups([{ ...captured, shape: { ...captured.shape, effort: null } }], 'effort').map((g) => g.key), ['none'], 'a request that asked for no effort files under none, as the rollups file it');
   const oldest = page.requests.find((r) => r.id === 'r-failover');
   const newest = page.requests.find((r) => r.id === 'r-captured');
   const points = d.foldRequests(page.requests, 3_600_000, oldest.at, newest.at);
@@ -260,6 +289,10 @@ test('a session fold groups on the client each row named', () => {
   const groups = d.foldGroups(rows, 'user_agent');
   assert.deepEqual(groups.map((g) => g.key).sort(), ['claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)', 'unknown']);
   assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
+  const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });
+  assert.deepEqual(named.map((g) => g.key).sort(), ['claude-cli/2.1.*', 'other', 'phoebis-batch/*'], 'the row that named no client falls under other, as the breakdown route files it');
+  assert.deepEqual(named.map((g) => g.requests), [1, 1, 1]);
+  assert.equal(d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/*'] })[0].requests, 1, 'the pattern keeps only the clients it admits');
 });
 
 test('a folded bucket carries one group per key the page groups on', () => {

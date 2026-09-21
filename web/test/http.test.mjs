@@ -59,14 +59,14 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
 
 test('listRequests passes the client filter as user_agent', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
-  await new HttpApi().listRequests({ userAgent: '2.1.269' });
-  assert.ok(String(calls[0].url).includes('user_agent=2.1.269'));
+  await new HttpApi().listRequests({ userAgent: 'claude-cli/2.1.*' });
+  assert.ok(String(calls[0].url).includes('user_agent=claude-cli%2F2.1.*'), String(calls[0].url));
 });
 
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();
-  const q = { accountIds: ['business', 'direct'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z' };
+  const q = { accountIds: ['business', 'direct'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z', userAgentGroups: ['a', 'b'] };
   assert.deepEqual(await api.getAnalyticsSeries(q), []);
   const series = new URL(calls[0].url, 'http://x');
   assert.equal(series.pathname, '/admin/analytics/series');
@@ -77,7 +77,9 @@ test('the analytics reads encode the range, the dimension, and every id list', a
   assert.equal(series.searchParams.get('keys'), 'desktop');
   assert.equal(series.searchParams.get('models'), 'claude-sonnet-5');
   assert.equal(series.searchParams.get('pools'), 'all');
-  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [] }), []);
+  // One pattern per line, so a pattern holding a comma still names one group.
+  assert.ok(String(calls[0].url).includes('user_agent_groups=a%0Ab'), String(calls[0].url));
+  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [], userAgentGroups: undefined }), []);
   const breakdown = new URL(calls[1].url, 'http://x');
   assert.equal(breakdown.pathname, '/admin/analytics/breakdown');
   assert.equal(breakdown.searchParams.get('group_by'), 'all');

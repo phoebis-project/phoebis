@@ -4,6 +4,7 @@ import type {
   Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
   ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
+import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
@@ -94,7 +95,8 @@ function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
     const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? ''].join(' ').toLowerCase();
     if (!hay.includes(needle)) return false;
   }
-  if (q.userAgent && !(r.userAgent ?? '').toLowerCase().includes(q.userAgent.toLowerCase())) return false;
+  // The route matches the same wildcard grammar through `LIKE ... ESCAPE`, so a row with no client matches none.
+  if (q.userAgent && !matchesPattern(q.userAgent, r.userAgent ?? '')) return false;
   return true;
 }
 

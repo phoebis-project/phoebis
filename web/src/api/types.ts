@@ -266,6 +266,18 @@ export interface AttemptWindow {
  */
 export type CacheMissReason = 'none' | 'model_changed' | 'system_changed' | 'tools_changed' | 'messages_changed' | 'previous_message_not_found' | 'unavailable' | 'not_requested';
 
+/** What the answer said about itself; `servedModel` only when it differs from the resolved model. */
+export interface AttemptResponse {
+  clearedInputTokens: number | null;
+  inferenceGeo: string | null;
+  refusalCategory: string | null;
+  refusalRecommendedModel: string | null;
+  servedModel: string | null;
+  speed: string | null;
+  stopReason: string | null;
+  stopSequence: string | null;
+}
+
 export interface Attempt {
   accountId: string;
   /** Estimated input that fell after the divergence point; set only for the `*_changed` reasons. */
@@ -276,6 +288,7 @@ export interface Attempt {
   durationMs: number | null;
   index: number;
   outcome: AttemptOutcome;
+  response: AttemptResponse;
   startedAt: string;
   upstreamStatus: number | null;
   windows: AttemptWindow[];
@@ -287,6 +300,26 @@ export interface Usage {
   cacheWrite5m: number;
   input: number;
   output: number;
+  /** The share of `output` spent thinking; at most `output`. */
+  thinking: number;
+  /** Server-tool calls the answer made, not tokens. */
+  webFetch: number;
+  webSearch: number;
+}
+
+/** What the request asked for, read off its body; `null` where the body carried no such member. */
+export interface RequestShape {
+  contextEdits: string[];
+  effort: string | null;
+  maxTokens: number | null;
+  messageCount: number;
+  requestedServiceTier: string | null;
+  requestedSpeed: string | null;
+  systemBlocks: number;
+  temperature: number | null;
+  thinkingBudget: number | null;
+  thinkingType: string | null;
+  toolCount: number;
 }
 
 export interface RequestLog {
@@ -307,7 +340,10 @@ export interface RequestLog {
   /** How the request ended, once every attempt is in. */
   outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
   poolId: string | null;
+  requestTruncated: boolean;
+  responseTruncated: boolean;
   sessionId: string | null;
+  shape: RequestShape;
   status: number | null;
   transport: Transport;
   ttfbMs: number | null;
@@ -318,10 +354,17 @@ export interface RequestLog {
   userAgent: string | null;
 }
 
+/** The bytes each side stored and the bytes it ran to, as the ledger counted them; `seen - stored` is what a cut dropped. */
 export interface CapturedBodies {
   request: unknown;
+  requestBytesSeen: number;
+  requestBytesStored: number;
   requestId: string;
+  requestTruncated: boolean;
   response: unknown;
+  responseBytesSeen: number;
+  responseBytesStored: number;
+  responseTruncated: boolean;
 }
 
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
@@ -356,7 +399,7 @@ export interface RequestQuery {
   search?: string;
   statuses?: number[];
   to?: string;
-  /** Matched anywhere in the client's own name; an empty string is no filter at all. */
+  /** A pattern: `*` any run, `?` one character, a backslash quotes either. An empty string is no filter at all. */
   userAgent?: string;
 }
 
@@ -365,7 +408,7 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
-export type AnalyticsGroupBy = 'account' | 'all' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
+export type AnalyticsGroupBy = 'account' | 'all' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
 
 export interface AnalyticsQuery {
   accountIds?: string[];
@@ -377,6 +420,10 @@ export interface AnalyticsQuery {
   models?: string[];
   poolIds?: string[];
   to: string;
+  /** Patterns, one per line, each naming a group under `user_agent`. */
+  userAgentGroups?: string[];
+  /** Patterns, one per line; a row matches when any matches its client in full. */
+  userAgents?: string[];
 }
 
 /** One group of one bucket or of the whole range, as the analytics routes sum it. */
@@ -403,7 +450,9 @@ export interface AnalyticsGroup {
   requests: number;
   savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number };
   succeeded: number;
-  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; uncachedInput: number };
+  /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
+   * thinking share and the rest. */
+  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
 }
 

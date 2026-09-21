@@ -1425,6 +1425,12 @@
   width: 232px;
 }
 
+.filters__groups {
+  resize: vertical;
+  min-width: 220px;
+  font-size: inherit;
+}
+
 .filters__cols {
   position: relative;
   margin-left: auto;
@@ -1593,6 +1599,13 @@
 
 .attempt__windows li span:last-child {
   text-align: right;
+}
+
+.attempt__response {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .attempt__cooldown {

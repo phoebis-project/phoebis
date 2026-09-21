@@ -27,7 +27,7 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', key: 'Key', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'Client' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'Client' };
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the upstream.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
@@ -59,8 +59,13 @@ const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.skipped + g.probe
 
 type Pct = Record<(typeof PERCENTILES)[number]['key'], number | null>;
 
+/** The routes answer one output sum; the chart stacks its thinking share and the rest, so the page derives the rest. */
+type SplitTokens = AnalyticsGroup['tokens'] & { plainOutput: number };
+const withPlainOutput = (t: AnalyticsGroup['tokens']): SplitTokens => ({ ...t, plainOutput: Math.max(0, t.output - t.thinking) });
+
 interface Bucket extends AnalyticsGroup {
   at: number;
+  tokens: SplitTokens;
 }
 
 function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
@@ -90,6 +95,8 @@ export function AnalyticsPage() {
   const [range, setRange] = useState<Range>('24h');
   const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
   const [groupBy, setGroupBy] = useState<GroupBy>('key');
+  const [clientPattern, setClientPattern] = useState('');
+  const [clientGroups, setClientGroups] = useState('');
   const [includeProbes, setIncludeProbes] = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
@@ -132,10 +139,14 @@ export function AnalyticsPage() {
   const toIso = new Date(span.toMs).toISOString();
   const sessionId = filters.sessionId[0] ?? null;
 
+  const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
-    () => ({ accountIds: filters.accountId, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso }),
-    [filters, fromIso, groupBy, includeProbes, toIso],
+    () => ({ accountIds: filters.accountId, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: clientPattern.trim() ? [clientPattern.trim()] : undefined }),
+    [agentGroups, clientPattern, filters, fromIso, groupBy, includeProbes, toIso],
   );
+  // The route already narrowed the rows a session view folds, but a cursor page that crossed a filter change
+  // may be wider than the pattern, so the fold applies both controls again over what it holds.
+  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: clientPattern.trim() ? [clientPattern.trim()] : undefined }), [agentGroups, clientPattern]);
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
   const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
@@ -148,12 +159,12 @@ export function AnalyticsPage() {
         : loadSessionRequests(
             (cursor) =>
               api
-                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso })
+                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: clientPattern.trim() || undefined })
                 // The search matches an id across several fields, so the page keeps only the exact session.
                 .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId) })),
             SESSION_PAGE_LIMIT,
           ),
-    [filters, fromIso, includeProbes, sessionId, toIso],
+    [clientPattern, filters, fromIso, includeProbes, sessionId, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
@@ -167,14 +178,24 @@ export function AnalyticsPage() {
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
   const rows = log.data?.requests ?? [];
-  const points = useMemo(() => (sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy)), [sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy]);
-  const buckets = useMemo<Bucket[]>(() => points.map((p) => ({ at: Date.parse(p.at), ...sumGroups(p.groups) })), [points]);
+  const points = useMemo(() => (sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
+  const buckets = useMemo<Bucket[]>(
+    () =>
+      points.map((p) => {
+        const summed = sumGroups(p.groups);
+        return { at: Date.parse(p.at), ...summed, tokens: withPlainOutput(summed.tokens) };
+      }),
+    [points],
+  );
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
-  const groups = useMemo(() => (sessionId === null ? (breakdown.data ?? []) : foldGroups(rows, groupBy)), [sessionId, breakdown.data, rows, groupBy]);
-  const poolGroups = useMemo(() => (sessionId === null ? (byPool.data ?? []) : foldGroups(rows, 'pool')), [sessionId, byPool.data, rows]);
-  const totals = useMemo(() => sumGroups(groups), [groups]);
+  const groups = useMemo(() => (sessionId === null ? (breakdown.data ?? []) : foldGroups(rows, groupBy, foldOptions)), [sessionId, breakdown.data, rows, groupBy, foldOptions]);
+  const poolGroups = useMemo(() => (sessionId === null ? (byPool.data ?? []) : foldGroups(rows, 'pool', foldOptions)), [sessionId, byPool.data, rows, foldOptions]);
+  const totals = useMemo(() => {
+    const summed = sumGroups(groups);
+    return { ...summed, tokens: withPlainOutput(summed.tokens) };
+  }, [groups]);
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
@@ -227,6 +248,11 @@ export function AnalyticsPage() {
         {DIMS.map((dim) => (
           <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => setFilters({ ...filters, [dim]: v })} mono />
         ))}
+        {/* `.mono` shrinks the text to 0.92em, which would leave this control shorter than the rest of the bar. */}
+        <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+        {groupBy === 'user_agent' && (
+          <textarea value={clientGroups} onChange={(e) => setClientGroups(e.target.value)} placeholder={'Client groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'} aria-label="Client groups" title="Each pattern names a group; every other client groups under other" className="mono filters__groups" rows={2} />
+        )}
         {/* No route enumerates sessions, so this one is typed or pasted rather than picked; the chip beside it
             is how a session arriving from the sessions list shows itself. */}
         <label className="row">
@@ -299,11 +325,12 @@ export function AnalyticsPage() {
           title={`Traffic by ${groupLabel.toLowerCase()}`}
           error={breakdown.error}
           groupLabel={groupLabel}
-          columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers']}
+          columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
           rows={groups.map((g) => ({
             key: g.key,
             label: g.label,
-            cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers)],
+            // Search and Fetch count the server-tool calls the group's answers made, not tokens.
+            cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
           }))}
         />
       </Section>

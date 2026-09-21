@@ -67,7 +67,8 @@ export const TOKEN_SERIES = [
   { key: 'cacheRead', label: 'Cache read', slot: 2 },
   { key: 'cacheWrite5m', label: 'Cache write 5m', slot: 3 },
   { key: 'cacheWrite1h', label: 'Cache write 1h', slot: 1 },
-  { key: 'output', label: 'Output', slot: 6 },
+  { key: 'thinking', label: 'Thinking', slot: 5 },
+  { key: 'plainOutput', label: 'Output', slot: 6 },
 ] as const;
 
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */

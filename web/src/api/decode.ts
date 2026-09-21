@@ -1,7 +1,7 @@
 import type {
-  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, ServedModel, Session, Settings, WindowId,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, Settings, WindowId,
 } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -209,22 +209,26 @@ const OUTCOMES: AttemptOutcome[] = ['auth_failed', 'canceled', 'rate_limited', '
 const outcomeOf = (v: unknown): AttemptOutcome => OUTCOMES.find((o) => o === str(v)) ?? 'upstream_error';
 const missReason = (v: unknown): CacheMissReason | null => ((CACHE_MISS_REASONS as string[]).includes(str(v)) ? (str(v) as CacheMissReason) : v === null || v === undefined ? null : 'unavailable');
 const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization) }]; });
-const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output) }; };
+const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
+const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { contextEdits: strings(s.context_edits), effort: strOrNull(s.effort), maxTokens: numOrNull(s.max_tokens), messageCount: num(s.message_count), requestedServiceTier: strOrNull(s.requested_service_tier), requestedSpeed: strOrNull(s.requested_speed), systemBlocks: num(s.system_blocks), temperature: numOrNull(s.temperature), thinkingBudget: numOrNull(s.thinking_budget), thinkingType: strOrNull(s.thinking_type), toolCount: num(s.tool_count) }; };
+const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return { clearedInputTokens: numOrNull(r.cleared_input_tokens), inferenceGeo: strOrNull(r.inference_geo), refusalCategory: strOrNull(r.refusal_category), refusalRecommendedModel: strOrNull(r.refusal_recommended_model), servedModel: strOrNull(r.served_model), speed: strOrNull(r.speed), stopReason: strOrNull(r.stop_reason), stopSequence: strOrNull(r.stop_sequence) }; };
 
 export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissedInputTokens: null, cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissedInputTokens: null, cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
     kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: (['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const).find((o) => o === str(r.outcome)) ?? 'failed',
-    poolId: strOrNull(r.pool_id), sessionId: strOrNull(r.session_id), status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
+    poolId: strOrNull(r.pool_id), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),
+    status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
 
 export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
-export const decodeBodies = (v: unknown): CapturedBodies => ({ request: rec(v).request, requestId: str(rec(v).request_id), response: rec(v).response });
+// The four counts are the route's own; nothing here measures the request or the response it passes through.
+export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
 
 const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => Record<K, number>): Record<K, number> => {
@@ -253,7 +257,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     probes: { failed: num(rec(g.probes).failed), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
     savings: { grossUsd: num(s.gross_usd), probeCostUsd: num(s.probe_cost_usd), wastedProbeReasons: record(WASTED_PROBE_REASONS, s.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(s.wasted_probe_usd), wastedProbes: num(s.wasted_probes) },
-    succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), uncachedInput: num(t.uncached_input) }, uncached: num(g.uncached),
+    succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
   };
 }
 export const decodeAnalyticsPoint = (v: unknown): AnalyticsPoint => ({ at: isoOr(rec(v).at, epoch), groups: list(rec(v).groups).map(decodeAnalyticsGroup) });

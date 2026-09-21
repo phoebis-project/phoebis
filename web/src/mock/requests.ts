@@ -96,21 +96,31 @@ const oauthWindows = (accountId: string, atMs: number): AttemptWindow[] => {
   return [...reported, walkBack(account.fableWindow, atMs, () => 0.8)];
 };
 
+/** Neither a probe nor a token count thinks or reaches a server tool, so both carry the counts at zero. */
+const NO_ANSWER_FACTS = { thinking: 0, webFetch: 0, webSearch: 0 };
+
 function usageFor(model: string, kind: RequestKind): Usage {
-  if (kind === 'probe') return { input: 0, cacheRead: rng.chance(0.9) ? rng.int(30_000, 90_000) : 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 1 };
-  if (kind === 'count_tokens') return { input: rng.int(2_000, 60_000), cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0 };
+  if (kind === 'probe') return { input: 0, cacheRead: rng.chance(0.9) ? rng.int(30_000, 90_000) : 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 1, ...NO_ANSWER_FACTS };
+  if (kind === 'count_tokens') return { input: rng.int(2_000, 60_000), cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
   const big = model.includes('fable') || model.includes('opus');
   const cached = rng.chance(0.72);
   const contextTokens = rng.int(big ? 40_000 : 12_000, big ? 180_000 : 90_000);
   const cacheRead = cached ? Math.round(contextTokens * rng.float(0.8, 0.98)) : 0;
   const fresh = contextTokens - cacheRead;
   const writes1h = rng.chance(0.35);
+  // One draw either way, since a request writes a 5-minute entry or a 1-hour one and never both.
+  const written = Math.round(fresh * rng.float(0.6, 0.95));
+  const output = rng.int(big ? 400 : 120, big ? 6_000 : 2_400);
   return {
     input: Math.round(fresh * rng.float(0.05, 0.35)),
     cacheRead,
-    cacheWrite5m: writes1h ? 0 : Math.round(fresh * rng.float(0.6, 0.95)),
-    cacheWrite1h: writes1h ? Math.round(fresh * rng.float(0.6, 0.95)) : 0,
-    output: rng.int(big ? 400 : 120, big ? 6_000 : 2_400),
+    cacheWrite5m: writes1h ? 0 : written,
+    cacheWrite1h: writes1h ? written : 0,
+    output,
+    // Only the larger models are asked to think in this story, and a thinking answer spends much of its output there.
+    thinking: big ? Math.round(output * rng.float(0.2, 0.7)) : 0,
+    webFetch: rng.chance(0.08) ? 1 : 0,
+    webSearch: rng.chance(0.15) ? rng.int(1, 4) : 0,
   };
 }
 
@@ -200,6 +210,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       durationMs,
       index: i,
       outcome,
+      response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       startedAt: iso(cursor),
       upstreamStatus,
       windows: rateLimitHit ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
@@ -212,6 +223,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
 function buildRequests(): RequestLog[] {
   const rows: RequestLog[] = [];
   const span = 24 * HOUR;
+  // The drawer's refusal line needs one answer that carries a refusal, so the first eligible row takes it
+  // rather than leaving it to the draw below.
+  let refusalOwed = true;
   for (let i = 0; i < 232; i += 1) {
     const lane = rng.weighted([{ value: LANES[0], weight: 11 }, { value: LANES[1], weight: 5 }, { value: LANES[2], weight: 1.6 }]);
     // Skew toward recent hours so the dashboard's "recent" table is dense.
@@ -225,9 +239,14 @@ function buildRequests(): RequestLog[] {
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
     const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted);
     const head = tried[tried.length - 1];
-    const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0 };
+    const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     // Needs the usage, so it runs once the response has been drawn rather than inside buildAttempts.
-    const attempts = diagnosed(tried, kind, usage);
+    const diagnosis = diagnosed(tried, kind, usage);
+    const refused = refusalOwed && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200;
+    if (refused) refusalOwed = false;
+    const attempts = refused
+      ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
+      : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     const durationMs = attempts.reduce((s, a) => s + (a.durationMs ?? 0), 0);
     const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'rate_limit_error' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
@@ -259,6 +278,22 @@ function buildRequests(): RequestLog[] {
       agentId: rng.pick(AGENT_IDS),
       userAgent: USER_AGENTS[lane.keyId] ?? null,
       capturedBodies: lane.keyId === 'laptop',
+      shape: {
+        contextEdits: ['clear_thinking_20251015'],
+        effort: rng.pick<string | null>(['high', 'max', null]),
+        maxTokens: 32_000,
+        messageCount: rng.int(1, 40),
+        requestedServiceTier: null,
+        requestedSpeed: null,
+        systemBlocks: 4,
+        temperature: null,
+        thinkingBudget: 31_999,
+        thinkingType: 'enabled',
+        toolCount: rng.int(8, 30),
+      },
+      // Only the laptop key captures bodies here, and every seventh of its rows drew an answer past the cap.
+      requestTruncated: false,
+      responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
   }
   return rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -390,12 +425,16 @@ function rollups(): HourlyRollup[] {
       // Every attempt but the last one moved the request to another member.
       failovers: list.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
       migrations: list.filter((r) => r.attempts.length > 1 && r.status === 200).length > 0 && h.chance(0.5) ? 1 : 0,
+      effort: 'none',
       tokens: {
         uncachedInput: list.reduce((s, r) => s + r.usage.input, 0),
         cacheRead: list.reduce((s, r) => s + r.usage.cacheRead, 0),
         cacheWrite5m: list.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
         cacheWrite1h: list.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
         output: list.reduce((s, r) => s + r.usage.output, 0),
+        thinking: list.reduce((s, r) => s + r.usage.thinking, 0),
+        webFetch: list.reduce((s, r) => s + r.usage.webFetch, 0),
+        webSearch: list.reduce((s, r) => s + r.usage.webSearch, 0),
       },
       cacheHits: okRows.filter((r) => r.usage.cacheRead > 0).length,
       cacheMisses: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
@@ -455,6 +494,9 @@ function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
   // A separate stream so the reason split does not shift the rest of the hour's draws.
   const hm = createRng(521);
+  // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
+  // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
+  let maxEffortOwed = true;
   const out: HourlyRollup[] = [];
   const start = startOfHour(NOW) - 30 * DAY;
   const end = startOfHour(NOW) - 24 * HOUR;
@@ -476,21 +518,30 @@ function historicalRollups(): HourlyRollup[] {
       const perReq = big ? 95_000 : 40_000;
       const cacheRead = Math.round(ok * perReq * h.float(0.6, 0.85));
       const fresh = Math.round(ok * perReq * h.float(0.12, 0.3));
+      const output = ok * h.int(600, 2_800);
       const tokens = {
         uncachedInput: Math.round(fresh * 0.2),
         cacheRead,
         cacheWrite5m: Math.round(fresh * 0.55),
         cacheWrite1h: Math.round(fresh * 0.25),
-        output: ok * h.int(600, 2_800),
+        output,
+        thinking: big ? Math.round(output * h.float(0.2, 0.7)) : 0,
+        webFetch: h.chance(0.3) ? h.int(1, 2) : 0,
+        webSearch: h.chance(0.5) ? h.int(1, ok + 2) : 0,
       };
-      const usage: Usage = { input: tokens.uncachedInput, cacheRead: tokens.cacheRead, cacheWrite5m: tokens.cacheWrite5m, cacheWrite1h: tokens.cacheWrite1h, output: tokens.output };
+      const usage: Usage = { input: tokens.uncachedInput, cacheRead: tokens.cacheRead, cacheWrite5m: tokens.cacheWrite5m, cacheWrite1h: tokens.cacheWrite1h, output: tokens.output, thinking: tokens.thinking, webFetch: tokens.webFetch, webSearch: tokens.webSearch };
       const ttfb = sampled(h, ok, big ? 1_300 : 800, 0.5);
       const ttft = ttfb.map((v) => v + h.int(40, 500));
       const duration = sampled(h, ok, big ? 14_000 : 6_000, 0.6);
       const keptRequests = warmsCaches(lane.keyId, lane.poolId) ? Math.round(ok * h.float(0.2, 0.45)) : 0;
       const keptTokens = Math.round((cacheRead / Math.max(1, ok)) * keptRequests);
+      // Six days back, so the hour sits well inside the week and the month the console offers rather than on
+      // the edge of the synthesized month, where a range bound would cut it.
+      const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
+      if (takesMaxEffort) maxEffortOwed = false;
       const inference: HourlyRollup = {
         hour: iso(t),
+        effort: lane.keyId === 'desktop' ? 'high' : takesMaxEffort ? 'max' : 'none',
         keyId: lane.keyId,
         keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
         kind: 'inference',
@@ -531,10 +582,11 @@ function historicalRollups(): HourlyRollup[] {
       if (warmsCaches(lane.keyId, lane.poolId) && daylight === 1) {
         const probes = h.int(2, 6);
         const failed = h.chance(0.08) ? 1 : 0;
-        const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes };
+        const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS };
         const probeCost = costOf(model, probeUsage);
         out.push({
           hour: iso(t),
+          effort: 'none',
           keyId: lane.keyId,
           keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
           kind: 'probe',
@@ -545,7 +597,7 @@ function historicalRollups(): HourlyRollup[] {
           requests: { ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,
-          tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes },
+          tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
           cacheHits: probes,
           cacheMisses: 0,
           ...synthesizeMissReasons(hm, probes, true),
@@ -618,10 +670,16 @@ function accountRollups(): AccountRollup[] {
 
 export const ACCOUNT_ROLLUPS: AccountRollup[] = accountRollups();
 
+/** What the ledger counted as it read the body, which is the only figure the drawer's "bytes dropped" may use. */
+const byteLength = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
+
+/** A cut answer ran a megabyte past the cap before the ledger stopped storing it. */
+const DROPPED_BYTES = 1_048_576;
+
 export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   if (!request.capturedBodies) return null;
   const isClaude = request.model.startsWith('claude');
-  return {
+  const bodies = {
     requestId: request.id,
     request: {
       model: request.model,
@@ -654,5 +712,17 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
         output_tokens: request.usage.output,
       },
     },
+  };
+  // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.
+  const requestBytes = byteLength(bodies.request);
+  const responseBytes = byteLength(bodies.response);
+  return {
+    ...bodies,
+    requestBytesSeen: requestBytes,
+    requestBytesStored: requestBytes,
+    requestTruncated: request.requestTruncated,
+    responseBytesSeen: responseBytes + (request.responseTruncated ? DROPPED_BYTES : 0),
+    responseBytesStored: responseBytes,
+    responseTruncated: request.responseTruncated,
   };
 }

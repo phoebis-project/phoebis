@@ -67,8 +67,9 @@ function expect(name, text, needles) {
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
-// More than one attempt, since a single-attempt 429 also ends rate-limited with a cooldown and never failed over.
-const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet));
+// More than one attempt, since a single-attempt 429 also ends rate-limited with a cooldown and never failed
+// over; and at least one attempt that reported quota windows, which is what the window slots below read.
+const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet) && r.attempts.some((a) => a.windows.length > 0));
 {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
@@ -839,16 +840,24 @@ m.unmount();
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-cli/2.1.269 (external', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
 {
-  const client = m.container.querySelector('input[aria-label="Client contains"]');
+  const client = m.container.querySelector('input[aria-label="Client pattern"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(client, 'phoebis-batch');
-  client.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(700);
-  const keys = [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
-  results.push({ name: '/requests the client filter is a substring match', ok: keys.length > 0 && keys.every((k) => k === 'ci'), missing: keys.slice(0, 3) });
-  setter.call(client, '');
-  client.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(700);
+  const type = async (value) => {
+    setter.call(client, value);
+    client.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+  };
+  const keyColumn = () => [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
+  await type('phoebis-batch/*');
+  const wildcard = keyColumn();
+  await type('phoebis-batch');
+  const bare = keyColumn();
+  results.push({
+    name: '/requests the client filter is a pattern',
+    ok: wildcard.length > 0 && wildcard.every((k) => k === 'ci') && bare.length === 0,
+    missing: [`with a star ${wildcard.slice(0, 3).join(',')}`, `without one ${bare.length} rows`],
+  });
+  await type('');
 }
 {
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
@@ -891,7 +900,23 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
-expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+{
+  const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
+  if (cut) {
+    await m.navigate(`/requests/${cut.id}`);
+    await m.settle(500);
+    const head = (label) => [...m.container.querySelectorAll('.body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label)?.querySelector('.body-block__head')?.textContent ?? '';
+    results.push({
+      name: '/requests a cut capture names the bytes dropped, on the side that was cut',
+      ok: head('Response').includes('cut at 8 MiB, 1,048,576 bytes dropped') && !head('Request').includes('cut at'),
+      missing: [head('Request'), head('Response')],
+    });
+    expect('/requests/:cut drawer reads the request shape', m.text(), ['Request shape', 'Effort', 'Thinking', 'Max tokens', 'Tools, system blocks, messages', 'Context edits', 'Speed, service tier', 'stopped: ']);
+  } else {
+    results.push({ name: '/requests a laptop row whose capture was cut', ok: false, missing: ['fixture'] });
+  }
+}
 {
   // Moving to another request while its bodies fail to load must not leave the previous prompt on screen.
   const [first, second] = requests.filter((r) => r.capturedBodies && r.id !== laptopRow.id);
@@ -1026,6 +1051,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const missCard = cardByTitle('Misses by reason');
   const wasteCard = cardByTitle('Wasted probes');
+  {
+    const legend = [...(cardByTitle('Tokens')?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
+    results.push({
+      name: '/analytics the tokens legend splits the output into its thinking share and the rest',
+      ok: JSON.stringify(legend) === JSON.stringify(['Uncached input', 'Cache read', 'Cache write 5m', 'Cache write 1h', 'Thinking', 'Output']),
+      missing: legend,
+    });
+  }
   const bars = [...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
   const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
   results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 8 && labels.every((l) => bars.includes(l)), missing: bars });
@@ -1044,6 +1077,56 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
     results.push({ name: '/analytics group-by offers the client agent', ok: group !== undefined, missing: [] });
+  }
+  {
+    const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const groupBy = async (label) => {
+      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      const option = [...(select?.options ?? [])].find((o) => o.textContent === label);
+      setSelect.call(select, option?.value);
+      select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(800);
+    };
+    const traffic = (dimension) => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Traffic by ${dimension}`));
+    const trafficRows = (dimension) => [...(traffic(dimension)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
+    const typeGroups = async (value) => {
+      const field = m.container.querySelector('textarea[aria-label="Client groups"]');
+      setArea.call(field, value);
+      field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(800);
+    };
+
+    await groupBy('Model');
+    const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    results.push({ name: '/analytics the traffic table ends with the server-tool calls', ok: JSON.stringify(heads.slice(-3)) === JSON.stringify(['Failovers', 'Search', 'Fetch']), missing: heads });
+    const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
+    results.push({
+      name: '/analytics a model whose answers reach server tools counts both calls',
+      ok: fable.length > 10 && Number(fable[9].replace(/,/g, '')) > 0 && Number(fable[10].replace(/,/g, '')) > 0,
+      missing: fable,
+    });
+
+    await groupBy('Client');
+    await typeGroups('claude-cli/2.1.*\nphoebis-batch/*');
+    const named = trafficRows('client').map((row) => row[0]);
+    results.push({
+      name: '/analytics a client pattern list names the groups and gathers the rest',
+      ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.*', 'other', 'phoebis-batch/*']),
+      missing: named,
+    });
+    await typeGroups('');
+
+    // Effort rides on the hourly rollups, and the synthesized month is the range that holds all three.
+    const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
+    range('30d')?.click();
+    await m.settle(900);
+    await groupBy('Effort');
+    const efforts = trafficRows('effort').map((row) => row[0]);
+    results.push({ name: '/analytics the effort grouping lists every effort the range holds', ok: JSON.stringify([...efforts].sort()) === JSON.stringify(['high', 'max', 'none']), missing: efforts });
+    range('24h')?.click();
+    await m.settle(900);
+    await groupBy('Key');
   }
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
@@ -1172,6 +1255,89 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const entered = m.text().includes('From the request log');
     await commit('');
     results.push({ name: '/analytics the session field enters and leaves the session view', ok: entered && !m.text().includes('From the request log'), missing: [`entered ${entered}`, `left ${!m.text().includes('From the request log')}`] });
+  }
+  {
+    // A session view answers every section from the request log, so the client and effort controls have to
+    // reach the local fold exactly as they reach the routes.
+    const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const groupBy = async (label) => {
+      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      const option = [...(select?.options ?? [])].find((o) => o.textContent === label);
+      setSelect.call(select, option?.value);
+      select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(900);
+    };
+    const trafficRows = (dimension) => {
+      const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Traffic by ${dimension}`));
+      return [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
+    };
+    const num = (cell) => Number((cell ?? '').replace(/,/g, ''));
+    const typeClient = async (value) => {
+      const input = m.container.querySelector('input[aria-label="Client pattern"]');
+      setInput.call(input, value);
+      input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(900);
+    };
+    const typeGroups = async (value) => {
+      const field = m.container.querySelector('textarea[aria-label="Client groups"]');
+      setArea.call(field, value);
+      field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(900);
+    };
+    const seed = requests.find((r) => r.keyId === 'desktop' && r.usage.webSearch > 0);
+    const session = seed?.sessionId ?? null;
+    const field = [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
+    setInput.call(field, session ?? '');
+    field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    await m.settle(1200);
+    results.push({ name: '/analytics a typed session raises its chip', ok: session !== null && m.container.querySelector('.chip--removable') !== null, missing: [String(session)] });
+
+    await groupBy('Model');
+    const perModel = trafficRows('model');
+    const want = new Map();
+    for (const r of requests.filter((x) => x.sessionId === session && x.kind !== 'probe')) {
+      const sums = want.get(r.model) ?? [0, 0];
+      want.set(r.model, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
+    }
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[9]) !== sums[0] || num(row[10]) !== sums[1]; });
+    results.push({
+      name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
+      ok: perModel.length > 0 && wrong.length === 0,
+      missing: wrong.map((row) => `${row[0]} ${row[9]}/${row[10]} against ${(want.get(row[0]) ?? []).join('/')}`),
+    });
+
+    await typeClient('nomatch/*');
+    const emptied = trafficRows('model');
+    results.push({ name: '/analytics a client pattern nothing matches empties the session fold', ok: emptied.length === 1 && emptied[0][0] === 'No rows.', missing: emptied.map((row) => row.join(' ')) });
+    await typeClient('');
+
+    await groupBy('Client');
+    await typeGroups('claude-cli/2.1.*\nclaude-cli/2.0.*');
+    const named = trafficRows('client').map((row) => row[0]);
+    // A session is shared across the story's keys, so what the two patterns name is read off its own rows;
+    // a trailing star is a prefix, and a client neither pattern names falls under `other`.
+    const clients = [...new Set(requests.filter((r) => r.sessionId === session).map((r) => r.userAgent ?? ''))];
+    const wanted = [...new Set(clients.map((c) => ['claude-cli/2.1.', 'claude-cli/2.0.'].find((p) => c.startsWith(p)) ?? 'other:'))].map((p) => (p === 'other:' ? 'other' : `${p}*`)).sort();
+    results.push({ name: '/analytics a session groups its clients under the patterns that name them', ok: wanted.length > 0 && JSON.stringify([...named].sort()) === JSON.stringify(wanted), missing: [named.join(','), wanted.join(',')] });
+    await typeGroups('');
+
+    await groupBy('Effort');
+    const perEffort = trafficRows('effort');
+    const counted = perEffort.reduce((n, row) => n + num(row[1]), 0);
+    const own = requests.filter((r) => r.sessionId === session).length;
+    results.push({
+      name: '/analytics a session groups on the effort each of its requests asked for',
+      ok: perEffort.length > 0 && perEffort.every((row) => ['high', 'max', 'none'].includes(row[0])) && counted === own,
+      missing: [...perEffort.map((row) => row[0]), `${counted} of ${own}`],
+    });
+
+    m.container.querySelector('.chip--removable button')?.click();
+    await m.settle(900);
+    await groupBy('Key');
+    results.push({ name: '/analytics removing the session chip leaves the session view', ok: !m.text().includes('From the request log'), missing: [] });
   }
 }
 m.unmount();

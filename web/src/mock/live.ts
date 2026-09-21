@@ -55,7 +55,9 @@ const windowsFor = (accountId: string): AttemptWindow[] => {
   return account.windows.map((w) => ({ id: w.id, resetsAt: w.resetsAt, utilization: w.utilization }));
 };
 
-const emptyUsage = (): Usage => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 });
+// The live feed draws no thinking share and no server-tool calls: neither reaches the console before the
+// request is over, so a stream in flight reports them as nothing spent yet.
+const emptyUsage = (): Usage => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0, thinking: 0, webFetch: 0, webSearch: 0 });
 
 function finalUsageFor(model: string, kind: RequestKind, status: number): Usage {
   if (status !== 200) return emptyUsage();
@@ -67,6 +69,7 @@ function finalUsageFor(model: string, kind: RequestKind, status: number): Usage 
   const fresh = context - cacheRead;
   const writes1h = rng.chance(0.35);
   return {
+    ...emptyUsage(),
     cacheRead,
     cacheWrite1h: writes1h ? Math.round(fresh * rng.float(0.6, 0.95)) : 0,
     cacheWrite5m: writes1h ? 0 : Math.round(fresh * rng.float(0.6, 0.95)),

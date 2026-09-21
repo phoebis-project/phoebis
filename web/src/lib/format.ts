@@ -15,6 +15,8 @@ const usd4 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD'
 export const fmtInt = (n: number) => plain.format(Math.round(n));
 export const fmtCompact = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact.format(n));
 export const fmtCompact2 = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact2.format(n));
+/** What a cut dropped, from the counts the ledger took as it read; a rendered body measures neither side. */
+export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen - stored);
 // `n + 0` folds a negative zero onto a positive one: an empty sum of f64 costs reaches the wire as -0.0 and
 // Intl would print its sign as "-$0.00".
 export const fmtUsd = (n: number, v = n + 0) => (Math.abs(v) > 0 && Math.abs(v) < 0.01 ? usd4.format(v) : usd.format(v));

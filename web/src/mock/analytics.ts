@@ -1,7 +1,9 @@
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestKind, WastedProbeReason } from '@/api/types';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
+import { matchesPattern } from '@/lib/pattern';
 import { keyById } from './pools';
+import { USER_AGENTS } from './requests';
 import { DAY, HOUR } from './time';
 
 /**
@@ -16,6 +18,8 @@ export interface HourlyRollup {
   cacheMissReasons: Record<CacheMissReason, number>;
   cost: CostSplit;
   costUsd: number;
+  /** The effort the hour's requests asked for; the rollups file an hour that asked for none under `none`. */
+  effort: string;
   /**
    * Requests that diagnosed no divergence yet read no cache, so the entry
    * expired between turns. The reason counts cannot be split this way once
@@ -43,7 +47,7 @@ export interface HourlyRollup {
   savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
-  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; uncachedInput: number };
+  tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
   /** Probes no real request ever followed, settled when the recipe stopped. */
   wastedProbes: number;
@@ -57,6 +61,7 @@ const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
   all: () => 'all',
+  effort: (r) => r.effort,
   key: (r) => {
     // What the router never attributed is one group whatever the generation column says.
     if (r.keyId === '-') return r.keyId;
@@ -66,8 +71,8 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   kind: (r) => r.kind,
   model: (r) => r.model,
   pool: (r) => r.poolId,
-  // The fixture rollups carry no user agent, so every row falls under the one key.
-  user_agent: () => 'unknown',
+  // Each key runs one client in this story, so the key names the client its rows were sent by.
+  user_agent: (r) => USER_AGENTS[r.keyId] ?? '-',
 };
 
 /**
@@ -93,6 +98,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
   if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
+  if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? ''))) return false;
   return true;
 }
 
@@ -156,7 +162,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
       wastedProbes: sum(probeRows, (r) => r.wastedProbes),
     },
     succeeded,
-    tokens: { cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output), uncachedInput: sum(counted, (r) => r.tokens.uncachedInput) },
+    tokens: {
+      cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output),
+      thinking: sum(counted, (r) => r.tokens.thinking), uncachedInput: sum(counted, (r) => r.tokens.uncachedInput), webFetch: sum(counted, (r) => r.tokens.webFetch), webSearch: sum(counted, (r) => r.tokens.webSearch),
+    },
     uncached: sum(counted, (r) => r.uncached),
   };
 }
@@ -165,7 +174,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
 const labelOf = (key: string, groupBy: AnalyticsGroupBy) => (key === '-' ? 'unattributed' : groupBy === 'key' && key.includes('@') ? `${key.split('@')[0]} (deleted)` : key);
 
 function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
-  const of = GROUP_KEY[q.groupBy];
+  const named = q.userAgentGroups ?? [];
+  // A pattern list names the groups under the client dimension; every client none of them names falls under
+  // the one bucket, as the breakdown route files it.
+  const of = q.groupBy === 'user_agent' && named.length ? (r: HourlyRollup) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
   return [...buckets.entries()].map(([key, list]) => groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
