@@ -59,10 +59,10 @@ for administrators`. The console shows a captured body in the request drawer, wi
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default) |
+| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 keeps them forever) |
 | Quota and extra-usage samples | `quota.sample_retention_days` (30 days by default) |
 | Captured bodies | The hours the capture named |
-| Hourly rollups | 400 days, fixed |
+| Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
 The purge that enforces these runs once an hour.
 

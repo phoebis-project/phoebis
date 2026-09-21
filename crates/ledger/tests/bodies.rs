@@ -161,8 +161,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
 }
 
 #[tokio::test]
-async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_keeps_rollups_for_400_days(
-) {
+async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_rollups_by_theirs() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let day = 86_400_000i64;
@@ -254,5 +253,59 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_k
         purged.rollups, 1,
         "the hour-zero rollup is past 400 days; the other is not"
     );
+    up.shutdown().await;
+}
+
+/// Zero on either key means forever: the purge of that family is skipped, the other families run as before.
+#[tokio::test]
+async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_the_rollups() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let day = 86_400_000i64;
+    let old = |id: &str| phoebis_ledger::RequestRecord {
+        id: id.into(),
+        received_at: day,
+        model: "m".into(),
+        canonical_model: "m".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        ..Default::default()
+    };
+    let attempt = |id: &str| phoebis_ledger::AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        outcome: "succeeded".into(),
+        ..Default::default()
+    };
+    h.db.insert_request(&old("r1"), &[attempt("r1")], None)
+        .unwrap();
+    let forever_raw = LedgerConfig {
+        retention_days: 0,
+        rollup_retention_days: 400,
+        ..LedgerConfig::default()
+    };
+    let purged = run_retention(&h.db, &forever_raw, 402 * day).unwrap();
+    assert_eq!(
+        (purged.requests, purged.attempts, purged.events),
+        (0, 0, 0),
+        "nothing raw goes under 0"
+    );
+    assert_eq!(purged.rollups, 1, "the hour's rollup row is past 400 days");
+    h.db.insert_request(&old("r2"), &[attempt("r2")], None)
+        .unwrap();
+    let forever_rollups = LedgerConfig {
+        retention_days: 1,
+        rollup_retention_days: 0,
+        ..LedgerConfig::default()
+    };
+    let purged = run_retention(&h.db, &forever_rollups, 402 * day).unwrap();
+    assert_eq!(
+        (purged.requests, purged.attempts),
+        (2, 2),
+        "both raw rows go under a one-day window"
+    );
+    assert_eq!(purged.rollups, 0, "nothing in the rollups goes under 0");
     up.shutdown().await;
 }

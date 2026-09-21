@@ -19,7 +19,7 @@ mod task;
 mod usage;
 
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
-pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY, ROLLUP_RETENTION_DAYS};
+pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY};
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};

@@ -135,8 +135,12 @@ pub struct StatsConfig {
     /// error, so the example path can stay in a fresh configuration.
     #[serde(default = "default_pricing_path")]
     pub pricing_path: Option<PathBuf>,
+    /// Days the raw request, attempt, and event rows are kept; 0 keeps them forever.
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    /// Days the hourly rollups are kept; 0 keeps them forever, and otherwise at least `retention_days`.
+    #[serde(default = "default_rollup_retention_days")]
+    pub rollup_retention_days: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -183,6 +187,8 @@ pub enum ConfigError {
     },
     #[error("{field} must be at least 1")]
     RetentionTooShort { field: &'static str },
+    #[error("stats.rollup_retention_days must be 0 or at least stats.retention_days ({retention_days}), not {value}")]
+    RollupRetentionTooShort { retention_days: u32, value: u32 },
     #[error("sessions.expire_after_seconds must be at least 60")]
     SessionExpiryTooShort,
     #[error("stats.ledger_path and storage.path must name different files, not {path}")]
@@ -261,6 +267,7 @@ impl Default for StatsConfig {
             metrics_listen: default_metrics_listen(),
             pricing_path: default_pricing_path(),
             retention_days: default_retention_days(),
+            rollup_retention_days: default_rollup_retention_days(),
         }
     }
 }
@@ -326,9 +333,15 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if config.quota.poll_interval_seconds < 900 {
         return Err(ConfigError::PollIntervalTooShort);
     }
-    if config.stats.retention_days == 0 {
-        return Err(ConfigError::RetentionTooShort {
-            field: "stats.retention_days",
+    // Zero is "forever" on both keys; otherwise a rollup must outlive the rows it was folded from.
+    let (raw, rollup) = (
+        config.stats.retention_days,
+        config.stats.rollup_retention_days,
+    );
+    if rollup != 0 && raw != 0 && rollup < raw {
+        return Err(ConfigError::RollupRetentionTooShort {
+            retention_days: raw,
+            value: rollup,
         });
     }
     if config.quota.sample_retention_days == 0 {
@@ -462,6 +475,10 @@ fn default_pricing_path() -> Option<PathBuf> {
 
 fn default_retention_days() -> u32 {
     90
+}
+
+fn default_rollup_retention_days() -> u32 {
+    400
 }
 
 fn default_sample_retention() -> u32 {

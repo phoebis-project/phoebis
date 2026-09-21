@@ -34,6 +34,7 @@ const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior pa
 #[derive(Clone, Debug)]
 pub struct LedgerConfig {
     pub retention_days: u32,
+    pub rollup_retention_days: u32,
     pub sample_retention_days: u32,
     pub purge_interval: Duration,
     pub quota_poll_interval: Duration,
@@ -44,6 +45,7 @@ impl Default for LedgerConfig {
     fn default() -> Self {
         LedgerConfig {
             retention_days: 90,
+            rollup_retention_days: 400,
             sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
             quota_poll_interval: Duration::from_secs(3_600),

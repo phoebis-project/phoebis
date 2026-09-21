@@ -24,7 +24,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "pricing": { "version": table.version, "effective": table.effective, "source": table.source, "models": table.models.iter().map(|(m, p)| json!({ "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output })).collect::<Vec<_>>() },
         "quota": { "poll_interval_seconds": s.quota_poll_interval_seconds, "sample_retention_days": s.quota_sample_retention_days },
-        "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "quota_samples_days": s.quota_sample_retention_days },
+        "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "quota_samples_days": s.quota_sample_retention_days, "rollup_days": s.rollup_retention_days },
         "routing": { "catalog_sync_interval_seconds": s.catalog_sync_interval_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "max_attempts": s.max_attempts },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
         "storage": { "ledger_path": s.ledger_path, "path": s.storage_path, "pricing_path": s.pricing_path },

@@ -109,6 +109,7 @@ pub struct SettingsView {
     pub quota_poll_interval_seconds: u64,
     pub quota_sample_retention_days: u32,
     pub retention_days: u32,
+    pub rollup_retention_days: u32,
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,

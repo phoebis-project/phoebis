@@ -172,8 +172,10 @@ stats:
   # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
   # fine.
   pricing_path: ./pricing.yaml
-  # Raw requests, attempts, and events are purged past this; hourly rollups are kept for 400 days.
+  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
   retention_days: 90
+  # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
+  rollup_retention_days: 400
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
@@ -303,7 +305,8 @@ Defaults whole.
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
 | `pricing_path` | `./pricing.yaml` | a path; a missing file is fine |
-| `retention_days` | `90` | at least 1 |
+| `retention_days` | `90` | 0 for forever, otherwise any number of days |
+| `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
 
 Refused with:
 
@@ -312,7 +315,9 @@ Refused with:
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
 - `metrics_listen`: a YAML error
 - `pricing_path`: nothing
-- `retention_days`: `stats.retention_days must be at least 1`
+- `retention_days`: nothing
+- `rollup_retention_days`: `stats.rollup_retention_days must be 0 or at least stats.retention_days
+  ({retention_days}), not {value}`
 
 ### storage
 

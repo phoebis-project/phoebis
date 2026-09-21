@@ -45,9 +45,11 @@ fn main() -> anyhow::Result<()> {
                 config.routing.catalog_sync_interval_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());
+            let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };
             println!(
-                "retention {} days, samples {} days, quota poll every {}s",
-                config.stats.retention_days,
+                "retention {}, rollups {}, samples {} days, quota poll every {}s",
+                days(config.stats.retention_days),
+                days(config.stats.rollup_retention_days),
                 config.quota.sample_retention_days,
                 config.quota.poll_interval_seconds
             );

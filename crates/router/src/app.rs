@@ -187,6 +187,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         metrics.clone(),
         LedgerConfig {
             retention_days: config.stats.retention_days,
+            rollup_retention_days: config.stats.rollup_retention_days,
             sample_retention_days: config.quota.sample_retention_days,
             purge_interval: Duration::from_secs(3_600),
             quota_poll_interval: Duration::from_secs(config.quota.poll_interval_seconds),
@@ -329,6 +330,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             quota_poll_interval_seconds: config.quota.poll_interval_seconds,
             quota_sample_retention_days: config.quota.sample_retention_days,
             retention_days: config.stats.retention_days,
+            rollup_retention_days: config.stats.rollup_retention_days,
             session_expire_after_seconds: config.sessions.expire_after_seconds,
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,

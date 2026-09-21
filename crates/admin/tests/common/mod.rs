@@ -684,6 +684,7 @@ async fn app_with_webhook_policy(
         quota_poll_interval_seconds: 3_600,
         quota_sample_retention_days: 30,
         retention_days: 90,
+        rollup_retention_days: 400,
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,

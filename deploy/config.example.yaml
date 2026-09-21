@@ -51,8 +51,10 @@ stats:
   # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
   # fine.
   pricing_path: ./pricing.yaml
-  # Raw requests, attempts, and events are purged past this; hourly rollups are kept for 400 days.
+  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
   retention_days: 90
+  # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
+  rollup_retention_days: 400
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite

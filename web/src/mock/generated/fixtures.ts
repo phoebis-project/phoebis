@@ -5111,7 +5111,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "retention": {
         "body_capture_max_hours": 72,
         "ledger_days": 90,
-        "quota_samples_days": 30
+        "quota_samples_days": 30,
+        "rollup_days": 400
       },
       "routing": {
         "catalog_sync_interval_seconds": 86400,

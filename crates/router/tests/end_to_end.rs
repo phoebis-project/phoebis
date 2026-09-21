@@ -1077,23 +1077,47 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
             .and_then(|p| p.to_str()),
         Some("./pricing.yaml")
     );
-    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\nquota:\n  poll_interval_seconds: 900\n  sample_retention_days: 3\n")).unwrap();
+    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\nquota:\n  poll_interval_seconds: 900\n  sample_retention_days: 3\n")).unwrap();
     assert_eq!(
         (
             full.stats.retention_days,
+            full.stats.rollup_retention_days,
             full.quota.poll_interval_seconds,
             full.quota.sample_retention_days
         ),
-        (7, 900, 3)
+        (7, 500, 900, 3)
     );
     assert!(matches!(
         load(&with("poll", "quota:\n  poll_interval_seconds: 899\n")),
         Err(ConfigError::PollIntervalTooShort)
     ));
+    let zero_retention = load(&with("retention", "stats:\n  retention_days: 0\n")).unwrap();
+    assert_eq!(zero_retention.stats.retention_days, 0);
+    let zero_rollup = load(&with("rollup", "stats:\n  rollup_retention_days: 0\n")).unwrap();
+    assert_eq!(zero_rollup.stats.rollup_retention_days, 0);
     assert!(matches!(
-        load(&with("retention", "stats:\n  retention_days: 0\n")),
-        Err(ConfigError::RetentionTooShort { .. })
+        load(&with(
+            "rollup-too-short",
+            "stats:\n  retention_days: 30\n  rollup_retention_days: 7\n"
+        )),
+        Err(ConfigError::RollupRetentionTooShort {
+            retention_days: 30,
+            value: 7
+        })
     ));
+    let zero_raw_short_rollup = load(&with(
+        "zero-raw-short-rollup",
+        "stats:\n  retention_days: 0\n  rollup_retention_days: 7\n",
+    ))
+    .unwrap();
+    assert_eq!(
+        (
+            zero_raw_short_rollup.stats.retention_days,
+            zero_raw_short_rollup.stats.rollup_retention_days
+        ),
+        (0, 7),
+        "no floor when the raw rows are kept forever"
+    );
     assert!(matches!(
         load(&with("samples", "quota:\n  sample_retention_days: 0\n")),
         Err(ConfigError::RetentionTooShort { .. })
