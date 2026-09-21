@@ -74,3 +74,39 @@ async fn the_first_party_e142e_body_relays_as_the_base_commit_relayed_it() {
         expected_wire(head, native.len(), &expected_body)
     );
 }
+
+#[tokio::test]
+async fn the_recorded_oauth_count_relays_under_the_defaults_as_the_client_sent_it() {
+    let (head, native) = (
+        inference_head(FixtureKind::CountOauthNonFirstParty),
+        body(BodyFixture::CountOauth),
+    );
+    assert_eq!(
+        relayed(AccountKind::Oauth, head, native).await,
+        expected_wire(head, native.len(), native)
+    );
+}
+
+#[tokio::test]
+async fn the_recorded_first_party_count_relays_under_the_defaults_as_the_client_sent_it() {
+    let (head, native) = (
+        inference_head(FixtureKind::CountOauthFirstParty),
+        body(BodyFixture::CountOauthFirstParty),
+    );
+    assert_eq!(
+        relayed(AccountKind::Oauth, head, native).await,
+        expected_wire(head, native.len(), native)
+    );
+}
+
+#[tokio::test]
+async fn the_recorded_api_key_count_relays_under_the_defaults_as_the_client_sent_it() {
+    let (head, native) = (
+        inference_head(FixtureKind::CountApiKey),
+        body(BodyFixture::CountApiKey),
+    );
+    assert_eq!(
+        relayed(AccountKind::ApiKey, head, native).await,
+        expected_wire(head, native.len(), native)
+    );
+}

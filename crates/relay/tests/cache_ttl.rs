@@ -443,43 +443,6 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
 }
 
 #[tokio::test]
-async fn the_policy_is_off_by_default_and_never_touches_a_count_tokens_body() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    // An enabled policy, not the default: a count_tokens body has to be exempted from a policy that would
-    // otherwise rewrite it, not merely left alone because nothing was on.
-    let h = harness(
-        &up,
-        &[api_key("acct", A, 0)],
-        policy(r#"{"enabled":true,"main":"1h"}"#),
-    )
-    .await;
-    let mut count_tokens = request_from_fixture(
-        inference_head(FixtureKind::ApiKey),
-        body(BodyFixture::ApiKey),
-        KEY,
-    );
-    *count_tokens.uri_mut() = "/v1/messages/count_tokens".parse().unwrap();
-    let resp = h.app.clone().oneshot(count_tokens).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(
-        markers(&up.requests()[0].body),
-        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
-        "count_tokens is left as sent even with the policy enabled elsewhere"
-    );
-    assert!(
-        !beta_list(&up.requests()[0])
-            .iter()
-            .any(|b| b == EXTENDED_TTL_BETA),
-        "count_tokens's public schema has no slot for the beta either"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage_state() {
     const POLICY: &str = r#"{"enabled":true,"main":"1h","in_overage":"5m"}"#;
 

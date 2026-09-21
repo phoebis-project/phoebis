@@ -912,15 +912,14 @@ impl Relay {
             // overage.
             let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
-            // retry reuses this body rather than pricing again.
-            let priced = admitted
-                .cache_ttl_policy
-                .ttl_for(
-                    canonical_model,
-                    admitted.identity.agent_id == "main",
-                    writes_cost_money,
-                )
-                .filter(|_| admitted.trace.kind != Kind::CountTokens);
+            // retry reuses this body rather than pricing again. A count is priced too: its markers and its
+            // hash follow the inference request's under the same policy, or the count would read an entry
+            // the inference request wrote under another TTL.
+            let priced = admitted.cache_ttl_policy.ttl_for(
+                canonical_model,
+                admitted.identity.agent_id == "main",
+                writes_cost_money,
+            );
             // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
             // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
             // minutes and reports that.
