@@ -371,6 +371,17 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
             .map(|(_, value)| value.clone()),
+        effort: observed.shape.effort.clone(),
+        thinking_type: observed.shape.thinking_type.clone(),
+        thinking_budget: observed.shape.thinking_budget,
+        max_tokens: observed.shape.max_tokens,
+        tool_count: observed.shape.tool_count,
+        system_blocks: observed.shape.system_blocks,
+        message_count: observed.shape.message_count,
+        context_edits: observed.shape.context_edits.join(","),
+        temperature: observed.shape.temperature,
+        requested_speed: observed.shape.speed.clone(),
+        requested_service_tier: observed.shape.service_tier.clone(),
     };
     records.push(Record::Request {
         request,
@@ -412,6 +423,7 @@ mod tests {
             headers: vec![],
             body: Bytes::from_static(b"0123456789"),
             body_capture_hours: capture_hours,
+            shape: RequestShape::default(),
             received_at: 1_000,
         })
     }

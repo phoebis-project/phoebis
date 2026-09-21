@@ -23,6 +23,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
         Some("claude-cli/2.1.300 (external, cli)"),
         None,
     ];
+    let efforts = [None, None, Some("low"), Some("high"), Some("max")];
     let kinds = [
         "inference",
         "inference",
@@ -105,6 +106,8 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
             duration_ms: duration,
             error_code: (outcome != "succeeded").then(|| "e".into()),
             user_agent: agents[rng.random_range(0..3)].map(String::from),
+            effort: efforts[rng.random_range(0..5)].map(String::from),
+            tool_count: rng.random_range(0..30),
             ..Default::default()
         };
         out.push((request, attempts));
@@ -199,6 +202,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         ("model", Box::new(|r| r.canonical_model.clone())),
         ("kind", Box::new(|r| r.kind.clone())),
         ("user_agent", Box::new(|r| r.user_agent.clone())),
+        ("effort", Box::new(|r| r.effort.clone())),
         ("hour", Box::new(|r| r.hour.to_string())),
     ];
     for (name, group) in &groups {

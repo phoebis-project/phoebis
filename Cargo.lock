@@ -426,6 +426,7 @@ dependencies = [
  "axum",
  "bytes",
  "phoebis-bus",
+ "phoebis-cch",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-relay",

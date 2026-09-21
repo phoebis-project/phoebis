@@ -297,7 +297,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         &request.canonical_model,
         &request.kind,
         request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
-        NO_EFFORT,
+        request.effort.as_deref().unwrap_or(NO_EFFORT),
     );
     d.requests = 1;
     match request.outcome.as_str() {

@@ -13,7 +13,7 @@ use phoebis_alerts::{AlertInputs, AlertParts, Alerts, Kind, ScopeType, Signal, W
 // The bus has a `Kind` of its own, and this file already speaks the alert one.
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
-    ResponseFacts,
+    RequestShape, ResponseFacts,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
@@ -311,6 +311,7 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         headers: vec![],
         body: Bytes::from_static(b"{}"),
         body_capture_hours: capture,
+        shape: RequestShape::default(),
         received_at: NOW,
     })
 }

@@ -207,6 +207,26 @@ pub struct CooldownSet {
     pub window: String,
 }
 
+/// What the body said about the request, read once at observation from the parse the relay performs for the
+/// restoration. Absent members stay `None`; the counts are 0 for a body with no such member.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RequestShape {
+    /// `output_config.effort`.
+    pub effort: Option<String>,
+    /// `thinking.type` and `thinking.budget_tokens`.
+    pub thinking_type: Option<String>,
+    pub thinking_budget: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub tool_count: u32,
+    pub system_blocks: u32,
+    pub message_count: u32,
+    /// `context_management.edits[].type`, in the body's order.
+    pub context_edits: Vec<String>,
+    pub temperature: Option<f64>,
+    pub speed: Option<String>,
+    pub service_tier: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RequestObserved {
     pub request_id: String,
@@ -228,6 +248,8 @@ pub struct RequestObserved {
     pub body: Bytes,
     /// The key's effective capture window; zero means the ledger keeps no bodies for this request.
     pub body_capture_hours: u32,
+    /// Empty for a refusal published before the body was read.
+    pub shape: RequestShape,
     pub received_at: i64,
 }
 

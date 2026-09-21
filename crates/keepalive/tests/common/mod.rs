@@ -14,7 +14,8 @@ use axum::http::Request;
 use bytes::Bytes;
 use phoebis_bus::{
     AccountSelected, Bus, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
-    RequestComplete, RequestObserved, ResponseChunk, ResponseFacts, Subscriber, Usage,
+    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber,
+    Usage,
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
@@ -347,6 +348,7 @@ impl Rig {
             ],
             body: Bytes::from(body.to_string()),
             body_capture_hours: 0,
+            shape: RequestShape::default(),
             received_at: self.now(),
         })
     }

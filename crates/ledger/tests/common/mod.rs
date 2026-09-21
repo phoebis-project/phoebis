@@ -326,15 +326,38 @@ pub fn clock_of(h: &Harness) -> Clock {
     Arc::new(move || c.load(Ordering::SeqCst))
 }
 
+/// The head fixture captured together with a body fixture: a first-party body checked against a non-first-
+/// party head's declared betas trips client-drift detection.
+fn head_of(fixture: &BodyFixture) -> FixtureKind {
+    match fixture {
+        BodyFixture::ApiKey => FixtureKind::ApiKey,
+        BodyFixture::CountApiKey => FixtureKind::CountApiKey,
+        BodyFixture::CountOauth => FixtureKind::CountOauthNonFirstParty,
+        BodyFixture::CountOauthFirstParty => FixtureKind::CountOauthFirstParty,
+        BodyFixture::FirstParty9b244 | BodyFixture::FirstPartyE142e => FixtureKind::OauthFirstParty,
+        BodyFixture::Oauth => FixtureKind::OauthNonFirstParty,
+    }
+}
+
 pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
-    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
-        .unwrap()
-        .replacen(
-            r#""model":"claude-sonnet-4-5""#,
-            &format!(r#""model":"{model}""#),
-            1,
-        );
-    let (line, headers) = parse_head(inference_head(FixtureKind::OauthNonFirstParty)).unwrap();
+    request_for_fixture(BodyFixture::Oauth, key, model, session)
+}
+
+/// `request_for` fixed to the OAuth fixture; this is the same request over any other body fixture, model
+/// substituted the same way.
+pub fn request_for_fixture(
+    fixture: BodyFixture,
+    key: &str,
+    model: &str,
+    session: &str,
+) -> Request<Body> {
+    let head = head_of(&fixture);
+    let native = String::from_utf8(body(fixture).to_vec()).unwrap().replacen(
+        r#""model":"claude-sonnet-4-5""#,
+        &format!(r#""model":"{model}""#),
+        1,
+    );
+    let (line, headers) = parse_head(inference_head(head)).unwrap();
     let target = line.split(' ').nth(1).unwrap();
     let mut req = Request::builder().method("POST").uri(target);
     for (n, v) in headers {

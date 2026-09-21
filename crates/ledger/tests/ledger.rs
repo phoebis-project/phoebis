@@ -4,6 +4,7 @@ mod common;
 use std::time::Duration;
 
 use phoebis_ledger::{EventRecord, LedgerConfig, Record};
+use phoebis_profile::fixtures::BodyFixture;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
@@ -324,6 +325,105 @@ async fn the_answers_thinking_tool_counts_and_facts_reach_the_attempt_row_and_th
             row.effort.as_str()
         ),
         (1, 1, 0, "none")
+    );
+    up.shutdown().await;
+}
+
+/// The one case needing a body already edited by hand: the head-and-header wiring `request_for_fixture` uses,
+/// over a caller-supplied body instead of a whole fixture.
+fn request_with_native_body(
+    native: String,
+    key: &str,
+    session: &str,
+) -> axum::http::Request<axum::body::Body> {
+    let (line, headers) = phoebis_transport::request::parse_head(
+        phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::OauthFirstParty),
+    )
+    .unwrap();
+    let target = line.split(' ').nth(1).unwrap();
+    let mut req = axum::http::Request::builder().method("POST").uri(target);
+    for (n, v) in headers {
+        match n.to_ascii_lowercase().as_str() {
+            "authorization" => req = req.header("Authorization", format!("Bearer {key}")),
+            "host" | "content-length" | "x-claude-code-session-id" => {}
+            _ => req = req.header(n, v),
+        }
+    }
+    req.header("x-claude-code-session-id", session)
+        .body(axum::body::Body::from(native.into_bytes()))
+        .unwrap()
+}
+
+/// The recorded first-party fixture's shape reaches the request row from the parse the relay already performs;
+/// a second request with an effort spliced into the same fixture carries it into the row and the rollup key.
+#[tokio::test]
+async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_the_rollup() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for_fixture(
+            BodyFixture::FirstParty9b244,
+            KEY,
+            "claude-sonnet-4-5",
+            "s1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (row, _) = ledgered(&h, &id).await;
+    assert_eq!(
+        (
+            row.thinking_type.as_deref(),
+            row.thinking_budget,
+            row.max_tokens
+        ),
+        (Some("enabled"), Some(31_999), Some(32_000))
+    );
+    assert_eq!(
+        (row.tool_count, row.system_blocks, row.message_count),
+        (12, 4, 1)
+    );
+    assert_eq!(row.context_edits, "clear_thinking_20251015");
+    assert_eq!(row.effort, None);
+
+    let spliced =
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+            .unwrap()
+            .replacen(
+                r#""model":"claude-sonnet-4-5""#,
+                r#""model":"claude-sonnet-4-5","output_config":{"effort":"high"}"#,
+                1,
+            );
+    // The fixture carries a first-party client's billing stamp over its own bytes; a hand-spliced body needs
+    // its own stamp, or the relay's drift check refuses it as tampered.
+    let spliced = String::from_utf8(phoebis_cch::sign(spliced.as_bytes()).unwrap()).unwrap();
+    let resp2 = h
+        .app
+        .clone()
+        .oneshot(request_with_native_body(spliced, KEY, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 200);
+    let id2 = request_id(&resp2);
+    let _ = resp2.into_body().collect().await.unwrap();
+    let (row2, _) = ledgered(&h, &id2).await;
+    assert_eq!(row2.effort.as_deref(), Some("high"));
+
+    let rollups =
+        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+            .await
+            .unwrap();
+    assert!(
+        rollups.iter().any(|r| r.effort == "high"),
+        "the second request's effort lands in a rollup row keyed on it"
     );
     up.shutdown().await;
 }

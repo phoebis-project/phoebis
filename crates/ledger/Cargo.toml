@@ -25,6 +25,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+phoebis-cch = { path = "../cch" }
 phoebis-profile = { path = "../profile" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }

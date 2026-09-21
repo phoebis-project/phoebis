@@ -726,7 +726,7 @@ fn delta_text(events: Vec<SseEvent>) -> Option<String> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use phoebis_bus::{Kind, Origin, Outcome, ResponseFacts};
+    use phoebis_bus::{Kind, Origin, Outcome, RequestShape, ResponseFacts};
     use phoebis_ledger::PriceTable;
 
     fn observed(id: &str) -> Event {
@@ -751,6 +751,7 @@ mod tests {
             headers: Vec::new(),
             body: Bytes::new(),
             body_capture_hours,
+            shape: RequestShape::default(),
             received_at: 1_000,
         })
     }

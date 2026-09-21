@@ -15,7 +15,8 @@ use axum::Router;
 use bytes::Bytes;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Bus, CooldownSet, Event, Kind, Origin, Outcome,
-    RequestComplete, RequestObserved, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
@@ -238,6 +239,7 @@ impl Trace {
 
     /// Published exactly once per request by the handler, as soon as it knows as much of the identity as the
     /// request will ever yield. A refusal before the key was read publishes with nothing but the id.
+    #[allow(clippy::too_many_arguments)]
     fn observed(
         &self,
         key: Option<&ApiKeyRow>,
@@ -246,6 +248,7 @@ impl Trace {
         body: Bytes,
         stream: bool,
         body_capture_hours: u32,
+        shape: RequestShape,
     ) {
         if self.bus.is_none() {
             return;
@@ -273,6 +276,7 @@ impl Trace {
             headers: published_headers(headers),
             body,
             body_capture_hours,
+            shape,
             received_at: self.received_at,
         }));
     }
@@ -555,13 +559,29 @@ impl Relay {
                 Ok(key) if key.created_at != probe.key_generation => {
                     let refusal = KeyRefusal::Replaced;
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                    trace.observed(
+                        None,
+                        None,
+                        &parts.headers,
+                        Bytes::new(),
+                        false,
+                        0,
+                        RequestShape::default(),
+                    );
                     return self.refused(&trace, key_refusal(&refusal), None, None, None);
                 }
                 Ok(key) => key.clone(),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                    trace.observed(
+                        None,
+                        None,
+                        &parts.headers,
+                        Bytes::new(),
+                        false,
+                        0,
+                        RequestShape::default(),
+                    );
                     return self.refused(&trace, key_refusal(&refusal), None, None, None);
                 }
             },
@@ -569,7 +589,15 @@ impl Relay {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,
                     Err(error) => {
-                        trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                        trace.observed(
+                            None,
+                            None,
+                            &parts.headers,
+                            Bytes::new(),
+                            false,
+                            0,
+                            RequestShape::default(),
+                        );
                         return self.refused(&trace, auth_failure(&error), None, None, None);
                     }
                 };
@@ -577,7 +605,15 @@ impl Relay {
                     Ok(key) => key.clone(),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
-                        trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                        trace.observed(
+                            None,
+                            None,
+                            &parts.headers,
+                            Bytes::new(),
+                            false,
+                            0,
+                            RequestShape::default(),
+                        );
                         return self.refused(&trace, key_refusal(&refusal), None, None, None);
                     }
                 }
@@ -598,6 +634,7 @@ impl Relay {
                 Bytes::new(),
                 false,
                 capture_hours,
+                RequestShape::default(),
             );
             return self.refused(
                 &trace,
@@ -607,6 +644,7 @@ impl Relay {
                 client_version.as_deref(),
             );
         };
+        let facts = BodyFacts::read(&raw);
         let stream = wants_stream(&raw);
         let identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
@@ -618,6 +656,7 @@ impl Relay {
                     raw.clone(),
                     stream,
                     capture_hours,
+                    facts.shape.clone(),
                 );
                 return self.refused(
                     &trace,
@@ -635,6 +674,7 @@ impl Relay {
             raw.clone(),
             stream,
             capture_hours,
+            facts.shape.clone(),
         );
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,
@@ -671,7 +711,6 @@ impl Relay {
                 })
                 .collect(),
         };
-        let facts = BodyFacts::read(&raw);
         // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
         // has no line to fill.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {

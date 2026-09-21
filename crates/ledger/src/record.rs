@@ -29,6 +29,18 @@ pub struct RequestRecord {
     pub bodies_captured: bool,
     /// The caller's `User-Agent` as it was sent, `None` when it sent none.
     pub user_agent: Option<String>,
+    pub effort: Option<String>,
+    pub thinking_type: Option<String>,
+    pub thinking_budget: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub tool_count: u32,
+    pub system_blocks: u32,
+    pub message_count: u32,
+    /// Comma-joined, empty for none: a request sends at most two edit types and the log reads them as a list.
+    pub context_edits: String,
+    pub temperature: Option<f64>,
+    pub requested_speed: Option<String>,
+    pub requested_service_tier: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

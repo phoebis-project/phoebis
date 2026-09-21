@@ -1,6 +1,7 @@
 //! What the restoration reads off the body in one parse: the turn boundary, the version suffix, and the
 //! prompt id a first-party line already carries.
 
+use phoebis_bus::RequestShape;
 use serde_json::Value;
 
 pub struct BodyFacts {
@@ -12,6 +13,7 @@ pub struct BodyFacts {
     /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
     /// from a value spelled any other way than the client spells one.
     pub prompt_id: Option<String>,
+    pub shape: RequestShape,
 }
 
 impl BodyFacts {
@@ -21,6 +23,7 @@ impl BodyFacts {
                 fresh_user_turn: false,
                 prompt_chars: ['0'; 3],
                 prompt_id: None,
+                shape: RequestShape::default(),
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
@@ -43,10 +46,38 @@ impl BodyFacts {
             .and_then(Value::as_str)
             .and_then(carried_prompt_id)
             .map(String::from);
+        let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
+        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
+        let thinking = root.get("thinking");
+        let shape = RequestShape {
+            effort: text(root.get("output_config").and_then(|o| o.get("effort"))),
+            thinking_type: text(thinking.and_then(|t| t.get("type"))),
+            thinking_budget: thinking
+                .and_then(|t| t.get("budget_tokens"))
+                .and_then(Value::as_u64),
+            max_tokens: root.get("max_tokens").and_then(Value::as_u64),
+            tool_count: count(root.get("tools")),
+            // A string `system` is one block; the client sends an array.
+            system_blocks: match root.get("system") {
+                Some(Value::String(_)) => 1,
+                other => count(other),
+            },
+            message_count: count(root.get("messages")),
+            context_edits: root
+                .get("context_management")
+                .and_then(|c| c.get("edits"))
+                .and_then(Value::as_array)
+                .map(|edits| edits.iter().filter_map(|e| text(e.get("type"))).collect())
+                .unwrap_or_default(),
+            temperature: root.get("temperature").and_then(Value::as_f64),
+            speed: text(root.get("speed")),
+            service_tier: text(root.get("service_tier")),
+        };
         BodyFacts {
             fresh_user_turn,
             prompt_chars,
             prompt_id,
+            shape,
         }
     }
 }
@@ -154,5 +185,67 @@ mod tests {
         let facts = BodyFacts::read(b"not json");
         assert!(!facts.fresh_user_turn);
         assert_eq!(facts.prompt_chars, ['0', '0', '0']);
+    }
+
+    #[test]
+    fn the_shape_is_read_from_the_recorded_first_party_body() {
+        let facts = BodyFacts::read(phoebis_profile::fixtures::body(
+            phoebis_profile::fixtures::BodyFixture::FirstParty9b244,
+        ));
+        let shape = facts.shape;
+        assert_eq!(
+            (
+                shape.thinking_type.as_deref(),
+                shape.thinking_budget,
+                shape.max_tokens
+            ),
+            (Some("enabled"), Some(31_999), Some(32_000))
+        );
+        assert_eq!(
+            (shape.tool_count, shape.system_blocks, shape.message_count),
+            (12, 4, 1)
+        );
+        assert_eq!(
+            shape.context_edits,
+            vec!["clear_thinking_20251015".to_string()]
+        );
+        assert_eq!(
+            (
+                shape.effort,
+                shape.temperature,
+                shape.speed,
+                shape.service_tier
+            ),
+            (None, None, None, None),
+            "the 2.1.269 client sends none of these"
+        );
+    }
+
+    #[test]
+    fn a_shape_with_every_member_and_a_string_system_reads_whole() {
+        let body = br#"{"model":"m","system":"be brief","max_tokens":1024,"temperature":0.5,"speed":"fast","service_tier":"auto","output_config":{"effort":"xhigh"},"thinking":{"type":"adaptive"},"tools":[{"name":"a"},{"name":"b"}],"context_management":{"edits":[{"type":"clear_tool_uses_20250919"},{"type":"clear_thinking_20251015"}]},"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"again"}]}"#;
+        let shape = BodyFacts::read(body).shape;
+        assert_eq!(shape.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            (shape.thinking_type.as_deref(), shape.thinking_budget),
+            (Some("adaptive"), None)
+        );
+        assert_eq!(
+            (shape.tool_count, shape.system_blocks, shape.message_count),
+            (2, 1, 3)
+        );
+        assert_eq!(
+            shape.context_edits,
+            vec!["clear_tool_uses_20250919", "clear_thinking_20251015"]
+        );
+        assert_eq!(
+            (
+                shape.temperature,
+                shape.speed.as_deref(),
+                shape.service_tier.as_deref()
+            ),
+            (Some(0.5), Some("fast"), Some("auto"))
+        );
+        assert_eq!(BodyFacts::read(b"not json").shape, RequestShape::default());
     }
 }

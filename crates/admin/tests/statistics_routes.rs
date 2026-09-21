@@ -2,7 +2,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, ResponseChunk};
+use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
 use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
 use common::{get, json, login, post};
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -611,6 +611,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),
         body_capture_hours: 24,
+        shape: RequestShape::default(),
         received_at: common::NOW,
     }));
     parts.bus.publish(Event::ResponseChunk(ResponseChunk { request_id: "live-1".into(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"secret prompt text\"}}\n\n"), phase: Some(Phase::FirstContentDelta) }));
