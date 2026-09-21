@@ -395,6 +395,10 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         400,
         "a single pattern past the length bound"
     );
+    assert_eq!(
+        json(one_long_pattern).await["error"],
+        "user agent patterns are at most 256 characters, at most 32 of them"
+    );
     let long_agent = get(
         &parts.app,
         &format!("/admin/requests?user_agent={}&limit=500", "a".repeat(257)),
@@ -405,6 +409,10 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         long_agent.status(),
         400,
         "the request log bounds its one pattern the same way"
+    );
+    assert_eq!(
+        json(long_agent).await["error"],
+        "user agent patterns are at most 256 characters, at most 32 of them"
     );
     let at_the_bound = get(
         &parts.app,

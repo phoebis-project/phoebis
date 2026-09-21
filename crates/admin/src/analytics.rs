@@ -100,8 +100,8 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
         .await
         .map_err(ledger_failure)?;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    // Cloned before `apply_filter` consumes the filter: the group list is the `Selection`'s own member, not
-    // read back off a filter the handlers no longer hold.
+    // Cloned rather than moved: `filter` still owes `apply_filter` a borrow below, so the group list needs
+    // its own copy to ride along as the `Selection`'s sixth member.
     let agent_groups = filter.user_agent_groups.clone();
     Ok((
         (from, to),
