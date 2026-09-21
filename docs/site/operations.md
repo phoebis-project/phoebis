@@ -132,6 +132,11 @@ To re-pin the profile against a new build:
    and grades it with `--through-router`. Its header names the two router keys it needs, that the service must be
    stopped while it runs since it opens the same store the running service does, and that it shares its client
    state with the baseline capture, so the two scripts never run at the same time.
+6. `scripts/capture-count-tokens.sh <path-to-claude-binary> <output-dir>` records the client's own token count in
+   each credential mode, inside the same namespace and past a receiver that answers the first request with a
+   canned tool call, so the count the Read tool sends before a large file reaches the wire; `python3
+   scripts/build-fixtures.py --count <output-dir>` writes the `count_*` fixtures, and `--check` beside it grades a
+   new build against them.
 
 ## Publishing this site
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build crates/profile/fixtures from a capture directory, or --check a capture against them."""
 import argparse
+import contextlib
 import difflib
+import io
 import json
 import pathlib
 import re
@@ -58,6 +60,14 @@ INFERENCE_BODIES = ["body_oauth.json", "body_fp_9b244.json", "body_apikey.json",
 # for its body alone, as a second hash vector.
 INFERENCE_HEADS = ["inference_oauth.http", "inference_oauth_fp.http", "inference_apikey.http"]
 
+# The credential modes the count capture drives, each its own directory, and the fixture pair each one's count
+# request becomes.
+COUNT_MODES = ["count_oauth", "count_oauth_fp", "count_apikey"]
+
+# The fixtures only the count capture produces. The baseline and the router capture never send a count, so
+# --check without --count reports these as not captured rather than as drift, and --count --check requires them.
+COUNT_FIXTURES = {f"{mode}{suffix}" for mode in COUNT_MODES for suffix in (".json", ".http")}
+
 # The two header values a session mints fresh on every run; masked so --check reports profile
 # drift, not the identifiers themselves.
 HEADER_PLACEHOLDERS = {
@@ -111,6 +121,21 @@ def control(entry, name, out):
     (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + body.encode())
 
 
+def inference_entries(cm: list) -> list:
+    """The capture's inference posts, matched on the path alone: a count request's line starts with the
+    inference path as well, and zipping one onto an inference fixture name would mis-pin that fixture."""
+    return [
+        (i, e)
+        for i, e in enumerate(cm)
+        if e["request_line"].split(" ")[1].split("?")[0] == "/v1/messages" and e["request_line"].startswith("POST ")
+    ]
+
+
+def count_entries(cm: list) -> list:
+    """The capture's token-count posts, the one request the count script's receiver provokes."""
+    return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
+
+
 def build(src: pathlib.Path, out: pathlib.Path) -> None:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
@@ -121,7 +146,7 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
     cm = json.load(open(src / "clean_modes.json"))
     # Selected by request line rather than by index: a capture that interleaves its HEAD /api/hello probes
     # differently still lands the same four bodies on the same four fixtures.
-    posts = [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages")]
+    posts = inference_entries(cm)
     if len(posts) != len(INFERENCE_BODIES):
         raise SystemExit(f"{src}/clean_modes.json holds {len(posts)} POST /v1/messages entries, want 4")
     for (idx, _), name in zip(posts, INFERENCE_BODIES):
@@ -183,6 +208,21 @@ def build(src: pathlib.Path, out: pathlib.Path) -> None:
     (out / "responses/roles.json").write_text('{"organization_role":"admin","workspace_role":"workspace_admin"}\n')
 
 
+def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
+    """Write count_<mode>.json and count_<mode>.http for each mode directory under `src`, from the one
+    count_tokens request each run recorded; the inference entries beside it are the client's turn and are not
+    extracted, since the inference fixtures stay pinned to the build that measured them."""
+    for mode in COUNT_MODES:
+        cm = json.load(open(src / mode / "clean_modes.json"))
+        counts = count_entries(cm)
+        if len(counts) != 1:
+            raise SystemExit(f"{src}/{mode}/clean_modes.json holds {len(counts)} count_tokens entries, want 1")
+        idx, entry = counts[0]
+        body = (src / mode / f"clean_body_{idx}.json").read_bytes()
+        (out / f"{mode}.json").write_bytes(body)
+        (out / f"{mode}.http").write_bytes(head(entry, len(body)))
+
+
 def mask_hello(raw: bytes) -> bytes:
     """Python port of transport::hello::mask; zeroes per-run randomness, leaves structure and lengths intact."""
     h = bytearray(raw)
@@ -234,6 +274,8 @@ def _self_test() -> None:
     _self_test_mask_hello()
     _self_test_normalize_body()
     _self_test_declared_length()
+    _self_test_count_selector()
+    _self_test_capture_partition()
 
 
 def _self_test_declared_length() -> None:
@@ -267,6 +309,83 @@ def _self_test_declared_length() -> None:
             raise AssertionError("the build accepted a body its declared Content-Length does not describe")
         finally:
             THROUGH_ROUTER = False
+
+
+def _self_test_count_selector() -> None:
+    """A count request's line starts with the inference path too, so the two selectors must not overlap."""
+    entries = [
+        {"request_line": "POST /v1/messages?beta=true HTTP/1.1", "headers": [], "body": ""},
+        {"request_line": "POST /v1/messages/count_tokens?beta=true HTTP/1.1", "headers": [], "body": ""},
+    ]
+    posts = [i for i, _ in inference_entries(entries)]
+    counts = [i for i, _ in count_entries(entries)]
+    if posts != [0]:
+        raise AssertionError(f"the inference selector took entries {posts}, want the first alone")
+    if counts != [1]:
+        raise AssertionError(f"the count selector took entries {counts}, want the second alone")
+    print("self-test passed: the inference selector and the count selector take one entry each")
+
+
+def _count_capture(root: pathlib.Path, session: bytes) -> pathlib.Path:
+    """A capture directory shaped like the one the count script writes: one inference entry and one count entry
+    per mode, the count body carrying a per-run session id for the normaliser to mask."""
+    content = rb'{\"session_id\":\"' + session + rb'\"}'
+    body = rb'{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"' + content + rb'"}]}'
+    for mode in COUNT_MODES:
+        (root / mode).mkdir(parents=True)
+        entries = [
+            {"request_line": "POST /v1/messages?beta=true HTTP/1.1", "headers": ["Content-Length: 2"], "body": "{}"},
+            {
+                "request_line": "POST /v1/messages/count_tokens?beta=true HTTP/1.1",
+                "headers": ["Host: 127.0.0.1:48444", f"Content-Length: {len(body)}"],
+                "body": body.decode(),
+            },
+        ]
+        (root / mode / "clean_modes.json").write_text(json.dumps(entries))
+        (root / mode / "clean_body_0.json").write_bytes(b"{}")
+        (root / mode / "clean_body_1.json").write_bytes(body)
+    return root
+
+
+def _self_test_capture_partition() -> None:
+    """The six count fixtures are exempt from every other capture's grade and required by the count's own.
+
+    Both halves read the code under test rather than a copy of it: the headings come from `partition_names`,
+    which `check` calls, and the missing report from `check_count` itself.
+    """
+    committed = {name: b"x" for name in sorted(COUNT_FIXTURES)}
+    committed["control_token.http"] = b"y"
+    committed["inference_oauth.http"] = b"z"
+    fresh = {"inference_oauth.http": b"z"}
+    for label, reachable in (("baseline", CONTROL_PLANE), ("router", UNCAPTURED_THROUGH_ROUTER)):
+        uncaptured, counts, diffs = partition_names(committed, fresh, reachable | COUNT_FIXTURES)
+        if counts != sorted(COUNT_FIXTURES):
+            raise AssertionError(f"the {label} classification put {counts} under the count heading")
+        if uncaptured != ["control_token.http"]:
+            raise AssertionError(f"the {label} classification put {uncaptured} under its own heading")
+        if diffs:
+            raise AssertionError(f"the {label} classification read {diffs} as drift rather than as not captured")
+    print("self-test passed: a count fixture no other capture writes is reported as not captured, not as drift")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        recorded = b"fd27de0e-0e2a-4b3f-8a34-4bd0f39a0f6d"
+        capture = _count_capture(pathlib.Path(tmp) / "capture", recorded)
+        tree = pathlib.Path(tmp) / "committed"
+        tree.mkdir()
+        build_count(capture, tree)
+        # The committed copy carries the session id of another run: a count body reaches normalize_body only
+        # because normalize_tree routes count_ names to it, and without that this reads as drift.
+        stale = (tree / "count_oauth.json").read_bytes().replace(recorded, b"b2b1f4ca-1f6e-4a52-9d54-2f9b4a6c0e11")
+        (tree / "count_oauth.json").write_bytes(stale)
+        if check_count(capture, tree) != 0:
+            raise AssertionError("check_count reported drift against the fixtures it just built")
+        (tree / "count_apikey.http").unlink()
+        report = io.StringIO()
+        with contextlib.redirect_stdout(report):
+            status = check_count(capture, tree)
+        if status == 0 or "count_apikey.http" not in report.getvalue():
+            raise AssertionError(f"check_count passed with a count fixture missing: {report.getvalue()!r}")
+    print("self-test passed: check_count requires every count fixture and names the one that is gone")
 
 
 def _self_test_mask_hello() -> None:
@@ -490,7 +609,7 @@ def normalize_tree(root: pathlib.Path) -> dict:
             raw = mask_hello(bytes.fromhex(raw.decode().strip())).hex().encode() + b"\n"
         elif rel.endswith(".http"):
             raw = normalize_head(raw)
-        elif rel.startswith("body_") and rel.endswith(".json"):
+        elif rel.startswith(("body_", "count_")) and rel.endswith(".json"):
             raw = normalize_body(raw)
         normalized[rel] = raw
     return normalized
@@ -537,6 +656,17 @@ def body_diff(name: str, committed: bytes, fresh: bytes) -> list:
     return lines
 
 
+def partition_names(committed: dict, fresh: dict, uncaptured_set: set) -> tuple[list, list, list]:
+    """Split every fixture name into the ones this capture cannot reach, the ones only the count capture
+    writes, and the ones that differ, so an operator reads which capture would fill each missing name."""
+    names = sorted(set(committed) | set(fresh))
+    uncaptured = [name for name in names if name not in fresh and name in uncaptured_set]
+    counts = [name for name in uncaptured if name in COUNT_FIXTURES]
+    others = [name for name in uncaptured if name not in COUNT_FIXTURES]
+    diffs = [name for name in names if name not in uncaptured and committed.get(name) != fresh.get(name)]
+    return others, counts, diffs
+
+
 def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_hashes: bool = False) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
@@ -554,14 +684,16 @@ def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_
         else:
             committed = normalize_tree(FIXTURES)
         fresh = normalize_tree(fresh_dir)
-        names = sorted(set(committed) | set(fresh))
-        uncaptured_set = UNCAPTURED_THROUGH_ROUTER if THROUGH_ROUTER else CONTROL_PLANE
-        uncaptured = [name for name in names if name not in fresh and name in uncaptured_set]
-        diffs = [name for name in names if name not in uncaptured and committed.get(name) != fresh.get(name)]
+        uncaptured_set = (UNCAPTURED_THROUGH_ROUTER if THROUGH_ROUTER else CONTROL_PLANE) | COUNT_FIXTURES
+        uncaptured, uncaptured_count, diffs = partition_names(committed, fresh, uncaptured_set)
         if uncaptured:
             label = "not captured (router capture):" if THROUGH_ROUTER else "not captured (control plane):"
             print(label)
             for name in uncaptured:
+                print(f"  {name}")
+        if uncaptured_count:
+            print("not captured (count capture):")
+            for name in uncaptured_count:
                 print(f"  {name}")
         if diffs:
             print("fixtures differ:")
@@ -574,6 +706,37 @@ def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_
         if hashes:
             return hashes
         print("fixtures match")
+        return 0
+
+
+def check_count(capture_dir: pathlib.Path, committed_dir: pathlib.Path = FIXTURES) -> int:
+    """Diff the count fixtures a capture produces against the committed ones. All six are required here: this
+    is the only capture that writes them, so one absent is a run that recorded no count, not a plane it could
+    not reach."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh_dir = pathlib.Path(tmp) / "fixtures"
+        fresh_dir.mkdir(parents=True)
+        build_count(capture_dir, fresh_dir)
+        committed = {k: v for k, v in normalize_tree(committed_dir).items() if k in COUNT_FIXTURES}
+        fresh = {k: v for k, v in normalize_tree(fresh_dir).items() if k in COUNT_FIXTURES}
+        missing = sorted(name for name in COUNT_FIXTURES if name not in committed or name not in fresh)
+        # Nothing is exempt here, so a name one side lacks lands in the difference list as well; it is already
+        # reported above, and reporting it twice would read as two faults.
+        _, _, diffs = partition_names(committed, fresh, set())
+        diffs = [name for name in diffs if name not in missing]
+        if missing:
+            print("count fixtures missing:")
+            for name in missing:
+                print(f"  {name} ({'not captured' if name not in fresh else 'not committed'})")
+        if diffs:
+            print("count fixtures differ:")
+            for name in diffs:
+                print(f"  {name}")
+                for line in body_diff(name, committed.get(name), fresh.get(name)):
+                    print(f"    {line}")
+        if missing or diffs:
+            return 1
+        print("count fixtures match")
         return 0
 
 
@@ -599,6 +762,11 @@ def main() -> int:
         action="store_true",
         help="leave the cch re-sign to the caller instead of running it as part of --check",
     )
+    parser.add_argument(
+        "--count",
+        metavar="DIR",
+        help="build (or --check) the count_tokens fixtures from the capture directory the count script wrote",
+    )
     parser.add_argument("--self-test", action="store_true", help="run mask_hello's bounds-check self-test and exit")
     args = parser.parse_args()
     if args.self_test:
@@ -606,6 +774,13 @@ def main() -> int:
         return 0
     global THROUGH_ROUTER
     THROUGH_ROUTER = args.through_router
+    if args.count:
+        count_src = pathlib.Path(args.count).expanduser()
+        if args.check:
+            return check_count(count_src)
+        build_count(count_src, FIXTURES)
+        print("count fixtures written:", sorted(COUNT_FIXTURES))
+        return 0
     src = pathlib.Path(args.capture_dir).expanduser()
     if args.check:
         baseline = pathlib.Path(args.baseline).expanduser() if args.baseline else None
