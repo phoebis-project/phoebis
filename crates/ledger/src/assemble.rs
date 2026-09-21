@@ -293,7 +293,24 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             last.cache_write_1h_tokens = usage.cache_write_1h_tokens;
             last.service_tier = usage.service_tier.clone();
             last.cache_miss_reason = usage.cache_miss_reason.clone();
+            last.thinking_tokens = usage.thinking_tokens;
+            last.web_search_requests = usage.web_search_requests;
+            last.web_fetch_requests = usage.web_fetch_requests;
         }
+        let response = &complete.response;
+        last.stop_reason = response.stop_reason.clone();
+        last.stop_sequence = response.stop_sequence.clone();
+        // The answer's model is worth a column only when it is not the one the router resolved: a fallback
+        // served the request, or the upstream spelled the id its own way.
+        last.served_model = response
+            .model
+            .clone()
+            .filter(|served| *served != observed.canonical_model && *served != observed.model);
+        last.speed = response.speed.clone();
+        last.inference_geo = response.inference_geo.clone();
+        last.cleared_input_tokens = response.cleared_input_tokens;
+        last.refusal_category = response.refusal_category.clone();
+        last.refusal_recommended_model = response.refusal_recommended_model.clone();
         if last.upstream_status.is_none()
             && complete.error_code.as_deref() == Some("account_cancelled")
         {
@@ -472,6 +489,7 @@ mod tests {
                 cache_miss_reason: Some("none".into()),
                 ..Default::default()
             }),
+            response: ResponseFacts::default(),
             ttfb_ms: Some(150),
             ttfc_ms: Some(200),
             error_code: code.map(String::from),

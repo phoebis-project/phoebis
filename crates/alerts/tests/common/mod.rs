@@ -11,7 +11,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use phoebis_alerts::{AlertInputs, AlertParts, Alerts, Kind, ScopeType, Signal, Webhook};
 // The bus has a `Kind` of its own, and this file already speaks the alert one.
-use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved};
+use phoebis_bus::{
+    Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
+    ResponseFacts,
+};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
 };
@@ -326,6 +329,7 @@ pub fn complete(
         outcome,
         status,
         usage: None,
+        response: ResponseFacts::default(),
         ttfb_ms: None,
         ttfc_ms: None,
         error_code: None,

@@ -69,6 +69,18 @@ pub struct AttemptRecord {
     pub cache_write_usd: Option<f64>,
     pub output_usd: Option<f64>,
     pub pricing_version: Option<String>,
+    pub thinking_tokens: Option<u64>,
+    pub web_search_requests: Option<u64>,
+    pub web_fetch_requests: Option<u64>,
+    pub stop_reason: Option<String>,
+    pub stop_sequence: Option<String>,
+    /// The model the answer named, recorded only when it is not the one the router resolved.
+    pub served_model: Option<String>,
+    pub speed: Option<String>,
+    pub inference_geo: Option<String>,
+    pub cleared_input_tokens: Option<u64>,
+    pub refusal_category: Option<String>,
+    pub refusal_recommended_model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

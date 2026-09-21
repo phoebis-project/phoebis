@@ -280,6 +280,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
                 cache_write_5m_tokens: Some(2_000),
                 ..Default::default()
             }),
+            response: phoebis_bus::ResponseFacts::default(),
             ttfb_ms: None,
             ttfc_ms: None,
             error_code: None,

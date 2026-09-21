@@ -1,4 +1,4 @@
-//! The hourly fold: each completed request adds one delta to the row for its hour and its seven-part key, in
+//! The hourly fold: each completed request adds one delta to the row for its hour and its eight-part key, in
 //! the same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +14,9 @@ use crate::LedgerError;
 /// The reserved id for a key, pool, or account a request never reached, so the failures of an exhausted hour
 /// have a row and the raw-versus-rollup equality holds.
 pub const UNATTRIBUTED: &str = "-";
+
+/// The value a request with no `output_config.effort` files under.
+pub const NO_EFFORT: &str = "none";
 
 pub fn hour_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(3_600) * 3_600
@@ -62,6 +65,8 @@ pub struct RollupRow {
     pub kind: String,
     /// The `User-Agent` of the request the row folded, `UNATTRIBUTED` for a request that sent none.
     pub user_agent: String,
+    /// The request's `output_config.effort`, `NO_EFFORT` when it sent none; a dimension, so it sits in the key.
+    pub effort: String,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -78,6 +83,9 @@ pub struct RollupRow {
     pub cache_write_5m_tokens: u64,
     pub cache_write_1h_tokens: u64,
     pub output_tokens: u64,
+    pub thinking_tokens: u64,
+    pub web_search_requests: u64,
+    pub web_fetch_requests: u64,
     pub estimated_usd: f64,
     pub input_usd: f64,
     pub cache_read_usd: f64,
@@ -111,6 +119,7 @@ impl RollupRow {
         canonical_model: &str,
         kind: &str,
         user_agent: &str,
+        effort: &str,
     ) -> RollupRow {
         RollupRow {
             hour,
@@ -121,6 +130,7 @@ impl RollupRow {
             canonical_model: canonical_model.into(),
             kind: kind.into(),
             user_agent: user_agent.into(),
+            effort: effort.into(),
             requests: 0,
             succeeded: 0,
             rate_limited: 0,
@@ -137,6 +147,9 @@ impl RollupRow {
             cache_write_5m_tokens: 0,
             cache_write_1h_tokens: 0,
             output_tokens: 0,
+            thinking_tokens: 0,
+            web_search_requests: 0,
+            web_fetch_requests: 0,
             estimated_usd: 0.0,
             input_usd: 0.0,
             cache_read_usd: 0.0,
@@ -177,6 +190,9 @@ impl RollupRow {
         self.cache_write_5m_tokens += o.cache_write_5m_tokens;
         self.cache_write_1h_tokens += o.cache_write_1h_tokens;
         self.output_tokens += o.output_tokens;
+        self.thinking_tokens += o.thinking_tokens;
+        self.web_search_requests += o.web_search_requests;
+        self.web_fetch_requests += o.web_fetch_requests;
         self.estimated_usd += o.estimated_usd;
         self.input_usd += o.input_usd;
         self.cache_read_usd += o.cache_read_usd;
@@ -224,6 +240,11 @@ impl RollupRow {
             .cache_write_1h_tokens
             .saturating_sub(o.cache_write_1h_tokens);
         self.output_tokens = self.output_tokens.saturating_sub(o.output_tokens);
+        self.thinking_tokens = self.thinking_tokens.saturating_sub(o.thinking_tokens);
+        self.web_search_requests = self
+            .web_search_requests
+            .saturating_sub(o.web_search_requests);
+        self.web_fetch_requests = self.web_fetch_requests.saturating_sub(o.web_fetch_requests);
         self.estimated_usd -= o.estimated_usd;
         self.input_usd -= o.input_usd;
         self.cache_read_usd -= o.cache_read_usd;
@@ -276,6 +297,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         &request.canonical_model,
         &request.kind,
         request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
+        NO_EFFORT,
     );
     d.requests = 1;
     match request.outcome.as_str() {
@@ -309,6 +331,9 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         d.cache_write_5m_tokens = a.cache_write_5m_tokens.unwrap_or(0);
         d.cache_write_1h_tokens = a.cache_write_1h_tokens.unwrap_or(0);
         d.output_tokens = a.output_tokens.unwrap_or(0);
+        d.thinking_tokens = a.thinking_tokens.unwrap_or(0);
+        d.web_search_requests = a.web_search_requests.unwrap_or(0);
+        d.web_fetch_requests = a.web_fetch_requests.unwrap_or(0);
         if let Some(reason) = &a.cache_miss_reason {
             *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
             if reason == "none" && read == 0 {
@@ -433,6 +458,7 @@ pub fn fold_request(
             &delta.canonical_model,
             &delta.kind,
             &delta.user_agent,
+            &delta.effort,
         )
     });
     row.add(&delta);
@@ -514,6 +540,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         &delta.canonical_model,
         &delta.kind,
         UNATTRIBUTED,
+        NO_EFFORT,
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;
@@ -731,7 +758,7 @@ fn take_span(
     Ok(span)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, effort, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -740,8 +767,8 @@ pub(crate) fn read_rollup(
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort],
             row_to_rollup,
         )
         .optional()?)
@@ -749,8 +776,8 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort],
     )?;
     Ok(())
 }
@@ -759,11 +786,12 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48)"),
         params![
-            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.effort, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
+            r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
             r.estimated_usd, r.input_usd, r.cache_read_usd, r.cache_write_usd, r.output_usd, r.kept_warm_requests as i64, r.kept_warm_tokens as i64,
             r.saved_usd_gross, r.probe_cost_usd, r.probe_migrated as i64, r.wasted_probes as i64, r.wasted_probe_usd, counts(&r.wasted_probe_reasons),
             r.probes_skipped as i64, r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
@@ -795,42 +823,46 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         canonical_model: r.get(offset + 5)?,
         kind: r.get(offset + 6)?,
         user_agent: r.get(offset + 7)?,
-        requests: u(8)?,
-        succeeded: u(9)?,
-        rate_limited: u(10)?,
-        failed: u(11)?,
-        exhausted: u(12)?,
-        rejected: u(13)?,
-        attempts: u(14)?,
-        failovers: u(15)?,
-        cache_hits: u(16)?,
-        cache_misses: u(17)?,
-        uncached_requests: u(18)?,
-        input_tokens: u(19)?,
-        cache_read_tokens: u(20)?,
-        cache_write_5m_tokens: u(21)?,
-        cache_write_1h_tokens: u(22)?,
-        output_tokens: u(23)?,
-        estimated_usd: r.get(offset + 24)?,
-        input_usd: r.get(offset + 25)?,
-        cache_read_usd: r.get(offset + 26)?,
-        cache_write_usd: r.get(offset + 27)?,
-        output_usd: r.get(offset + 28)?,
-        kept_warm_requests: u(29)?,
-        kept_warm_tokens: u(30)?,
-        saved_usd_gross: r.get(offset + 31)?,
-        probe_cost_usd: r.get(offset + 32)?,
-        probe_migrated: u(33)?,
-        wasted_probes: u(34)?,
-        wasted_probe_usd: r.get(offset + 35)?,
-        wasted_probe_reasons: counts(36)?,
-        probes_skipped: u(37)?,
-        ttfb_hist: hist(38)?,
-        ttfc_hist: hist(39)?,
-        duration_hist: hist(40)?,
-        output_tps_hist: hist(41)?,
-        errors: counts(42)?,
-        cache_miss_reasons: counts(43)?,
+        effort: r.get(offset + 8)?,
+        requests: u(9)?,
+        succeeded: u(10)?,
+        rate_limited: u(11)?,
+        failed: u(12)?,
+        exhausted: u(13)?,
+        rejected: u(14)?,
+        attempts: u(15)?,
+        failovers: u(16)?,
+        cache_hits: u(17)?,
+        cache_misses: u(18)?,
+        uncached_requests: u(19)?,
+        input_tokens: u(20)?,
+        cache_read_tokens: u(21)?,
+        cache_write_5m_tokens: u(22)?,
+        cache_write_1h_tokens: u(23)?,
+        output_tokens: u(24)?,
+        thinking_tokens: u(25)?,
+        web_search_requests: u(26)?,
+        web_fetch_requests: u(27)?,
+        estimated_usd: r.get(offset + 28)?,
+        input_usd: r.get(offset + 29)?,
+        cache_read_usd: r.get(offset + 30)?,
+        cache_write_usd: r.get(offset + 31)?,
+        output_usd: r.get(offset + 32)?,
+        kept_warm_requests: u(33)?,
+        kept_warm_tokens: u(34)?,
+        saved_usd_gross: r.get(offset + 35)?,
+        probe_cost_usd: r.get(offset + 36)?,
+        probe_migrated: u(37)?,
+        wasted_probes: u(38)?,
+        wasted_probe_usd: r.get(offset + 39)?,
+        wasted_probe_reasons: counts(40)?,
+        probes_skipped: u(41)?,
+        ttfb_hist: hist(42)?,
+        ttfc_hist: hist(43)?,
+        duration_hist: hist(44)?,
+        output_tps_hist: hist(45)?,
+        errors: counts(46)?,
+        cache_miss_reasons: counts(47)?,
     })
 }
 
@@ -854,7 +886,7 @@ pub fn read_rollups(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, effort"))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -899,7 +931,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, effort"))?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,
@@ -930,6 +962,11 @@ mod tests {
     fn v2_columns() -> String {
         COLUMNS
             .replace(", user_agent", "")
+            .replace(", effort", "")
+            .replace(
+                ", thinking_tokens, web_search_requests, web_fetch_requests",
+                "",
+            )
             .replace(", probes_skipped", "")
             .replace(", key_generation", "")
     }
@@ -966,7 +1003,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 7);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 9);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -1004,7 +1041,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 7);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 9);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1261,6 +1298,9 @@ mod tests {
                 cache_read_usd: Some(0.02),
                 cache_write_usd: Some(0.0),
                 output_usd: Some(0.13),
+                thinking_tokens: Some(25),
+                web_search_requests: Some(2),
+                web_fetch_requests: Some(1),
                 ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
             }],
         );
@@ -1269,7 +1309,12 @@ mod tests {
                 id: "r2".into(),
                 ..request("succeeded", Some(200), Some("k"))
             },
-            vec![attempt(1, "a", Some(5), None, Some(20), Some(0.2))],
+            vec![AttemptRecord {
+                thinking_tokens: Some(25),
+                web_search_requests: Some(2),
+                web_fetch_requests: Some(1),
+                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
+            }],
         );
         db.write(|c| {
             let tx = c.transaction()?;
@@ -1301,6 +1346,9 @@ mod tests {
             cache_read_usd: Some(0.1),
             cache_write_usd: Some(0.05),
             output_usd: Some(0.45),
+            thinking_tokens: Some(30),
+            web_search_requests: Some(1),
+            web_fetch_requests: Some(0),
             ..attempt(1, "a", Some(5), None, Some(50), Some(0.9))
         }];
         db.write(|c| {
@@ -1317,6 +1365,15 @@ mod tests {
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
             "still two requests; the output is 20 + 50"
+        );
+        assert_eq!(
+            (
+                rows[0].thinking_tokens,
+                rows[0].web_search_requests,
+                rows[0].web_fetch_requests
+            ),
+            (55, 3, 1),
+            "the replacement's counts stand in for the ones it took back"
         );
         assert!((rows[0].estimated_usd - expected.estimated_usd).abs() < 1e-9);
         assert_eq!(
@@ -1346,6 +1403,243 @@ mod tests {
             serde_json::to_string(&delta.estimated_usd).unwrap(),
             "0.0",
             "a signed zero on the wire is read back as -$0.00"
+        );
+    }
+
+    /// Every numeric column carries its own value, so a read off the wrong index cannot pass.
+    fn distinct_row() -> RollupRow {
+        let mut r = RollupRow::key(
+            3_600,
+            "k",
+            7,
+            "p",
+            "a",
+            "m",
+            "inference",
+            "claude-cli/2.1.269 (external, cli)",
+            "high",
+        );
+        r.requests = 10;
+        r.succeeded = 11;
+        r.rate_limited = 12;
+        r.failed = 13;
+        r.exhausted = 14;
+        r.rejected = 15;
+        r.attempts = 16;
+        r.failovers = 17;
+        r.cache_hits = 18;
+        r.cache_misses = 19;
+        r.uncached_requests = 20;
+        r.input_tokens = 21;
+        r.cache_read_tokens = 22;
+        r.cache_write_5m_tokens = 23;
+        r.cache_write_1h_tokens = 24;
+        r.output_tokens = 40;
+        r.thinking_tokens = 25;
+        r.web_search_requests = 2;
+        r.web_fetch_requests = 1;
+        r.estimated_usd = 28.5;
+        r.input_usd = 29.5;
+        r.cache_read_usd = 30.5;
+        r.cache_write_usd = 31.5;
+        r.output_usd = 32.5;
+        r.kept_warm_requests = 33;
+        r.kept_warm_tokens = 34;
+        r.saved_usd_gross = 35.5;
+        r.probe_cost_usd = 36.5;
+        r.probe_migrated = 37;
+        r.wasted_probes = 38;
+        r.wasted_probe_usd = 39.5;
+        r.wasted_probe_reasons = BTreeMap::from([("idle_limit".to_string(), 40)]);
+        r.probes_skipped = 41;
+        r.ttfb_hist.record(42.0);
+        r.ttfc_hist.record(43.0);
+        r.ttfc_hist.record(43.0);
+        r.duration_hist.record(44.0);
+        r.duration_hist.record(44.0);
+        r.duration_hist.record(44.0);
+        r.output_tps_hist.record(45.0);
+        r.errors = BTreeMap::from([("overloaded".to_string(), 46)]);
+        r.cache_miss_reasons = BTreeMap::from([("none".to_string(), 47)]);
+        r
+    }
+
+    #[test]
+    fn a_rollup_row_with_a_distinct_value_in_every_column_reads_back_as_written() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let row = distinct_row();
+        db.write(|c| {
+            let tx = c.transaction()?;
+            write_rollup(&tx, &row)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let read = db
+            .read_blocking(|c| read_rollup(c, &row))
+            .unwrap()
+            .expect("the row is found under its key");
+        assert_eq!(
+            read, row,
+            "every column, the histograms and the JSON counts included, is read from its own index"
+        );
+        assert_eq!(
+            (
+                read.output_tokens,
+                read.thinking_tokens,
+                read.web_search_requests,
+                read.web_fetch_requests
+            ),
+            (40, 25, 2, 1),
+            "the three new sums sit after output_tokens and read as themselves"
+        );
+        assert_eq!(
+            (
+                read.effort.as_str(),
+                read.estimated_usd,
+                read.cache_miss_reasons["none"]
+            ),
+            ("high", 28.5, 47)
+        );
+    }
+
+    #[test]
+    fn two_folded_requests_sum_the_thinking_share_and_the_server_tool_calls() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let counted = |n: u32| AttemptRecord {
+            thinking_tokens: Some(25),
+            web_search_requests: Some(2),
+            web_fetch_requests: Some(1),
+            ..attempt(n, "a", Some(5), None, Some(40), Some(0.2))
+        };
+        let first = (request("succeeded", Some(200), Some("k")), vec![counted(1)]);
+        let second = (
+            RequestRecord {
+                id: "r2".into(),
+                ..request("succeeded", Some(200), Some("k"))
+            },
+            vec![counted(1)],
+        );
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &first.0, &first.1, None)?;
+            fold_request(&tx, &second.0, &second.1, None)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].output_tokens,
+                rows[0].thinking_tokens,
+                rows[0].web_search_requests,
+                rows[0].web_fetch_requests
+            ),
+            (80, 50, 4, 2),
+            "each request adds its own counts to the hour's row"
+        );
+    }
+
+    /// A populated version-7 ledger keeps every value through the version-9 rebuild and reads the new
+    /// columns at zero and `none`; the migration's INSERT names every column on both sides, so a column
+    /// added in the middle cannot shift the ones after it.
+    #[test]
+    fn a_version_seven_ledger_keeps_its_rollup_values_and_reads_the_new_columns_at_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let mut old = distinct_row();
+        old.effort = String::new();
+        old.thinking_tokens = 0;
+        old.web_search_requests = 0;
+        old.web_fetch_requests = 0;
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            let tx = conn.transaction().unwrap();
+            for (_, sql) in crate::schema::MIGRATIONS.iter().filter(|(v, _)| *v <= 7) {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '7')",
+                [],
+            )
+            .unwrap();
+            // The version-7 column list and placeholders, written here so this test does not depend on the
+            // constant it is checking.
+            let v7 = COLUMNS.replace(", effort", "").replace(
+                ", thinking_tokens, web_search_requests, web_fetch_requests",
+                "",
+            );
+            let counts = |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap();
+            tx.execute(
+                &format!(
+                    "INSERT INTO rollups_hourly ({v7}) VALUES ({})",
+                    (1..=44)
+                        .map(|i| format!("?{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                params![
+                    old.hour,
+                    old.key_id,
+                    old.key_generation,
+                    old.pool_id,
+                    old.account_id,
+                    old.canonical_model,
+                    old.kind,
+                    old.user_agent,
+                    old.requests as i64,
+                    old.succeeded as i64,
+                    old.rate_limited as i64,
+                    old.failed as i64,
+                    old.exhausted as i64,
+                    old.rejected as i64,
+                    old.attempts as i64,
+                    old.failovers as i64,
+                    old.cache_hits as i64,
+                    old.cache_misses as i64,
+                    old.uncached_requests as i64,
+                    old.input_tokens as i64,
+                    old.cache_read_tokens as i64,
+                    old.cache_write_5m_tokens as i64,
+                    old.cache_write_1h_tokens as i64,
+                    old.output_tokens as i64,
+                    old.estimated_usd,
+                    old.input_usd,
+                    old.cache_read_usd,
+                    old.cache_write_usd,
+                    old.output_usd,
+                    old.kept_warm_requests as i64,
+                    old.kept_warm_tokens as i64,
+                    old.saved_usd_gross,
+                    old.probe_cost_usd,
+                    old.probe_migrated as i64,
+                    old.wasted_probes as i64,
+                    old.wasted_probe_usd,
+                    counts(&old.wasted_probe_reasons),
+                    old.probes_skipped as i64,
+                    old.ttfb_hist.to_le_bytes(),
+                    old.ttfc_hist.to_le_bytes(),
+                    old.duration_hist.to_le_bytes(),
+                    old.output_tps_hist.to_le_bytes(),
+                    counts(&old.errors),
+                    counts(&old.cache_miss_reasons),
+                ],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(db.read_blocking(read_version).unwrap(), 9);
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(rows.len(), 1);
+        let mut expected = old;
+        expected.effort = NO_EFFORT.into();
+        assert_eq!(
+            rows[0], expected,
+            "every old value is where it was; effort is none and the three sums are zero"
         );
     }
 }

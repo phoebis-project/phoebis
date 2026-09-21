@@ -75,6 +75,9 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
                 cache_write_5m_tokens: last
                     .then(|| [0, rng.random_range(1..2_000)][rng.random_range(0..2)]),
                 cache_write_1h_tokens: last.then_some(0),
+                thinking_tokens: last.then(|| rng.random_range(0..500)),
+                web_search_requests: last.then(|| rng.random_range(0..3)),
+                web_fetch_requests: last.then(|| rng.random_range(0..3)),
                 cache_miss_reason: last.then(|| {
                     ["none", "tools_changed", "messages_changed"][rng.random_range(0..3)].into()
                 }),
@@ -260,6 +263,19 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
                     want.output_tokens
                 ),
                 "group-by {name} = {key}: tokens"
+            );
+            assert_eq!(
+                (
+                    got.thinking_tokens,
+                    got.web_search_requests,
+                    got.web_fetch_requests
+                ),
+                (
+                    want.thinking_tokens,
+                    want.web_search_requests,
+                    want.web_fetch_requests
+                ),
+                "group-by {name} = {key}: the thinking share and the server-tool calls"
             );
             assert!(
                 (got.estimated_usd - want.estimated_usd).abs() < 1e-6,

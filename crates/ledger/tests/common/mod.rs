@@ -364,7 +364,7 @@ pub fn json_200() -> fake_upstream::Respond {
     fake_upstream::Respond::Json {
         status: 200,
         headers: vec![],
-        body: br#"{"id":"msg_1","type":"message","usage":{"input_tokens":3,"output_tokens":4}}"#
+        body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4,"output_tokens_details":{"thinking_tokens":1},"server_tool_use":{"web_search_requests":1,"web_fetch_requests":0},"speed":"standard","inference_geo":"us"}}"#
             .to_vec(),
     }
 }

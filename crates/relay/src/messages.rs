@@ -15,7 +15,7 @@ use axum::Router;
 use bytes::Bytes;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Bus, CooldownSet, Event, Kind, Origin, Outcome,
-    RequestComplete, RequestObserved, ResponseChunk, ResponseHead as BusHead, Usage,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
@@ -46,7 +46,7 @@ use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
 use crate::memory::{uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP};
-use crate::observe::{published_headers, usage_from_json, wants_stream};
+use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
@@ -334,6 +334,7 @@ impl Trace {
         outcome: &RelayOutcome,
         status: u16,
         usage: Option<Usage>,
+        response: ResponseFacts,
         ttfc_ms: Option<i64>,
         response_bytes: Option<u64>,
         end: Option<(Outcome, Option<String>)>,
@@ -350,6 +351,7 @@ impl Trace {
             outcome: final_outcome,
             status,
             usage: usage.filter(|u| !u.is_empty()),
+            response,
             ttfb_ms: outcome.head_at.map(|at| at - outcome.received_at),
             ttfc_ms,
             error_code,
@@ -848,6 +850,7 @@ impl Relay {
                         exhaustion_response(&exhaustion, now, &trace.request_id),
                         outcome,
                         None,
+                        ResponseFacts::default(),
                         None,
                     );
                 }
@@ -1019,6 +1022,7 @@ impl Relay {
                         relay_failure(&error).response(admitted.request_id),
                         outcome,
                         None,
+                        ResponseFacts::default(),
                         None,
                     ));
                 }
@@ -1180,6 +1184,7 @@ impl Relay {
                         ACCOUNT_CANCELLED.response(admitted.request_id),
                         outcome,
                         None,
+                        ResponseFacts::default(),
                         None,
                     ));
                 }
@@ -1206,6 +1211,7 @@ impl Relay {
                         UPSTREAM_UNREACHABLE.response(admitted.request_id),
                         outcome,
                         None,
+                        ResponseFacts::default(),
                         None,
                     ));
                 }
@@ -1333,6 +1339,7 @@ impl Relay {
                         UPSTREAM_UNREACHABLE.response(ctx.request_id),
                         unreachable_outcome(outcome),
                         None,
+                        ResponseFacts::default(),
                         None,
                     ));
                 }
@@ -1374,6 +1381,7 @@ impl Relay {
                         UPSTREAM_UNREACHABLE.response(ctx.request_id),
                         unreachable_outcome(outcome),
                         None,
+                        ResponseFacts::default(),
                         None,
                     ));
                 }
@@ -1693,6 +1701,7 @@ impl Relay {
             failure.response(&trace.request_id),
             outcome,
             None,
+            ResponseFacts::default(),
             None,
         )
     }
@@ -1705,12 +1714,14 @@ impl Relay {
         response: Response,
         outcome: RelayOutcome,
         usage: Option<Usage>,
+        facts: ResponseFacts,
         response_bytes: Option<u64>,
     ) -> Response {
         trace.complete(
             &outcome,
             response.status().as_u16(),
             usage,
+            facts,
             None,
             response_bytes,
             None,
@@ -1750,6 +1761,7 @@ impl Relay {
             ACCOUNT_CANCELLED.response(ctx.request_id),
             outcome,
             None,
+            ResponseFacts::default(),
             None,
         )
     }
@@ -1857,6 +1869,7 @@ impl Relay {
                     UPSTREAM_UNREACHABLE.response(&outcome.request_id),
                     unreachable_outcome(outcome),
                     None,
+                    ResponseFacts::default(),
                     None,
                 );
             }
@@ -1883,6 +1896,7 @@ impl Relay {
             // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
             json: (!event_stream && head.status == 200).then(Vec::new),
             usage: Usage::default(),
+            response: ResponseFacts::default(),
             index: 0,
             bytes: 0,
             first_content_at: None,
@@ -1923,6 +1937,7 @@ impl Relay {
                     UPSTREAM_UNREACHABLE.response(&outcome.request_id),
                     unreachable_outcome(outcome),
                     None,
+                    ResponseFacts::default(),
                     None,
                 );
             }
@@ -1938,6 +1953,7 @@ impl Relay {
                         UPSTREAM_UNREACHABLE.response(&outcome.request_id),
                         unreachable_outcome(outcome),
                         None,
+                        ResponseFacts::default(),
                         None,
                     );
                 }
@@ -1946,7 +1962,7 @@ impl Relay {
         // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
         // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
         // chunk was promised text and coded bytes are worse than none.
-        let usage = match inspectable_copy(head, &raw).map(Bytes::from) {
+        let answer = match inspectable_copy(head, &raw).map(Bytes::from) {
             None => None,
             Some(text) => {
                 trace.publish_chunk(ResponseChunk {
@@ -1958,14 +1974,19 @@ impl Relay {
                 });
                 // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
                 // body task.
-                (head.status == 200).then(|| usage_from_json(&text, &[]))
+                (head.status == 200).then(|| answer_from_json(&text, &[]))
             }
+        };
+        let (usage, facts) = match answer {
+            Some(answer) => (Some(answer.usage), answer.response),
+            None => (None, ResponseFacts::default()),
         };
         self.answer(
             trace,
             built(builder, Body::from(payload.clone())),
             outcome,
             usage,
+            facts,
             Some(payload.len() as u64),
         )
     }

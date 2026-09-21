@@ -14,10 +14,14 @@ so a long range costs one row per hour rather than one per request.
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
 call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes
 sent and received; whether the response was served kept warm; whether its body was captured; and the client's
-user agent. The attempt row names the account and its kind and host; the upstream status and request id; the
-outcome; the cooldown the attempt set; the five token counts; the cache miss reason the diagnostics beta reports;
-the unified rate-limit window readings; overage; the cost split across input, cache read, cache write, and
-output; and the pricing version the estimate used.
+user agent and the request's shape: the effort, the thinking mode and budget, the output limit, the tool,
+system-block, and message counts, the context edits, the temperature, and the requested speed and service tier.
+The attempt row names the account and its kind and host; the upstream status and request id; the outcome; the
+cooldown the attempt set; the stop reason, the served model when it differs from the one requested, the speed,
+the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;
+the five token counts, with the thinking share of the output and the web search and fetch calls the answer made;
+the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
+split across input, cache read, cache write, and output; and the pricing version the estimate used.
 
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
 64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading

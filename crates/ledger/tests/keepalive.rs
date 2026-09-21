@@ -395,13 +395,50 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
     let path = dir.path().join("ledger.sqlite");
     {
         let db = LedgerDb::open(&path).unwrap();
-        // The rollup table keeps the generation column it cannot drop (it is in the primary key); the rebuild
-        // that replays over it names its own columns and never reads that one, so only the request row's has
-        // to go for the replay to reach migration five's work.
-        db.write(|c| { c.execute_batch("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; UPDATE meta SET value = '4' WHERE key = 'schema_version';")?; Ok(()) }).unwrap();
+        // The replay runs every migration above four over a file the current schema already built, so each
+        // column a later migration adds has to go first. The rollup table keeps the generation column it
+        // cannot drop (it is in the primary key); the rebuild that replays over it names its own columns and
+        // never reads that one.
+        let mut sql = String::from("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ");
+        for column in [
+            "cleared_input_tokens",
+            "inference_geo",
+            "refusal_category",
+            "refusal_recommended_model",
+            "served_model",
+            "speed",
+            "stop_reason",
+            "stop_sequence",
+            "thinking_tokens",
+            "web_fetch_requests",
+            "web_search_requests",
+        ] {
+            sql.push_str(&format!("ALTER TABLE attempts DROP COLUMN {column}; "));
+        }
+        for column in [
+            "context_edits",
+            "effort",
+            "max_tokens",
+            "message_count",
+            "requested_service_tier",
+            "requested_speed",
+            "system_blocks",
+            "temperature",
+            "thinking_budget",
+            "thinking_type",
+            "tool_count",
+        ] {
+            sql.push_str(&format!("ALTER TABLE requests DROP COLUMN {column}; "));
+        }
+        sql.push_str("UPDATE meta SET value = '4' WHERE key = 'schema_version';");
+        db.write(|c| {
+            c.execute_batch(&sql)?;
+            Ok(())
+        })
+        .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 7);
+    assert_eq!(db.schema_version().await.unwrap(), 9);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

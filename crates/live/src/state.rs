@@ -726,7 +726,7 @@ fn delta_text(events: Vec<SseEvent>) -> Option<String> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use phoebis_bus::{Kind, Origin, Outcome};
+    use phoebis_bus::{Kind, Origin, Outcome, ResponseFacts};
     use phoebis_ledger::PriceTable;
 
     fn observed(id: &str) -> Event {
@@ -804,6 +804,7 @@ mod tests {
             outcome,
             status: 200,
             usage: None,
+            response: ResponseFacts::default(),
             ttfb_ms: Some(60),
             ttfc_ms: Some(70),
             error_code: error_code.map(String::from),

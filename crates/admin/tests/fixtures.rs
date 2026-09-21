@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Event, Kind, Origin, Phase, RequestComplete, RequestObserved,
-    ResponseChunk, ResponseHead, Usage,
+    ResponseChunk, ResponseFacts, ResponseHead, Usage,
 };
 use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
@@ -131,6 +131,12 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         output_tokens: Some(100),
         cache_read_tokens: Some(500),
         cache_write_5m_tokens: Some(200),
+        thinking_tokens: Some(40),
+        web_search_requests: Some(0),
+        web_fetch_requests: Some(0),
+        stop_reason: Some("end_turn".into()),
+        speed: Some("standard".into()),
+        inference_geo: Some("us".into()),
         cache_miss_reason: Some("none".into()),
         ratelimit_5h_utilization: Some(0.4),
         ratelimit_5h_reset: Some(at + 3_600_000),
@@ -409,6 +415,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_write_5m_tokens: Some(2_000),
                 ..Default::default()
             }),
+            response: ResponseFacts::default(),
             ttfb_ms: None,
             ttfc_ms: None,
             error_code: None,
@@ -648,6 +655,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             output_tokens: Some(2),
             ..Default::default()
         }),
+        response: ResponseFacts::default(),
         ttfb_ms: Some(95),
         ttfc_ms: Some(120),
         error_code: None,

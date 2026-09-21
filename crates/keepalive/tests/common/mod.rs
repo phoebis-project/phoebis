@@ -14,7 +14,7 @@ use axum::http::Request;
 use bytes::Bytes;
 use phoebis_bus::{
     AccountSelected, Bus, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
-    RequestComplete, RequestObserved, ResponseChunk, Subscriber, Usage,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
@@ -381,6 +381,7 @@ impl Rig {
             outcome,
             status: 200,
             usage,
+            response: ResponseFacts::default(),
             ttfb_ms: None,
             ttfc_ms: None,
             error_code: None,

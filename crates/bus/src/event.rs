@@ -44,6 +44,11 @@ pub struct Usage {
     pub cache_read_tokens: Option<u64>,
     pub cache_write_5m_tokens: Option<u64>,
     pub cache_write_1h_tokens: Option<u64>,
+    /// `output_tokens_details.thinking_tokens`: the share of `output_tokens` spent thinking, never more than it.
+    pub thinking_tokens: Option<u64>,
+    /// `server_tool_use.web_search_requests` and `web_fetch_requests`: calls, not tokens.
+    pub web_search_requests: Option<u64>,
+    pub web_fetch_requests: Option<u64>,
     pub service_tier: Option<String>,
     pub cache_miss_reason: Option<String>,
 }
@@ -67,6 +72,15 @@ impl Usage {
         if later.cache_write_1h_tokens.is_some() {
             self.cache_write_1h_tokens = later.cache_write_1h_tokens;
         }
+        if later.thinking_tokens.is_some() {
+            self.thinking_tokens = later.thinking_tokens;
+        }
+        if later.web_search_requests.is_some() {
+            self.web_search_requests = later.web_search_requests;
+        }
+        if later.web_fetch_requests.is_some() {
+            self.web_fetch_requests = later.web_fetch_requests;
+        }
         if later.service_tier.is_some() {
             self.service_tier = later.service_tier.clone();
         }
@@ -77,6 +91,58 @@ impl Usage {
 
     pub fn is_empty(&self) -> bool {
         *self == Usage::default()
+    }
+}
+
+/// What the answer said about itself beyond its usage, read from `message_start` (the served model), from
+/// `message_delta` (the stop, the context edits, the refusal), or from the whole JSON answer. A member the
+/// upstream did not send stays `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResponseFacts {
+    pub stop_reason: Option<String>,
+    pub stop_sequence: Option<String>,
+    /// The `model` the answer names, as sent; the ledger records it only when it differs from the resolved one.
+    pub model: Option<String>,
+    pub speed: Option<String>,
+    pub inference_geo: Option<String>,
+    /// The sum of `context_management.applied_edits[].cleared_input_tokens`.
+    pub cleared_input_tokens: Option<u64>,
+    pub refusal_category: Option<String>,
+    pub refusal_recommended_model: Option<String>,
+}
+
+impl ResponseFacts {
+    /// A later read replaces an earlier one member by member, as `Usage::merge` does: `message_delta` names the
+    /// stop that `message_start` could not, and neither unsays what the other already told.
+    pub fn merge(&mut self, later: &ResponseFacts) {
+        if later.stop_reason.is_some() {
+            self.stop_reason = later.stop_reason.clone();
+        }
+        if later.stop_sequence.is_some() {
+            self.stop_sequence = later.stop_sequence.clone();
+        }
+        if later.model.is_some() {
+            self.model = later.model.clone();
+        }
+        if later.speed.is_some() {
+            self.speed = later.speed.clone();
+        }
+        if later.inference_geo.is_some() {
+            self.inference_geo = later.inference_geo.clone();
+        }
+        if later.cleared_input_tokens.is_some() {
+            self.cleared_input_tokens = later.cleared_input_tokens;
+        }
+        if later.refusal_category.is_some() {
+            self.refusal_category = later.refusal_category.clone();
+        }
+        if later.refusal_recommended_model.is_some() {
+            self.refusal_recommended_model = later.refusal_recommended_model.clone();
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == ResponseFacts::default()
     }
 }
 
@@ -210,6 +276,8 @@ pub struct RequestComplete {
     pub outcome: Outcome,
     pub status: u16,
     pub usage: Option<Usage>,
+    /// Empty for a local answer and for an upstream that named nothing.
+    pub response: ResponseFacts,
     pub ttfb_ms: Option<i64>,
     pub ttfc_ms: Option<i64>,
     pub error_code: Option<String>,
@@ -221,6 +289,9 @@ pub struct RequestComplete {
 
 /// One queue carries every variant, so a subscriber sees a request's chunks between its head and its
 /// completion and never has to reconcile two receivers.
+// Boxing the completion would put an allocation on every clone the bus makes per subscriber, to shrink a
+// value whose queues are already bounded.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum Event {
     AccountSelected(AccountSelected),
@@ -329,4 +400,67 @@ pub const HEADER_DENYLIST: &[&str] = &[
 pub fn header_published(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     !HEADER_DENYLIST.contains(&lower.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_later_usage_carries_the_thinking_and_server_tool_counts_over_an_earlier_one() {
+        let mut usage = Usage {
+            output_tokens: Some(10),
+            thinking_tokens: Some(4),
+            web_search_requests: Some(1),
+            ..Default::default()
+        };
+        usage.merge(&Usage {
+            output_tokens: Some(40),
+            thinking_tokens: Some(25),
+            web_fetch_requests: Some(2),
+            ..Default::default()
+        });
+        assert_eq!(
+            (
+                usage.output_tokens,
+                usage.thinking_tokens,
+                usage.web_search_requests,
+                usage.web_fetch_requests
+            ),
+            (Some(40), Some(25), Some(1), Some(2)),
+            "the later count wins and one only the earlier read carried survives"
+        );
+    }
+
+    #[test]
+    fn the_answers_facts_merge_member_by_member_and_a_default_says_nothing() {
+        let mut facts = ResponseFacts {
+            model: Some("claude-opus-5".into()),
+            speed: Some("fast".into()),
+            ..Default::default()
+        };
+        facts.merge(&ResponseFacts {
+            speed: Some("standard".into()),
+            stop_reason: Some("refusal".into()),
+            cleared_input_tokens: Some(1_200),
+            ..Default::default()
+        });
+        assert_eq!(
+            (
+                facts.model.as_deref(),
+                facts.speed.as_deref(),
+                facts.stop_reason.as_deref(),
+                facts.cleared_input_tokens
+            ),
+            (
+                Some("claude-opus-5"),
+                Some("standard"),
+                Some("refusal"),
+                Some(1_200)
+            ),
+            "a member only the earlier read carried survives the later one"
+        );
+        assert!(!facts.is_empty());
+        assert!(ResponseFacts::default().is_empty());
+    }
 }

@@ -675,8 +675,8 @@ fn sum_groups(
         let key = group_of(row, group_by, live);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, 0, "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
             )
         });
         if row.kind == "probe" {

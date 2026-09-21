@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use phoebis_ledger::{EventRecord, LedgerConfig, Record};
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -258,6 +258,130 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
     };
     assert_eq!(matched("2.1.300"), 1, "a substring of the agent matches");
     assert_eq!(matched("2.1.269"), 0, "another build does not");
+    up.shutdown().await;
+}
+
+/// The answer's own counts and facts reach the attempt row and the three counts reach the hour's rollup; the
+/// served model is recorded only when it is not the one the router resolved.
+#[tokio::test]
+async fn the_answers_thinking_tool_counts_and_facts_reach_the_attempt_row_and_the_rollup() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (_, attempts) = ledgered(&h, &id).await;
+    let a = &attempts[0];
+    assert_eq!(
+        (
+            a.thinking_tokens,
+            a.web_search_requests,
+            a.web_fetch_requests
+        ),
+        (Some(1), Some(1), Some(0)),
+        "a count the answer sent is recorded, a zero as zero"
+    );
+    assert_eq!(
+        (
+            a.stop_reason.as_deref(),
+            a.speed.as_deref(),
+            a.inference_geo.as_deref()
+        ),
+        (Some("end_turn"), Some("standard"), Some("us"))
+    );
+    assert_eq!(
+        a.served_model, None,
+        "the answer named the resolved model, so nothing is recorded"
+    );
+    assert_eq!(
+        (
+            a.stop_sequence.clone(),
+            a.cleared_input_tokens,
+            a.refusal_category.as_deref()
+        ),
+        (None, None, None)
+    );
+    let rows =
+        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+            .await
+            .unwrap();
+    let row = rows.iter().find(|r| r.kind == "inference").unwrap();
+    assert_eq!(
+        (
+            row.thinking_tokens,
+            row.web_search_requests,
+            row.web_fetch_requests,
+            row.effort.as_str()
+        ),
+        (1, 1, 0, "none")
+    );
+    up.shutdown().await;
+}
+
+/// A fallback model refused the request: the answer's own model and the refusal's details reach the row, since
+/// the model that served is not the one the router resolved.
+#[tokio::test]
+async fn a_streamed_refusal_from_another_model_records_the_served_model_and_the_refusal() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-opus-5","usage":{"input_tokens":9}}}"#.into(),
+                },
+                SseEvent {
+                    event: "message_delta".into(),
+                    data: r#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null},"stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"},"usage":{"output_tokens":3}}"#.into(),
+                },
+                SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+            delay_between: Duration::from_millis(1),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (_, attempts) = ledgered(&h, &id).await;
+    let a = &attempts[0];
+    assert_eq!(
+        (
+            a.served_model.as_deref(),
+            a.stop_reason.as_deref(),
+            a.refusal_category.as_deref(),
+            a.refusal_recommended_model.as_deref()
+        ),
+        (
+            Some("claude-opus-5"),
+            Some("refusal"),
+            Some("cyber"),
+            Some("claude-opus-5")
+        ),
+        "the model that answered is not the one the router resolved, so it is recorded"
+    );
     up.shutdown().await;
 }
 

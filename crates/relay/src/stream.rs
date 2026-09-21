@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
-use phoebis_bus::{Outcome, Phase, ResponseChunk, Usage};
+use phoebis_bus::{Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::hold::Inspect;
 use crate::messages::{RelayOutcome, Trace};
-use crate::observe::{is_tool_use_delta, message_id_from_json, usage_from_json};
+use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
 use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -57,6 +57,7 @@ pub(crate) struct Publish {
     /// usage block can be read at the end; `None` for a stream or once the bound is passed.
     pub json: Option<Vec<u8>>,
     pub usage: Usage,
+    pub response: ResponseFacts,
     pub index: u32,
     pub bytes: u64,
     pub first_content_at: Option<i64>,
@@ -147,12 +148,15 @@ impl Publish {
     fn phase_of(&mut self, event: &SseEvent) -> Option<Phase> {
         match event.name.as_deref() {
             Some(b"message_start") => {
-                let usage = usage_from_json(&event.data, &["message"]);
-                self.usage.merge(&usage);
+                let answer = answer_from_json(&event.data, &["message"]);
+                self.usage.merge(&answer.usage);
+                self.response.merge(&answer.response);
                 if let Some(id) = message_id_from_json(&event.data, &["message"]) {
                     self.saw_message_id(id);
                 }
-                Some(Phase::MessageStart { usage })
+                Some(Phase::MessageStart {
+                    usage: answer.usage,
+                })
             }
             Some(b"content_block_delta") => {
                 if self.first_content_at.is_none() {
@@ -166,9 +170,12 @@ impl Publish {
                 None
             }
             Some(b"message_delta") => {
-                let usage = usage_from_json(&event.data, &[]);
-                self.usage.merge(&usage);
-                Some(Phase::MessageDelta { usage })
+                let answer = answer_from_json(&event.data, &[]);
+                self.usage.merge(&answer.usage);
+                self.response.merge(&answer.response);
+                Some(Phase::MessageDelta {
+                    usage: answer.usage,
+                })
             }
             Some(b"message_stop") => Some(Phase::MessageStop),
             // The post-commit observer already acts on this event for routing; here it only decides how the
@@ -191,7 +198,9 @@ impl Publish {
             }
         }
         if let Some(json) = self.json.take() {
-            self.usage.merge(&usage_from_json(&json, &[]));
+            let answer = answer_from_json(&json, &[]);
+            self.usage.merge(&answer.usage);
+            self.response.merge(&answer.response);
             if let Some(id) = message_id_from_json(&json, &[]) {
                 self.saw_message_id(id);
             }
@@ -214,6 +223,7 @@ impl Publish {
             &self.outcome,
             self.status,
             usage,
+            self.response.clone(),
             ttfc_ms,
             Some(self.bytes),
             outcome,
