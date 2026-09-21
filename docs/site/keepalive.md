@@ -26,8 +26,10 @@ through the same edit path; the engine learns the TTL an entry was written with 
 from what the router sent, never from the marker the client wrote.
 
 Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
-cache-diagnosis beta and a `diagnostics.previous_message_id` of null, since a probe replays a request rather
-than continuing a turn. Its cache-miss reason lands in the request log like any other request's.
+cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
+account, the turn the probe keeps warm, so the upstream's report says whether that entry was still there. A
+probe's own answer is never remembered as a previous turn: the next probe and the next real request still name
+the last real answer. Its cache-miss reason lands in the request log like any other request's.
 
 ## The companion
 

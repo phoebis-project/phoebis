@@ -674,12 +674,14 @@ impl Relay {
         };
         // A separate field from `restore`: every client inference request naming a session gets one,
         // because the diagnostics member the option forces names the previous answer on
-        // that session whoever sent it. A probe replays what the client sent and a count_tokens request has
-        // no slot for either, so neither is remembered. Dispatch reads the key to look up the previous
-        // request id per account, and the response half writes the upstream's `request-id` and message id
-        // back under it; what lands on the billing line stays gated on `restore` being `Some`.
+        // that session whoever sent it. A probe reads under the same key, since it replays the session's own
+        // headers and the diagnostics report should name the turn it keeps warm; what a probe is answered is
+        // never remembered, which the response half enforces by reading no key for it. A count_tokens request
+        // has no slot for either, so it is neither read nor remembered. Dispatch reads the key to look up the
+        // previous request id per account, and the response half writes the upstream's `request-id` and
+        // message id back under it; what lands on the billing line stays gated on `restore` being `Some`.
         let memory_key = match (trace.kind, identity.session_id.as_deref()) {
-            (Kind::Inference, Some(session)) => Some(MemoryKey {
+            (Kind::Inference | Kind::Probe, Some(session)) => Some(MemoryKey {
                 key_id: key.id.clone(),
                 session_id: session.into(),
                 agent_id: identity.agent_id.clone(),
@@ -1067,7 +1069,12 @@ impl Relay {
                 identity: admitted.identity,
                 injected: &injected,
                 key: admitted.key,
-                memory_key: admitted.memory_key.as_ref(),
+                // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
+                // and recording it would make the next real turn name a probe.
+                memory_key: admitted
+                    .memory_key
+                    .as_ref()
+                    .filter(|_| admitted.trace.kind != Kind::Probe),
                 pin: selection.pin.as_ref(),
                 pin_epoch,
                 portable: admitted.portable,
@@ -2022,7 +2029,8 @@ struct Admitted<'a> {
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
-    /// The session memory key this request reads and writes under, absent when the request carries no session.
+    /// The session memory key this request reads under, absent when the request carries no session; a probe
+    /// reads under its session's key and the response half records nothing for it.
     memory_key: Option<MemoryKey>,
     /// The caller's head as it arrived, absent for an in-process caller and for a connection the recorder
     /// gave up on.

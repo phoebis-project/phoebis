@@ -709,3 +709,72 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
         .any(|t| t == CACHE_DIAGNOSIS_BETA));
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_never_remembered() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_turn"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_probe_1"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_probe_2"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_turn_2"));
+    let h = harness(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: Some(true),
+            ..Default::default()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[0], None);
+
+    // The probe replays the turn's own headers, session id among them.
+    let probe = || phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        allow_oauth: false,
+    };
+    let resp = h
+        .relay
+        .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[1], Some("msg_turn"));
+
+    // A second probe still names the turn: the first probe's own answer was not remembered.
+    let resp = h
+        .relay
+        .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[2], Some("msg_turn"));
+    let key = phoebis_relay::MemoryKey {
+        key_id: "desktop".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+    };
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+            .as_deref(),
+        Some("msg_turn")
+    );
+
+    // The next real turn names the turn before it, not a probe.
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[3], Some("msg_turn"));
+    up.shutdown().await;
+}
