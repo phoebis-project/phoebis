@@ -44,6 +44,11 @@ pub struct RequestRecord {
     pub temperature: Option<f64>,
     pub requested_speed: Option<String>,
     pub requested_service_tier: Option<String>,
+    /// The caller presented the secret a rotation retired.
+    pub presented_retired: bool,
+    /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired
+    /// presentation belongs to.
+    pub rotation_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

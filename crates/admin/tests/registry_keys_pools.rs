@@ -369,6 +369,133 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
 }
 
 #[tokio::test]
+async fn the_key_list_counts_live_sessions_still_on_the_secret_a_rotation_retired() {
+    use phoebis_ledger::{Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let created = json(
+        post(
+            &parts.app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let old_secret = created["secret"].as_str().unwrap().to_string();
+    let generation = common::generation(&parts.store, "desktop");
+
+    let rotated =
+        json(post(&parts.app, "/admin/keys/desktop/rotate", "", Some(&cookie)).await).await;
+    let r1 = rotated["rotated_at"].as_i64().unwrap();
+
+    for (id, session, retired) in [("req1", "s1", true), ("req2", "s2", false)] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: common::NOW,
+                key_id: Some("desktop".into()),
+                key_generation: generation,
+                session_id: Some(session.into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                presented_retired: retired,
+                rotation_at: Some(r1),
+                ..Default::default()
+            },
+            attempts: vec![],
+            bodies: None,
+        });
+    }
+    let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
+        v["keys"][0]["sessions_on_retired_secret"] == 1
+    })
+    .await;
+    assert_eq!(keys["keys"][0]["sessions_on_retired_secret"], 1);
+    assert!(keys["keys"][0]["retired_secret_last_used_at"].is_null());
+
+    // Relay a request through the proxy listener with the secret the rotation just retired, the same
+    // authenticate-and-touch path a real client's request takes.
+    use tower::ServiceExt;
+    let proxy = phoebis_relay::router(parts.relay.clone());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("x-api-key", &old_secret)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"model":"claude-sonnet-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let _ = proxy.oneshot(request).await.unwrap();
+    fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
+        parts
+            .store
+            .api_key("desktop")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at
+            .is_some()
+            .then_some(())
+    })
+    .await;
+    assert!(
+        json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await["keys"][0]
+            ["retired_secret_last_used_at"]
+            .is_number()
+    );
+
+    // Still inside the first grace, a second rotation clears the count and the stamp: the one session's
+    // newest request presented the secret the first rotation retired, which the second no longer accepts.
+    parts
+        .clock_cell
+        .fetch_add(1_000, std::sync::atomic::Ordering::SeqCst);
+    let rotated2 =
+        json(post(&parts.app, "/admin/keys/desktop/rotate", "", Some(&cookie)).await).await;
+    let r2 = rotated2["rotated_at"].as_i64().unwrap();
+    assert!(r2 > r1 && r2 < r1 + phoebis_store::ROTATION_GRACE_MS);
+    let keys = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await;
+    assert_eq!(keys["keys"][0]["sessions_on_retired_secret"], 0);
+    assert!(keys["keys"][0]["retired_secret_last_used_at"].is_null());
+
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "req3".into(),
+            received_at: common::NOW,
+            key_id: Some("desktop".into()),
+            key_generation: generation,
+            session_id: Some("s3".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            presented_retired: true,
+            rotation_at: Some(r2),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
+        v["keys"][0]["sessions_on_retired_secret"] == 1
+    })
+    .await;
+    assert_eq!(keys["keys"][0]["sessions_on_retired_secret"], 1);
+}
+
+#[tokio::test]
 async fn a_revoke_whose_reload_fails_answers_503_and_the_old_secret_is_refused_only_once_the_reload_succeeds(
 ) {
     let (app, _up, store, router) = common::admin_parts().await;
@@ -426,7 +553,23 @@ async fn a_revoke_whose_reload_fails_answers_503_and_the_old_secret_is_refused_o
 /// rather than whichever model happens to sort last.
 #[tokio::test]
 async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
-    let (_first, _up, store, _router) = common::admin_parts().await;
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    post(
+        &first,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        Some(&cookie),
+    )
+    .await;
+    // A pin belongs to the live key of its id, so the key exists before the pins do.
+    post(
+        &first,
+        "/admin/keys",
+        r#"{"id":"k","label":"k","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
     for (model, account, epoch, last_used_at) in [
         ("claude-opus-5", "direct", 4, common::NOW - 5),
         ("claude-sonnet-4-5", "business", 3, common::NOW - 5_000),
@@ -509,6 +652,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 created_at: common::NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )
@@ -735,6 +879,27 @@ async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage()
         "active",
         "the same overage is not an obstacle once the policy allows it"
     );
+}
+
+#[tokio::test]
+async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "business".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(common::NOW),
+            reset: None,
+            observed_at: common::NOW,
+            source: phoebis_routing::EvidenceSource::Head,
+        },
+    });
+    let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        v["accounts"][0]["overage"]["in_use"] == true
+    })
+    .await;
+    assert_eq!(accounts["accounts"][0]["overage"]["in_use"], true);
 }
 
 #[tokio::test]

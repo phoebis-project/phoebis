@@ -144,6 +144,8 @@ mod tests {
             body: Bytes::from_static(b"{}"),
             body_capture_hours: 0,
             shape: RequestShape::default(),
+            presented_retired: false,
+            rotation_at: None,
             received_at: 1,
         })
     }

@@ -256,7 +256,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     assert!(row["companion_since"].is_null() && row["account_id"].is_null());
     // A retained recipe shows the main agent's companion state and the next probe.
     let now = common::NOW;
-    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: common::generation(&parts.store, "desktop"), pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), received_at: now }));
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: common::generation(&parts.store, "desktop"), pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), presented_retired: false, rotation_at: None, received_at: now }));
     parts
         .keepalive
         .observe(phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
@@ -437,6 +437,161 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             system["keepalive"]["running_probes"].as_u64()
         ),
         (Some(1), Some(0))
+    );
+}
+
+#[tokio::test]
+async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_only() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let g = common::generation(&parts.store, "desktop");
+    let now = common::NOW;
+    // A holder the ledger alone still remembers, one generation behind the live one, and the live holder's
+    // own row, under the same session id: a key id created again must not merge the two.
+    for (id, generation) in [("r1", g), ("r2", g - 1)] {
+        parts.ledger.record(phoebis_ledger::Record::Request {
+            request: phoebis_ledger::RequestRecord {
+                id: id.into(),
+                received_at: now,
+                key_id: Some("desktop".into()),
+                key_generation: generation,
+                session_id: Some("s1".into()),
+                model: "claude-sonnet-5".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                ..Default::default()
+            },
+            attempts: vec![],
+            bodies: None,
+        });
+    }
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            g,
+            Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r3".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: g, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), presented_retired: false, rotation_at: None, received_at: now }));
+    parts
+        .keepalive
+        .observe(phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
+            request_id: "r3".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            pin_epoch: Some(1),
+            started_at: now,
+            cache_ttl_ms: None,
+        }));
+    parts
+        .keepalive
+        .observe(phoebis_bus::Event::RequestComplete(phoebis_bus::RequestComplete {
+            request_id: "r3".into(),
+            attempt: 1,
+            account_id: Some("direct".into()),
+            outcome: phoebis_bus::Outcome::Succeeded,
+            status: 200,
+            usage: Some(phoebis_bus::Usage {
+                cache_write_5m_tokens: Some(2_000),
+                ..Default::default()
+            }),
+            response: phoebis_bus::ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: None,
+            client_drift: None,
+            client_version: None,
+            response_bytes: None,
+            finished_at: now,
+        }));
+    let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["session_id"] == "s1")
+            .count()
+            == 2
+    })
+    .await;
+    let rows: Vec<_> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["session_id"] == "s1")
+        .collect();
+    let live = rows
+        .iter()
+        .find(|r| r["key_generation"] == g)
+        .expect("the live generation is listed");
+    assert_eq!(
+        (
+            live["historical"].as_bool(),
+            live["companion"].as_str(),
+            live["agents"].as_u64()
+        ),
+        (Some(false), Some("reporting"), Some(1))
+    );
+    let historical = rows
+        .iter()
+        .find(|r| r["key_generation"] == g - 1)
+        .expect("the historical generation is listed");
+    assert_eq!(
+        (
+            historical["historical"].as_bool(),
+            historical["companion"].as_str(),
+            historical["agents"].as_u64(),
+            historical["keepalive"]["state"].is_null()
+        ),
+        (Some(true), Some("none"), Some(0), true)
+    );
+    let released = post(
+        &parts.app,
+        "/admin/sessions/desktop/s1/release",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(released.status(), 204);
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let rows: Vec<_> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["session_id"] == "s1")
+        .collect();
+    let live = rows.iter().find(|r| r["key_generation"] == g).unwrap();
+    assert!(
+        live["keepalive"]["state"].is_null(),
+        "the release discarded the live generation's recipe"
+    );
+    let historical = rows.iter().find(|r| r["key_generation"] == g - 1).unwrap();
+    assert_eq!(
+        (
+            historical["historical"].as_bool(),
+            historical["companion"].as_str(),
+            historical["agents"].as_u64()
+        ),
+        (Some(true), Some("none"), Some(0)),
+        "a release reaches the live generation alone; the historical row is untouched"
     );
 }
 

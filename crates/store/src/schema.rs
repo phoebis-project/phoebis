@@ -46,6 +46,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (14, V14),
     (15, V15),
     (16, V16),
+    (17, V17),
 ];
 
 const V2: &str = r#"
@@ -219,4 +220,9 @@ GROUP BY target;
 // usage, so the retirement that stood in for it goes with its table.
 const V16: &str = r#"
 DROP TABLE IF EXISTS api_key_tombstones;
+"#;
+
+// A key says when its retired secret last authenticated, so the console can count the sessions still on it.
+const V17: &str = r#"
+ALTER TABLE api_keys ADD COLUMN retired_secret_last_used_at INTEGER;
 "#;

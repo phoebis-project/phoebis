@@ -1,4 +1,4 @@
-use phoebis_routing::{KeyRefusal, RegistrySnapshot};
+use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::{
     digest_with, ApiKeyRow, OveragePolicy, PoolRow, RegistryLoad, RetiredSecret, Strategy,
     SubStrategy,
@@ -26,6 +26,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             created_at: 0,
             rotated_at: None,
             last_used_at: None,
+            retired_secret_last_used_at: None,
         }],
         members: Vec::new(),
         models: Vec::new(),
@@ -62,7 +63,8 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
 #[test]
 fn a_retired_secret_authenticates_its_key_until_the_grace_ends() {
     let s = RegistrySnapshot::from_load(load(None), DIGEST_KEY, 0, 1);
-    assert_eq!(s.authenticate("one", 1_999).unwrap().id, "k");
+    assert_eq!(s.authenticate("one", 1_999).unwrap().0.id, "k");
+    assert_eq!(s.authenticate("one", 1_999).unwrap().1, Presented::Retired);
     assert!(matches!(
         s.authenticate("one", 2_000),
         Err(KeyRefusal::Unknown)
@@ -71,6 +73,7 @@ fn a_retired_secret_authenticates_its_key_until_the_grace_ends() {
         s.authenticate("two", 5_000).is_ok(),
         "the live secret needs no grace"
     );
+    assert_eq!(s.authenticate("two", 5_000).unwrap().1, Presented::Live);
     assert!(matches!(
         s.authenticate("three", 1_000),
         Err(KeyRefusal::Unknown)

@@ -145,6 +145,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 created_at: NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )

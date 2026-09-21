@@ -20,8 +20,8 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Report, ResolveError,
-    RouterHandle, SelectRequest, SelectResult, Selection,
+    resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Presented, Report,
+    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Store};
 use phoebis_transport::control::Resolver;
@@ -250,6 +250,8 @@ impl Trace {
         stream: bool,
         body_capture_hours: u32,
         shape: RequestShape,
+        presented_retired: bool,
+        rotation_at: Option<i64>,
     ) {
         if self.bus.is_none() {
             return;
@@ -278,6 +280,8 @@ impl Trace {
             body,
             body_capture_hours,
             shape,
+            presented_retired,
+            rotation_at,
             received_at: self.received_at,
         }));
     }
@@ -552,7 +556,7 @@ impl Relay {
         // The snapshot is pinned for the whole request: the key, the pool, and the candidates all come from one
         // registry, and a write that lands mid-request is seen by the next request.
         let snapshot = self.router.snapshot();
-        let key = match &probe {
+        let (key, presented) = match &probe {
             // Before the body, as for a caller: an unauthenticated probe never holds the request limit either.
             Some(probe) => match snapshot.authenticate_id(&probe.key_id, received_at) {
                 // A recipe retained under an earlier key of this id is that key's; its probe never runs in
@@ -568,10 +572,13 @@ impl Relay {
                         false,
                         0,
                         RequestShape::default(),
+                        false,
+                        None,
                     );
                     return self.refused(&trace, key_refusal(&refusal), None, None, None);
                 }
-                Ok(key) => key.clone(),
+                // A probe authenticates by key id, never by secret, so it never presents a retired one.
+                Ok(key) => (key.clone(), Presented::Live),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
                     trace.observed(
@@ -582,6 +589,8 @@ impl Relay {
                         false,
                         0,
                         RequestShape::default(),
+                        false,
+                        None,
                     );
                     return self.refused(&trace, key_refusal(&refusal), None, None, None);
                 }
@@ -598,12 +607,14 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            false,
+                            None,
                         );
                         return self.refused(&trace, auth_failure(&error), None, None, None);
                     }
                 };
                 match snapshot.authenticate(presented, received_at) {
-                    Ok(key) => key.clone(),
+                    Ok((key, presented)) => (key.clone(), presented),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
                         trace.observed(
@@ -614,13 +625,15 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            false,
+                            None,
                         );
                         return self.refused(&trace, key_refusal(&refusal), None, None, None);
                     }
                 }
             }
         };
-        self.router.touch_key(&key.id);
+        self.router.touch_key(&key.id, presented, key.rotated_at);
         let capture_hours = snapshot
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
@@ -636,6 +649,8 @@ impl Relay {
                 false,
                 capture_hours,
                 RequestShape::default(),
+                presented == Presented::Retired,
+                key.rotated_at,
             );
             return self.refused(
                 &trace,
@@ -658,6 +673,8 @@ impl Relay {
                     stream,
                     capture_hours,
                     facts.shape.clone(),
+                    presented == Presented::Retired,
+                    key.rotated_at,
                 );
                 return self.refused(
                     &trace,
@@ -676,6 +693,8 @@ impl Relay {
             stream,
             capture_hours,
             facts.shape.clone(),
+            presented == Presented::Retired,
+            key.rotated_at,
         );
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,

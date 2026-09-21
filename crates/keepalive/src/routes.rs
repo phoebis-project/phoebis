@@ -37,7 +37,7 @@ fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64
     let snapshot = engine.parts.router.snapshot();
     snapshot
         .authenticate(presented, engine.now())
-        .map(|key| (key.id.clone(), key.created_at))
+        .map(|(key, _)| (key.id.clone(), key.created_at))
         .map_err(|refusal| no_store(key_refusal_response(&refusal, &request_id)))
 }
 

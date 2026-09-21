@@ -42,6 +42,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         created_at: 1,
         rotated_at: None,
         last_used_at: None,
+        retired_secret_last_used_at: None,
     }
 }
 
@@ -117,6 +118,69 @@ fn a_rotation_retires_the_previous_secret_for_the_grace_and_a_second_rotation_re
             expires_at: past_the_first_grace + ROTATION_GRACE_MS,
         }],
         "the row from the second rotation expired exactly at this instant and is swept"
+    );
+}
+
+#[test]
+fn a_touch_stamps_the_retired_secret_only_for_the_rotation_it_authenticated_under() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "t").unwrap();
+    store
+        .insert_api_key(&key(&store, "k", "main", "one"), "t")
+        .unwrap();
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("two"),
+            &phoebis_store::key_prefix("two"),
+            500,
+            "t",
+        )
+        .unwrap();
+    let rotated_at = store.api_key("k").unwrap().unwrap().rotated_at;
+    store.touch_api_key("k", 1_000, true, rotated_at).unwrap();
+    assert_eq!(
+        store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at,
+        Some(1_000),
+        "a retired touch carrying the row's own rotation stamps it"
+    );
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("three"),
+            &phoebis_store::key_prefix("three"),
+            2_000,
+            "t",
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at,
+        None,
+        "the second rotation clears the stamp its predecessor left"
+    );
+    store.touch_api_key("k", 3_000, true, rotated_at).unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().retired_secret_last_used_at,
+        None,
+        "a retired touch still carrying the first rotation cannot stamp the grace the second one started"
+    );
+    store.touch_api_key("k", 4_000, false, None).unwrap();
+    assert_eq!(
+        store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at,
+        None,
+        "a live touch never stamps the retired secret"
     );
 }
 

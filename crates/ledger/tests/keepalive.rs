@@ -422,8 +422,10 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             "effort",
             "max_tokens",
             "message_count",
+            "presented_retired",
             "requested_service_tier",
             "requested_speed",
+            "rotation_at",
             "system_blocks",
             "temperature",
             "thinking_budget",
@@ -440,7 +442,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 10);
+    assert_eq!(db.schema_version().await.unwrap(), 11);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

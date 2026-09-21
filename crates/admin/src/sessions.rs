@@ -40,10 +40,22 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Ok(a) => a,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
-    let mut rows: std::collections::BTreeMap<(String, String), serde_json::Value> =
+    // Read once: a pin and a recipe belong to the live holder of their key id alone, and a ledger row's
+    // generation says whether that row's holder is still the live one or has since been replaced.
+    let live: std::collections::BTreeMap<String, i64> = state
+        .router
+        .snapshot()
+        .keys()
+        .map(|k| (k.id.clone(), k.created_at))
+        .collect();
+    let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
         std::collections::BTreeMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
-        let key = (p.key_id.clone(), p.session_id.clone());
+        // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
+        let Some(&generation) = live.get(&p.key_id) else {
+            continue;
+        };
+        let key = (p.key_id.clone(), generation, p.session_id.clone());
         // A session holds a pin per model and the row shows one of them, so it shows the one the caller used
         // last rather than whichever model the sorted list ends on.
         if rows
@@ -55,17 +67,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         rows.insert(
             key,
             json!({
-                "key_id": p.key_id, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
+                "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
             }),
         );
     }
     for a in activity {
         let entry = rows
-            .entry((a.key_id.clone(), a.session_id.clone()))
+            .entry((a.key_id.clone(), a.key_generation, a.session_id.clone()))
             .or_insert_with(|| {
                 json!({
-                    "key_id": a.key_id, "session_id": a.session_id, "model": a.model, "account_id": null, "epoch": null,
+                    "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
                 })
             });
@@ -76,16 +88,22 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["account_id"] = json!(a.account_id);
         }
     }
-    let engine: std::collections::BTreeMap<(String, String), phoebis_keepalive::SessionView> = state
-        .keepalive
-        .sessions()
-        .into_iter()
-        .map(|s| ((s.key_id.clone(), s.session_id.clone()), s))
-        .collect();
+    let engine: std::collections::BTreeMap<(String, i64, String), phoebis_keepalive::SessionView> =
+        state
+            .keepalive
+            .sessions()
+            .into_iter()
+            .map(|s| {
+                (
+                    (s.key_id.clone(), s.key_generation, s.session_id.clone()),
+                    s,
+                )
+            })
+            .collect();
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             json!({
-                "key_id": key.0, "session_id": key.1, "model": null, "account_id": null, "epoch": null,
+                "key_id": key.0, "key_generation": key.1, "session_id": key.2, "model": null, "account_id": null, "epoch": null,
                 "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
             })
         });
@@ -94,7 +112,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         entry["agents"] = json!(view.agents);
         entry["keepalive"] = json!(view.keepalive);
     }
+    // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
+    // under the live generation alone and cannot belong to it, so it carries no companion or recipe.
     for (key, entry) in rows.iter_mut() {
+        entry["historical"] = json!(live.get(&key.0) != Some(&key.1));
         if !engine.contains_key(key) {
             entry["companion"] = json!("none");
             entry["companion_since"] = json!(null);
@@ -103,14 +124,18 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         }
     }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
-    // serving account come from its main agent's recipe instead, the first the session's agents sort to.
+    // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
+    // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
     let mut recipe_by_session: std::collections::BTreeMap<
-        (String, String),
+        (String, i64, String),
         phoebis_keepalive::RecipeView,
     > = std::collections::BTreeMap::new();
     for recipe in state.keepalive.recipes() {
+        let Some(&generation) = live.get(&recipe.key_id) else {
+            continue;
+        };
         recipe_by_session
-            .entry((recipe.key_id.clone(), recipe.session_id.clone()))
+            .entry((recipe.key_id.clone(), generation, recipe.session_id.clone()))
             .or_insert(recipe);
     }
     for (key, entry) in rows.iter_mut() {

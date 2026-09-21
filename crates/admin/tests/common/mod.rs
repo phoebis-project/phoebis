@@ -124,6 +124,7 @@ struct Parts {
     live: LiveFeed,
     manager: Arc<CredentialManager>,
     pricing: Arc<Pricing>,
+    relay: Arc<Relay>,
     resolver: Resolver,
     router: RouterHandle,
     store: Arc<Store>,
@@ -144,6 +145,9 @@ pub struct Full {
     pub ledger: Ledger,
     pub live: LiveFeed,
     pub pricing: Arc<Pricing>,
+    /// The relay backing the harness's own keepalive engine, exposed so a test can drive a real request
+    /// through the proxy listener's own authenticate-and-touch path rather than reaching around it.
+    pub relay: Arc<Relay>,
     pub resolver: Resolver,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -184,6 +188,7 @@ fn full_from(parts: Parts) -> Full {
         ledger: parts.ledger,
         live: parts.live,
         pricing: parts.pricing,
+        relay: parts.relay,
         resolver: parts.resolver,
         router: parts.router,
         store: parts.store,
@@ -741,6 +746,7 @@ async fn app_with_webhook_policy(
         live,
         manager,
         pricing,
+        relay,
         resolver,
         router: router_handle,
         store,

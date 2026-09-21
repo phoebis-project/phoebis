@@ -250,6 +250,11 @@ pub struct RequestObserved {
     pub body_capture_hours: u32,
     /// Empty for a refusal published before the body was read.
     pub shape: RequestShape,
+    /// The caller presented the secret a rotation retired.
+    pub presented_retired: bool,
+    /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired
+    /// presentation belongs to.
+    pub rotation_at: Option<i64>,
     pub received_at: i64,
 }
 

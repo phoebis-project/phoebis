@@ -223,6 +223,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 created_at: NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )
@@ -312,6 +313,8 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         body: Bytes::from_static(b"{}"),
         body_capture_hours: capture,
         shape: RequestShape::default(),
+        presented_retired: false,
+        rotation_at: None,
         received_at: NOW,
     })
 }

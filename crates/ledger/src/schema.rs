@@ -434,4 +434,11 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_gen
         "ALTER TABLE bodies ADD COLUMN request_len_seen INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE bodies ADD COLUMN response_len_seen INTEGER NOT NULL DEFAULT 0;",
     ),
+    (
+        11,
+        // A request says whether it presented a retired secret and under which rotation, so the count of
+        // sessions still on the previous secret is scoped to the rotation whose grace is running.
+        "ALTER TABLE requests ADD COLUMN presented_retired INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE requests ADD COLUMN rotation_at INTEGER;",
+    ),
 ];

@@ -64,6 +64,7 @@ fn key(id: &str, pool_id: &str, secret: &str, allowed: Option<Vec<&str>>) -> Api
         created_at: 0,
         rotated_at: None,
         last_used_at: None,
+        retired_secret_last_used_at: None,
     }
 }
 
@@ -153,7 +154,7 @@ fn snapshot() -> RegistrySnapshot {
 fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
     let s = snapshot();
     assert_eq!(
-        s.authenticate("phoebis-desktopsecret0000", 1_000).unwrap().id,
+        s.authenticate("phoebis-desktopsecret0000", 1_000).unwrap().0.id,
         "desktop"
     );
     assert!(matches!(
@@ -169,7 +170,7 @@ fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
         Err(KeyRefusal::Expired)
     ));
     assert_eq!(
-        s.authenticate("phoebis-oldsecret00000000", 400).unwrap().id,
+        s.authenticate("phoebis-oldsecret00000000", 400).unwrap().0.id,
         "old"
     );
     assert!(matches!(

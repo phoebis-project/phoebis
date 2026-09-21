@@ -13,7 +13,7 @@ pub use select::{
     release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult, Selection,
     MIGRATE_BAND, MIGRATE_DWELL_MS,
 };
-pub use snapshot::{KeyRefusal, RegistrySnapshot};
+pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     EvidenceSource, OverageEvidence, PinRef, Purged, RoutingState, StateWrite, UtilizationSample,
 };

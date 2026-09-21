@@ -206,6 +206,7 @@ pub async fn harness_on(
                     created_at: NOW,
                     rotated_at: None,
                     last_used_at: None,
+                    retired_secret_last_used_at: None,
                 },
                 "test",
             )

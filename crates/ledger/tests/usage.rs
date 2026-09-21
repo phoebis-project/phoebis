@@ -439,6 +439,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
                 created_at: NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )
@@ -488,6 +489,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
         created_at: NOW,
         rotated_at: None,
         last_used_at: None,
+        retired_secret_last_used_at: None,
     }
 }
 
@@ -595,6 +597,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 created_at: NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )

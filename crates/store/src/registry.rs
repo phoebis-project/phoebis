@@ -203,6 +203,8 @@ pub struct ApiKeyRow {
     pub created_at: i64,
     pub rotated_at: Option<i64>,
     pub last_used_at: Option<i64>,
+    /// When the secret a rotation retired last authenticated; cleared by the next rotation.
+    pub retired_secret_last_used_at: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -607,8 +609,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -692,8 +694,10 @@ impl Store {
             "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
         )?;
+        // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
+        // otherwise read as if it belonged to the one this rotation creates.
         tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4 WHERE id = ?1",
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
             params![id, digest, prefix, at],
         )?;
         record_change(
@@ -740,11 +744,21 @@ impl Store {
         Ok(())
     }
 
-    pub fn touch_api_key(&self, id: &str, at: i64) -> Result<(), StoreError> {
+    /// `last_used_at` always; `retired_secret_last_used_at` only for a retired presentation whose `rotated_at`
+    /// is still the row's.
+    pub fn touch_api_key(
+        &self,
+        id: &str,
+        at: i64,
+        presented_retired: bool,
+        rotated_at: Option<i64>,
+    ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE api_keys SET last_used_at = ?2 WHERE id = ?1",
-            params![id, at],
+            "UPDATE api_keys SET last_used_at = ?2, \
+             retired_secret_last_used_at = CASE WHEN ?3 AND rotated_at IS ?4 THEN ?2 ELSE retired_secret_last_used_at END \
+             WHERE id = ?1",
+            params![id, at, presented_retired, rotated_at],
         )?;
         Ok(())
     }
@@ -1116,7 +1130,7 @@ impl Store {
 }
 
 const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at FROM api_keys";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1177,6 +1191,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         created_at: r.get(12)?,
         rotated_at: r.get(13)?,
         last_used_at: r.get(14)?,
+        retired_secret_last_used_at: r.get(15)?,
     })
 }
 

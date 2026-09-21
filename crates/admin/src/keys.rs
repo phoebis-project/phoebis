@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use phoebis_store::{ApiKeyRow, StoreError};
+use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -135,13 +135,59 @@ async fn totals(
     }
 }
 
+/// The (key, generation) sessions the ledger has seen inside the console's own session window, read once
+/// rather than once per key row.
+async fn recent_activity(state: &AdminState, now: i64) -> Vec<phoebis_ledger::SessionActivity> {
+    let cutoff = now - state.session_expiry.as_millis() as i64;
+    match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::session_activity(c, cutoff))
+        .await
+    {
+        Ok(activity) => activity,
+        Err(error) => {
+            tracing::warn!(%error, "the key view could not read session activity; retired-secret counts are empty");
+            Vec::new()
+        }
+    }
+}
+
+// Live sessions whose newest request presented the retired secret of this rotation, while its grace lasts;
+// the console says how many sessions still need to switch before the old secret stops working. A session
+// last seen on the secret an earlier rotation retired is not on this one: that secret no longer
+// authenticates, so the session has already switched or gone.
+fn sessions_on_retired_secret(
+    row: &ApiKeyRow,
+    activity: &[phoebis_ledger::SessionActivity],
+    now: i64,
+) -> usize {
+    row.rotated_at
+        .filter(|at| now < at + ROTATION_GRACE_MS)
+        .map(|rotated_at| {
+            activity
+                .iter()
+                .filter(|s| {
+                    s.key_id == row.id
+                        && s.key_generation == row.created_at
+                        && s.on_retired_secret
+                        && s.rotation_at == Some(rotated_at)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match state.store.api_keys() {
         Ok(rows) => {
             let (week, lifetime) = totals(&state).await;
+            let now = (state.clock)();
+            let activity = recent_activity(&state, now).await;
             let mut out = Vec::new();
             for row in rows {
-                match key_json(&state, &row, &week, &lifetime) {
+                let count = sessions_on_retired_secret(&row, &activity, now);
+                match key_json(&state, &row, &week, &lifetime, count) {
                     Ok(v) => out.push(v),
                     Err(e) => return store_failure(e),
                 }
@@ -189,6 +235,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         created_at: now,
         rotated_at: None,
         last_used_at: None,
+        retired_secret_last_used_at: None,
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
@@ -206,7 +253,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     let (week, lifetime) = totals(&state).await;
-    match key_json(&state, &row, &week, &lifetime) {
+    let activity = recent_activity(&state, now).await;
+    let count = sessions_on_retired_secret(&row, &activity, now);
+    match key_json(&state, &row, &week, &lifetime, count) {
         Ok(mut v) => {
             v["secret"] = json!(secret);
             (StatusCode::CREATED, Json(v)).into_response()
@@ -238,7 +287,10 @@ pub(crate) async fn patch(
         return refusal;
     }
     let (week, lifetime) = totals(&state).await;
-    match key_json(&state, &row, &week, &lifetime) {
+    let now = (state.clock)();
+    let activity = recent_activity(&state, now).await;
+    let count = sessions_on_retired_secret(&row, &activity, now);
+    match key_json(&state, &row, &week, &lifetime, count) {
         Ok(v) => Json(v).into_response(),
         Err(e) => store_failure(e),
     }
@@ -273,7 +325,9 @@ pub(crate) async fn rotate(
     match state.store.api_key(&id) {
         Ok(Some(row)) => {
             let (week, lifetime) = totals(&state).await;
-            match key_json(&state, &row, &week, &lifetime) {
+            let activity = recent_activity(&state, now).await;
+            let count = sessions_on_retired_secret(&row, &activity, now);
+            match key_json(&state, &row, &week, &lifetime, count) {
                 Ok(mut v) => {
                     v["secret"] = json!(secret);
                     Json(v).into_response()
@@ -320,6 +374,7 @@ fn key_json(
     row: &ApiKeyRow,
     week: &BTreeMap<String, phoebis_ledger::Totals>,
     lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
+    sessions_on_retired_secret: usize,
 ) -> Result<Value, StoreError> {
     let effective = row.body_capture_hours.unwrap_or(
         state
@@ -333,6 +388,7 @@ fn key_json(
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "allowed_models": row.allowed_models,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
+        "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
         "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },
     }))

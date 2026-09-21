@@ -975,36 +975,46 @@ pub fn key_request_totals(
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionActivity {
     pub key_id: String,
+    pub key_generation: i64,
     pub session_id: String,
     pub first_request_at: i64,
     pub last_request_at: i64,
     pub requests: u64,
     pub model: String,
     pub account_id: Option<String>,
+    /// The newest request of the session presented the retired secret, and under which rotation.
+    pub on_retired_secret: bool,
+    pub rotation_at: Option<i64>,
 }
 
-/// Every (key, session) with a client request since `since`, with the canonical model and the serving account
-/// of its newest request.
+/// Every (key, key generation, session) with a client request since `since`, with the canonical model and the
+/// serving account of its newest request. Grouped by generation as well as id, so a key id created again never
+/// merges its sessions with an earlier holder's.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
     let mut stmt = conn.prepare(
-        "SELECT r.key_id, r.session_id, MIN(r.received_at), MAX(r.received_at), COUNT(*), \
-         (SELECT canonical_model FROM requests r2 WHERE r2.key_id = r.key_id AND r2.session_id = r.session_id AND r2.kind != 'probe' ORDER BY r2.received_at DESC, r2.id DESC LIMIT 1), \
-         (SELECT a.account_id FROM attempts a WHERE a.request_id = (SELECT r3.id FROM requests r3 WHERE r3.key_id = r.key_id AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) ORDER BY a.attempt DESC LIMIT 1) \
+        "SELECT r.key_id, r.key_generation, r.session_id, MIN(r.received_at), MAX(r.received_at), COUNT(*), \
+         (SELECT canonical_model FROM requests r2 WHERE r2.key_id = r.key_id AND r2.key_generation = r.key_generation AND r2.session_id = r.session_id AND r2.kind != 'probe' ORDER BY r2.received_at DESC, r2.id DESC LIMIT 1), \
+         (SELECT a.account_id FROM attempts a WHERE a.request_id = (SELECT r3.id FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) ORDER BY a.attempt DESC LIMIT 1), \
+         (SELECT r3.presented_retired FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1), \
+         (SELECT r3.rotation_at FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) \
          FROM requests r WHERE r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.kind != 'probe' AND r.received_at >= ?1 \
-         GROUP BY r.key_id, r.session_id ORDER BY MAX(r.received_at) DESC",
+         GROUP BY r.key_id, r.key_generation, r.session_id ORDER BY MAX(r.received_at) DESC",
     )?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
-            session_id: r.get(1)?,
-            first_request_at: r.get(2)?,
-            last_request_at: r.get(3)?,
-            requests: r.get::<_, i64>(4)? as u64,
-            model: r.get(5)?,
-            account_id: r.get(6)?,
+            key_generation: r.get(1)?,
+            session_id: r.get(2)?,
+            first_request_at: r.get(3)?,
+            last_request_at: r.get(4)?,
+            requests: r.get::<_, i64>(5)? as u64,
+            model: r.get(6)?,
+            account_id: r.get(7)?,
+            on_retired_secret: r.get(8)?,
+            rotation_at: r.get(9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

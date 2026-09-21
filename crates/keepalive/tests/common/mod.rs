@@ -349,6 +349,8 @@ impl Rig {
             body: Bytes::from(body.to_string()),
             body_capture_hours: 0,
             shape: RequestShape::default(),
+            presented_retired: false,
+            rotation_at: None,
             received_at: self.now(),
         })
     }

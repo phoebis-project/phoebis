@@ -10,12 +10,19 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 const HOUR: i64 = 3_600_000;
 
 fn record(id: &str, at: i64, model: &str, session: &str) -> Record {
+    record_at(id, at, model, session, 0)
+}
+
+/// `key_generation` matters only to a caller that also plants a pin: the sessions view groups a request row
+/// under it, and a row left at the default of 0 never joins a pin under the key's real generation.
+fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64) -> Record {
     Record::Request {
         request: RequestRecord {
             id: id.into(),
             received_at: at,
             finished_at: Some(at + 500),
             key_id: Some("desktop".into()),
+            key_generation,
             pool_id: Some("main".into()),
             session_id: Some(session.into()),
             model: model.into(),
@@ -281,8 +288,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(10), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that records a capture's dropped length"
+        (Some(11), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that records a request's presented-retired rotation"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -493,12 +500,14 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     }
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
+    let generation = common::generation(&seed.store, "desktop");
     for i in 0..3 {
-        parts.ledger.record(record(
+        parts.ledger.record(record_at(
             &format!("p{i}"),
             now - i * HOUR,
             "claude-sonnet-5",
             "served",
+            generation,
         ));
     }
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
@@ -612,6 +621,8 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         body: bytes::Bytes::from_static(b"{}"),
         body_capture_hours: 24,
         shape: RequestShape::default(),
+        presented_retired: false,
+        rotation_at: None,
         received_at: common::NOW,
     }));
     parts.bus.publish(Event::ResponseChunk(ResponseChunk { request_id: "live-1".into(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"secret prompt text\"}}\n\n"), phase: Some(Phase::FirstContentDelta) }));

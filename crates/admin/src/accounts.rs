@@ -427,6 +427,9 @@ pub(crate) async fn sync(State(state): State<Arc<AdminState>>, Path(id): Path<St
             }))
             .into_response()
         }
+        // The gate above read the row; a delete that lands during discovery reaches `CatalogService::sync`'s
+        // own read and is the same absence, answered the same way as `patch` and `remove` answer it.
+        Err(StoreError::AccountNotFound(_)) => failure(StatusCode::NOT_FOUND, "account not found"),
         Err(error) => store_failure(error),
     }
 }

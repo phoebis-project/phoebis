@@ -19,7 +19,7 @@ use phoebis_oauth::{
     PairingError, PairingSession, PairingStatus, PendingIdentity, UsageSnapshot,
 };
 use phoebis_relay::DiscoveryError;
-use phoebis_routing::ReloadError;
+use phoebis_routing::{OverageEvidence, ReloadError};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
 };
@@ -851,6 +851,7 @@ pub(crate) struct AccountContext {
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
     pub members: Vec<PoolMember>,
+    pub overages: BTreeMap<String, OverageEvidence>,
     pub quota: Vec<phoebis_ledger::QuotaSampleRecord>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
@@ -890,6 +891,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         extra,
         lifetime,
         members,
+        overages: state
+            .router
+            .overages()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         quota,
         week,
     }
@@ -905,7 +913,7 @@ pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Value 
 /// The view over a context the caller already holds, so listing every account asks the router and the
 /// ledger once.
 async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Value {
-    let overage = state.router.overage(&row.id).await.ok().flatten();
+    let overage = ctx.overages.get(&row.id);
     let (catalog_synced_at, catalog_error) =
         state.store.catalog_status(&row.id).unwrap_or_default();
     let served_models_count = state

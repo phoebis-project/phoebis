@@ -396,6 +396,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         temperature: observed.shape.temperature,
         requested_speed: observed.shape.speed.clone(),
         requested_service_tier: observed.shape.service_tier.clone(),
+        presented_retired: observed.presented_retired,
+        rotation_at: observed.rotation_at,
     };
     records.push(Record::Request {
         request,
@@ -438,6 +440,8 @@ mod tests {
             body: Bytes::from_static(b"0123456789"),
             body_capture_hours: capture_hours,
             shape: RequestShape::default(),
+            presented_retired: false,
+            rotation_at: None,
             received_at: 1_000,
         })
     }

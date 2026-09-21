@@ -110,6 +110,7 @@ pub struct SessionView {
     pub companion: CompanionState,
     pub companion_since: Option<i64>,
     pub key_id: String,
+    pub key_generation: i64,
     pub keepalive: KeepaliveSummary,
     pub session_id: String,
 }
@@ -175,6 +176,7 @@ impl Engine {
                     companion_since: (companion != CompanionState::Reporting)
                         .then_some(s.last_report_at),
                     key_id: s.key_id.clone(),
+                    key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
                         next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),
                         state: main.map(|a| a.state),

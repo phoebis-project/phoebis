@@ -746,6 +746,49 @@ async fn a_sync_that_cannot_publish_says_whether_the_registry_was_written() {
 }
 
 #[tokio::test]
+async fn a_sync_answers_404_for_an_account_deleted_while_discovery_was_running() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
+        })),
+    );
+    let syncing = {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        tokio::spawn(async move {
+            post(
+                &app,
+                "/admin/accounts/direct/models/sync",
+                "",
+                Some(&cookie),
+            )
+            .await
+        })
+    };
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        up.requests()
+            .iter()
+            .any(|r| r.line.starts_with("GET /v1/models"))
+            .then_some(())
+    })
+    .await;
+    store.delete_account("direct", "test").unwrap();
+    up.release();
+    let refused = syncing.await.unwrap();
+    assert_eq!(refused.status(), 404);
+    assert_eq!(
+        json(refused).await,
+        serde_json::json!({ "error": "account not found" })
+    );
+}
+
+#[tokio::test]
 async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() {
     use phoebis_ledger::{
         AttemptRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,

@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    resolve, sample_from_usage, spawn, Exhaustion, ReloadError, Report, ResolveError, RouterConfig,
-    SelectRequest, SelectResult, UtilizationSample,
+    resolve, sample_from_usage, spawn, Exhaustion, Presented, ReloadError, Report, ResolveError,
+    RouterConfig, SelectRequest, SelectResult, UtilizationSample,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolRow,
-    ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy,
+    PoolRow, ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
 };
 use fake_upstream::{stays_for, wait_for};
 
@@ -93,6 +93,7 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 created_at: 0,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )
@@ -549,22 +550,91 @@ async fn a_key_is_touched_at_most_once_a_minute() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
-    handle.touch_key("k");
+    handle.touch_key("k", Presented::Live, None);
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
     })
     .await;
     now.store(11_000, Ordering::SeqCst);
-    handle.touch_key("k");
+    handle.touch_key("k", Presented::Live, None);
     // Ten seconds on from the last touch, which is inside the minute, so nothing is written.
     stays_for(NOT_WRITTEN, || {
         store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)
     })
     .await;
     now.store(62_000, Ordering::SeqCst);
-    handle.touch_key("k");
+    handle.touch_key("k", Presented::Live, None);
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(62_000)).then_some(())
+    })
+    .await;
+}
+
+/// A retired presentation right after a live one still stamps the retired secret's last use: the two are
+/// debounced apart, so the minute the live touch started does not swallow the retired one.
+#[tokio::test]
+async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_written() {
+    let store = seeded(&["a"]);
+    let rotated_at = Some(500);
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("phoebis-next"),
+            &key_prefix("phoebis-next"),
+            500,
+            "t",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.touch_key("k", Presented::Live, rotated_at);
+    wait_for(WRITTEN, || {
+        (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
+    })
+    .await;
+    now.store(11_000, Ordering::SeqCst);
+    handle.touch_key("k", Presented::Retired, rotated_at);
+    wait_for(WRITTEN, || {
+        (store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at
+            == Some(11_000))
+        .then_some(())
+    })
+    .await;
+    now.store(21_000, Ordering::SeqCst);
+    handle.touch_key("k", Presented::Retired, rotated_at);
+    stays_for(NOT_WRITTEN, || {
+        store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at
+            == Some(11_000)
+    })
+    .await;
+    // A touch that authenticated under the earlier rotation lands after a later one: the new grace stays
+    // unpresented.
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("phoebis-later"),
+            &key_prefix("phoebis-later"),
+            30_000,
+            "t",
+        )
+        .unwrap();
+    now.store(90_000, Ordering::SeqCst);
+    handle.touch_key("k", Presented::Retired, rotated_at);
+    stays_for(NOT_WRITTEN, || {
+        store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at
+            .is_none()
     })
     .await;
 }

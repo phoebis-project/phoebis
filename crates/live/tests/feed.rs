@@ -39,6 +39,8 @@ fn observed(id: &str, at: i64, capture_hours: u32) -> phoebis_bus::Event {
         body: bytes::Bytes::from_static(b"{}"),
         body_capture_hours: capture_hours,
         shape: phoebis_bus::RequestShape::default(),
+        presented_retired: false,
+        rotation_at: None,
         received_at: at,
     })
 }

@@ -397,6 +397,7 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
                 created_at: NOW,
                 rotated_at: None,
                 last_used_at: None,
+                retired_secret_last_used_at: None,
             },
             "test",
         )

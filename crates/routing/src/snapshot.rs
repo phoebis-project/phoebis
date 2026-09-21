@@ -5,6 +5,14 @@ use phoebis_store::{
 };
 use subtle::ConstantTimeEq;
 
+/// Which secret the caller presented: the key's live one, or the one a rotation retired and the grace still
+/// admits.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum Presented {
+    Live,
+    Retired,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum KeyRefusal {
     #[error("the key is disabled")]
@@ -105,14 +113,18 @@ impl RegistrySnapshot {
     /// The digest narrows the search and the constant-time compare decides, as the static key table did. A
     /// secret a rotation retired still names its key until the grace ends, so a running session switches on
     /// its own time rather than on the operator's click.
-    pub fn authenticate(&self, presented: &str, now: i64) -> Result<&ApiKeyRow, KeyRefusal> {
+    pub fn authenticate(
+        &self,
+        presented: &str,
+        now: i64,
+    ) -> Result<(&ApiKeyRow, Presented), KeyRefusal> {
         let digest = digest_with(&self.digest_key, presented.as_bytes());
         if let Some(id) = self.keys_by_digest.get(&digest) {
             let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
             if !bool::from(key.secret_digest.as_slice().ct_eq(&digest)) {
                 return Err(KeyRefusal::Unknown);
             }
-            return self.live(key, now);
+            return self.live(key, now).map(|k| (k, Presented::Live));
         }
         // The map hit narrows and the constant-time compare decides, as on the live path above; the stored
         // digest is the map's own key.
@@ -127,7 +139,7 @@ impl RegistrySnapshot {
             return Err(KeyRefusal::Unknown);
         }
         let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
-        self.live(key, now)
+        self.live(key, now).map(|k| (k, Presented::Retired))
     }
 
     /// The liveness half of `authenticate` for a key the relay already matched under an older snapshot.

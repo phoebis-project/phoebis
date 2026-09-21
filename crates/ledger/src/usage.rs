@@ -181,7 +181,7 @@ async fn usage(State(state): State<Arc<UsageState>>, request: Request<Body>) -> 
     let snapshot = state.router.snapshot();
     let generation;
     let key = match snapshot.authenticate(presented, now) {
-        Ok(row) => {
+        Ok((row, _)) => {
             generation = row.created_at;
             KeyView {
                 id: row.id.clone(),

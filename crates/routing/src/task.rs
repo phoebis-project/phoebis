@@ -17,7 +17,7 @@ use crate::select::{
 use crate::state::{
     EvidenceSource, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
 };
-use crate::{resolve, RegistrySnapshot};
+use crate::{resolve, Presented, RegistrySnapshot};
 
 const COMMANDS: usize = 4_096;
 
@@ -199,6 +199,8 @@ enum Command {
     },
     Touch {
         key_id: String,
+        presented: Presented,
+        rotated_at: Option<i64>,
     },
 }
 
@@ -297,9 +299,13 @@ impl RouterHandle {
     pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::Samples { reply }).await
     }
-    pub fn touch_key(&self, key_id: &str) {
+    /// `rotated_at` is the key's rotation the caller authenticated under, so a touch that lands after a later
+    /// rotation stamps nothing on the new grace.
+    pub fn touch_key(&self, key_id: &str, presented: Presented, rotated_at: Option<i64>) {
         let _ = self.tx.try_send(Command::Touch {
             key_id: key_id.to_string(),
+            presented,
+            rotated_at,
         });
     }
 
@@ -326,7 +332,7 @@ struct Task {
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
     store: Arc<Store>,
-    touched_at: HashMap<String, i64>,
+    touched_at: HashMap<(String, Presented), i64>,
     /// Weak on purpose: the loop ends when the last handle drops, so a test that reopens an on-disk store
     /// gets the process lock back; the task's own follow-ups upgrade it and give up when nobody is left.
     tx: mpsc::WeakSender<Command>,
@@ -702,17 +708,29 @@ impl Task {
             Command::Samples { reply } => {
                 let _ = reply.send(self.state.samples());
             }
-            Command::Touch { key_id } => {
+            Command::Touch {
+                key_id,
+                presented,
+                rotated_at,
+            } => {
                 let now = (self.clock)();
+                // Debounced per presentation, so a retired-secret touch is never swallowed by a live one that
+                // landed inside the same minute: the retired stamp is what the console's count leans on.
+                let slot = (key_id.clone(), presented);
                 let due = self
                     .touched_at
-                    .get(&key_id)
+                    .get(&slot)
                     .is_none_or(|at| now - at >= self.config.touch_interval.as_millis() as i64);
                 if due {
-                    self.touched_at.insert(key_id.clone(), now);
+                    self.touched_at.insert(slot, now);
                     let store = self.store.clone();
                     tokio::task::spawn_blocking(move || {
-                        let _ = store.touch_api_key(&key_id, now);
+                        let _ = store.touch_api_key(
+                            &key_id,
+                            now,
+                            presented == Presented::Retired,
+                            rotated_at,
+                        );
                     });
                 }
             }
