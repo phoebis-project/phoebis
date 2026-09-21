@@ -6,6 +6,9 @@
 /// what the grammar itself uses and no measured user agent carries one.
 const ESCAPE: char = '\\';
 
+/// The `LIKE` pattern and the escape character to pass as `ESCAPE`: `*` becomes `%`, `?` becomes `_`, and a
+/// literal `%`, `_`, or the escape character itself is escaped, so a pattern with no wildcard matches its own
+/// text alone.
 pub fn to_like(pattern: &str) -> (String, char) {
     let mut out = String::with_capacity(pattern.len() + 4);
     let mut chars = pattern.chars();
@@ -49,6 +52,9 @@ pub fn within_bounds(patterns: &[String]) -> bool {
             .all(|p| p.chars().count() <= MAX_PATTERN_CHARS)
 }
 
+/// Whether `value` matches `pattern` under the same grammar, character by character; `*` is greedy over any run
+/// (including none), `?` consumes exactly one character, and `\` quotes the next character. Linear per star
+/// run, `pattern * value` steps at worst.
 pub fn matches(pattern: &str, value: &str) -> bool {
     matches_counted(pattern, value).0
 }

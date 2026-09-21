@@ -29,7 +29,7 @@ pub use metrics::{
 };
 pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,
-    within_bounds as patterns_within_bounds, PATTERNS_TOO_LONG,
+    within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
