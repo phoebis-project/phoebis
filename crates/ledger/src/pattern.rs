@@ -1,0 +1,264 @@
+//! The wildcard grammar the user-agent filters share: `*` for any run of characters, `?` for one, and a
+//! backslash to quote either. The request log hands `to_like` to SQLite; the analytics test rollup rows in
+//! memory with `matches`, so the two views cannot drift apart on what a pattern means.
+
+/// The escape character `to_like` names. A backslash rather than SQLite's absent default, since a backslash is
+/// what the grammar itself uses and no measured user agent carries one.
+const ESCAPE: char = '\\';
+
+pub fn to_like(pattern: &str) -> (String, char) {
+    let mut out = String::with_capacity(pattern.len() + 4);
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => out.push('%'),
+            '?' => out.push('_'),
+            '\\' => match chars.next() {
+                // A quoted character reaches SQLite as itself, escaped where `LIKE` would read it as a wildcard.
+                Some(next @ ('%' | '_' | '\\')) => {
+                    out.push(ESCAPE);
+                    out.push(next);
+                }
+                Some(next) => out.push(next),
+                // A trailing backslash quotes nothing and matches nothing more.
+                None => {}
+            },
+            '%' | '_' => {
+                out.push(ESCAPE);
+                out.push(c);
+            }
+            other => out.push(other),
+        }
+    }
+    (out, ESCAPE)
+}
+
+/// The longest pattern and the longest pattern list a route accepts. The matcher below is linear per star
+/// run and at worst `pattern * value` steps, so the bound keeps one analytics read over a few thousand
+/// rollup rows within a fraction of a worker's time whatever the caller typed.
+pub const MAX_PATTERN_CHARS: usize = 256;
+pub const MAX_PATTERNS: usize = 32;
+/// The refusal a route answers for a pattern or a list past the bounds.
+pub const PATTERNS_TOO_LONG: &str =
+    "user agent patterns are at most 256 characters, at most 32 of them";
+
+pub fn within_bounds(patterns: &[String]) -> bool {
+    patterns.len() <= MAX_PATTERNS
+        && patterns
+            .iter()
+            .all(|p| p.chars().count() <= MAX_PATTERN_CHARS)
+}
+
+pub fn matches(pattern: &str, value: &str) -> bool {
+    matches_counted(pattern, value).0
+}
+
+/// The match and the number of steps it took, the count being what the tests bound. Two cursors walk the
+/// pattern and the value; a `*` records where it stood and where the value stood, and a later mismatch resumes
+/// after that star with the value one character further on, so no split is tried twice and the work is
+/// `pattern * value` at worst rather than one path per way of splitting the value among the stars. ASCII case
+/// folds, as SQLite's `LIKE` folds it on the SQL side.
+fn matches_counted(pattern: &str, value: &str) -> (bool, usize) {
+    let p: Vec<char> = pattern.chars().collect();
+    let v: Vec<char> = value.chars().collect();
+    let (mut pi, mut vi, mut steps) = (0, 0, 0);
+    // The pattern position after the last star seen and the value position that star currently covers up to.
+    let mut star: Option<(usize, usize)> = None;
+    while vi < v.len() {
+        steps += 1;
+        let literal = match p.get(pi) {
+            Some('*') => {
+                star = Some((pi + 1, vi));
+                pi += 1;
+                continue;
+            }
+            Some('?') => Some(('?', 1)),
+            Some('\\') => p.get(pi + 1).map(|quoted| (*quoted, 2)),
+            Some(c) => Some((*c, 1)),
+            None => None,
+        };
+        match literal {
+            Some((c, width)) if (c == '?' && width == 1) || c.eq_ignore_ascii_case(&v[vi]) => {
+                pi += width;
+                vi += 1;
+            }
+            _ => match star {
+                Some((after_star, covered)) => {
+                    pi = after_star;
+                    vi = covered + 1;
+                    star = Some((after_star, vi));
+                }
+                None => return (false, steps),
+            },
+        }
+    }
+    // The value is spent; what is left of the pattern must match nothing: stars, or a trailing backslash,
+    // which quotes nothing.
+    while pi < p.len() {
+        match p[pi] {
+            '*' => pi += 1,
+            '\\' if pi + 1 == p.len() => pi += 1,
+            _ => return (false, steps),
+        }
+    }
+    (true, steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CLI: &str = "claude-cli/2.1.269 (external, cli)";
+    const SDK: &str = "claude-cli/2.1.269 (external, sdk-cli)";
+
+    #[test]
+    fn a_star_matches_any_run_and_a_question_mark_one_character() {
+        assert!(matches("claude-cli/*", CLI));
+        assert!(matches("claude-cli/*", SDK));
+        assert!(matches("*sdk-cli*", SDK));
+        assert!(!matches("*sdk-cli*", CLI));
+        assert!(matches("claude-cli/2.1.2?? (external, cli)", CLI));
+        assert!(
+            !matches("claude-cli/2.1.2? (external, cli)", CLI),
+            "one mark is one character"
+        );
+        assert!(matches("*", ""), "a star alone matches the empty value");
+        assert!(!matches("?", ""), "a mark needs a character");
+        assert!(
+            matches("CLAUDE-CLI/*", CLI),
+            "ASCII case folds as LIKE folds it"
+        );
+        assert!(
+            matches("*cli)", CLI),
+            "a star before a literal tail backtracks to the last fit"
+        );
+        assert!(
+            matches("a*b*c", "aXbYbZc"),
+            "a later star resumes after the earlier one's last fit"
+        );
+        assert!(
+            !matches("a*b*c", "aXbYbZ"),
+            "and fails when the tail never lands"
+        );
+    }
+
+    /// A pattern of many stars against a value that cannot match is where a split-per-star matcher goes
+    /// exponential; the two-cursor walk answers in `pattern * value` steps at most.
+    #[test]
+    fn a_failing_pattern_of_many_stars_answers_in_bounded_steps() {
+        let pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+        let value = "a".repeat(30);
+        let (matched, steps) = matches_counted(pattern, &value);
+        assert!(!matched);
+        assert!(
+            steps < 100_000,
+            "{steps} steps for a fifteen-star pattern over thirty characters"
+        );
+        let alternating = "*?*?*?*?*?*?*?*?*?*?*?*?*?*?*?*?b";
+        let (matched, steps) = matches_counted(alternating, &"a".repeat(32));
+        assert!(!matched);
+        assert!(
+            steps < 100_000,
+            "{steps} steps for an alternating pattern over thirty-two characters"
+        );
+    }
+
+    #[test]
+    fn a_pattern_list_is_bounded_in_length_and_in_count() {
+        assert!(within_bounds(&vec!["claude-cli/*".to_string(); 32]));
+        assert!(
+            !within_bounds(&vec!["claude-cli/*".to_string(); 33]),
+            "one entry too many"
+        );
+        assert!(within_bounds(&["a".repeat(256)]));
+        assert!(!within_bounds(&["a".repeat(257)]), "one character too many");
+        assert!(within_bounds(&[]));
+    }
+
+    #[test]
+    fn a_pattern_with_no_wildcard_is_an_exact_match() {
+        assert!(matches(CLI, CLI));
+        assert!(!matches(CLI, SDK));
+        assert!(
+            !matches("claude-cli/2.1.269", CLI),
+            "no implicit trailing star"
+        );
+    }
+
+    #[test]
+    fn a_backslash_quotes_the_next_character() {
+        assert!(matches(r"a\*b", "a*b"));
+        assert!(!matches(r"a\*b", "aXb"));
+        assert!(matches(r"a\?b", "a?b"));
+        assert!(!matches(r"a\?b", "aXb"));
+        assert!(matches(r"a\\b", r"a\b"));
+        assert!(matches(r"a\", "a"), "a trailing backslash quotes nothing");
+    }
+
+    #[test]
+    fn the_like_form_maps_the_grammar_onto_sqlite_and_escapes_its_own_wildcards() {
+        assert_eq!(to_like("claude-cli/*"), ("claude-cli/%".into(), '\\'));
+        assert_eq!(
+            to_like("claude-cli/2.1.2??"),
+            ("claude-cli/2.1.2__".into(), '\\')
+        );
+        assert_eq!(to_like("100%_sure"), (r"100\%\_sure".into(), '\\'));
+        assert_eq!(
+            to_like(r"a\*b"),
+            ("a*b".into(), '\\'),
+            "a quoted star is a plain star to LIKE"
+        );
+        assert_eq!(
+            to_like(r"a\\b"),
+            (r"a\\b".into(), '\\'),
+            "a quoted backslash is escaped for LIKE"
+        );
+        assert_eq!(to_like(CLI), (CLI.into(), '\\'), "no wildcard, no change");
+    }
+
+    /// The two halves agree: what `matches` accepts, SQLite's `LIKE ... ESCAPE` accepts too.
+    #[test]
+    fn the_like_form_and_the_memory_match_agree_on_sqlite() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let values = [
+            CLI,
+            SDK,
+            "curl/8.5.0",
+            "a*b",
+            "a?b",
+            r"a\b",
+            "100%_sure",
+            "",
+        ];
+        let patterns = [
+            "claude-cli/*",
+            "*sdk-cli*",
+            "claude-cli/2.1.2??*",
+            r"a\*b",
+            r"a\?b",
+            r"a\\b",
+            "100%_sure",
+            "*",
+            "?",
+            CLI,
+            "curl/8.5.?",
+        ];
+        for pattern in patterns {
+            let (like, escape) = to_like(pattern);
+            for value in values {
+                let sql: bool = conn
+                    .query_row(
+                        "SELECT ?1 LIKE ?2 ESCAPE ?3",
+                        rusqlite::params![value, like, escape.to_string()],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    sql,
+                    matches(pattern, value),
+                    "pattern {pattern:?} over {value:?}"
+                );
+            }
+        }
+    }
+}
