@@ -235,8 +235,12 @@ fn the_keyed_read_is_planned_on_an_index_that_starts_with_the_key() {
         })
         .unwrap();
     assert!(
-        plan.iter().any(|step| step.contains("rollups_hourly_key")),
-        "one key's week costs its own rows, not a scan of every key's hours: {plan:?}"
+        plan.iter().any(|step| {
+            step.contains("rollups_hourly_key")
+                && step.contains("key_id=? AND key_generation=? AND hour>? AND hour<?")
+        }),
+        "one key's week costs its own rows: the seek is bound on the pair and the range, not on the id alone \
+         with the rest left to a filter: {plan:?}"
     );
 }
 

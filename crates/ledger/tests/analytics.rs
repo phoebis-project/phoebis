@@ -383,6 +383,16 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         "an id no live key holds selects nothing bare"
     );
     assert_eq!(
+        sum(&["desktop@"]),
+        0,
+        "a selector with nothing after the `@` names no generation and selects nothing"
+    );
+    assert_eq!(
+        sum(&["k1@abc"]),
+        0,
+        "a generation that is not a number selects nothing, the live rows included"
+    );
+    assert_eq!(
         sum(&["-"]),
         1,
         "the reserved id selects the unattributed rows whatever their generation"

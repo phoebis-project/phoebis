@@ -28,8 +28,8 @@ const DAY_MS: i64 = 86_400_000;
 
 pub const USAGE_PATH: &str = "/v1/usage";
 
-/// One window of a key's own usage, summed from the hourly rollups under its `key_id`; probe rows are left out
-/// as the key list's totals leave them out.
+/// One window of a key's own usage, summed from the hourly rollups filed under its `(key_id, key_generation)`;
+/// probe rows are left out as the key list's totals leave them out.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct KeyUsageWindow {
     pub from: i64,
