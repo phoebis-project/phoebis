@@ -250,8 +250,9 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Raw span of every `cache_control` value the Messages API reads: the top-level member, one per `system[]` and
-/// `tools[]` entry, and one per `messages[].content[]` block, in body order. One pass; a member of that name
-/// anywhere else (a tool schema, a tool input) is skipped with the value that holds it.
+/// `tools[]` entry, one per `messages[].content[]` block, and one per block inside a content block's own
+/// `content` array (a `tool_result`'s blocks), in body order. One pass; a member of that name anywhere else (a
+/// tool schema, a tool input, a block nested deeper than that) is skipped with the value that holds it.
 pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError> {
     let mut s = Scanner {
         body,
@@ -282,7 +283,7 @@ pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError>
                 s.value(false)?;
                 spans.push((start, s.pos));
             }
-            b"system" | b"tools" => block_array(&mut s, &mut spans)?,
+            b"system" | b"tools" => block_array(&mut s, &mut spans, false)?,
             b"messages" => message_array(&mut s, &mut spans)?,
             _ => s.value(false)?,
         }
@@ -300,8 +301,13 @@ pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError>
 
 /// The array behind `system` or `tools`, or a `messages[]` element's `content`: each object entry's own
 /// members are scanned for `cache_control`; anything not an array is skipped whole, as a value at that position
-/// with the wrong shape gives the scanner nothing to walk.
-fn block_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+/// with the wrong shape gives the scanner nothing to walk. `inner` says whether this array is already a block's
+/// own `content`, in which case its objects' `content` is skipped whole.
+fn block_array(
+    s: &mut Scanner<'_>,
+    spans: &mut Vec<(usize, usize)>,
+    inner: bool,
+) -> Result<(), CchError> {
     s.ws();
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
@@ -314,7 +320,7 @@ fn block_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(
     loop {
         s.ws();
         if s.body.get(s.pos) == Some(&b'{') {
-            block_object(s, spans)?;
+            block_object(s, spans, inner)?;
         } else {
             s.value(false)?;
         }
@@ -330,9 +336,14 @@ fn block_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(
     Ok(())
 }
 
-/// One `system[]`, `tools[]`, or content-block object: its own `cache_control` member is recorded, every other
-/// member is skipped whole.
-fn block_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+/// One `system[]`, `tools[]`, or content-block object: its own `cache_control` member is recorded; its `content`
+/// member, when it is not itself inside one, is walked one level as `block_array` walks `messages[].content`;
+/// every other member is skipped whole.
+fn block_object(
+    s: &mut Scanner<'_>,
+    spans: &mut Vec<(usize, usize)>,
+    inner: bool,
+) -> Result<(), CchError> {
     s.pos += 1;
     s.ws();
     if s.eat(b'}') {
@@ -346,12 +357,16 @@ fn block_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<
             return Err(CchError::Json(s.pos));
         }
         s.ws();
-        if &s.body[ks + 1..ke - 1] == b"cache_control" {
-            let start = s.pos;
-            s.value(false)?;
-            spans.push((start, s.pos));
-        } else {
-            s.value(false)?;
+        match &s.body[ks + 1..ke - 1] {
+            b"cache_control" => {
+                let start = s.pos;
+                s.value(false)?;
+                spans.push((start, s.pos));
+            }
+            // A `tool_result` is the one block the API gives a `content` array of blocks, and its `type` may
+            // follow `content` in body order, so the member is read on its name alone and one level only.
+            b"content" if !inner => block_array(s, spans, true)?,
+            _ => s.value(false)?,
         }
         s.ws();
         if s.eat(b',') {
@@ -411,7 +426,7 @@ fn message_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Resul
         }
         s.ws();
         if &s.body[ks + 1..ke - 1] == b"content" {
-            block_array(s, spans)?;
+            block_array(s, spans, false)?;
         } else {
             s.value(false)?;
         }
@@ -867,6 +882,21 @@ mod tests {
                 br#"{"type":"ephemeral"}"#.as_slice(),
             ],
             "the tool's own marker is found, the one inside its input_schema is skipped with the schema"
+        );
+    }
+
+    #[test]
+    fn cache_control_spans_walks_one_level_into_a_tool_results_content_and_no_further() {
+        let body = br#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"b"}],"cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"c","content":[{"type":"text","content":[{"cache_control":{"type":"ephemeral"}}]}]}]}],"model":"m"}"#;
+        let spans = cache_control_spans(body).unwrap();
+        let texts: Vec<&[u8]> = spans.iter().map(|(s, e)| &body[*s..*e]).collect();
+        assert_eq!(
+            texts,
+            vec![
+                br#"{"type":"ephemeral"}"#.as_slice(),
+                br#"{"type":"ephemeral","ttl":"1h"}"#.as_slice(),
+            ],
+            "the marker inside the tool result is found ahead of the block's own; one two levels down is skipped"
         );
     }
 }

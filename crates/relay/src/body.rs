@@ -170,8 +170,9 @@ pub fn set_cache_ttl(body: &mut Vec<u8>, ttl: CacheTtl) -> Result<TtlEdit, Relay
     Ok(TtlEdit::Applied(changed))
 }
 
-/// How many `cache_control` members a decoder reads at the four positions the Messages API takes them from:
-/// the top level, `system[]`, `tools[]`, and `messages[].content[]`. `None` where the body does not parse.
+/// How many `cache_control` members a decoder reads at the five positions the Messages API takes them from:
+/// the top level, `system[]`, `tools[]`, `messages[].content[]`, and the blocks inside a content block's own
+/// `content`. `None` where the body does not parse.
 fn schema_markers(body: &[u8]) -> Option<usize> {
     let root = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let root = root.as_object()?;
@@ -191,7 +192,17 @@ fn schema_markers(body: &[u8]) -> Option<usize> {
         .map_or(0, |messages| {
             messages
                 .iter()
-                .map(|message| blocks(message.get("content")))
+                .map(|message| {
+                    let content = message.get("content");
+                    // The walk reads a `tool_result`'s own blocks one level down, so this count has to as
+                    // well, or the two would disagree on every such body and the edit would be refused.
+                    let nested: usize = content
+                        .and_then(serde_json::Value::as_array)
+                        .map_or(0, |list| {
+                            list.iter().map(|block| blocks(block.get("content"))).sum()
+                        });
+                    blocks(content) + nested
+                })
                 .sum()
         });
     Some(

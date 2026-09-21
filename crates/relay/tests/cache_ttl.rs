@@ -74,6 +74,37 @@ fn without_markers(native: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn a_marker_inside_a_tool_results_own_content_is_rewritten_like_every_other() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"main":"1h"}"#),
+    )
+    .await;
+    let native = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]}],"stream":true}"#;
+    let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
+    set_header(&mut req, "x-claude-code-session-id", "s1");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert_eq!(
+        markers(&sent.body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 2],
+        "the system marker and the one inside the tool result both carry the hour"
+    );
+    assert!(
+        beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "the edit stood, so the hour's beta travels with it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_body() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

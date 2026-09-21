@@ -75,17 +75,18 @@ again.
 ### Cache TTL
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object
-carries `enabled` (default `false`), `main` (default `1h`)
-and `subagent` (default `5m`) in `5m` or `1h`, `in_overage` (default unset), and `models`, a list of `{model,
-main, subagent}` overrides on canonical ids. With it on, every `cache_control` marker in the body is rewritten to
-the TTL for the request's agent and model, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body
-is one hour, and the `cch` hash is restamped; the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` then has no effect
-through the pool. A request that carries no marker at all gets the API's top-level `cache_control` member with
-the TTL instead, and a request with any marker keeps its count. `in_overage` takes over while the write costs
-money: the serving upstream is in overage, or is an API-key upstream. The TTL is priced per attempt, so a request
-that fails over reads its destination's state, and a request without an agent id reads as the main conversation.
-Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's
-lifetime and price alone. The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
+carries `enabled` (default `false`), `main` (default
+`1h`) and `subagent` (default `5m`) in `5m` or `1h`, `in_overage` (default unset), and `models`, a list of
+`{model, main, subagent}` overrides on canonical ids. With it on, every `cache_control` marker in the body is
+rewritten to the TTL for the request's agent and model, the ones inside a tool result's own content included, the
+`extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped;
+the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` then has no effect through the pool. A request that carries no
+marker at all gets the API's top-level `cache_control` member with the TTL instead, and a request with any marker
+keeps its count. `in_overage` takes over while the write costs money: the serving upstream is in overage, or is
+an API-key upstream. The TTL is priced per attempt, so a request that fails over reads its destination's state,
+and a request without an agent id reads as the main conversation. Mixed TTLs across a session's requests are fine:
+the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of each choice
+is on the [keepalive page](keepalive.md#the-cost-reference).
 
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pl]
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pd]
