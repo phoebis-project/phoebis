@@ -28,17 +28,20 @@ automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all t
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
-Optional, and no longer needed for the wire shape. Set to `1`, it switches the client to the full first-party
-request shape and switches off gateway model discovery. Without it the client sends the reduced shape, and the
-router restores, toward `api.anthropic.com`, the fields the reduced shape lacks: the `cch` billing hash,
-`x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when absent, and the whole attribution line
-when `CLAUDE_CODE_ATTRIBUTION_HEADER` switched it off. Two things are not restored, because the router cannot:
-the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true`
-selects it) and the global cache scope on the static system block. The restoration applies to a request whose
-`User-Agent` is `claude-cli/` followed by a version the client itself would spell (digits and dots, optionally
-`-` and a prerelease suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
-a keepalive probe replays a request as the client sent it.
-The variable is an internal one that a later client build may drop.
+Optional, and no longer needed for the wire shape. Set to `1`, it switches the client to the full first-party request
+shape and switches off gateway model discovery. Without it the client sends the reduced shape, and the router restores,
+toward `api.anthropic.com`, the fields the reduced shape lacks: the `cch` billing hash, `x-client-request-id`,
+`cc_prev_req`, and `cc_prompt_id`, each only when absent, and the whole attribution line when
+`CLAUDE_CODE_ATTRIBUTION_HEADER` switched it off. Two things are not restored, because the router cannot: the
+`advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true` selects it) and
+the global cache scope on the static system block. The restoration applies to a request whose `User-Agent` is
+`claude-cli/` followed by a version the client itself would spell (digits and dots, optionally `-` and a prerelease
+suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
+a keepalive probe replays a request as the client sent it. Two self-checks guard the
+restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
+`cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
+client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). The variable is an
+internal one that a later client build may drop.
 
 ### DISABLE_TELEMETRY
 

@@ -63,6 +63,37 @@ pub fn cc_version(cli_version: &str, prompt_chars: [char; 3]) -> String {
     format!("{cli_version}.{}", &hex[0..3])
 }
 
+/// How a stamped line's `cc_version` relates to the version the user agent names: the client's own version
+/// bare, the client's version with a three-hex suffix, or another version altogether.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CarriedVersion<'a> {
+    Bare,
+    Suffixed(&'a str),
+    Other,
+}
+
+/// The `cc_version` value of a stamped line, read against `client_version`; `None` for a line with no
+/// `cc_version` field. No free-form splitting: a value is bare when it equals the client's version, suffixed
+/// when it is the client's version, a dot, and three hex characters, and `Other` otherwise.
+pub(crate) fn carried_version<'a>(
+    text: &'a str,
+    client_version: &str,
+) -> Option<CarriedVersion<'a>> {
+    let value = text
+        .strip_prefix("x-anthropic-billing-header: ")?
+        .split("; ")
+        .find_map(|field| field.strip_prefix("cc_version="))?
+        .trim_end_matches(';');
+    if value == client_version {
+        return Some(CarriedVersion::Bare);
+    }
+    let suffix = value
+        .strip_prefix(client_version)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .filter(|tail| tail.len() == 3 && tail.bytes().all(|b| b.is_ascii_hexdigit()));
+    Some(suffix.map_or(CarriedVersion::Other, CarriedVersion::Suffixed))
+}
+
 /// The version half of a `claude-cli/` user agent, accepted only as the client's own spelling of one: digits
 /// and dots, then at most one `-` and a prerelease suffix of ASCII letters, digits, dots, and hyphens. A header
 /// value admits `;` and `=`, so an unconstrained version could smuggle a `;`-separated field of its own
@@ -276,6 +307,69 @@ mod tests {
     #[test]
     fn cc_version_hashes_the_salt_the_prompt_characters_and_the_client_version() {
         assert_eq!(cc_version("2.1.269", ['0', '0', '0']), "2.1.269.517");
+    }
+
+    /// The formula as the 2.1.278 binary computes it (read 2026-09-21): characters 4, 7, and 20 of the first
+    /// user message's text, `0` for a missing one, the salt, the version, sha256, three hex characters. The
+    /// prompt below is longer than 20 characters, so every index lands on a real character.
+    #[test]
+    fn the_suffix_of_a_long_prompt_reproduces_the_clients_formula() {
+        let prompt = "Explain how the relay restores the billing line for a reduced-shape request.";
+        let chars: Vec<char> = prompt.chars().collect();
+        assert_eq!((chars[4], chars[7], chars[20]), ('a', ' ', 'y'));
+        assert_eq!(cc_version("2.1.278", ['a', ' ', 'y']), "2.1.278.233");
+        assert_eq!(cc_version("2.1.269", ['a', ' ', 'y']), "2.1.269.3ef");
+        let short = "Explain";
+        let padded: Vec<char> = short
+            .chars()
+            .chain(std::iter::repeat('0'))
+            .take(21)
+            .collect();
+        assert_eq!(
+            (padded[4], padded[7], padded[20]),
+            ('a', '0', '0'),
+            "a short prompt pads with zeros"
+        );
+    }
+
+    #[test]
+    fn a_carried_version_is_read_against_the_clients_own_version() {
+        let line = |v: &str| {
+            format!("x-anthropic-billing-header: cc_version={v}; cc_entrypoint=cli; cch=9b244;")
+        };
+        assert_eq!(
+            carried_version(&line("2.1.269"), "2.1.269"),
+            Some(CarriedVersion::Bare),
+            "a three-digit patch is not a suffix"
+        );
+        assert_eq!(
+            carried_version(&line("2.1.269.517"), "2.1.269"),
+            Some(CarriedVersion::Suffixed("517"))
+        );
+        assert_eq!(
+            carried_version(&line("2.1.269-rc.1.abc"), "2.1.269-rc.1"),
+            Some(CarriedVersion::Suffixed("abc")),
+            "a prerelease client's suffix follows its whole version"
+        );
+        assert_eq!(
+            carried_version(&line("2.1.300.517"), "2.1.269"),
+            Some(CarriedVersion::Other),
+            "another version is the hash check's to judge"
+        );
+        assert_eq!(
+            carried_version(&line("2.1.269.51"), "2.1.269"),
+            Some(CarriedVersion::Other),
+            "two characters is not a suffix"
+        );
+        assert_eq!(
+            carried_version(&line("2.1.269.xyz"), "2.1.269"),
+            Some(CarriedVersion::Other),
+            "and neither is a non-hex tail"
+        );
+        assert_eq!(
+            carried_version("x-anthropic-billing-header: cc_entrypoint=cli;", "2.1.269"),
+            None
+        );
     }
 
     #[test]

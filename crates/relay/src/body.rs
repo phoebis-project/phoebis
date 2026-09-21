@@ -1,7 +1,7 @@
 //! The in-place body edits: the bound account's identity, the model the upstream is asked for, the billing hash
 //! that has to follow both, and the first-party fields a reduced-shape request lacks.
 
-use crate::billing::{restore_billing_line, Restore};
+use crate::billing::{restore_billing_line, CarriedVersion, Restore};
 use crate::identity::is_valid_id;
 use crate::memory::Injected;
 use crate::{CacheTtl, RelayError};
@@ -52,6 +52,15 @@ pub struct NativeEdit<'a> {
     pub cache_ttl: Option<CacheTtl>,
     /// What the TTL rewrite does to a body carrying no marker at all.
     pub markerless: Markerless,
+    /// The `claude-cli/` version of the user agent and the prompt characters `BodyFacts` read, for the
+    /// version-suffix check; `None` for a caller the check does not apply to.
+    pub version_check: Option<VersionCheck<'a>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VersionCheck<'a> {
+    pub client_version: &'a str,
+    pub prompt_chars: [char; 3],
 }
 
 /// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
@@ -109,6 +118,13 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         // client's own hash over an edited body is known to satisfy the upstream, so nothing is sent until the
         // router is re-pinned; the caller still learns which kind of drift it was.
         return Err(RelayError::ClientDrift { kind: client_drift });
+    }
+    if let Some(check) = edit.version_check {
+        if carries_a_stamp(body) {
+            if let Some(kind) = version_drift(body, check) {
+                return Err(RelayError::ClientDrift { kind });
+            }
+        }
     }
     // An API-key account has no identity to splice: the measured client never carried one for it.
     let account_uuid_replaced = match edit.account_uuid {
@@ -363,6 +379,22 @@ fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
     Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
 }
 
+/// Whether the version suffix the client stamped reproduces from the body's own prompt and the version its
+/// user agent names. A line with no `cc_version`, a bare version with no suffix, or a version other than the
+/// agent's is not this drift: the first two carry nothing to check, and the third is the hash check's to judge.
+fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
+    let (start, end) = phoebis_cch::string_member_span(body, &["system", "0", "text"])?;
+    // The span is the JSON token with its quotes and escapes; the billing line is its decoded text.
+    let text = serde_json::from_slice::<String>(&body[start..end]).ok()?;
+    let CarriedVersion::Suffixed(suffix) =
+        crate::billing::carried_version(&text, check.client_version)?
+    else {
+        return None;
+    };
+    let expected = crate::billing::cc_version(check.client_version, check.prompt_chars);
+    (expected.rsplit('.').next() != Some(suffix)).then_some("version_suffix")
+}
+
 /// Whether the billing block claims a hash, readable by `find_cch` or not. A first-party client stamps one; a
 /// non-first-party billing block carries the entrypoint alone and leaves the body free to be edited.
 fn carries_a_stamp(body: &[u8]) -> bool {
@@ -445,6 +477,7 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
+                version_check: None,
             },
         )
         .expect("a JSON object is editable");
@@ -467,6 +500,7 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
+                    version_check: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -486,6 +520,7 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
+                    version_check: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -504,6 +539,7 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
+                    version_check: None,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -522,6 +558,7 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
+                version_check: None,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -540,6 +577,7 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
+                version_check: None,
             },
         )
         .expect("a JSON object is editable");
@@ -563,6 +601,7 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
+                    version_check: None,
                 },
             ),
             Err(RelayError::NotAnObject)

@@ -197,9 +197,9 @@ one.
 agent is blocked on an answer; it resolves on the session's next request, the first sign the user replied, or
 when the session expires.
 
-**Client drift** fires when the billing-hash self-check fails for a client request, because the client stamped a
-hash this build cannot reproduce; re-pinning the router to that client build and resolving the event by hand
-clears it.
+**Client drift** fires when a self-check fails for a client request: the client stamped a billing hash, or a
+`cc_version` suffix, this build cannot reproduce; re-pinning the router to that client build and resolving the event by
+hand clears it.
 
 **Funding required** fires when an API-key upstream is refused for billing reasons and resolves when an operator
 clears the funding flag.

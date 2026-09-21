@@ -263,18 +263,99 @@ async fn local_rejections_are_anthropic_shaped() {
 
 #[tokio::test]
 async fn a_client_with_a_drifted_hash_is_refused() {
-    a_drifted_stamp_is_refused("cch=00000").await;
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen("cch=9b244", "cch=00000", 1)
+        .into_bytes();
+    a_drifted_stamp_is_refused(drifted, "hash").await;
 }
 
 #[tokio::test]
 async fn an_uppercase_cch_counts_as_drift() {
-    a_drifted_stamp_is_refused("cch=9B244").await;
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen("cch=9b244", "cch=9B244", 1)
+        .into_bytes();
+    a_drifted_stamp_is_refused(drifted, "hash").await;
 }
 
-/// A first-party body whose billing hash this build cannot reproduce never reaches the upstream: the client
-/// moved past the pinned profile, the caller gets a 400 that names the drift, and the outcome carries it for
-/// the ledger.
-async fn a_drifted_stamp_is_refused(stamp: &str) {
+/// The edited fixture, re-signed so the hash check passes and the suffix check is what decides.
+fn resigned(from: &str, to: &str) -> Vec<u8> {
+    let edited = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen(from, to, 1);
+    phoebis_cch::sign(edited.as_bytes()).unwrap()
+}
+
+/// The fixture's line carries `cc_version=2.1.269.517`, the suffix of a prompt of three zeros under 2.1.269. A
+/// suffix the client computed by another rule is refused before any account is tried, as a drifted hash is;
+/// the body carries a valid hash, so the refusal is the suffix check's own.
+#[tokio::test]
+async fn a_version_suffix_this_build_cannot_reproduce_is_refused() {
+    a_drifted_stamp_is_refused(
+        resigned("cc_version=2.1.269.517", "cc_version=2.1.269.abc"),
+        "version_suffix",
+    )
+    .await;
+}
+
+/// A bare version with no suffix has nothing to check and relays.
+#[tokio::test]
+async fn a_bare_version_with_no_suffix_is_not_drift() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let bare = resigned("cc_version=2.1.269.517", "cc_version=2.1.269");
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            &bare,
+            "phoebis-testkey",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(outcome(&resp).client_drift, None);
+    assert_eq!(up.requests().len(), 1, "the body reached the upstream");
+    up.shutdown().await;
+}
+
+/// The guard reaches the comparison on a stamped body: the same edit with the right suffix relays, so the
+/// refusal above is the suffix's and not a `None` from a span the guard could not read.
+#[tokio::test]
+async fn a_stamped_body_with_the_right_suffix_relays() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let same = resigned("cc_version=2.1.269.517", "cc_version=2.1.269.517");
+    assert_eq!(
+        same,
+        body(BodyFixture::FirstParty9b244),
+        "re-signing the unchanged fixture reproduces its own stamp"
+    );
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            &same,
+            "phoebis-testkey",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(up.requests().len(), 1);
+    up.shutdown().await;
+}
+
+/// A first-party body whose billing stamp this build cannot reproduce never reaches the upstream: the client
+/// moved past the pinned profile, the caller gets a 400 that names which check refused it, and the outcome
+/// carries it for the ledger.
+async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -285,13 +366,10 @@ async fn a_drifted_stamp_is_refused(stamp: &str) {
     }])
     .await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
-        .unwrap()
-        .replacen("cch=9b244", stamp, 1);
     let resp = app
         .oneshot(request_from_fixture(
             inference_head(FixtureKind::OauthFirstParty),
-            drifted.as_bytes(),
+            &drifted,
             "phoebis-testkey",
         ))
         .await
@@ -302,7 +380,7 @@ async fn a_drifted_stamp_is_refused(stamp: &str) {
         .get::<RelayOutcome>()
         .expect("a refused request carries its outcome")
         .clone();
-    assert_eq!(outcome.client_drift.as_deref(), Some("hash"));
+    assert_eq!(outcome.client_drift.as_deref(), Some(kind));
     assert_eq!(outcome.attempt, 0);
     assert_eq!(
         resp.headers()

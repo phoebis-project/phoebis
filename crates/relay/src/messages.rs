@@ -56,7 +56,7 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, CacheTtl, CacheTtlPolicy, DriftGuard,
-    Markerless, NativeEdit, RelayError, EXTENDED_TTL_BETA,
+    Markerless, NativeEdit, RelayError, VersionCheck, EXTENDED_TTL_BETA,
 };
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
@@ -104,8 +104,9 @@ pub struct RelayOutcome {
     /// Whether the request was written to the upstream in full, which is what decides if it may have been
     /// billed even when no response came back.
     pub written: bool,
-    /// `hash` when the caller stamped a billing hash this build cannot reproduce, in which case nothing was
-    /// sent upstream. Every client version is relayed, so a version is never drift.
+    /// `hash` when the caller stamped a billing hash this build cannot reproduce, `version_suffix` when its
+    /// `cc_version` suffix does not reproduce from the prompt and the user agent; in either case nothing was
+    /// sent upstream.
     pub client_drift: Option<String>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
@@ -1009,6 +1010,10 @@ impl Relay {
                         diagnostics,
                         cache_ttl: ttl,
                         markerless,
+                        version_check: admitted.restore.as_ref().map(|r| VersionCheck {
+                            client_version: &r.cli_version,
+                            prompt_chars: r.prompt_chars,
+                        }),
                     },
                 )?;
                 if !claims_its_ttl(&edits) {
@@ -1039,7 +1044,7 @@ impl Relay {
                         account = %account.id,
                         drift = %kind,
                         user_agent = %user_agent(admitted.caller),
-                        "a caller stamped a billing hash this build cannot reproduce; re-pin the router to that client",
+                        "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
                     );
                     let outcome = self.outcome(
                         admitted.trace,

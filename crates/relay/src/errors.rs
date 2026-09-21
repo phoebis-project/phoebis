@@ -108,8 +108,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             code: "invalid_body",
             message: "the request body is not a valid Messages request",
         },
-        // Fail closed: a hash the pinned rules cannot reproduce means the client moved past the profile, and
-        // the operator re-pins rather than the relay guessing what the upstream now expects.
+        // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
+        // the profile, and the operator re-pins rather than the relay guessing what the upstream now expects.
+        RelayError::ClientDrift { kind: "version_suffix" } => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "client_drift",
+            message: "the client's version suffix does not reproduce from the prompt and the user agent; re-pin the router to this client version",
+        },
         RelayError::ClientDrift { .. } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
@@ -210,3 +216,27 @@ pub(crate) const UPSTREAM_UNREACHABLE: Failure = Failure {
     code: "upstream_unreachable",
     message: "the upstream did not answer",
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A drifted hash and a drifted version suffix are the same error code, but the message names which check
+    /// failed, so an operator reads the right one off the response without a log line.
+    #[test]
+    fn a_client_drift_message_names_the_kind_that_failed() {
+        let hash = relay_failure(&RelayError::ClientDrift { kind: "hash" });
+        assert_eq!(hash.code, "client_drift");
+        assert!(hash.message.contains("billing hash"), "{}", hash.message);
+        let suffix = relay_failure(&RelayError::ClientDrift {
+            kind: "version_suffix",
+        });
+        assert_eq!(suffix.code, "client_drift");
+        assert!(
+            suffix.message.contains("version suffix"),
+            "{}",
+            suffix.message
+        );
+        assert_ne!(hash.message, suffix.message);
+    }
+}

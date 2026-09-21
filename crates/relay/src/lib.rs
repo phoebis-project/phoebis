@@ -27,7 +27,7 @@ mod stream;
 
 pub use auth::{presented_key, AuthError};
 pub use body::{
-    edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, CACHE_DIAGNOSIS_BETA,
+    edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, VersionCheck, CACHE_DIAGNOSIS_BETA,
     EXTENDED_TTL_BETA,
 };
 pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
