@@ -508,6 +508,15 @@ impl Task {
                         });
                         return;
                     };
+                    // The id is reusable, so the lifetime is the identity: a key created again under the id
+                    // since admission is another key, and the request is refused as a refused id is.
+                    if key.created_at != request.key_generation {
+                        let _ = reply.send(SelectAnswer {
+                            result: SelectResult::Exhausted(Exhaustion::Untimed),
+                            cancel: CancellationToken::new(),
+                        });
+                        return;
+                    }
                     match resolve(&snapshot, key, &request.canonical_model) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {

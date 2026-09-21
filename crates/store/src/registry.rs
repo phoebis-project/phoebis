@@ -267,9 +267,9 @@ pub struct RegistryLoad {
     pub pools: Vec<PoolRow>,
     pub retired_secrets: Vec<RetiredSecret>,
     /// Live keys whose id was deleted with an earlier key before this one was created, in the order the
-    /// change log recorded it. A delete retires the id, so only a database written before that rule holds
-    /// one; the rollups under such an id carry both holders' traffic, and a reader of one key's own usage
-    /// has to start at the current holder.
+    /// change log recorded it. The earlier holder's rollup rows from before the ledger carried a generation
+    /// sit at generation 0 under the same id, so the startup stamp starts such a key's own rows at its
+    /// creation rather than claiming every unstamped row of the id.
     pub reused_key_ids: Vec<String>,
 }
 
@@ -594,15 +594,16 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
-        if tx.query_row(
-            "SELECT COUNT(*) FROM api_key_tombstones WHERE id = ?1",
+        // The id is reusable and the generation is this stamp, so a key created inside the millisecond its
+        // previous holder was created in must not share it: the change log remembers every create under the
+        // id (never pruned, served by `registry_changes_target`), and the stamp goes one past the last one
+        // when the clock has not moved.
+        let previous: Option<i64> = tx.query_row(
+            "SELECT MAX(at) FROM registry_changes WHERE target = ?1 AND kind = 'key_created'",
             params![row.id],
-            |r| r.get::<_, i64>(0),
-        )? > 0
-        {
-            return Err(StoreError::KeyIdRetired(row.id.clone()));
-        }
-        let now = now_ms();
+            |r| r.get(0),
+        )?;
+        let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL)",
@@ -732,12 +733,6 @@ impl Store {
         }
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
         let now = now_ms();
-        // The rollups stay under the id, so the id stays with them: a key created under it later would read
-        // the deleted holder's usage as its own.
-        tx.execute(
-            "INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES (?1, ?2)",
-            params![id, now],
-        )?;
         record_change(&tx, now, actor, "key_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())

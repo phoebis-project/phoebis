@@ -249,6 +249,36 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
 }
 
 #[tokio::test]
+async fn a_request_admitted_under_a_key_that_was_replaced_under_its_id_is_refused() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let admitted = request(&handle, Some("s1"), 1_000);
+    // The key is deleted and created again under its id before the selection runs: another key, whatever
+    // the id says.
+    let mut again = store.api_key("k").unwrap().unwrap();
+    again.secret_digest = store.api_key_digest("phoebis-reissued").to_vec();
+    store.delete_api_key("k", "test").unwrap();
+    store.insert_api_key(&again, "test").unwrap();
+    handle.reload().await.unwrap();
+    assert_ne!(
+        store.api_key("k").unwrap().unwrap().created_at,
+        admitted.key_generation,
+        "the store stamped the replacement with its own generation"
+    );
+    let answer = handle.select(stale(admitted)).await.unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Exhausted(Exhaustion::Untimed)),
+        "refused as a refused id is, never resolved against the replacement: {:?}",
+        answer.result
+    );
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "no pin was written under the replacement key"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));

@@ -19,7 +19,7 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, EvidenceSource, Exhaustion, OverageEvidence, PinRef, Report, ResolveError,
+    resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Report, ResolveError,
     RouterHandle, SelectRequest, SelectResult, Selection,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Store};
@@ -541,6 +541,14 @@ impl Relay {
         let key = match &probe {
             // Before the body, as for a caller: an unauthenticated probe never holds the request limit either.
             Some(probe) => match snapshot.authenticate_id(&probe.key_id, received_at) {
+                // A recipe retained under an earlier key of this id is that key's; its probe never runs in
+                // the replacement's pool.
+                Ok(key) if key.created_at != probe.key_generation => {
+                    let refusal = KeyRefusal::Replaced;
+                    tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                    trace.observed(None, None, &parts.headers, Bytes::new(), false, 0);
+                    return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                }
                 Ok(key) => key.clone(),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");

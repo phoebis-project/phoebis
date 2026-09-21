@@ -45,6 +45,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (13, V13),
     (14, V14),
     (15, V15),
+    (16, V16),
 ];
 
 const V2: &str = r#"
@@ -194,8 +195,6 @@ ALTER TABLE pools ADD COLUMN cache_diagnostics INTEGER;
 // window to switch, and a session presenting the retired secret inside it is the operator's own. One row per
 // key, so a second rotation inside the window ends the older secret at once; the grace is a bounded overlap of
 // two secrets, never a chain.
-// A deleted key's id is retired with it: the ledger keeps the rollups under the id, so a key created under it
-// again would read the previous holder's usage through the self-service route.
 const V14: &str = r#"
 CREATE TABLE IF NOT EXISTS api_key_retired_secrets (
   key_id TEXT PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,
@@ -207,13 +206,17 @@ CREATE TABLE IF NOT EXISTS api_key_tombstones (
 );
 "#;
 
-// V14 tombstones only what `delete_api_key` deletes from its landing on, so a store upgraded with keys already
-// deleted before then keeps those ids creatable, and the usage route lets a re-created id read the deleted
-// holder's rollups. `registry_changes` is never pruned, so every `key_deleted` change still on record backfills
-// the tombstone; the `NOT IN` leaves out an id that was deleted and legitimately re-created before this upgrade.
+// V15 backfilled the retirement V14 introduced from the change log; V16 drops the table, so this statement is
+// kept for the version chain alone and inserts into a table V16 removes.
 const V15: &str = r#"
 INSERT OR IGNORE INTO api_key_tombstones (id, deleted_at)
 SELECT target, MAX(at) FROM registry_changes
 WHERE kind = 'key_deleted' AND target NOT IN (SELECT id FROM api_keys)
 GROUP BY target;
+"#;
+
+// The generation every ledger row now carries is what keeps a re-created id from reading an earlier holder's
+// usage, so the retirement that stood in for it goes with its table.
+const V16: &str = r#"
+DROP TABLE IF EXISTS api_key_tombstones;
 "#;

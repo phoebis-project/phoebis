@@ -131,7 +131,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     }
 }
 
-/// Every refused key is the same 401 the static table answered: telling the caller which of the six ways it
+/// Every refused key is the same 401 the static table answered: telling the caller which of the ways it
 /// failed would help an attacker enumerate, so the variant reaches the log line only.
 pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
     Failure {

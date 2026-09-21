@@ -1004,6 +1004,45 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     up.shutdown().await;
 }
 
+/// A probe carries the generation of the key its recipe was retained under; a key created again under the
+/// same id is another key, so the old recipe's probe is refused before anything goes upstream.
+#[tokio::test]
+async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_anything_goes_upstream(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let live = h.store.api_key("desktop").unwrap().unwrap().created_at;
+    let probe = |generation: i64| phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: generation,
+        allow_oauth: true,
+    };
+    let refused = h
+        .relay
+        .probe(probe(live - 1), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(refused.status(), 401);
+    assert_eq!(refused.headers()["x-phoebis-error-code"], "auth_unknown");
+    assert!(
+        up.requests().is_empty(),
+        "nothing reached the upstream under the replacement"
+    );
+    let served = h
+        .relay
+        .probe(probe(live), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(
+        served.status(),
+        200,
+        "the recipe's own generation is served"
+    );
+    up.shutdown().await;
+}
+
 /// A probe's eligibility holds on every attempt: a 429 on the eligible account fails over to nothing when the
 /// only sibling is an unverified `oauth` account, and the probe gets the exhaustion answer.
 #[tokio::test]

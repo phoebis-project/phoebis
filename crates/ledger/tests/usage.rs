@@ -11,7 +11,7 @@ use axum::http::Request;
 use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, RequestRecord, KEY_RANGE_PREDICATE,
 };
-use phoebis_store::{ApiKeyRow, StorageKey, Store, StoreError};
+use phoebis_store::{ApiKeyRow, Store};
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
@@ -488,19 +488,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
 #[tokio::test]
 async fn the_route_reads_the_generation_of_the_key_that_presented_the_secret() {
     let up = FakeUpstream::start(vec![]).await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
-    let h = harness_on(
-        store,
-        Arc::new(LedgerDb::open_in_memory().unwrap()),
-        &up,
-        &[oauth("a", A, 0)],
-        (0, None),
-        LedgerConfig::default(),
-        false,
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
 
     let now = h.clock.load(Ordering::SeqCst);
@@ -522,17 +510,7 @@ async fn the_route_reads_the_generation_of_the_key_that_presented_the_secret() {
         "the holder that filed the row reads it: {body}"
     );
 
-    // The one way a live key shares an id with an earlier holder: a database written before a delete
-    // retired the id. The tombstone is what forbids it now, so the row carrying it is dropped here to
-    // reach the state the upgrade to that rule preserves.
     h.store.delete_api_key("desktop", "test").unwrap();
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute("DELETE FROM api_key_tombstones WHERE id = 'desktop'", [])
-        .unwrap();
-    // The store stamps a key from the wall clock, and the read below is only meaningful where the second
-    // holder's generation differs from the first's.
-    std::thread::sleep(Duration::from_millis(2));
     h.store
         .insert_api_key(&desktop_row(&h.store), "test")
         .unwrap();
@@ -593,8 +571,8 @@ async fn a_deleted_keys_usage_stays_with_it() {
         "the key is gone from the snapshot the route authenticates against"
     );
 
-    assert!(matches!(
-        h.store.insert_api_key(
+    h.store
+        .insert_api_key(
             &ApiKeyRow {
                 id: "desktop".into(),
                 label: "desktop".into(),
@@ -613,9 +591,16 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 last_used_at: None,
             },
             "test",
-        ),
-        Err(StoreError::KeyIdRetired(id)) if id == "desktop"
-    ));
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+
+    let (status, _, body) = get(&app, Some("phoebis-desktop-reissued")).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["windows"]["7d"]["requests"], 0,
+        "the id is the new key's at once, and the earlier holder's row is not its own: {body}"
+    );
 
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
@@ -624,7 +609,27 @@ async fn a_deleted_keys_usage_stays_with_it() {
             .1
             .requests,
         1,
-        "the history stays under an id no key can present"
+        "the history stays under the generation that spent it"
+    );
+}
+
+#[tokio::test]
+async fn an_earlier_holders_unstamped_rows_are_not_the_new_keys_own() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
+    let now = h.clock.load(Ordering::SeqCst);
+    // A row written before the column existed, under an id whose holder was gone when the stamp ran.
+    h.db.insert_request(
+        &request_at("r0", "desktop", now - HOUR_MS),
+        &[used("r0")],
+        None,
+    )
+    .unwrap();
+    let (_, _, body) = get(&app, Some(KEY)).await;
+    assert_eq!(
+        body["windows"]["24h"]["requests"], 0,
+        "generation 0 is nobody's live key: {body}"
     );
 }
 

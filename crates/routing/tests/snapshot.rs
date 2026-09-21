@@ -60,34 +60,6 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
 }
 
 #[test]
-fn a_usage_floor_stands_only_where_an_id_had_a_holder_before_this_one() {
-    let mut load = load(None);
-    load.keys.push(ApiKeyRow {
-        id: "reused".into(),
-        created_at: 9_000,
-        secret_digest: digest_with(&DIGEST_KEY, b"three").to_vec(),
-        ..load.keys[0].clone()
-    });
-    load.reused_key_ids = vec!["reused".into()];
-    let s = RegistrySnapshot::from_load(load, DIGEST_KEY, 0, 1);
-    assert_eq!(
-        s.usage_floor("reused"),
-        Some(9_000),
-        "the current holder's creation is the line between it and the key that had the id before"
-    );
-    assert_eq!(
-        s.usage_floor("k"),
-        None,
-        "the first holder of an id reads from wherever the window starts"
-    );
-    assert_eq!(
-        s.usage_floor("gone"),
-        None,
-        "an id this snapshot does not hold has no floor to report"
-    );
-}
-
-#[test]
 fn a_retired_secret_authenticates_its_key_until_the_grace_ends() {
     let s = RegistrySnapshot::from_load(load(None), DIGEST_KEY, 0, 1);
     assert_eq!(s.authenticate("one", 1_999).unwrap().id, "k");

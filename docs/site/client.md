@@ -101,6 +101,8 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 - the key has expired
 - the key is disabled
 - the key is not in the registry
+- the key was replaced under its id (a request admitted under a key that was deleted and created again before
+  it was routed, or a cache probe for such a key)
 - the key was revoked
 - the key's pool does not exist
 - the key's pool is disabled

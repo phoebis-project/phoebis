@@ -76,12 +76,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 15);
+    assert_eq!(store.schema_version().unwrap(), 16);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        15,
+        16,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -104,7 +104,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        15,
+        16,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -129,7 +129,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        15,
+        16,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -155,7 +155,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        15,
+        16,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -174,7 +174,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        15,
+        16,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -194,7 +194,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        15,
+        16,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -225,14 +225,10 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
         .unwrap();
     store.delete_api_key("back", "test").unwrap();
-    // The retirement the delete writes is what a database from before that rule does not have, and it is
-    // what refuses the second create, so the row goes and the id is created again as it was then.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute("DELETE FROM api_key_tombstones WHERE id = 'back'", [])
-        .unwrap();
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
         .unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
         "UPDATE api_keys SET created_at = (SELECT at FROM registry_changes WHERE target = 'back' AND kind = 'key_deleted' ORDER BY id DESC LIMIT 1) WHERE id = 'back'",
         [],
@@ -247,7 +243,22 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
 }
 
 #[test]
-fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
+fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgraded_one() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .unwrap();
+    assert_eq!(
+        store.api_key("back").unwrap().unwrap().prefix,
+        phoebis_store::key_prefix("phoebis-back-reissued")
+    );
+
+    // A store that retired ids: the table is dropped by the upgrade and the id is creatable again.
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -256,71 +267,68 @@ fn a_v14_stores_already_deleted_keys_are_tombstoned_by_the_upgrade_to_v15() {
     store
         .insert_api_key(&key(&store, "old", "main", "phoebis-old-secret"), "test")
         .unwrap();
-    store
-        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
-        .unwrap();
-    store
-        .insert_api_key(&key(&store, "kept", "main", "phoebis-kept-secret"), "test")
-        .unwrap();
-    // Deleted through the store, so it carries the tombstone a V14 store already wrote as well as the change
-    // row the backfill reads; its id is never recreated, so the backfill selects it and collides.
-    store.delete_api_key("kept", "test").unwrap();
+    store.delete_api_key("old", "test").unwrap();
     drop(store);
-    // What a database written before the tombstone backfill existed looks like on disk: `old` was deleted
-    // and its id never reused, `back` was deleted at 900 and created again at 1500, before the upgrade ran,
-    // so its change log reads created, deleted, created.
-    // `kept`'s tombstone stays, dated by a sentinel the backfill would overwrite if `OR IGNORE` ever became
-    // a plain insert.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "UPDATE api_key_tombstones SET deleted_at = 1 WHERE id = 'kept'; \
-         DELETE FROM api_key_tombstones WHERE id != 'kept'; \
-         UPDATE meta SET value = '14' WHERE key = 'schema_version'; \
-         DELETE FROM api_keys WHERE id = 'old'; \
-         UPDATE api_keys SET created_at = 1500 WHERE id = 'back'; \
-         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1000, 'test', 'key_deleted', 'old', '{}'); \
-         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (900, 'test', 'key_deleted', 'back', '{}'); \
-         INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (1500, 'test', 'key_created', 'back', '{}');",
+        "CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL); \
+         INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES ('old', 1); \
+         UPDATE meta SET value = '15' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 15);
-    assert!(matches!(
-        migrated.insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test"),
-        Err(StoreError::KeyIdRetired(id)) if id == "old"
-    ));
-    assert!(matches!(
-        migrated.insert_api_key(&key(&migrated, "kept", "main", "phoebis-kept-reissued"), "test"),
-        Err(StoreError::KeyIdRetired(id)) if id == "kept"
-    ));
-    let back = migrated.api_key("back").unwrap().unwrap();
-    assert_eq!(back.id, "back");
-    assert!(
-        back.created_at > 900,
-        "the id's holder was created after the holder before it was deleted"
-    );
-    assert_eq!(
-        migrated.load_registry().unwrap().reused_key_ids,
-        vec!["back".to_string()],
-        "only the id whose log reads created, deleted, created is a reused one: a read of that key's own \
-         usage starts at its creation, while `old` and `kept` are no longer live keys at all"
-    );
-    assert!(matches!(
-        migrated.insert_api_key(&key(&migrated, "back", "main", "phoebis-back-reissued"), "test"),
-        Err(StoreError::Sqlite(_))
-    ));
-    drop(migrated);
+    assert_eq!(migrated.schema_version().unwrap(), 16);
+    migrated
+        .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
+        .unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(
-        conn.query_row(
-            "SELECT deleted_at FROM api_key_tombstones WHERE id = 'kept'",
+    let tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'api_key_tombstones'",
             [],
-            |r| r.get::<_, i64>(0)
+            |r| r.get(0),
         )
-        .unwrap(),
-        1,
-        "the surviving tombstone is the one that stands; the backfill only fills what is missing"
+        .unwrap();
+    assert_eq!(tables, 0, "the upgrade dropped the table");
+}
+
+#[test]
+fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage_key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &storage_key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    // The first holder's create is moved a minute past the wall clock: the state the second insert sees when
+    // it lands in the first's millisecond, pinned rather than raced for.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE registry_changes SET at = at + 60000 WHERE target = 'back' AND kind = 'key_created'",
+        [],
+    )
+    .unwrap();
+    let first: i64 = conn
+        .query_row(
+            "SELECT MAX(at) FROM registry_changes WHERE target = 'back' AND kind = 'key_created'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .unwrap();
+    let second = store.api_key("back").unwrap().unwrap().created_at;
+    assert_eq!(second, first + 1, "one millisecond, two generations");
+    assert_eq!(
+        store.load_registry().unwrap().reused_key_ids,
+        vec!["back".to_string()],
+        "the change log still names the id as one with an earlier holder"
     );
 }
 

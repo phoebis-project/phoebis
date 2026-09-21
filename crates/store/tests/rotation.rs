@@ -1,6 +1,6 @@
 use phoebis_store::{
-    ApiKeyRow, OveragePolicy, PoolRow, RetiredSecret, StorageKey, Store, StoreError, Strategy,
-    SubStrategy, ROTATION_GRACE_MS,
+    ApiKeyRow, OveragePolicy, PoolRow, RetiredSecret, StorageKey, Store, Strategy, SubStrategy,
+    ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -157,7 +157,7 @@ fn a_revocation_drops_the_retired_secret_and_a_deletion_cascades_it() {
 }
 
 #[test]
-fn a_deleted_keys_id_cannot_be_created_again() {
+fn a_deleted_keys_id_is_created_again_under_a_fresh_secret() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_pool(&pool("main"), "t").unwrap();
     store
@@ -165,10 +165,13 @@ fn a_deleted_keys_id_cannot_be_created_again() {
         .unwrap();
     store.delete_api_key("k", "t").unwrap();
 
-    match store.insert_api_key(&key(&store, "k", "main", "two"), "t") {
-        Err(StoreError::KeyIdRetired(id)) => assert_eq!(id, "k"),
-        other => panic!("expected KeyIdRetired, got {other:?}"),
-    }
+    store
+        .insert_api_key(&key(&store, "k", "main", "two"), "t")
+        .unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().prefix,
+        phoebis_store::key_prefix("two")
+    );
     store
         .insert_api_key(&key(&store, "k2", "main", "three"), "t")
         .unwrap();

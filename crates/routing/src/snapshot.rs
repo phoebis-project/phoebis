@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use phoebis_store::{
     digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, ServedModel,
@@ -15,6 +15,8 @@ pub enum KeyRefusal {
     PoolDisabled,
     #[error("the key's pool does not exist")]
     PoolMissing,
+    #[error("the key was replaced under its id")]
+    Replaced,
     #[error("the key was revoked")]
     Revoked,
     #[error("the key is not in the registry")]
@@ -39,8 +41,6 @@ pub struct RegistrySnapshot {
     /// Retired secrets by digest, with the key each belonged to and the end of its grace; consulted only after
     /// the current digests miss.
     retired_by_digest: HashMap<[u8; 32], (String, i64)>,
-    /// Ids whose current holder is not the first key to carry them, from the store's own load.
-    reused_key_ids: HashSet<String>,
 }
 
 impl RegistrySnapshot {
@@ -99,19 +99,7 @@ impl RegistrySnapshot {
             models,
             pools: load.pools.into_iter().map(|p| (p.id.clone(), p)).collect(),
             retired_by_digest,
-            reused_key_ids: load.reused_key_ids.into_iter().collect(),
         }
-    }
-
-    /// Where a read of one key's own usage has to start, `None` when it may start wherever the caller's
-    /// window does. An id deleted with an earlier key and created again before the store began retiring ids
-    /// carries both holders' rollups, and nothing in a rollup says which holder filed it, so the current
-    /// holder's creation is the only line between them. An id whose holder is its first needs no line.
-    pub fn usage_floor(&self, key_id: &str) -> Option<i64> {
-        if !self.reused_key_ids.contains(key_id) {
-            return None;
-        }
-        self.keys.get(key_id).map(|key| key.created_at)
     }
 
     /// The digest narrows the search and the constant-time compare decides, as the static key table did. A

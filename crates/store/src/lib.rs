@@ -69,8 +69,6 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("key id {0} belonged to a deleted key and stays with its usage history")]
-    KeyIdRetired(String),
     #[error("api key {0} not found")]
     KeyNotFound(String),
     #[error("account {0} already holds credentials, so its kind cannot change")]

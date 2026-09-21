@@ -189,17 +189,25 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         Some(&cookie),
     )
     .await;
-    assert_eq!(recreated.status(), 409);
+    assert_eq!(recreated.status(), 201);
     assert_eq!(
-        json(recreated).await["error"],
-        "a deleted key used this id; its usage history stays with it, so choose another id"
+        delete(&app, "/admin/pools/main", Some(&cookie))
+            .await
+            .status(),
+        409,
+        "pool still has keys"
+    );
+    assert_eq!(
+        delete(&app, "/admin/keys/desktop", Some(&cookie))
+            .await
+            .status(),
+        204
     );
     assert_eq!(
         delete(&app, "/admin/pools/main", Some(&cookie))
             .await
             .status(),
-        204,
-        "nothing was created under the retired id"
+        204
     );
     assert_eq!(get(&app, "/admin/pools", Some(&cookie)).await.status(), 200);
     let viewer = login(&app, "viewer-secret").await;
