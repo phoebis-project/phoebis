@@ -381,6 +381,34 @@ async fn a_user_agent_whose_version_carries_a_field_of_its_own_restores_nothing(
     up.shutdown().await;
 }
 
+/// A prerelease build spells its version with a suffix; the line is inserted with that spelling, as the client
+/// itself would write it.
+#[tokio::test]
+async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let mut req = without_billing_line("s-1");
+    set_header(
+        &mut req,
+        "user-agent",
+        "claude-cli/2.1.269-beta.1 (external, cli)",
+    );
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
+    let sent = &up.requests()[0];
+    let line = billing_line(&sent.body);
+    let version = field(&line, "cc_version").expect("the line was inserted whole");
+    assert!(
+        version.starts_with("2.1.269-beta.1.") && version.len() == "2.1.269-beta.1.".len() + 3,
+        "the version keeps its own spelling ahead of the three hex digits: {line}"
+    );
+    assert_eq!(field(&line, "cc_entrypoint"), Some("cli"));
+    assert!(
+        header(sent, "x-client-request-id").is_some(),
+        "the rest of the first-party shape is presented too"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn nothing_is_restored_for_a_probe_turn() {
     // A probe replays what the client sent: the reduced line stays reduced and no header is generated.

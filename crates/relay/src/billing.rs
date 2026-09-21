@@ -64,15 +64,26 @@ pub fn cc_version(cli_version: &str, prompt_chars: [char; 3]) -> String {
 }
 
 /// The version half of a `claude-cli/` user agent, accepted only as the client's own spelling of one: digits
-/// and dots. A header value admits `;` and `=`, so an unconstrained version could smuggle a `;`-separated
-/// field of its own choosing into the billing line this build then signs; anything else restores nothing
-/// rather than a guessed version.
+/// and dots, then at most one `-` and a prerelease suffix of ASCII letters, digits, dots, and hyphens. A header
+/// value admits `;` and `=`, so an unconstrained version could smuggle a `;`-separated field of its own
+/// choosing into the billing line this build then signs; anything else restores nothing rather than a guessed
+/// version.
 pub fn restorable_version(cli_version: &str) -> Option<&str> {
-    let spelled = !cli_version.is_empty()
-        && cli_version
+    let (release, prerelease) = match cli_version.split_once('-') {
+        Some((release, prerelease)) => (release, Some(prerelease)),
+        None => (cli_version, None),
+    };
+    let spelled = !release.is_empty()
+        && release
             .split('.')
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
-    spelled.then_some(cli_version)
+    let suffixed = prerelease.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+    });
+    (spelled && suffixed).then_some(cli_version)
 }
 
 /// `sdk-cli` out of `claude-cli/2.1.269 (external, sdk-cli)`; `cli` when the agent carries no parenthesis, or
@@ -443,9 +454,22 @@ mod tests {
         assert_eq!(restorable_version("2"), Some("2"));
         assert_eq!(restorable_version("2.1.269;cc_prev_req=forged"), None);
         assert_eq!(restorable_version("2.1.269=x"), None);
-        assert_eq!(restorable_version("2.1.269-beta"), None);
         assert_eq!(restorable_version("2..1"), None);
         assert_eq!(restorable_version(""), None);
+    }
+
+    #[test]
+    fn a_prerelease_suffix_of_letters_digits_dots_and_hyphens_is_the_clients_own_spelling() {
+        assert_eq!(restorable_version("2.1.269-beta"), Some("2.1.269-beta"));
+        assert_eq!(restorable_version("2.1.269-beta.1"), Some("2.1.269-beta.1"));
+        assert_eq!(restorable_version("2.1.269-rc-2"), Some("2.1.269-rc-2"));
+        assert_eq!(restorable_version("2.1.269-"), None);
+        assert_eq!(restorable_version("-beta"), None);
+        assert_eq!(restorable_version("2.1.269-beta;cc_prev_req=forged"), None);
+        assert_eq!(restorable_version("2.1.269-beta=x"), None);
+        assert_eq!(restorable_version("2.1.269-be ta"), None);
+        assert_eq!(restorable_version("2.1.269-b\u{e9}ta"), None);
+        assert_eq!(restorable_version("2.1.269-beta-1;x"), None);
     }
 
     #[test]

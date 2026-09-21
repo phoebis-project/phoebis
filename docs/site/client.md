@@ -35,9 +35,10 @@ router restores, toward `api.anthropic.com`, the fields the reduced shape lacks:
 when `CLAUDE_CODE_ATTRIBUTION_HEADER` switched it off. Two things are not restored, because the router cannot:
 the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true`
 selects it) and the global cache scope on the static system block. The restoration applies to a request whose
-`User-Agent` is `claude-cli/` and to the client's own inference requests;
-a keepalive probe replays a request as the client sent it. The variable is an internal one that a
-later client build may drop.
+`User-Agent` is `claude-cli/` followed by a version the client itself would spell (digits and dots, optionally
+`-` and a prerelease suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
+a keepalive probe replays a request as the client sent it.
+The variable is an internal one that a later client build may drop.
 
 ### DISABLE_TELEMETRY
 
