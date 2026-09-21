@@ -54,7 +54,7 @@ use crate::stream::{
     MAX_BUFFERED_BODY,
 };
 use crate::{
-    edit_body, is_portable, presented_key, CacheTtl, CacheTtlPolicy, DriftGuard,
+    edit_body, is_portable, presented_key, BodyEdits, CacheTtl, CacheTtlPolicy, DriftGuard,
     Markerless, NativeEdit, RelayError, EXTENDED_TTL_BETA,
 };
 
@@ -943,6 +943,14 @@ impl Relay {
                     t
                 }
             });
+            // A body whose markers the rewrite could not reach went as it arrived, and so did a count the
+            // rewrite found nothing to edit in, so neither leg claims a TTL: no beta for it, none dropped
+            // for it, and none reported. A beta naming an hour the body does not carry would be the
+            // relay's to answer for on a 400.
+            let claims_its_ttl = |edits: &BodyEdits| {
+                !edits.cache_ttl_refused
+                    && (markerless == Markerless::TakesTheMember || edits.cache_ttl_edited)
+            };
                 // Isolated per account, so a failover never carries one account's previous request id, or the
                 // previous message id a diagnostics member names, into another account's memory.
                 let previous = memory_key
@@ -961,16 +969,10 @@ impl Relay {
                         markerless,
                     },
                 )?;
-                body_injected.extend(edits.restored);
-                // A body whose markers the rewrite could not reach went as it arrived, so this leg claims
-                // nothing about its TTL: no beta for it, none dropped for it, and none reported. A count
-                // the rewrite found nothing to edit in went as it arrived too, and a beta naming an hour
-                // its body does not carry would be the relay's to answer for on a 400.
-                if edits.cache_ttl_refused
-                    || (markerless == Markerless::GoesAsSent && !edits.cache_ttl_edited)
-                {
+                if !claims_its_ttl(&edits) {
                     ttl = None;
                 }
+                body_injected.extend(edits.restored);
                 if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
                     inject_betas.push(Injected::CacheDiagnosisBeta);
                 }
