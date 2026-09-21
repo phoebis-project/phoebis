@@ -401,7 +401,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // column a later migration adds has to go first. The rollup table keeps the generation column it
         // cannot drop (it is in the primary key); the rebuild that replays over it names its own columns and
         // never reads that one.
-        let mut sql = String::from("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ");
+        let mut sql = String::from("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ");
         for column in [
             "cleared_input_tokens",
             "inference_geo",
@@ -440,7 +440,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 9);
+    assert_eq!(db.schema_version().await.unwrap(), 10);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

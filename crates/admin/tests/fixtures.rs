@@ -340,6 +340,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             request_id: "r-captured".into(),
             request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),
             response_body: Some(br#"{"id":"msg","content":[]}"#.to_vec()),
+            request_len_seen: br#"{"model":"claude-sonnet-5","messages":[]}"#.len() as u64,
+            response_len_seen: br#"{"id":"msg","content":[]}"#.len() as u64,
             expires_at: now + 86_400_000,
         }),
     });

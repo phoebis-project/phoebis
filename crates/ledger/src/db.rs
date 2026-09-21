@@ -145,9 +145,16 @@ impl LedgerDb {
         self.read(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT request_id, request_body, response_body, expires_at FROM bodies WHERE request_id = ?1",
+                    "SELECT request_id, request_body, response_body, request_len_seen, response_len_seen, expires_at FROM bodies WHERE request_id = ?1",
                     params![id],
-                    |r| Ok(BodyRecord { request_id: r.get(0)?, request_body: r.get(1)?, response_body: r.get(2)?, expires_at: r.get(3)? }),
+                    |r| Ok(BodyRecord {
+                        request_id: r.get(0)?,
+                        request_body: r.get(1)?,
+                        response_body: r.get(2)?,
+                        request_len_seen: r.get::<_, i64>(3)? as u64,
+                        response_len_seen: r.get::<_, i64>(4)? as u64,
+                        expires_at: r.get(5)?,
+                    }),
                 )
                 .optional()?)
         }).await
@@ -342,8 +349,8 @@ pub(crate) fn insert_request_in(
     }
     if let Some(b) = bodies {
         tx.execute(
-            "INSERT OR REPLACE INTO bodies (request_id, request_body, response_body, expires_at) VALUES (?1, ?2, ?3, ?4)",
-            params![b.request_id, b.request_body, b.response_body, b.expires_at],
+            "INSERT OR REPLACE INTO bodies (request_id, request_body, response_body, request_len_seen, response_len_seen, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![b.request_id, b.request_body, b.response_body, b.request_len_seen as i64, b.response_len_seen as i64, b.expires_at],
         )?;
     }
     Ok(previous)
@@ -357,7 +364,9 @@ pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), 
     Ok(())
 }
 
-pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier FROM requests";
+pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, \
+(SELECT LENGTH(b.request_body) < b.request_len_seen FROM bodies b WHERE b.request_id = requests.id), \
+(SELECT LENGTH(b.response_body) < b.response_len_seen FROM bodies b WHERE b.request_id = requests.id) FROM requests";
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, pricing_version, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model FROM attempts";
 
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
@@ -387,6 +396,10 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         error_code: r.get(22)?,
         kept_warm: r.get(23)?,
         bodies_captured: r.get(24)?,
+        // NULL for a request with no bodies row, or one whose capture has already been purged: a purged
+        // capture reads as whole rather than as a cut it no longer holds evidence of.
+        request_truncated: r.get::<_, Option<bool>>(37)?.unwrap_or(false),
+        response_truncated: r.get::<_, Option<bool>>(38)?.unwrap_or(false),
         user_agent: r.get(25)?,
         effort: r.get(26)?,
         thinking_type: r.get(27)?,
@@ -583,7 +596,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 9);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 10);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -592,6 +605,8 @@ mod tests {
             request_id: "r1".into(),
             request_body: b"{}".to_vec(),
             response_body: Some(b"hi".to_vec()),
+            request_len_seen: 2,
+            response_len_seen: 2,
             expires_at: 9_000,
         };
         db.insert_request(
@@ -667,7 +682,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 9, "and answered what the connection holds");
+        assert_eq!(version, 10, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -682,7 +697,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            9,
+            10,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }

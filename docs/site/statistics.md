@@ -50,10 +50,11 @@ carries no cost estimate and is counted in `phoebis_pricing_unknown_model_total`
 
 Body capture is off until a key or a pool asks for it. Once asked for, a capture holds the request and response
 bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
-and each captured body is dropped once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or
-pool may ask for, because the bodies are prompts and how long they are kept is the operator's call rather than
-the caller's. Only the admin role reads bodies: a viewer's request for them is answered `403 captured bodies are
-for administrators`. The console shows a captured body in the request drawer, with a control to copy it.
+the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
+once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
+bodies are prompts and how long they are kept is the operator's call rather than the caller's. Only the admin role
+reads bodies: a viewer's request for them is answered `403 captured bodies are for administrators`. The console
+shows a captured body in the request drawer, with a control to copy it.
 
 ## Retention
 

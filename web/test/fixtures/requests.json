@@ -27,6 +27,8 @@
         "response_bytes": null,
         "kept_warm": false,
         "captured_bodies": true,
+        "request_truncated": false,
+        "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
         "shape": {
           "context_edits": [
@@ -118,6 +120,8 @@
         "response_bytes": null,
         "kept_warm": false,
         "captured_bodies": false,
+        "request_truncated": false,
+        "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
         "shape": {
           "context_edits": [
@@ -209,6 +213,8 @@
         "response_bytes": null,
         "kept_warm": false,
         "captured_bodies": false,
+        "request_truncated": false,
+        "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
         "shape": {
           "context_edits": [
@@ -300,6 +306,8 @@
         "response_bytes": null,
         "kept_warm": false,
         "captured_bodies": false,
+        "request_truncated": false,
+        "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
         "shape": {
           "context_edits": [

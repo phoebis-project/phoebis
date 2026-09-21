@@ -10,6 +10,12 @@
       "id": "msg",
       "content": []
     },
+    "request_bytes_stored": 41,
+    "request_bytes_seen": 41,
+    "response_bytes_stored": 25,
+    "response_bytes_seen": 25,
+    "request_truncated": false,
+    "response_truncated": false,
     "expires_at": 87400000
   }
 }

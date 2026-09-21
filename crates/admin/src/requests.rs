@@ -30,6 +30,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "model": r.model, "canonical_model": r.canonical_model, "kind": r.kind, "origin": r.origin, "transport": if r.stream { "sse" } else { "json" },
         "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
+        "request_truncated": r.request_truncated, "response_truncated": r.response_truncated,
         "user_agent": r.user_agent,
         "shape": {
             "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),
@@ -211,7 +212,16 @@ pub(crate) async fn bodies(
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))
     };
     match state.ledger.db().bodies(&id).await {
-        Ok(Some(b)) => Json(json!({ "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text), "expires_at": b.expires_at })).into_response(),
+        // The byte counts are read off the raw vectors before rendering: a re-encoded JSON string adds quotes
+        // and escapes, and a JavaScript `.length` on it counts UTF-16 units, so neither measures what was cut.
+        Ok(Some(b)) => Json(json!({
+            "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text),
+            "request_bytes_stored": b.request_body.len(), "request_bytes_seen": b.request_len_seen,
+            "response_bytes_stored": b.response_body.as_ref().map_or(0, Vec::len), "response_bytes_seen": b.response_len_seen,
+            "request_truncated": (b.request_body.len() as u64) < b.request_len_seen,
+            "response_truncated": b.response_body.as_ref().is_some_and(|body| (body.len() as u64) < b.response_len_seen),
+            "expires_at": b.expires_at,
+        })).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => ledger_failure(e),
     }

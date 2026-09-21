@@ -27,6 +27,9 @@ pub struct RequestRecord {
     pub error_code: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
+    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured.
+    pub request_truncated: bool,
+    pub response_truncated: bool,
     /// The caller's `User-Agent` as it was sent, `None` when it sent none.
     pub user_agent: Option<String>,
     pub effort: Option<String>,
@@ -100,6 +103,10 @@ pub struct BodyRecord {
     pub request_id: String,
     pub request_body: Vec<u8>,
     pub response_body: Option<Vec<u8>>,
+    /// The bytes each side ran to as the capture saw them; equal to the stored vector's length for a whole
+    /// body, larger for a cut one. A truncation flag is derived: seen > stored.
+    pub request_len_seen: u64,
+    pub response_len_seen: u64,
     pub expires_at: i64,
 }
 

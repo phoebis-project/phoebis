@@ -46,6 +46,8 @@ pub(crate) struct InFlight {
     pub attempts: Vec<AttemptRecord>,
     /// The response text assembled from chunks while the request's key captures bodies.
     pub response_body: Option<Vec<u8>>,
+    /// Every chunk's length whether or not it was kept, so a cut capture can say how much it dropped.
+    pub response_len_seen: u64,
     /// The chunk index expected next; a chunk past it means one was dropped at the bus.
     pub next_index: u32,
     /// Set once a chunk was skipped: the capture is incomplete and is not stored.
@@ -82,6 +84,7 @@ impl Assembler {
                         observed,
                         attempts: Vec::new(),
                         response_body,
+                        response_len_seen: 0,
                         next_index: 0,
                         gapped: false,
                         seen_at: now,
@@ -151,6 +154,7 @@ impl Assembler {
             records.push(gap(&chunk.request_id, "chunk_skipped", now));
         }
         entry.next_index = chunk.index.saturating_add(1);
+        entry.response_len_seen += chunk.body.len() as u64;
         if let Some(body) = entry.response_body.as_mut() {
             let room = MAX_CAPTURED_BODY.saturating_sub(body.len());
             body.extend_from_slice(&chunk.body[..chunk.body.len().min(room)]);
@@ -254,6 +258,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         observed,
         mut attempts,
         response_body,
+        response_len_seen,
         gapped,
         ..
     } = entry;
@@ -334,6 +339,9 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             request_id: observed.request_id.clone(),
             request_body: observed.body.to_vec(),
             response_body: (!assembled.is_empty()).then_some(assembled),
+            // The request is never cut: it is the bus's whole `Bytes`, read once at observation.
+            request_len_seen: observed.body.len() as u64,
+            response_len_seen,
             expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
         });
     let request = RequestRecord {
@@ -366,6 +374,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         error_code: complete.error_code.clone(),
         kept_warm: false,
         bodies_captured: bodies.is_some(),
+        request_truncated: false,
+        response_truncated: bodies.as_ref().is_some_and(|b| {
+            b.response_body
+                .as_ref()
+                .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
+        }),
         user_agent: observed
             .headers
             .iter()
@@ -433,6 +447,15 @@ mod tests {
             attempt: 1,
             index,
             body: Bytes::from_static(b"x"),
+            phase: None,
+        })
+    }
+    fn chunk_sized(id: &str, index: u32, len: usize) -> Event {
+        Event::ResponseChunk(ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::from(vec![b'a'; len]),
             phase: None,
         })
     }
@@ -966,5 +989,31 @@ mod tests {
             "silent for the whole TTL"
         );
         assert_eq!(a.in_flight(), 0);
+    }
+
+    #[test]
+    fn a_capture_past_the_cap_keeps_the_length_it_saw_and_stores_the_cap() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed_capturing("r13", Some("k"), 1));
+        a.observe(selected("r13", 1, "a", 1_010));
+        let half = MAX_CAPTURED_BODY / 2;
+        assert!(a.observe(chunk_sized("r13", 0, half)).is_empty());
+        assert!(a.observe(chunk_sized("r13", 1, half)).is_empty());
+        assert!(a.observe(chunk_sized("r13", 2, 10)).is_empty());
+        let Some(Record::Request { bodies, .. }) = a
+            .observe(complete("r13", 1, Some("a"), Outcome::Succeeded, 200, None))
+            .pop()
+        else {
+            panic!()
+        };
+        let bodies = bodies.expect("the capture stayed on for the whole stream");
+        assert_eq!(
+            (
+                bodies.response_body.as_ref().map(Vec::len),
+                bodies.response_len_seen
+            ),
+            (Some(MAX_CAPTURED_BODY), (MAX_CAPTURED_BODY + 10) as u64),
+            "the stored body is cut at the cap; the seen length is the full count"
+        );
     }
 }

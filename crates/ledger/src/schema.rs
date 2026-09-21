@@ -210,6 +210,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 9: three token sums and the request's effort join the hourly rollup; effort is a dimension, so it
 /// joins the primary key and the table is rebuilt as versions 3 and 7 rebuilt it, every existing row filed
 /// under `none`.
+///
+/// Version 10: a captured body records the length each side ran to, so a cut body says how much was dropped.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -426,5 +428,10 @@ INSERT INTO rollups_hourly_next (hour, key_id, key_generation, pool_id, account_
 DROP TABLE rollups_hourly;
 ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);",
+    ),
+    (
+        10,
+        "ALTER TABLE bodies ADD COLUMN request_len_seen INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE bodies ADD COLUMN response_len_seen INTEGER NOT NULL DEFAULT 0;",
     ),
 ];

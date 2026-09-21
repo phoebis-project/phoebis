@@ -105,6 +105,8 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
             request_id: "cap".into(),
             request_body: b"{}".to_vec(),
             response_body: None,
+            request_len_seen: 2,
+            response_len_seen: 0,
             expires_at: common::NOW + 1,
         }),
     });

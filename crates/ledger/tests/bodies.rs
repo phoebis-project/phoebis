@@ -4,7 +4,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{run_retention, LedgerConfig, Purged};
+use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
@@ -32,6 +32,32 @@ fn streamed() -> Respond {
                 data:
                     r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}"#
                         .into(),
+            },
+            SseEvent {
+                event: "message_stop".into(),
+                data: r#"{"type":"message_stop"}"#.into(),
+            },
+        ],
+        delay_between: Duration::from_millis(1),
+    }
+}
+
+/// One `content_block_delta` past the cap, so the capture cuts the response and keeps the length it saw.
+fn streamed_past_the_cap() -> Respond {
+    let text = "a".repeat(MAX_CAPTURED_BODY + 1_024);
+    Respond::Sse {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            SseEvent {
+                event: "message_start".into(),
+                data: r#"{"type":"message_start","message":{"usage":{"input_tokens":1}}}"#.into(),
+            },
+            SseEvent {
+                event: "content_block_delta".into(),
+                data: format!(
+                    r#"{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{text}"}}}}"#
+                ),
             },
             SseEvent {
                 event: "message_stop".into(),
@@ -77,7 +103,7 @@ async fn a_pool_with_capture_stores_both_bodies_for_a_key_without_an_override() 
     .await;
     let (id, body) = one_request(&h).await;
     let (row, _) = ledgered(&h, &id).await;
-    assert!(row.bodies_captured);
+    assert!(row.bodies_captured && !row.request_truncated);
     let bodies = h.db.bodies(&id).await.unwrap().expect("captured");
     assert!(
         bodies
@@ -90,7 +116,45 @@ async fn a_pool_with_capture_stores_both_bodies_for_a_key_without_an_override() 
         Some(body.as_slice()),
         "the response text, assembled from the chunks"
     );
+    assert_eq!(
+        bodies.request_len_seen,
+        bodies.request_body.len() as u64,
+        "the request body is never cut, so the seen length is what was stored"
+    );
     assert_eq!(bodies.expires_at, row.finished_at.unwrap() + 24 * 3_600_000);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_capture_past_the_cap_says_how_much_it_dropped() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: streamed_past_the_cap(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (24, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let (id, _) = one_request(&h).await;
+    let (row, _) = ledgered(&h, &id).await;
+    assert!(
+        row.response_truncated && !row.request_truncated,
+        "the response ran past the cap; the request body never does"
+    );
+    let bodies = h.db.bodies(&id).await.unwrap().expect("captured");
+    assert_eq!(
+        bodies.response_body.as_ref().map(Vec::len),
+        Some(MAX_CAPTURED_BODY),
+        "the stored body is cut at the cap"
+    );
+    assert!(
+        bodies.response_len_seen > MAX_CAPTURED_BODY as u64,
+        "the seen length is the full count, past the cap"
+    );
     up.shutdown().await;
 }
 

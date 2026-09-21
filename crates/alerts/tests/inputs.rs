@@ -239,6 +239,8 @@ async fn a_captured_body_gives_the_question_its_text() {
                 br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Ship it?"}]}}]}"#
                     .to_vec(),
             ),
+            request_len_seen: b"{}".len() as u64,
+            response_len_seen: br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Ship it?"}]}}]}"#.len() as u64,
             expires_at: NOW + 86_400_000,
         }),
     });
@@ -314,6 +316,8 @@ async fn a_question_answered_while_its_body_was_being_read_opens_nothing() {
                 br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Late?"}}]}"#
                     .to_vec(),
             ),
+            request_len_seen: b"{}".len() as u64,
+            response_len_seen: br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Late?"}}]}"#.len() as u64,
             expires_at: NOW + 86_400_000,
         }),
     });
@@ -465,6 +469,8 @@ async fn an_answering_turn_cannot_land_between_a_questions_claim_and_its_event()
                 br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Ship it?"}}]}"#
                     .to_vec(),
             ),
+            request_len_seen: b"{}".len() as u64,
+            response_len_seen: br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Ship it?"}}]}"#.len() as u64,
             expires_at: NOW + 86_400_000,
         }),
     });
@@ -923,6 +929,8 @@ async fn a_sub_agent_turn_neither_answers_a_question_nor_invalidates_one_being_r
                 br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Which one?"}}]}"#
                     .to_vec(),
             ),
+            request_len_seen: b"{}".len() as u64,
+            response_len_seen: br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Which one?"}}]}"#.len() as u64,
             expires_at: NOW + 86_400_000,
         }),
     });
@@ -1035,6 +1043,8 @@ async fn a_question_signalled_long_after_admission_is_tracked_from_the_signal() 
                 br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Still there?"}}]}"#
                     .to_vec(),
             ),
+            request_len_seen: b"{}".len() as u64,
+            response_len_seen: br#"{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"question":"Still there?"}}]}"#.len() as u64,
             expires_at: NOW + 86_400_000,
         }),
     });

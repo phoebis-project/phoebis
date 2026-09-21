@@ -2598,6 +2598,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": true,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -2689,6 +2691,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -2780,6 +2784,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -2871,6 +2877,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -4352,6 +4360,8 @@ export const FIXTURES: Record<string, Fixture> = {
         "response_bytes": null,
         "kept_warm": false,
         "captured_bodies": false,
+        "request_truncated": false,
+        "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
         "shape": {
           "context_edits": [
@@ -4502,6 +4512,12 @@ export const FIXTURES: Record<string, Fixture> = {
         "id": "msg",
         "content": []
       },
+      "request_bytes_stored": 41,
+      "request_bytes_seen": 41,
+      "response_bytes_stored": 25,
+      "response_bytes_seen": 25,
+      "request_truncated": false,
+      "response_truncated": false,
       "expires_at": 87400000
     }
   },
@@ -4534,6 +4550,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": true,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -4625,6 +4643,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -4716,6 +4736,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -4807,6 +4829,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "response_bytes": null,
           "kept_warm": false,
           "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
           "user_agent": "claude-cli/2.1.269 (external, cli)",
           "shape": {
             "context_edits": [
@@ -5141,7 +5165,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "uptime_seconds": 0,
       "storage_ok": true,
       "ledger": {
-        "schema_version": 9,
+        "schema_version": 10,
         "written": 9,
         "dropped": 0,
         "write_failures": 0,

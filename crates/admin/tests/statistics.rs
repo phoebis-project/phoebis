@@ -1,7 +1,7 @@
 //! The analytics, request-log, and dashboard routes over rows written straight into the ledger.
 mod common;
-use phoebis_ledger::{AttemptRecord, BodyRecord, RequestRecord};
-use common::{get, json, login, post};
+use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+use common::{get, json, login, post, wait_json};
 
 const HOUR: i64 = 3_600_000;
 
@@ -606,6 +606,9 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
                         request_id: id.clone(),
                         request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),
                         response_body: Some(b"event: message_stop\ndata: {}\n\n".to_vec()),
+                        request_len_seen: br#"{"model":"claude-sonnet-5","messages":[]}"#.len()
+                            as u64,
+                        response_len_seen: b"event: message_stop\ndata: {}\n\n".len() as u64,
                         expires_at: now + HOUR,
                     })
                     .as_ref(),
@@ -830,6 +833,65 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
             .await
             .status(),
         200
+    );
+}
+
+#[tokio::test]
+async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Two multibyte characters, 4 bytes for the pair: proves the byte counts below are not a character count.
+    let request_body = r#"{"text":"éé"}"#.as_bytes().to_vec();
+    let request_len = request_body.len() as u64;
+    let response_body = "a".repeat(1_000).into_bytes();
+    let mut row = request(
+        "r-multibyte",
+        now,
+        Some("desktop"),
+        "claude-sonnet-5",
+        "succeeded",
+        200,
+        "inference",
+    );
+    row.bodies_captured = true;
+    parts.ledger.record(Record::Request {
+        request: row,
+        attempts: vec![attempt("r-multibyte", "business", 200)],
+        bodies: Some(BodyRecord {
+            request_id: "r-multibyte".into(),
+            request_len_seen: request_len,
+            response_len_seen: 1_010,
+            request_body,
+            response_body: Some(response_body),
+            expires_at: now + HOUR,
+        }),
+    });
+    let bodies = wait_json(
+        &parts.app,
+        "/admin/requests/r-multibyte/bodies",
+        &cookie,
+        |v| v.get("response_bytes_seen").is_some(),
+    )
+    .await;
+    assert_eq!(
+        (
+            bodies["request_bytes_stored"].as_u64(),
+            bodies["request_bytes_seen"].as_u64(),
+            bodies["response_bytes_stored"].as_u64(),
+            bodies["response_bytes_seen"].as_u64(),
+            bodies["request_truncated"].as_bool(),
+            bodies["response_truncated"].as_bool(),
+        ),
+        (
+            Some(request_len),
+            Some(request_len),
+            Some(1_000),
+            Some(1_010),
+            Some(false),
+            Some(true)
+        ),
+        "bytes measured on the raw vectors, not the rendered JSON or a character count"
     );
 }
 
