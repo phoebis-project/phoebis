@@ -237,7 +237,9 @@ A stream commits at its `message_start` event or its first `error` event, whiche
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
 committing event within 30 seconds commits as received. Every wire submission counts against
 `routing.max_attempts`, including the one same-account retry after a transport failure that happened before the
-request was fully written.
+request was fully written, with one exception: when an upstream answers 400 naming a beta or field the router
+itself added, the router strips it and retries once on the same account, and that retry costs no attempt, since
+it corrects the router's own edit rather than trying another upstream.
 
 ### When nothing can serve
 

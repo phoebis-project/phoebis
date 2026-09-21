@@ -52,7 +52,8 @@ pub struct HeadContext<'a> {
     pub body_prefix: Option<&'a [u8]>,
     /// The attempt's own additions, body and head, that a 400 might name.
     pub injected: &'a [Injected],
-    /// Whether an attempt remains under `max_attempts` and this leg has not stripped yet.
+    /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
+    /// not read here; the one-round rule is the only gate.
     pub can_strip: bool,
 }
 
@@ -651,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn a_400_that_cannot_be_retried_commits_whatever_the_message_names() {
+    fn a_400_on_a_leg_that_already_stripped_commits_whatever_the_message_names() {
         let message = refusal("Unexpected value(s) `cache-diagnosis-2026-04-07`");
         let mut ctx = context(AccountKind::Oauth);
         ctx.can_strip = false;

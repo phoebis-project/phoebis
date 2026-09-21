@@ -732,11 +732,12 @@ impl Relay {
         };
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
+        let mut spent: u8 = 0;
 
         loop {
             // A backstop: every failover point already checks the budget before it comes back here, and
             // `attempted` grows each pass, so the loop is bounded by the pool even without this.
-            if attempt >= self.limits.max_attempts {
+            if spent >= self.limits.max_attempts {
                 return self.refused(
                     &trace,
                     UPSTREAM_UNREACHABLE,
@@ -833,7 +834,13 @@ impl Relay {
                 }
             }
             match self
-                .dispatch_to(&admitted, &selection, &answer.cancel, &mut attempt)
+                .dispatch_to(
+                    &admitted,
+                    &selection,
+                    &answer.cancel,
+                    &mut attempt,
+                    &mut spent,
+                )
                 .await
             {
                 Leg::FailOver => continue,
@@ -842,15 +849,15 @@ impl Relay {
         }
     }
 
-    /// One account's leg of the request: the credential, the body edit, the dispatch with its same-account
-    /// retry and its 401 replay, and the response half. Every early exit here is a `Leg`; the account is
-    /// already in the loop's `attempted`, so a `FailOver` costs nothing but the next selection.
+    /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
+    /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone.
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
         selection: &Selection,
         cancel: &CancellationToken,
         attempt: &mut u8,
+        spent: &mut u8,
     ) -> Leg {
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
         // request goes out to and the credential it carries have to be the pair one snapshot held.
@@ -997,9 +1004,16 @@ impl Relay {
         let mut retried = false;
         let mut replayed = false;
         let mut stripped_once = false;
+        let mut stripping = false;
 
         loop {
             *attempt += 1;
+            // The strip retry is the router correcting its own edit on the account that refused it, not a
+            // failover and not a transport retry: it spends no slot of the budget. Every other pass does.
+            if !stripping {
+                *spent += 1;
+            }
+            stripping = false;
             admitted.trace.selected(
                 *attempt,
                 account,
@@ -1045,7 +1059,7 @@ impl Relay {
                 attempt: *attempt,
                 cache_ttl_ms: cache_ttl_ms(ttl),
                 caller: admitted.caller,
-                can_strip: !stripped_once && *attempt < self.limits.max_attempts,
+                can_strip: !stripped_once,
                 cancel,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
@@ -1059,6 +1073,7 @@ impl Relay {
                 portable: admitted.portable,
                 replayed,
                 request_id: admitted.request_id,
+                spent: *spent,
                 trace: admitted.trace,
             };
             let dispatched = {
@@ -1092,7 +1107,7 @@ impl Relay {
             let next = match dispatched {
                 Ok(next) => next,
                 Err(AttemptFailure::Unsent(detail))
-                    if !retried && *attempt < self.limits.max_attempts =>
+                    if !retried && *spent < self.limits.max_attempts =>
                 {
                     tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
                     fresh = true;
@@ -1182,10 +1197,10 @@ impl Relay {
                             ));
                         }
                     }
-                    // The next pass increments `*attempt` exactly as any other submission would; `can_strip`
-                    // already confirmed that increment still leaves room under `max_attempts`, so this retry
-                    // spends a normal slot of the budget rather than a free one.
+                    // The next pass submits the corrected body on this account; the loop top spends no slot
+                    // for it, and `stripped_once` keeps the strip to one round per leg.
                     stripped_once = true;
+                    stripping = true;
                     fresh = false;
                     continue;
                 }
@@ -1370,7 +1385,7 @@ impl Relay {
         let (cooldown, mark) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
             Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired)),
-            Verdict::Refresh if ctx.attempt < self.limits.max_attempts => {
+            Verdict::Refresh if ctx.spent < self.limits.max_attempts => {
                 match self
                     .manager
                     .refresh_now(&ctx.account.id, ctx.credential_generation)
@@ -1405,8 +1420,8 @@ impl Relay {
                     outcome,
                 ))
             }
-            // `classify` only returns this under `can_strip`, so the budget and the one-round rule are already
-            // applied; without either, the same 400 classifies as `Commit` and is forwarded as any other.
+            // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
+            // it the same 400 classifies as `Commit` and is forwarded as any other.
             Verdict::StripInjected(items) => {
                 for item in &items {
                     self.memory.latch(ctx.account, *item);
@@ -1529,7 +1544,7 @@ impl Relay {
         // A held stream cannot be rewound onto another connection, so the only way not to commit it is
         // to drop it unread; once the budget is spent it goes to the caller as it came.
         if let Some(held) = held {
-            if ctx.portable && ctx.attempt < self.limits.max_attempts {
+            if ctx.portable && ctx.spent < self.limits.max_attempts {
                 drop(reader);
                 return Next::FailOver;
             }
@@ -1551,7 +1566,7 @@ impl Relay {
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
-        if ctx.portable && ctx.attempt < self.limits.max_attempts {
+        if ctx.portable && ctx.spent < self.limits.max_attempts {
             return Next::FailOver;
         }
         Next::Respond(self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome))
@@ -1949,7 +1964,8 @@ struct Responding<'a> {
     /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
     cache_ttl_ms: Option<i64>,
     caller: &'a HeaderMap,
-    /// Whether an attempt remains under `max_attempts` and this leg has not stripped yet.
+    /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
+    /// not read here; the one-round rule is the only gate.
     can_strip: bool,
     cancel: &'a CancellationToken,
     client_version: Option<String>,
@@ -1965,6 +1981,8 @@ struct Responding<'a> {
     portable: bool,
     replayed: bool,
     request_id: &'a str,
+    /// The budget slots spent so far, which the failover and the refresh replay read; a strip retry spends none.
+    spent: u8,
     trace: &'a Trace,
 }
 

@@ -562,9 +562,10 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
 }
 
 #[tokio::test]
-async fn a_strip_needs_a_remaining_attempt_and_otherwise_forwards_the_400() {
+async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_strips() {
     let up = FakeUpstream::start(vec![]).await;
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_BETA));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
     let limits = Limits {
         max_attempts: 1,
         ..default_limits()
@@ -586,10 +587,21 @@ async fn a_strip_needs_a_remaining_attempt_and_otherwise_forwards_the_400() {
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "no attempt remains for a strip retry");
-    assert_eq!(up.requests().len(), 1);
+    assert_eq!(
+        resp.status(),
+        200,
+        "the one budget slot went to the 400; the strip retry cost none"
+    );
+    assert_eq!(up.requests().len(), 2);
+    assert!(!beta_header(&up.requests()[1])
+        .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
+    assert_eq!(
+        outcome(&resp).attempt,
+        2,
+        "the outcome counts wire submissions, which the ledger keys its attempt rows by"
+    );
 
-    // The latch is still set: the next request carries no beta, in one upstream request.
+    // The latch still lands: the next request carries no beta, in one upstream request.
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
     let resp2 = h
         .app
@@ -598,15 +610,16 @@ async fn a_strip_needs_a_remaining_attempt_and_otherwise_forwards_the_400() {
         .await
         .unwrap();
     assert_eq!(resp2.status(), 200);
-    assert_eq!(up.requests().len(), 2);
-    assert!(!beta_header(&up.requests()[1])
+    assert_eq!(up.requests().len(), 3);
+    assert!(!beta_header(&up.requests()[2])
         .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
     up.shutdown().await;
 
-    // Two accounts, two attempts total: a's 429 spends the first, so b's 400 on the last attempt is forwarded.
+    // Two accounts, two slots: a's 429 spends the first and b's 400 the second, and the strip on b still runs.
     let up2 = FakeUpstream::start(vec![]).await;
     up2.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
-    up2.add_credential_rule(B, "/v1/messages", json_400(REFUSED_BETA));
+    up2.push_credential_rule(B, "/v1/messages", json_400(REFUSED_BETA));
+    up2.push_credential_rule(B, "/v1/messages", json_200());
     let limits2 = Limits {
         max_attempts: 2,
         ..default_limits()
@@ -628,24 +641,13 @@ async fn a_strip_needs_a_remaining_attempt_and_otherwise_forwards_the_400() {
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(resp3.status(), 400);
+    assert_eq!(resp3.status(), 200);
     assert_eq!(
         up2.requests().len(),
-        2,
-        "a's 429 and b's 400 together spend the whole budget"
+        3,
+        "a's 429, b's 400, and b's corrected retry: two slots, three submissions"
     );
     assert_eq!(outcome(&resp3).account_id, "b");
-
-    // b is latched: the session's pin stays on it, so the next request reaches it directly with no beta.
-    up2.push_credential_rule(B, "/v1/messages", json_200());
-    let resp4 = h2
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(resp4.status(), 200);
-    assert_eq!(up2.requests().len(), 3);
     assert!(!beta_header(&up2.requests()[2])
         .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
     up2.shutdown().await;
