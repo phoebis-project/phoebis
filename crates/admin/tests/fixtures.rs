@@ -375,7 +375,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .keepalive
         .apply_event(
             "desktop",
-            common::generation(&parts.store, "desktop"),
+            key_generation,
             phoebis_keepalive::Event {
                 event: "session_start".into(),
                 session_id: "s1".into(),
@@ -586,7 +586,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         origin: Origin::Client,
         kind: Kind::Inference,
         key_id: Some("desktop".into()),
-        key_generation: 0,
+        key_generation,
         pool_id: Some("main".into()),
         session_id: Some("s1".into()),
         agent_id: Some("main".into()),

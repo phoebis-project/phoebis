@@ -516,6 +516,30 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
 }
 
 #[tokio::test]
+async fn a_request_of_a_later_generation_arms_nothing_on_the_previous_holders_session() {
+    let r = rig(RigSpec::default()).await;
+    let before = r.status("main").reason;
+    let mut observed = r.observed("r1", "main", BODY);
+    if let phoebis_bus::Event::RequestObserved(request) = &mut observed {
+        request.key_generation += 1;
+    }
+    r.engine.observe(observed);
+    assert!(
+        r.engine.recipes_for("desktop", "session").is_empty(),
+        "a key id created again finds the previous holder's session, and arms nothing on it"
+    );
+    assert_eq!(
+        (
+            r.engine.stats().retained_bytes,
+            r.agent("main").state,
+            r.status("main").reason
+        ),
+        (0, AgentState::Busy, before),
+        "and leaves the agent it names exactly as it was"
+    );
+}
+
+#[tokio::test]
 async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_re_adopts_it() {
     let mut r = rig(RigSpec {
         limits: KeepaliveLimits {

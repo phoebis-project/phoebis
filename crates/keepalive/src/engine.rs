@@ -837,6 +837,11 @@ impl Engine {
         let Some(session) = inner.sessions.get(&key) else {
             return;
         };
+        // The purge ends a session whose key id now belongs to a later holder, but only at the next tick: until
+        // then this is the previous holder's session, and a request of another generation arms nothing on it.
+        if session.key_generation != observed.key_generation {
+            return;
+        }
         if session.ended {
             return;
         }
