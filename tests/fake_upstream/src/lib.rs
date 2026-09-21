@@ -3,6 +3,7 @@
 //! speaking plain HTTP via `start_plain`.
 
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,6 +40,39 @@ pub async fn stays_for(window: Duration, mut probe: impl FnMut() -> bool) {
     let until = Instant::now() + window;
     while Instant::now() < until {
         assert!(probe(), "the state moved within {window:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The async-probe twin of `wait_for`, for a check that itself needs to await (a ledger read on a blocking
+/// worker, for instance, which a plain `FnMut` probe cannot call). Same deadline, same 5 ms poll, same message.
+pub async fn wait_for_async<T, F, Fut>(deadline: Duration, mut probe: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Option<T>>,
+{
+    let give_up = Instant::now() + deadline;
+    loop {
+        if let Some(value) = probe().await {
+            return value;
+        }
+        assert!(
+            Instant::now() < give_up,
+            "the expected state never arrived within {deadline:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The async-probe twin of `stays_for`.
+pub async fn stays_for_async<F, Fut>(window: Duration, mut probe: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let until = Instant::now() + window;
+    while Instant::now() < until {
+        assert!(probe().await, "the state moved within {window:?}");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }

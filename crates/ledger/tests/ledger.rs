@@ -300,23 +300,14 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
     );
     hold_tx.send(()).unwrap();
     holder.join().unwrap();
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    let gap = loop {
-        if let Some(gap) =
-            h.db.events(0, i64::MAX, 10_000)
-                .await
-                .unwrap()
-                .into_iter()
-                .find(|e| e.kind == "ledger_gap")
-        {
-            break gap;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    };
+    let gap = wait_for_async(Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 10_000)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "ledger_gap")
+    })
+    .await;
     let detail: serde_json::Value = serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
     assert_eq!(
         detail["dropped"].as_u64().unwrap(),

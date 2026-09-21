@@ -2,7 +2,7 @@
 //! connection the admin routes share through `read`, WAL so the two never wait on each other.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
@@ -96,9 +96,12 @@ impl LedgerDb {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
+        // A read never opens a transaction, so a closure that panics mid-row leaves the connection exactly as
+        // consistent as it was before the call; recovering the guard here, rather than propagating the
+        // poisoning, keeps one panicked read from turning every later read into a `ReadCancelled`.
         match &self.reader {
-            Some(reader) => f(&reader.lock().expect(LOCK_POISONED)),
-            None => f(&self.writer.lock().expect(LOCK_POISONED)),
+            Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
+            None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),
         }
     }
 
@@ -625,5 +628,22 @@ mod tests {
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
         assert_eq!(version, 7, "and answered what the connection holds");
+    }
+
+    #[tokio::test]
+    async fn a_panicked_read_answers_read_cancelled_and_the_next_read_on_the_same_ledger_succeeds()
+    {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let panicked = db
+            .read(|_conn| -> Result<(), LedgerError> {
+                panic!("a read closure that never means to answer");
+            })
+            .await;
+        assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
+        assert_eq!(
+            db.read_blocking(read_version).unwrap(),
+            7,
+            "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
+        );
     }
 }

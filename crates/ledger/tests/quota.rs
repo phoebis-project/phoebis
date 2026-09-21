@@ -89,21 +89,13 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
     let bucket = phoebis_ledger::bucket_of(NOW);
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    let header = loop {
+    let header = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
-        if rows
-            .iter()
+        rows.iter()
             .any(|r| r.window == "5h" && r.source == "header")
-        {
-            break rows;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    };
+            .then_some(rows)
+    })
+    .await;
     let five = header.iter().find(|r| r.window == "5h").unwrap();
     assert_eq!(
         (five.utilization, five.reset_at, five.bucket),
@@ -127,18 +119,11 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     );
     // The poll lands in the same bucket (the clock is frozen at NOW): the header rows stay, the poll adds its
     // own windows beside them, and the credits arrive.
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
+    wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
-        if rows.iter().any(|r| r.window == "fable") {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+        rows.iter().any(|r| r.window == "fable").then_some(rows)
+    })
+    .await;
     let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
     let five = rows.iter().find(|r| r.window == "5h").unwrap();
     assert_eq!(
@@ -169,21 +154,14 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     h.clock
         .store(NOW + 300_000, std::sync::atomic::Ordering::SeqCst);
     let next = bucket + 300;
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    let extra = loop {
+    let extra = wait_for_async(Duration::from_secs(5), || async {
         let rows =
             h.db.extra_usage_samples("a", next, next + 300)
                 .await
                 .unwrap();
-        if !rows.is_empty() {
-            break rows;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    };
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
     assert_eq!(
         (
             extra[0].source.as_str(),
@@ -216,34 +194,22 @@ async fn a_paused_oauth_account_receives_hourly_samples_and_an_unpaired_one_does
         .unwrap();
     h.router.reload().await.unwrap();
     let bucket = phoebis_ledger::bucket_of(NOW);
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if !h
-            .db
+    wait_for_async(Duration::from_secs(5), || async {
+        (!h.db
             .quota_samples("a", bucket, bucket + 300)
             .await
             .unwrap()
+            .is_empty())
+        .then_some(())
+    })
+    .await;
+    stays_for_async(Duration::from_millis(500), || async {
+        h.db.quota_samples("b", 0, i64::MAX)
+            .await
+            .unwrap()
             .is_empty()
-        {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    let until = std::time::Instant::now() + Duration::from_millis(500);
-    while std::time::Instant::now() < until {
-        assert!(
-            h.db.quota_samples("b", 0, i64::MAX)
-                .await
-                .unwrap()
-                .is_empty(),
-            "the state moved within 500ms"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    })
+    .await;
     let polls = up
         .requests()
         .iter()

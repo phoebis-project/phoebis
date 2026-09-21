@@ -61,6 +61,9 @@ pub enum LedgerError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    /// The blocking worker running the read panicked, or was dropped before it answered. This falls on the one
+    /// call it happened to: `LedgerDb::read_blocking` recovers a poisoned guard, so the next read on the same
+    /// `LedgerDb` runs as if nothing happened.
     #[error("the ledger read was cancelled before it ran")]
     ReadCancelled,
     #[error(transparent)]

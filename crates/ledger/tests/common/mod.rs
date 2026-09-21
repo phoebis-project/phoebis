@@ -24,7 +24,7 @@ use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
 #[allow(unused_imports)]
-pub use fake_upstream::{stays_for, wait_for};
+pub use fake_upstream::{stays_for, stays_for_async, wait_for, wait_for_async};
 
 pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
@@ -354,17 +354,10 @@ pub async fn ledgered(
     h: &Harness,
     id: &str,
 ) -> (phoebis_ledger::RequestRecord, Vec<phoebis_ledger::AttemptRecord>) {
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(found) = h.db.request(id).await.unwrap() {
-            return found;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.request(id).await.unwrap()
+    })
+    .await
 }
 
 pub fn json_200() -> fake_upstream::Respond {

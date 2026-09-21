@@ -82,17 +82,10 @@ fn cold_answer() -> Respond {
 
 /// The request row, once the ledger landed it; a missing row is a failure, never a pass by absence.
 async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some((row, _)) = r.db.request(id).await.unwrap() {
-            return row;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        r.db.request(id).await.unwrap().map(|(row, _)| row)
+    })
+    .await
 }
 
 #[tokio::test]

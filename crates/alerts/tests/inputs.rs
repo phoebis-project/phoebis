@@ -178,18 +178,11 @@ async fn the_bus_arm_opens_pool_exhausted_client_drift_and_ask_user_question_and
             .any(|e| e.subject == "desktop, session s5"),
         "a buffered tool_use block opens the question too"
     );
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let events = loop {
+    let events = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
         let rows = rig.db.events(0, i64::MAX, 100).await.unwrap();
-        if rows.iter().filter(|e| e.kind == "alert_resolved").count() == 3 {
-            break rows;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    };
+        (rows.iter().filter(|e| e.kind == "alert_resolved").count() == 3).then_some(rows)
+    })
+    .await;
     assert!(events.iter().any(|e| e.kind == "alert_opened"
         && e.session_id.as_deref() == Some("s3")
         && e.key_id.as_deref() == Some("desktop")));
@@ -324,14 +317,10 @@ async fn a_question_answered_while_its_body_was_being_read_opens_nothing() {
             expires_at: NOW + 86_400_000,
         }),
     });
-    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while rig.db.bodies("r9").await.unwrap().is_none() {
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        rig.db.bodies("r9").await.unwrap().map(|_| ())
+    })
+    .await;
     fake_upstream::stays_for(std::time::Duration::from_secs(2), || {
         rig.store.open_alert_events().unwrap().is_empty()
     })

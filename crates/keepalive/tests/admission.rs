@@ -9,14 +9,10 @@ use common::*;
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    while r.db.request(id).await.unwrap().is_none() {
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the expected state never arrived within 5s"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        r.db.request(id).await.unwrap()
+    })
+    .await;
 }
 
 fn usage(read: u64, write_5m: u64) -> Usage {
