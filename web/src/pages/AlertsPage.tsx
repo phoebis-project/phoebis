@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, LifecycleDelivery, LifecycleEventName, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
+import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
@@ -71,8 +71,7 @@ const EVENT_LABEL: Record<LifecycleEventName, string> = {
   subagent_ended: 'Subagent ended',
   subagent_started: 'Subagent started',
 };
-/** A 2xx is the only answer the deliverer counts as landed; everything else, including no answer at all, reads as a failure. */
-const deliveryTone = (d: Delivery) => (d.status !== null && d.status < 300 ? 'good' : 'critical');
+const deliveryTone = (d: { status: number | null }) => (d.status !== null && d.status < 300 ? 'good' : 'critical');
 const TRIGGER_LABEL: Record<string, string> = { hash: 'the billing-hash check' };
 /** A trigger this build does not know still reads as itself rather than as a gap in the sentence. */
 const triggerLabel = (trigger: string) => TRIGGER_LABEL[trigger] ?? `the ${trigger} check`;
@@ -326,7 +325,7 @@ export function AlertsPage() {
         className="card--table"
       >
         <div className="table-wrap">
-          <table className="table lifecycle-table">
+          <table className="table">
             <thead>
               <tr>
                 <th>Time</th>
@@ -450,9 +449,7 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
             <li key={i} title={fmtAbsolute(d.at)}>
               {/* The deliverer counts attempts per run, so the transition is what tells two `#1` rows apart. */}
               <span className="muted">{d.state}</span>
-              <span className="muted">#{d.attempt}</span>
-              <Badge tone={deliveryTone(d)}>{d.status ?? 'no answer'}</Badge>
-              {d.error && <span className="muted">{d.error}</span>}
+              <DeliveryCell attempt={d.attempt} error={d.error} status={d.status} />
             </li>
           ))}
         </ul>
@@ -463,6 +460,20 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
         )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * One attempt's outcome, drawn the same in the events list and in the lifecycle log. A 2xx is the only answer
+ * the deliverer counts as landed; everything else, including no answer at all, reads as a failure.
+ */
+function DeliveryCell({ attempt, error, status }: { attempt: number; error: string | null; status: number | null }) {
+  return (
+    <>
+      <span className="muted">#{attempt}</span>{' '}
+      <Badge tone={deliveryTone({ status })}>{status ?? 'no answer'}</Badge>
+      {error && <span className="muted"> {error}</span>}
+    </>
   );
 }
 
@@ -485,9 +496,7 @@ function LifecycleRow({ delivery, now }: { delivery: LifecycleDelivery; now: num
       </td>
       <td>{KIND_LABEL[delivery.kind]}</td>
       <td>
-        <span className="muted">#{delivery.attempt}</span>{' '}
-        <Badge tone={delivery.status !== null && delivery.status < 300 ? 'good' : 'critical'}>{delivery.status ?? 'no answer'}</Badge>
-        {delivery.error && <span className="muted"> {delivery.error}</span>}
+        <DeliveryCell attempt={delivery.attempt} error={delivery.error} status={delivery.status} />
       </td>
     </tr>
   );

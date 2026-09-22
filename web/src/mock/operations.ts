@@ -550,6 +550,23 @@ export const ALERT_EVENTS: AlertEvent[] = [
   },
   {
     ...ALERT_EVENT_SAMPLE,
+    id: 'evt_16',
+    ruleId: 'rule_idle',
+    kind: 'session_idle',
+    subject: `desktop, session ${SESSION_IDS[2].slice(0, 8)}`,
+    // Written by a router that still opened and resolved the session kinds; the lifecycle log is where they
+    // are read now, so the events card drops a row like this one rather than drawing it twice.
+    detail: { key: 'desktop', pool: 'all', session: SESSION_IDS[2] },
+    state: 'resolved',
+    openedAt: daysAgo(16),
+    resolvedAt: daysAgo(15),
+    deliveries: [
+      { ...DELIVERY_SAMPLE, at: daysAgo(16), attempt: 1, error: null, state: 'opened', status: 200 },
+      { ...DELIVERY_SAMPLE, at: daysAgo(15), attempt: 1, error: null, state: 'resolved', status: 200 },
+    ],
+  },
+  {
+    ...ALERT_EVENT_SAMPLE,
     id: 'evt_13',
     ruleId: 'rule_refresh',
     kind: 'refresh_failed',
@@ -639,6 +656,20 @@ export const LIFECYCLE_DELIVERIES: LifecycleDelivery[] = [
   {
     ...LIFECYCLE_DELIVERY_SAMPLE,
     id: 106,
+    at: ago(20 * MINUTE),
+    ruleId: 'rule_idle',
+    kind: 'session_idle',
+    event: 'session_idle',
+    subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}`,
+    // The router always writes idle_minutes; the type leaves it optional, and the row must read without it.
+    detail: { event: 'session_idle', key: 'desktop', pool: 'all', session: SESSION_IDS[1] },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 107,
     at: ago(11 * MINUTE),
     ruleId: 'rule_subagent',
     kind: 'subagent_active',
@@ -651,7 +682,7 @@ export const LIFECYCLE_DELIVERIES: LifecycleDelivery[] = [
   },
   {
     ...LIFECYCLE_DELIVERY_SAMPLE,
-    id: 107,
+    id: 108,
     at: ago(9 * MINUTE),
     ruleId: 'rule_active',
     kind: 'session_active',
@@ -664,7 +695,7 @@ export const LIFECYCLE_DELIVERIES: LifecycleDelivery[] = [
   },
   {
     ...LIFECYCLE_DELIVERY_SAMPLE,
-    id: 108,
+    id: 109,
     at: ago(4 * MINUTE),
     ruleId: 'rule_active',
     kind: 'session_active',

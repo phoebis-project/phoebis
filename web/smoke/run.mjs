@@ -1768,7 +1768,6 @@ m.unmount();
 
 m = await mount('/alerts');
 expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
-results.push({ name: '/alerts an idle event without a minute count reads idle, never a blank count', ok: !m.text().includes('idle for  min'), missing: [] });
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
   const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
@@ -1776,12 +1775,23 @@ results.push({ name: '/alerts an idle event without a minute count reads idle, n
   results.push({ name: '/alerts a delivery row names the transition it belongs to', ok: items.length === 2 && items[0].startsWith('opened') && items[1].startsWith('resolved'), missing: items });
 }
 {
-  const lifecycleRows = () => [...(m.container.querySelector('.lifecycle-table')?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
+  // The lifecycle table carries no class of its own, so it is reached through the card whose title names it.
+  const lifecycleTable = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle')?.querySelector('table');
+  const lifecycleRows = () => [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
   const first = lifecycleRows()[0] ?? '';
   results.push({
     name: '/alerts the lifecycle log lists the newest event first, with its failed delivery',
     ok: /^\d+m ago/.test(first) && first.includes('Session started') && first.includes('refused'),
     missing: [first.slice(0, 120)],
+  });
+  // The router always writes idle_minutes; the type leaves it optional, so one row has to read without it.
+  const idleSubs = [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])]
+    .filter((r) => (r.children[1]?.textContent ?? '').startsWith('Session idle'))
+    .map((r) => r.children[1].querySelector('.sub')?.textContent?.trim() ?? '');
+  results.push({
+    name: '/alerts an idle event without a minute count reads idle, never a blank count',
+    ok: idleSubs.length === 2 && idleSubs.includes('idle for 30 min') && idleSubs.includes('idle'),
+    missing: idleSubs,
   });
   const eventsText = [...m.container.querySelectorAll('table')][1].textContent ?? '';
   const strayed = ['Session active', 'Session idle', 'Session parked', 'Subagent active'].filter((label) => eventsText.includes(label));
