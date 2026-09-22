@@ -163,10 +163,10 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy
-/// other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the
-/// request's window). Never empty: a pin released by a move whose destination then answered nothing carries
-/// `released`, the one fact the list above does not evaluate.
+/// `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy other than
+/// `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the request's
+/// window). Never empty: a pin released by a move whose destination then answered nothing carries `released`,
+/// the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

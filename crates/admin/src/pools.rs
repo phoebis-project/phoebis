@@ -455,7 +455,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = state.store.accounts()?;
-    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready/mid-refresh,
+    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready,
     // an account-wide cooldown, or overage the pool's policy admits no substitute for. `None` is eligible.
     let ineligible = |m: &PoolMember| -> Option<&'static str> {
         let ready = accounts
