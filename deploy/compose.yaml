@@ -1,0 +1,25 @@
+# The router from the registry image under bridge networking: the proxy port is published on every interface, the
+# console and the metrics port on the host's loopback only, so the console's cookie stays off the LAN. Publishing
+# 8081 on a LAN address is one edit to the ports line; the installation page says what that costs.
+secrets:
+  router-storage-key:
+    # Compose bind-mounts a file secret with the host file's owner and mode: own it by uid 65532, mode 0400.
+    file: ./storage.key
+services:
+  phoebis:
+    env_file: phoebis.env
+    image: ghcr.io/daystrom-labs/phoebis:0.1.0
+    ports:
+      - "8317:8317"
+      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:9464:9464"
+    restart: unless-stopped
+    secrets:
+      - router-storage-key
+    # The router drains in-flight requests for up to 30 seconds after SIGTERM; the grace period leaves it that long.
+    stop_grace_period: 40s
+    volumes:
+      - ./config.yaml:/etc/phoebis/config.yaml:ro
+      - phoebis-data:/var/lib/phoebis
+volumes:
+  phoebis-data:

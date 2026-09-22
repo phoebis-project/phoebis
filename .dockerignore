@@ -1,0 +1,13 @@
+.codegraph/
+.git/
+.superpowers/
+.worktrees/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data/
+docs/
+site/
+target/
+web/dist/
+web/node_modules/

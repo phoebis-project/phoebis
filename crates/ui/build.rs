@@ -13,11 +13,16 @@ const CI_STAMP: &str = ".phoebis-npm-ci-stamp";
 
 fn newest(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
+    // A directory's own mtime moves when an entry is created, deleted, or renamed, which no surviving file's
+    // mtime records; without it a deleted source leaves the bundle looking fresh.
+    let mut newest = meta.modified().ok();
     if meta.is_file() {
-        return meta.modified().ok();
+        return newest;
     }
-    let mut newest = None;
-    for entry in std::fs::read_dir(path).ok()?.flatten() {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return newest;
+    };
+    for entry in entries.flatten() {
         if let Some(t) = self::newest(&entry.path()) {
             newest = Some(newest.map_or(t, |n: SystemTime| n.max(t)));
         }

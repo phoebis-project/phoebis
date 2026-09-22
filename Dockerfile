@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+# The builder cooks the dependency tree with cargo-chef so BoringSSL and the crates stay a cached layer until
+# Cargo.lock or a manifest changes; the runtime is distroless, so the health check is the binary's own subcommand.
+FROM rust:1.96.1-trixie AS chef
+# clang, cmake, libclang-dev, and pkg-config build BoringSSL and its bindings; nodejs and npm build the console.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang cmake libclang-dev nodejs npm pkg-config \
+ && rm -rf /var/lib/apt/lists/* \
+ && rustup component add clippy rustfmt \
+ && cargo install cargo-chef --locked --version 0.1.78
+WORKDIR /src
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /src/recipe.json recipe.json
+# The recipe carries dummy sources and an empty build script, so no npm runs here.
+RUN cargo chef cook --release --locked --recipe-path recipe.json --package phoebis-router
+COPY . .
+# The console is its own step so a failed npm command fails the image: the crate's build script would catch
+# the failure and embed a placeholder page in a binary that builds green.
+RUN cd web && npm ci --no-audit --no-fund && npm run build
+# PHOEBIS_SKIP_UI_BUILD=1 embeds the bundle the step above produced as it is, with no mtime judgement against the
+# sources the context just copied. The data directory is created here so the runtime stage copies it with its
+# owner already set.
+RUN PHOEBIS_SKIP_UI_BUILD=1 cargo build --release --locked --package phoebis-router \
+ && install -d -o 65532 -g 65532 -m 0750 /var/lib/phoebis
+
+# gcr.io/distroless/cc-debian13:nonroot, resolved 2026-09-22
+FROM gcr.io/distroless/cc-debian13@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
+COPY --from=builder /src/target/release/phoebis /usr/local/bin/phoebis
+COPY --from=builder --chown=65532:65532 /var/lib/phoebis /var/lib/phoebis
+WORKDIR /var/lib/phoebis
+ENV PHOEBIS_CONFIG=/etc/phoebis/config.yaml
+USER 65532
+EXPOSE 8081 8317 9464
+ENTRYPOINT ["/usr/local/bin/phoebis"]
+# The start interval probes every two seconds for the first ten, so a container is healthy seconds after it
+# binds rather than a whole interval later; failures inside the start period do not count.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=2s --retries=3 \
+  CMD ["/usr/local/bin/phoebis", "health"]

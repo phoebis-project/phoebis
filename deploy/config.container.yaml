@@ -1,0 +1,64 @@
+# The container: every listener binds all interfaces and the host publishes the ports it wants (deploy/compose.yaml
+# publishes the proxy to the LAN and the console and metrics on the host's loopback). Secrets come from the
+# environment file and the key from the mounted secret; the databases live on the volume at /var/lib/phoebis.
+admin:
+  # plain_http serves the console over plain HTTP on whatever address the host publishes 8081 on, with no origin
+  # to pin. On the loopback publication of the compose example that costs nothing; on a LAN publication the admin
+  # secret at login and the session cookie on every call cross that LAN in the clear.
+  listen: 0.0.0.0:8081
+  plain_http: true
+  secret_env: ROUTER_ADMIN_SECRET
+  viewer_secret_env: ROUTER_VIEWER_SECRET
+compatibility:
+  # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
+  cache_diagnostics: false
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+keepalive:
+  # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
+  # the registry; probes on oauth accounts stay off until the expiry-crossing experiment has passed for the
+  # combinations in use and oauth_prewarm_verified is set.
+  lease_seconds: 90
+  max_agents: 1024
+  max_request_bytes: 8388608
+  max_retained_bytes: 268435456
+  max_sessions: 128
+  max_workers: 4
+  oauth_prewarm_verified: false
+proxy:
+  listen: 0.0.0.0:8317
+quota:
+  # How often every OAuth account's usage endpoint is polled for a quota sample, at least 900 s. Response
+  # headers sample active accounts for free; the poll fills idle gaps and is the only source of extra-usage
+  # credit totals.
+  poll_interval_seconds: 3600
+  sample_retention_days: 30
+routing:
+  # How often the router re-discovers each account's served models, jittered so accounts do not sync
+  # together.
+  catalog_sync_interval_seconds: 86400
+  cooldown_fallback_seconds: 60
+  # Upstream attempts per client request across distinct accounts, 1 to 8.
+  max_attempts: 3
+sessions:
+  expire_after_seconds: 86400
+stats:
+  # The longest a key or pool may keep captured bodies, 1 to 168.
+  body_capture_max_hours: 72
+  ledger_path: /var/lib/phoebis/ledger.sqlite
+  # Prometheus text format at /metrics; the compose example publishes it on the host's loopback.
+  metrics_listen: 0.0.0.0:9464
+  # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
+  # fine, and the volume is where one would be dropped.
+  pricing_path: /var/lib/phoebis/pricing.yaml
+  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
+  retention_days: 90
+  # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
+  rollup_retention_days: 400
+storage:
+  encryption_key_file: /run/secrets/router-storage-key
+  path: /var/lib/phoebis/router.sqlite
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
