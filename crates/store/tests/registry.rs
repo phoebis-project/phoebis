@@ -1,7 +1,7 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, ModelSource,
-    OveragePolicy, PoolRow, Secret, ServedModelWrite, StorageKey, Store, StoreError, Strategy,
-    SubStrategy,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, MemoryKey,
+    MemoryRecord, MemoryStore, ModelSource, OveragePolicy, PoolRow, Secret, ServedModelWrite,
+    StorageKey, Store, StoreError, Strategy, SubStrategy,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -294,6 +294,38 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
         )
         .unwrap();
     assert_eq!(tables, 0, "the upgrade dropped the table");
+}
+
+/// A reissued id must not read what the deleted holder left behind: `delete_api_key` cascades `session_memory`
+/// by `key_id` the same way it cascades `pins`.
+#[test]
+fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap();
+    let memory_key = MemoryKey {
+        key_id: "back".into(),
+        session_id: "s-1".into(),
+        agent_id: "main".into(),
+    };
+    store
+        .save(&[(
+            memory_key.clone(),
+            MemoryRecord {
+                record_version: 1,
+                payload: "{}".into(),
+                last_seen: 1,
+            },
+        )])
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    assert_eq!(
+        MemoryStore::load(&store, &memory_key).unwrap(),
+        None,
+        "the deleted key's memory must not outlive it, for a reissued id to read"
+    );
 }
 
 #[test]

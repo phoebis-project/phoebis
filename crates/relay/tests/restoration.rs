@@ -1,11 +1,13 @@
 mod common;
 use common::*;
 
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::Request;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::AccountKind;
+use phoebis_store::{AccountKind, StorageKey, Store};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -557,6 +559,104 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
         field(&third, "cc_prev_req"),
         Some("req_json_0002"),
         "the most recently committed attempt's request id is the one carried forward"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the_store() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Arc::new(Store::open(&path, &storage_key).unwrap());
+    let h = harness_on(
+        store.clone(),
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+    )
+    .await;
+    h.app
+        .clone()
+        .oneshot(cli_request("s-1", None, None))
+        .await
+        .unwrap();
+    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
+        .unwrap()
+        .to_string();
+    let key = MemoryKey {
+        key_id: "desktop".into(),
+        session_id: "s-1".into(),
+        agent_id: "main".into(),
+    };
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .request_id
+            .as_deref(),
+        Some("req_up_0001")
+    );
+    // What the binary does at shutdown: the dirty entries reach the store before the process ends.
+    h.relay.flush_memory().await;
+    drop(h);
+    drop(store);
+    let store = Arc::new(
+        wait_for(std::time::Duration::from_secs(2), || {
+            Store::open(&path, &storage_key).ok()
+        })
+        .await,
+    );
+    let h = harness_on(
+        store.clone(),
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+    )
+    .await;
+    // The new process holds nothing for the session until a request restores it; the wire proves the read.
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .request_id,
+        None
+    );
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    h.app
+        .clone()
+        .oneshot(tool_loop_request("s-1"))
+        .await
+        .unwrap();
+    let second = billing_line(&up.requests()[1].body);
+    assert_eq!(
+        field(&second, "cc_prev_req"),
+        Some("req_up_0001"),
+        "restored across the restart"
+    );
+    assert_eq!(
+        field(&second, "cc_prompt_id"),
+        Some(prompt.as_str()),
+        "the tool loop keeps the turn's id"
+    );
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .request_id
+            .as_deref(),
+        Some("req_up_0002"),
+        "the restored entry took the new request's id"
     );
     up.shutdown().await;
 }

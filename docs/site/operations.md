@@ -6,10 +6,11 @@ publishing this site, and releasing the container image.
 
 ## Backup
 
-The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools, keys,
-alert rules, pricing versions, pins, and cooldowns; `stats.ledger_path`, the ledger of requests, attempts, events,
-samples, rollups, and captured bodies; and `storage.encryption_key_file`, the key that seals every credential the
-registry holds. No script in this repository takes a backup of any of them.
+The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools,
+keys, alert rules, pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the
+ledger of requests, attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`,
+the key that seals every credential the registry holds. No script in this repository takes a backup of any of
+them.
 
 Both databases are SQLite, and both run in WAL mode. A plain file copy taken while the service is running can land
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.

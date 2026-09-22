@@ -23,7 +23,9 @@ use phoebis_routing::{
     resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Presented, Report,
     ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
+};
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Pool, PoolKey};
@@ -60,6 +62,10 @@ use crate::{
     edit_body, is_portable, presented_key, BodyEdits, CacheTtl, CacheTtlPolicy, DriftGuard,
     Markerless, NativeEdit, RelayError, VersionCheck, EXTENDED_TTL_BETA,
 };
+
+/// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
+/// shutdown flushes the rest.
+pub const MEMORY_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
 /// payload, and the framing ones no longer match the body the caller is sent.
@@ -203,6 +209,43 @@ impl Relay {
             memory: Arc::new(SessionMemory::new(cap, idle.as_millis() as i64)),
             ..self
         }
+    }
+
+    /// Tier 2 of the session memory and how long its rows are kept past a session's last request. The map
+    /// stays the truth; the store takes its changes behind, on `flush_memory` and the task `spawn_memory_flush`
+    /// runs, and answers a miss the request path fills before it reads the key.
+    pub fn with_memory_store(self, store: Arc<dyn MemoryStore>, retention: Duration) -> Relay {
+        let memory = SessionMemory::new(self.memory.cap(), self.memory.idle_ms())
+            .with_store(store, retention.as_millis() as i64);
+        Relay {
+            memory: Arc::new(memory),
+            ..self
+        }
+    }
+
+    /// Writes every entry changed since the last flush that landed; the binary calls it once at shutdown,
+    /// after the periodic task is joined.
+    pub async fn flush_memory(&self) {
+        self.memory.flush((self.clock)()).await;
+    }
+
+    /// Flushes every `every`, and once an hour drops the rows past the retention; aborted and joined at
+    /// shutdown before the last flush.
+    pub fn spawn_memory_flush(self: Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(every);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut ticks: u64 = 0;
+            loop {
+                interval.tick().await;
+                self.flush_memory().await;
+                ticks += 1;
+                let per_hour = (3_600 / every.as_secs().max(1)).max(1);
+                if ticks.is_multiple_of(per_hour) {
+                    self.memory.purge_store((self.clock)()).await;
+                }
+            }
+        })
     }
 
     /// A keepalive probe: the recipe's headers and body, run through the same admission, selection, edit, and
@@ -742,6 +785,32 @@ impl Relay {
                 })
                 .collect(),
         };
+        // A separate field from `restore`: every client inference request naming a session gets one,
+        // because the diagnostics member the option forces names the previous answer on
+        // that session whoever sent it. A probe reads under the same key, since it replays the session's own
+        // headers and the diagnostics report should name the turn it keeps warm; what a probe is answered is
+        // never remembered, which the response half enforces by reading no key for it. A count_tokens request
+        // has no slot for either, so it is neither read nor remembered. Dispatch reads the key to look up the
+        // previous request id per account, and the response half writes the upstream's `request-id` and
+        // message id back under it; what lands on the billing line stays gated on `restore` being `Some`.
+        let memory_key = match (trace.kind, identity.session_id.as_deref()) {
+            (Kind::Inference | Kind::Probe, Some(session)) => Some(MemoryKey {
+                key_id: key.id.clone(),
+                session_id: session.into(),
+                agent_id: identity.agent_id.clone(),
+            }),
+            _ => None,
+        };
+        // The one store read of the request path, before either the prompt id or the previous request id is
+        // read: a miss after a restart or an eviction is filled from tier 2 here, on the blocking pool, so no
+        // worker blocks on SQLite for it. A probe and a token count restore nothing, since the prompt id is
+        // read for an inference alone.
+        if let Some(key) = memory_key
+            .as_ref()
+            .filter(|_| trace.kind == Kind::Inference)
+        {
+            self.memory.restore(key, received_at).await;
+        }
         // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
         // has no line to fill.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
@@ -767,22 +836,6 @@ impl Relay {
                     }),
                 })
             }
-            _ => None,
-        };
-        // A separate field from `restore`: every client inference request naming a session gets one,
-        // because the diagnostics member the option forces names the previous answer on
-        // that session whoever sent it. A probe reads under the same key, since it replays the session's own
-        // headers and the diagnostics report should name the turn it keeps warm; what a probe is answered is
-        // never remembered, which the response half enforces by reading no key for it. A count_tokens request
-        // has no slot for either, so it is neither read nor remembered. Dispatch reads the key to look up the
-        // previous request id per account, and the response half writes the upstream's `request-id` and
-        // message id back under it; what lands on the billing line stays gated on `restore` being `Some`.
-        let memory_key = match (trace.kind, identity.session_id.as_deref()) {
-            (Kind::Inference | Kind::Probe, Some(session)) => Some(MemoryKey {
-                key_id: key.id.clone(),
-                session_id: session.into(),
-                agent_id: identity.agent_id.clone(),
-            }),
             _ => None,
         };
         // The pool's own setting overrides the bootstrap default; either way a `count_tokens` request never

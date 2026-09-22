@@ -230,8 +230,15 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         .with_session_memory(
             config.sessions.memory_cap,
             Duration::from_secs(config.sessions.memory_idle_seconds),
+        )
+        .with_memory_store(
+            store.clone(),
+            Duration::from_secs(u64::from(config.sessions.memory_retention_days) * 86_400),
         ),
     );
+    let memory_flush = relay
+        .clone()
+        .spawn_memory_flush(phoebis_relay::MEMORY_FLUSH_INTERVAL);
     // The companion's reports reach the alerts off the request bus, which drops under pressure while a
     // session's start and end must not.
     let (lifecycle_tx, lifecycle_rx) = phoebis_bus::lifecycle_channel();
@@ -473,6 +480,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     sweeper.abort();
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
     drop(keepalive);
+    // The periodic flusher is aborted and joined, and a flush it had in flight runs to its end on the
+    // blocking pool under the memory's flush lock, so the last flush queues behind it and an older batch
+    // never follows a newer one to the store. The last flush lands after the listeners drained, so every
+    // request that committed reaches the store.
+    memory_flush.abort();
+    let _ = memory_flush.await;
+    relay.flush_memory().await;
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
     drop(catalog);

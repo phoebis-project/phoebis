@@ -41,7 +41,9 @@ pub use headers::{outbound_headers, CredentialKind};
 pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
-pub use messages::{new_request_id, router, Limits, Probe, Relay, RelayOutcome};
+pub use messages::{
+    new_request_id, router, Limits, Probe, Relay, RelayOutcome, MEMORY_FLUSH_INTERVAL,
+};
 pub use portability::is_portable;
 pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
 pub use serve::serve;

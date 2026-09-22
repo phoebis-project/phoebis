@@ -474,7 +474,9 @@ async fn build(
         clock,
         limits,
     );
-    let relay = relay.with_cache_diagnostics(cache_diagnostics);
+    let relay = relay
+        .with_cache_diagnostics(cache_diagnostics)
+        .with_memory_store(store.clone(), Duration::from_secs(30 * 86_400));
     let relay = match bus {
         Some(bus) => relay.with_bus(bus),
         None => relay,
