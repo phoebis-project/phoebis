@@ -16,8 +16,8 @@ DISABLE_TELEMETRY=1
 ### ANTHROPIC_BASE_URL
 
 Points Claude Code at the router's proxy listener, through the reverse proxy that terminates TLS when there is
-one. Every model request and the keepalive companion's reports go here. Plain HTTP off loopback is allowed, and
-that is what the companion needs `CC_KEEPALIVE_ALLOW_PLAINTEXT=1` for (below).
+one. Every model request and the keepalive companion's reports go here. Plain HTTP is accepted on any address, by
+the router and by the companion alike.
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
@@ -52,9 +52,6 @@ policy and settings lookups the client makes at start still go to `api.anthropic
 setting; they fail there and the client tolerates that.
 
 ### For the keepalive companion
-
-`CC_KEEPALIVE_ALLOW_PLAINTEXT=1` is needed on a LAN where the router speaks plain HTTP off loopback: the
-companion refuses to report session identifiers over `http://` to a non-loopback host without it.
 
 `CC_KEEPALIVE_MANAGEMENT_URL` and `CC_KEEPALIVE_TOKEN` are not needed; the companion defaults them to
 `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_OAUTH_TOKEN`.
