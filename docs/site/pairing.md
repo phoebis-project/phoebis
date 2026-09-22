@@ -126,7 +126,7 @@ The Upstreams view offers these actions, each calling its own route:
 | --- | --- |
 | Clear cooldown | Clears the account's cooldown immediately. |
 | Clear funding | Clears a `funding_required` account back to `ready`. |
-| Disconnect | Removes the credential; request history stays in the ledger. |
+| Disconnect | Removes the credential and the account's extra headers; request history stays in the ledger. |
 | Pair or Re-pair | Opens the pairing dialog described above. |
 | Pause and Resume | A paused account takes no traffic. |
 | Re-sync | Runs discovery again. |

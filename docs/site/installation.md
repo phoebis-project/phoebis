@@ -109,6 +109,11 @@ docker compose logs -f phoebis
 docker compose down          # SIGTERM, then up to 40 seconds for the 30-second drain
 ```
 
+The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
+container's own environment before it probes the proxy listener. A file it cannot read, a value it refuses, or an
+unset secret variable therefore reads as `unhealthy` rather than as a passing check, with the reason in `docker
+inspect`.
+
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
 `config.yaml` sets `admin.plain_http: true` with no `origin`, so the cookie is issued without `Secure` and any
@@ -170,8 +175,9 @@ secret`.
 | `ROUTER_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
 | `ROUTER_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
 
-Pick your own names; those two are what the example file happens to use. `admin.viewer_secret_env` is the one
-line you may delete outright, for no read-only login. `RUST_LOG` sets the log filter and defaults to `info`.
+Pick your own names; `ROUTER_ADMIN_SECRET` and `ROUTER_VIEWER_SECRET` are what the example file happens to use.
+`admin.viewer_secret_env` is the one line you may delete outright, for no read-only login. `RUST_LOG` sets the log
+filter and defaults to `info`.
 Nothing else is named here: an account's upstream credential and the keys downstream clients present belong to
 the registry, not the bootstrap file.
 
@@ -370,15 +376,15 @@ memory of a session's previous request id and prompt id, the record behind `cc_p
 | --- | --- | --- |
 | `expire_after_seconds` | `86400` | at least 60 |
 | `memory_cap` | `65536` | 1 to 1048576 entries held in process; past it the least recently seen entry leaves memory |
-| `memory_idle_seconds` | `86400` | at least 60; how long an entry may go unseen before it leaves memory |
-| `memory_retention_days` | `30` | at least 1; how long the on-disk copy of an entry is kept after its last request |
+| `memory_idle_seconds` | `86400` | 60 to 31536000; how long an entry may go unseen before it leaves memory |
+| `memory_retention_days` | `30` | 1 to 3650; how long the on-disk copy of an entry is kept after its last request |
 
 Refused with:
 
 - `expire_after_seconds`: `sessions.expire_after_seconds must be at least 60`
 - `memory_cap`: `sessions.memory_cap must be between 1 and 1048576, not {value}`
-- `memory_idle_seconds`: `sessions.memory_idle_seconds must be at least 60`
-- `memory_retention_days`: `sessions.memory_retention_days must be at least 1`
+- `memory_idle_seconds`: `sessions.memory_idle_seconds must be between 60 and 31536000, not {value}`
+- `memory_retention_days`: `sessions.memory_retention_days must be between 1 and 3650, not {value}`
 
 ### stats
 

@@ -170,8 +170,8 @@ run zensical serve` previews it.
 ## Releasing
 
 A GitHub release publishes the container image. The workflow runs on a published release, on a manual dispatch,
-and on a pull request that touches the image's inputs (the Dockerfile, the workflow, the manifests, the crates, or
-the console's sources). To release:
+and on a pull request that touches the image's inputs (the Dockerfile, the workflow, the manifests, the crates,
+the deploy files, or the console's sources). To release:
 
 1. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease),
    head the changelog's section for it `## X.Y.Z`, and merge to `main`.

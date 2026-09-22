@@ -193,9 +193,13 @@ async fn two_concurrent_openers_of_one_subject_land_one_event_and_one_delivery()
         1,
         "the opener whose insert did not land posts nothing"
     );
+    // The rule this test upserts reaches the ledger's mirror as a registry_changed row of its own, polled on
+    // the rig's own tick, so the wait names the row it is actually waiting for.
     let events = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
         let rows = rig.db.events(0, i64::MAX, 100).await.unwrap();
-        (!rows.is_empty()).then_some(rows)
+        rows.iter()
+            .any(|e| e.kind == "alert_opened")
+            .then_some(rows)
     })
     .await;
     assert_eq!(

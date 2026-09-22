@@ -198,6 +198,26 @@ fn the_subcommand_exits_zero_on_200_and_one_on_a_closed_port() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1);
 }
 
+/// A listener that answers is not a healthy one, so the container's probe fails on any other status and says
+/// which it saw; the orchestrator reads that line out of the last health log.
+#[test]
+fn the_subcommand_exits_one_on_a_listener_answering_503() {
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, served) = answering("503 Service Unavailable");
+    let config = config_file(dir.path(), "unhealthy", addr);
+    let out = phoebis()
+        .args(["health", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        format!("proxy on {addr} answered 503, not 200")
+    );
+    served.join().unwrap();
+}
+
 #[test]
 fn phoebis_config_names_the_file_when_the_flag_is_absent_and_loses_to_the_flag() {
     let dir = tempfile::tempdir().unwrap();

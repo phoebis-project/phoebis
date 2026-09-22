@@ -973,6 +973,55 @@ async fn a_refresh_failed_delivery_names_whether_the_attempt_failed_or_went_unce
     );
 }
 
+/// The refused half of the same rule: two failures the token endpoint answered, so the operator reads that the
+/// credential was refused rather than that its answer was lost.
+#[tokio::test]
+async fn two_failed_refreshes_name_the_failed_outcome_on_the_event_and_the_delivery() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("refresh", Kind::RefreshFailed, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    for _ in 0..2 {
+        let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+        rig.store
+            .resolve_refresh_attempt(
+                attempt,
+                1,
+                phoebis_store::AttemptOutcome::Failed("invalid_grant".into()),
+            )
+            .unwrap();
+        poller.tick().await;
+    }
+    settled(&rig).await;
+    let event = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "refresh_failed")
+        .expect("two in a row open the event");
+    let detail: serde_json::Value =
+        serde_json::from_str(event.detail_json.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["outcome"], "failed", "{detail}");
+    assert_eq!(detail["failures"], 2);
+    assert_eq!(detail["last_error"], "invalid_grant");
+    let posted = rig.webhook.posts();
+    assert_eq!(
+        posted[0].body["detail"]["outcome"], "failed",
+        "the delivery carries the outcome"
+    );
+}
+
 #[tokio::test]
 async fn a_question_open_before_the_arm_existed_resolves_on_the_next_client_turn() {
     let rig = rig().await;

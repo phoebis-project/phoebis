@@ -185,10 +185,10 @@ pub enum ConfigError {
     MaxAttemptsOutOfRange { value: u8 },
     #[error("sessions.memory_cap must be between 1 and 1048576, not {value}")]
     MemoryCapOutOfRange { value: usize },
-    #[error("sessions.memory_idle_seconds must be at least 60")]
-    MemoryIdleTooShort,
-    #[error("sessions.memory_retention_days must be at least 1")]
-    MemoryRetentionTooShort,
+    #[error("sessions.memory_idle_seconds must be between 60 and 31536000, not {value}")]
+    MemoryIdleOutOfRange { value: u64 },
+    #[error("sessions.memory_retention_days must be between 1 and 3650, not {value}")]
+    MemoryRetentionOutOfRange { value: u32 },
     #[error("admin.origin is required unless admin.plain_http is set")]
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
@@ -344,11 +344,17 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: config.sessions.memory_cap,
         });
     }
-    if config.sessions.memory_idle_seconds < 60 {
-        return Err(ConfigError::MemoryIdleTooShort);
+    // Bounded above as well as below: the relay holds both as milliseconds in an i64, and a value near the
+    // type's own ceiling wraps that arithmetic negative, after which every entry reads as idle at once.
+    if !(60..=31_536_000).contains(&config.sessions.memory_idle_seconds) {
+        return Err(ConfigError::MemoryIdleOutOfRange {
+            value: config.sessions.memory_idle_seconds,
+        });
     }
-    if config.sessions.memory_retention_days < 1 {
-        return Err(ConfigError::MemoryRetentionTooShort);
+    if !(1..=3_650).contains(&config.sessions.memory_retention_days) {
+        return Err(ConfigError::MemoryRetentionOutOfRange {
+            value: config.sessions.memory_retention_days,
+        });
     }
     if !(1..=168).contains(&config.stats.body_capture_max_hours) {
         return Err(ConfigError::BodyCaptureMaxOutOfRange {
@@ -682,14 +688,24 @@ mod tests {
                 "sessions.memory_cap must be between 1 and 1048576, not 1048577",
             ),
             (
-                "idle",
+                "idle-low",
                 "sessions:\n  memory_idle_seconds: 59\n",
-                "sessions.memory_idle_seconds must be at least 60",
+                "sessions.memory_idle_seconds must be between 60 and 31536000, not 59",
             ),
             (
-                "retention",
+                "idle-high",
+                "sessions:\n  memory_idle_seconds: 31536001\n",
+                "sessions.memory_idle_seconds must be between 60 and 31536000, not 31536001",
+            ),
+            (
+                "retention-low",
                 "sessions:\n  memory_retention_days: 0\n",
-                "sessions.memory_retention_days must be at least 1",
+                "sessions.memory_retention_days must be between 1 and 3650, not 0",
+            ),
+            (
+                "retention-high",
+                "sessions:\n  memory_retention_days: 3651\n",
+                "sessions.memory_retention_days must be between 1 and 3650, not 3651",
             ),
         ] {
             let error = load(&file(dir.path(), name, body)).unwrap_err();

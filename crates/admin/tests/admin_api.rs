@@ -91,7 +91,9 @@ async fn the_cookie_carries_secure_exactly_when_plain_http_is_off() {
     )
     .await;
     assert_eq!(secure.status(), 204);
-    assert!(cookie_attributes(&secure).contains("Secure"));
+    // The whole attribute, not a substring of one: `contains` would also pass on a cookie value that happened
+    // to carry the word.
+    assert!(cookie_attributes(&secure).ends_with("; Secure"));
 }
 
 #[tokio::test]
@@ -119,6 +121,48 @@ async fn an_origin_set_under_plain_http_is_still_enforced() {
     .await;
     assert_eq!(allowed.status(), 204);
     assert!(!cookie_attributes(&allowed).contains("Secure"));
+}
+
+/// A WebSocket handshake carries a cookie and no body, so a forged page could open the live feed with nothing
+/// but the browser's own credentials; the origin check covers the upgrade exactly as it covers a write.
+#[tokio::test]
+async fn an_origin_set_under_plain_http_refuses_a_websocket_upgrade() {
+    use common::{json, login_from};
+    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
+    let cookie = login_from(&app, "admin-secret", "http://phoebis.lan:8081").await;
+    let forged = handshake(&app, &cookie, "http://elsewhere").await;
+    assert_eq!(forged.status(), 403);
+    assert_eq!(json(forged).await["error"], "origin is not allowed");
+
+    // Past the gate the route itself answers: an in-process call carries no connection to hand over, so the
+    // upgrade extractor refuses it, and that refusal is the proof the origin check admitted the request.
+    let allowed = handshake(&app, &cookie, "http://phoebis.lan:8081").await;
+    assert_eq!(allowed.status(), 400);
+    assert_eq!(
+        json(allowed).await["error"],
+        "this route upgrades to a WebSocket"
+    );
+}
+
+/// The head a browser sends to open `/admin/live`, with the `Origin` under test.
+async fn handshake(
+    app: &axum::Router,
+    cookie: &str,
+    origin: &str,
+) -> axum::http::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/admin/live")
+        .header("cookie", format!("phoebis_admin={cookie}"))
+        .header("origin", origin)
+        .header("connection", "Upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    app.clone().oneshot(request).await.unwrap()
 }
 
 fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> String {

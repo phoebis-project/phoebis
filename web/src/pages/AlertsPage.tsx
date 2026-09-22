@@ -472,7 +472,7 @@ function DeliveryCell({ attempt, error, status }: { attempt: number; error: stri
     <>
       <span className="muted">#{attempt}</span>{' '}
       <Badge tone={deliveryTone({ status })}>{status ?? 'no answer'}</Badge>
-      {error && <span className="muted"> {error}</span>}
+      {error && <span className="muted">{error}</span>}
     </>
   );
 }

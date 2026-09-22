@@ -485,7 +485,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // never follows a newer one to the store. The last flush lands after the listeners drained, so every
     // request that committed reaches the store.
     memory_flush.abort();
-    let _ = memory_flush.await;
+    if let Err(error) = memory_flush.await {
+        // The abort above is the expected end; anything else is a flusher that died on its own, which means
+        // the flushes between its last one and this shutdown never ran.
+        if !error.is_cancelled() {
+            tracing::warn!(%error, "the session memory's flush task did not end cleanly");
+        }
+    }
     relay.flush_memory().await;
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);

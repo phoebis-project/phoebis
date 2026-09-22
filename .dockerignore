@@ -5,10 +5,10 @@
 .git/
 .superpowers/
 .worktrees/
-*.key
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
+**/*.key
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
 /config.yaml
 data/
 deploy/phoebis.env

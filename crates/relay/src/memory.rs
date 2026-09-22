@@ -456,7 +456,12 @@ impl SessionMemory {
         };
         let memory = self.clone();
         let flushed = tokio::task::spawn_blocking(move || -> Result<(), StoreError> {
-            let _flushing = memory.flush_lock.lock().unwrap();
+            // A panic inside a flush leaves the lock poisoned; taking the guard anyway keeps every later
+            // flush working, since the lock orders flushes and guards no invariant of its own.
+            let _flushing = memory
+                .flush_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let batch = memory.snapshot_dirty(now);
             if batch.is_empty() {
                 return Ok(());
@@ -541,12 +546,15 @@ fn account_entry<'a>(
 /// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
 /// with its new `last_seen`; answers whether there was one.
 fn revive_pending(inner: &mut Inner, key: &MemoryKey, now: i64, cap: usize) -> bool {
-    let Some((record, _)) = inner.pending.remove(key) else {
+    let Some((record, _)) = inner.pending.get(key) else {
         return false;
     };
-    let Some(entry) = Entry::from_record(&record, now) else {
+    // Decoded before the record leaves the overlay: a payload this build cannot read is an unflushed change
+    // that still belongs on disk, and removing it first would drop it for good.
+    let Some(entry) = Entry::from_record(record, now) else {
         return false;
     };
+    inner.pending.remove(key);
     evict_if_full(inner, cap);
     inner.entries.insert(key.clone(), entry);
     inner.sequence += 1;
@@ -1052,6 +1060,67 @@ mod tests {
         assert!(
             store.rows.lock().unwrap().contains_key(&a),
             "the read leaves the row for the hourly purge rather than dropping it itself"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_record_at_the_retention_bound_is_restored_and_one_a_millisecond_older_is_not() {
+        let store = Arc::new(MapStore::default());
+        let (at_bound, older) = (key("at"), key("older"));
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(at_bound.clone(), seeded("req_at", None, 4_000));
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(older.clone(), seeded("req_older", None, 3_999));
+        let mem = Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
+        mem.restore(&at_bound, 5_000).await;
+        mem.restore(&older, 5_000).await;
+        assert_eq!(
+            mem.previous(&at_bound, "acct", "claude-sonnet-4-5")
+                .request_id
+                .as_deref(),
+            Some("req_at"),
+            "a row last seen exactly the retention ago is still inside it"
+        );
+        assert_eq!(
+            mem.previous(&older, "acct", "claude-sonnet-4-5").request_id,
+            None,
+            "one millisecond older is past it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overlay_record_the_build_cannot_decode_is_kept_and_still_flushed() {
+        let store = Arc::new(MapStore::default());
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        let a = key("a");
+        let stashed = MemoryRecord {
+            record_version: RECORD_VERSION,
+            payload: "{".into(),
+            last_seen: 1_000,
+        };
+        mem.inner
+            .lock()
+            .unwrap()
+            .pending
+            .insert(a.clone(), (stashed.clone(), 1));
+        // The read that follows an eviction reaches the overlay first, and this record does not decode.
+        mem.restore(&a, 2_000).await;
+        assert!(
+            mem.inner.lock().unwrap().pending.contains_key(&a),
+            "a record that could not be decoded is still an unflushed change"
+        );
+        mem.flush(2_000).await;
+        assert_eq!(
+            store.rows.lock().unwrap().get(&a),
+            Some(&stashed),
+            "and the next flush writes it to the store"
         );
     }
 

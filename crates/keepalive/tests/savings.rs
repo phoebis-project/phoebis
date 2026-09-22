@@ -908,9 +908,11 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
         spent.get("warm").copied().unwrap_or(0.0) > 0.0,
         "the probe's delta landed on the pool that served it: {spent:?}"
     );
+    // The probe's own request row reaches the rollups through the assembler with no cost on it, ahead of the
+    // engine's keepalive delta, so the wait has to name the charge rather than the row.
     let rows = rollups(&r, |rows| {
         rows.iter()
-            .any(|row| row.kind == "probe" && row.pool_id == "warm")
+            .any(|row| row.kind == "probe" && row.pool_id == "warm" && row.probe_cost_usd > 0.0)
     })
     .await;
     assert!(rows
