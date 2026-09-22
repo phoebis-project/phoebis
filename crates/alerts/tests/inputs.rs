@@ -843,6 +843,137 @@ async fn an_event_left_open_for_a_healthy_account_resolves_on_the_next_tick() {
 }
 
 #[tokio::test]
+async fn a_tick_with_no_open_event_issues_no_clear_and_one_with_open_events_clears_only_those() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("cap", Kind::KeepaliveCostCap, ScopeType::Pool, Some("main")),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.store
+        .upsert_alert_rule(
+            &phoebis_store::AlertRuleRow {
+                threshold: Some(0.9),
+                window: Some("7d".into()),
+                ..rule("util", Kind::UtilizationAbove, ScopeType::AnyAccount, None)
+            },
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    rig.router.report(Report::Sample {
+        account_id: "business".into(),
+        sample: UtilizationSample {
+            five_hour: Some(0.5),
+            five_hour_reset: None,
+            seven_day: Some(0.5),
+            seven_day_reset: None,
+            fable: None,
+            fable_reset: None,
+            observed_at: NOW,
+        },
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let mut spent = BTreeMap::new();
+    spent.insert("main".to_string(), 0.1);
+    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, spent), Tracked::default());
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.alerts.clears(),
+        0,
+        "under the cap and under the threshold with nothing open, the tick has nothing to clear"
+    );
+    for (id, rule_id, kind, subject) in [
+        ("cap-open", "cap", "keepalive_cost_cap", "main"),
+        ("util-open", "util", "utilization_above", "business"),
+    ] {
+        assert!(rig
+            .store
+            .insert_alert_event(&AlertEventRow {
+                id: id.into(),
+                rule_id: rule_id.into(),
+                kind: kind.into(),
+                subject: subject.into(),
+                state: "open".into(),
+                opened_at: NOW,
+                resolved_at: None,
+                detail_json: None,
+            })
+            .unwrap());
+    }
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.alerts.clears(),
+        2,
+        "one clear per open event, none for the pairs with nothing open"
+    );
+    for id in ["cap-open", "util-open"] {
+        assert_eq!(
+            rig.store.alert_event(id).unwrap().unwrap().state,
+            "resolved"
+        );
+    }
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.alerts.clears(),
+        2,
+        "resolved rows are not open, so the next tick clears nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_refresh_failed_delivery_names_whether_the_attempt_failed_or_went_uncertain() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("refresh", Kind::RefreshFailed, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    for outcome in [
+        phoebis_store::AttemptOutcome::Failed("invalid_grant".into()),
+        phoebis_store::AttemptOutcome::Uncertain("refresh response lost".into()),
+    ] {
+        let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+        rig.store
+            .resolve_refresh_attempt(attempt, 1, outcome)
+            .unwrap();
+        poller.tick().await;
+    }
+    settled(&rig).await;
+    let event = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "refresh_failed")
+        .expect("two in a row, the second uncertain, open the event");
+    let detail: serde_json::Value =
+        serde_json::from_str(event.detail_json.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["outcome"], "uncertain", "{detail}");
+    assert_eq!(detail["failures"], 2);
+    assert_eq!(detail["last_error"], "refresh response lost");
+    let posted = rig.webhook.posts();
+    assert_eq!(
+        posted[0].body["detail"]["outcome"], "uncertain",
+        "the delivery carries the outcome"
+    );
+}
+
+#[tokio::test]
 async fn a_question_open_before_the_arm_existed_resolves_on_the_next_client_turn() {
     let rig = rig().await;
     rig.store

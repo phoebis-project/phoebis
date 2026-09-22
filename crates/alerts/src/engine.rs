@@ -59,6 +59,8 @@ pub struct Alerts {
     rules: Mutex<Vec<Rule>>,
     deliveries_ok: AtomicU64,
     deliveries_failed: AtomicU64,
+    /// Clears that reached the store, `clear` and `clear_rule` alike; what the tick's narrowing is measured by.
+    clears: AtomicU64,
     /// One sender per event whose worker is still running; an entry goes when its queue has drained.
     queues: Mutex<HashMap<String, mpsc::Sender<Transition>>>,
     sleeper: Box<Sleeper>,
@@ -88,6 +90,7 @@ impl Alerts {
             rules: Mutex::new(Vec::new()),
             deliveries_ok: AtomicU64::new(0),
             deliveries_failed: AtomicU64::new(0),
+            clears: AtomicU64::new(0),
             queues: Mutex::new(HashMap::new()),
             sleeper,
             transitions: Mutex::new(()),
@@ -187,6 +190,7 @@ impl Alerts {
     /// Answers whether the store did its part, so a caller holding the one transition that closes those rows
     /// can offer it again rather than lose it to a moment the store was unavailable.
     pub fn clear(self: &Arc<Self>, kind: Kind, subject: &str) -> bool {
+        self.clears.fetch_add(1, Ordering::Relaxed);
         let now = (self.parts.clock)();
         let open = match self.parts.store.open_alert_events() {
             Ok(o) => o,
@@ -209,6 +213,7 @@ impl Alerts {
 
     /// `clear` narrowed to one rule, the dual of `signal_rule`.
     pub fn clear_rule(self: &Arc<Self>, rule_id: &str, subject: &str) -> bool {
+        self.clears.fetch_add(1, Ordering::Relaxed);
         match self.parts.store.open_alert_event(rule_id, subject) {
             Ok(Some(event)) => self.finish(event, (self.parts.clock)()),
             Ok(None) => true,
@@ -418,6 +423,10 @@ impl Alerts {
                 .unwrap_or(0),
             rules: self.rules().len(),
         }
+    }
+
+    pub fn clears(&self) -> u64 {
+        self.clears.load(Ordering::Relaxed)
     }
 
     /// Resolves once every delivery task spawned so far has finished; the tests and the shutdown wait on it.

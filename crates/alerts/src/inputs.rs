@@ -996,11 +996,11 @@ impl Poller {
         let parts = self.alerts.parts();
         let now = (parts.clock)();
         self.ticks += 1;
+        // One read for the whole tick, because every clear below runs on each tick the condition is off rather
+        // than on the tick it lifts: a clear the store refused once is retried, and a `clear` per pool, rule,
+        // and account would read the open events again each time. The list is the truth about what is open.
+        let open = parts.store.open_alert_events().unwrap_or_default();
         if let Ok(accounts) = parts.store.accounts() {
-            // One read for the whole sweep, because the clear below runs on every tick the account is out of
-            // the state rather than on the tick it leaves: a clear the store refused once is retried, and a
-            // `clear` per account and kind would read the open events again each time.
-            let open = parts.store.open_alert_events().unwrap_or_default();
             for account in &accounts {
                 for (kind, state) in [
                     (Kind::ReauthRequired, AccountState::ReauthRequired),
@@ -1046,7 +1046,12 @@ impl Poller {
                             key_id: None,
                             pool_id: None,
                             subject: attempt.account_id.clone(),
-                            detail: json!({ "account": attempt.account_id, "failures": *n, "last_error": attempt.detail }),
+                            detail: json!({
+                                "account": attempt.account_id,
+                                "failures": *n,
+                                "last_error": attempt.detail,
+                                "outcome": attempt.outcome,
+                            }),
                         });
                     }
                 }
@@ -1120,7 +1125,11 @@ impl Poller {
                     };
                     if value >= threshold {
                         self.alerts.signal_rule(&rule.id, &signal);
-                    } else if value < threshold - 0.05 {
+                    } else if value < threshold - 0.05
+                        && open
+                            .iter()
+                            .any(|e| e.rule_id == rule.id && &e.subject == account_id)
+                    {
                         self.alerts.clear_rule(&rule.id, account_id);
                     }
                 }
@@ -1145,7 +1154,10 @@ impl Poller {
                         subject: pool.id.clone(),
                         detail: json!({ "cap_usd": cap, "pool": pool.id, "spent_usd": used }),
                     });
-                } else {
+                } else if open
+                    .iter()
+                    .any(|e| e.kind == Kind::KeepaliveCostCap.as_str() && e.subject == pool.id)
+                {
                     self.alerts.clear(Kind::KeepaliveCostCap, &pool.id);
                 }
             }

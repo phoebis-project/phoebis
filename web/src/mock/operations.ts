@@ -541,7 +541,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
     ruleId: 'rule_refresh',
     kind: 'refresh_failed',
     subject: 'team',
-    detail: { account: 'team', failures: 2, last_error: 'invalid_grant' },
+    detail: { account: 'team', failures: 2, last_error: 'invalid_grant', outcome: 'failed' },
     state: 'resolved',
     openedAt: daysAgo(13),
     resolvedAt: daysAgo(12),

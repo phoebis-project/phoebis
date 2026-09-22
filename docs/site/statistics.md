@@ -217,8 +217,10 @@ the pool serves.
 **Re-auth required** fires when an upstream enters the reauth-required state and resolves once the upstream is
 paired or verified again.
 
-**Credential refresh failed** fires when a credential refresh fails twice in a row and resolves on the next
-refresh that succeeds.
+**Credential refresh failed** fires when a credential refresh fails twice in a row, an attempt whose answer was
+lost counting as a failure, and resolves on the next refresh that succeeds. The detail names the account, the
+length of the run, the last error, and `outcome`: `failed` for a refresh the token endpoint refused, `uncertain`
+for one whose answer never arrived, so the token may or may not have rotated upstream.
 
 **Session active** opens on a session's first request through the router, or on the keepalive companion's
 `session_start` when that comes first, and resolves on the companion's `session_end` or when the session has been
