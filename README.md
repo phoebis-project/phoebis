@@ -3,7 +3,8 @@
 A local relay for Claude Code. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
 request on the wire to Anthropic, under credentials it holds itself, and picks
 those credentials from a pool of accounts with sticky sessions, quota-driven failover, prompt-cache keepalive,
-per-request statistics, and a web console. One process serves three listeners: the proxy that relays
+per-request statistics down to the request's shape and the answer's own facts, and a web console. One process
+serves three listeners: the proxy that relays
 `/v1/messages`, the admin API with the embedded console, and a metrics endpoint in Prometheus text format.
 
 The documentation lives under [`docs/site/`](docs/site/index.md) and is published at

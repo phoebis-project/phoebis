@@ -59,16 +59,18 @@ companion refuses to report session identifiers over `http://` to a non-loopback
 `CC_KEEPALIVE_MANAGEMENT_URL` and `CC_KEEPALIVE_TOKEN` are not needed; the companion defaults them to
 `ANTHROPIC_BASE_URL` and `CLAUDE_CODE_OAUTH_TOKEN`.
 
+`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is worth setting for Fable 5.1 sessions in a pool with cache warming on: at a
+0.025x read price, a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset
+without warming. Through a pool with a cache TTL policy the variable has no effect; the pool decides. See
+[Keepalive](keepalive.md).
+
+### Optional: bind a session to its process
+
 The optional owner binding, `CC_KEEPALIVE_OWNER_ID` paired with `ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id:
 $CC_KEEPALIVE_OWNER_ID"`, hardens what the router already fences: cache warming is fenced by the companion's own
 registration, and this pair binds each request to the process that registered, so a second process resuming the same
 session id cannot inherit its recipes. When both sides name an owner they must agree. It needs a wrapper script, since
 the settings file's environment block holds only static values.
-
-`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is worth setting for Fable 5.1 sessions in a pool with cache warming on: at a
-0.025x read price, a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset
-without warming. Through a pool with a cache TTL policy the variable has no effect; the pool decides. See
-[Keepalive](keepalive.md).
 
 ## What the proxy accepts
 
