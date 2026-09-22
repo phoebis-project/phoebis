@@ -39,9 +39,7 @@ impl ToSql for AccountKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountState {
     Unpaired,
-    Pairing,
     Ready,
-    Refreshing,
     ReauthRequired,
     FundingRequired,
     Disconnected,
@@ -51,9 +49,7 @@ impl AccountState {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             AccountState::Unpaired => "unpaired",
-            AccountState::Pairing => "pairing",
             AccountState::Ready => "ready",
-            AccountState::Refreshing => "refreshing",
             AccountState::ReauthRequired => "reauth_required",
             AccountState::FundingRequired => "funding_required",
             AccountState::Disconnected => "disconnected",
@@ -65,9 +61,7 @@ impl FromSql for AccountState {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value.as_str()? {
             "unpaired" => Ok(AccountState::Unpaired),
-            "pairing" => Ok(AccountState::Pairing),
             "ready" => Ok(AccountState::Ready),
-            "refreshing" => Ok(AccountState::Refreshing),
             "reauth_required" => Ok(AccountState::ReauthRequired),
             "funding_required" => Ok(AccountState::FundingRequired),
             "disconnected" => Ok(AccountState::Disconnected),

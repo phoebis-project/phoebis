@@ -801,15 +801,6 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             .sum::<u64>(),
         1
     );
-    parts
-        .store
-        .set_state("direct", phoebis_store::AccountState::Refreshing)
-        .unwrap();
-    assert_eq!(
-        json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0]["status"],
-        "active",
-        "a member mid-refresh still serves, as the selector admits it"
-    );
     assert_eq!(
         post(
             &parts.app,

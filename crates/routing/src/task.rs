@@ -965,10 +965,7 @@ impl Task {
         // finishes on its account. A disconnect or a deletion takes the credential away, so its streams end.
         for account in previous.accounts() {
             let present = next.account(&account.id).is_some_and(|a| {
-                !matches!(
-                    a.state,
-                    AccountState::Disconnected | AccountState::Pairing | AccountState::Unpaired
-                )
+                !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
             });
             if !present {
                 if let Some(token) = self.cancel.remove(&account.id) {

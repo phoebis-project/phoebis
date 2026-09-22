@@ -412,11 +412,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "trigger": "hash"
           },
-          "id": "evt_fa15ef4348f19f4d",
+          "id": "evt_48ad7409d6596261",
           "kind": "client_drift",
           "opened_at": 1000000,
           "resolved_at": null,
-          "rule_id": "rule_57c72b9a51167704",
+          "rule_id": "rule_e4017c0f1170e2ab",
           "state": "open",
           "subject": "client 2.1.274"
         }
@@ -431,7 +431,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": false,
           "has_secret": false,
-          "id": "rule_57c72b9a51167704",
+          "id": "rule_e4017c0f1170e2ab",
           "kind": "client_drift",
           "scope": {
             "id": null,
@@ -446,7 +446,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": true,
-          "id": "rule_6dd607182721ea91",
+          "id": "rule_68d84766e4768a42",
           "kind": "utilization_above",
           "scope": {
             "id": "main",
@@ -3056,7 +3056,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "key_id": "desktop",
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "next_probe_at": 1237291,
+          "next_probe_at": 1235039,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -3082,8 +3082,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "keepalive_opt_out": false,
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
-      "prefix": "Q7Z2UfYT",
-      "created_at": 1790029260002,
+      "prefix": "2JGZ2Kh0",
+      "created_at": 1790070403331,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -3118,8 +3118,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive_opt_out": false,
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
-          "prefix": "Q7Z2UfYT",
-          "created_at": 1790029260002,
+          "prefix": "2JGZ2Kh0",
+          "created_at": 1790070403331,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
@@ -3835,9 +3835,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "CkPpcJfJv9LarAh5GBMQJtfGRXn-7G840GxiQ1fD8qk",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60465%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=S9QhncP8vdqQvy4iKNnZvpGryNxvLQ-_ktDcyNH_1sg&code_challenge_method=S256&state=MVTFuKufEzw7Mn_CQIv8OJ_em7G27yHQJZSMAsSg8wA",
-      "redirect_uri": "http://localhost:60465/callback",
+      "id": "PuEZFsqy7j01gVA5K2cQOKQd_ob4nzUnEWgfJMNsBb0",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A54532%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=MqI9D1c1qcvmrjCO3YYmvXSY7seM-bik0XWr_Xa41Lc&code_challenge_method=S256&state=kz3RuANIHJUbdCSWTwmOtYAmp8RJcAabPiEDIw5aS8w",
+      "redirect_uri": "http://localhost:54532/callback",
       "expires_at": 1600000
     }
   },
@@ -4069,8 +4069,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cache_diagnostics": null,
           "body_capture_hours": 24,
-          "created_at": 1790029259999,
-          "updated_at": 1790029259999,
+          "created_at": 1790070403328,
+          "updated_at": 1790070403328,
           "members": [
             {
               "account_id": "business",
@@ -4087,7 +4087,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "Q7Z2UfYT",
+              "prefix": "2JGZ2Kh0",
               "enabled": true
             }
           ],
@@ -4315,7 +4315,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "pricing_import": {
     "route": "POST /admin/pricing/import",
     "body": {
-      "token": "imp_7f980022fc485a4ad7a36f9dfcaa45d9",
+      "token": "imp_67ae6f6638f24ac0136eba660da76cfb",
       "format": "litellm",
       "in_file": 1,
       "served": 1,
@@ -4957,7 +4957,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/session",
     "body": {
       "role": "admin",
-      "session_id": "QsFvSEXytv4rueRLrshhir22pDndArMTa4yJ_VqDKmg"
+      "session_id": "14Q3HNsh_H2coJteRzpL_mCKMNq4EWOhlecZbhAvbXo"
     }
   },
   "sessions": {
@@ -4966,7 +4966,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790029260002,
+          "key_generation": 1790070403331,
           "session_id": "s1",
           "model": "claude-sonnet-5",
           "account_id": "business",
@@ -4980,14 +4980,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
-            "next_probe_at": 1237291,
+            "next_probe_at": 1235039,
             "state": "busy"
           },
           "historical": false
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790029260002,
+          "key_generation": 1790070403331,
           "session_id": "s2",
           "model": "claude-sonnet-5",
           "account_id": "business",
@@ -5184,7 +5184,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "uptime_seconds": 0,
       "storage_ok": true,
       "ledger": {
-        "schema_version": 11,
+        "schema_version": 12,
         "written": 9,
         "dropped": 0,
         "write_failures": 0,

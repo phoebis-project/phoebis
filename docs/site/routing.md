@@ -180,7 +180,7 @@ stays and the upstream's answer decides.
 Any move records a `pin_migrated` event with reason `overage`, `spent`, or `utilization`. A pin released without a move
 records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`, `cooldown`,
 `deleted`, `expired`, `overage`, `paused`, `spent`, `unserved`, the account's state when it cannot serve
-(`disconnected`, `funding_required`, `pairing`, `reauth_required`, `unpaired`), or `released` when the selection found
+(`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found
 nothing else against the account, as with a utilization move whose destination emptied. Releasing a session by hand,
 from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 

@@ -127,10 +127,7 @@ pub fn samples_from_poll(
 /// because a paused account's quota is still the operator's to watch.
 fn polled(kind: AccountKind, state: AccountState) -> bool {
     kind == AccountKind::Oauth
-        && !matches!(
-            state,
-            AccountState::Disconnected | AccountState::Pairing | AccountState::Unpaired
-        )
+        && !matches!(state, AccountState::Disconnected | AccountState::Unpaired)
 }
 
 pub struct QuotaPoll;

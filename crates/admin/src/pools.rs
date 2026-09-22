@@ -461,13 +461,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         let ready = accounts
             .iter()
             .find(|a| a.id == m.account_id)
-            .is_some_and(|a| {
-                a.enabled
-                    && matches!(
-                        a.state,
-                        phoebis_store::AccountState::Ready | phoebis_store::AccountState::Refreshing
-                    )
-            });
+            .is_some_and(|a| a.enabled && a.state == phoebis_store::AccountState::Ready);
         if !ready {
             return Some("unavailable");
         }

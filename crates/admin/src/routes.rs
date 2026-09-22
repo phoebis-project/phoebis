@@ -1025,10 +1025,8 @@ fn state_name(state: AccountState) -> &'static str {
     match state {
         AccountState::Disconnected => "disconnected",
         AccountState::FundingRequired => "funding_required",
-        AccountState::Pairing => "pairing",
         AccountState::ReauthRequired => "reauth_required",
         AccountState::Ready => "ready",
-        AccountState::Refreshing => "refreshing",
         AccountState::Unpaired => "unpaired",
     }
 }

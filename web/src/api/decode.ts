@@ -52,7 +52,7 @@ function foldWindows(windows: RateLimitWindow[]): RateLimitWindow[] {
 function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   const state = str(a.state);
   if (state === 'reauth_required' || state === 'funding_required') return state;
-  if (state === 'unpaired' || state === 'disconnected' || state === 'pairing') return 'unpaired';
+  if (state === 'unpaired' || state === 'disconnected') return 'unpaired';
   if (!bool(a.enabled, true)) return 'paused';
   if (cooldowns.length > 0) return 'cooldown';
   return 'ready';

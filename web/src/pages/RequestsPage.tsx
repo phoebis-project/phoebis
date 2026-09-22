@@ -60,7 +60,6 @@ const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   expired: 'pin idle past the affinity window',
   funding_required: 'funding required',
   overage: 'in overage',
-  pairing: 'upstream pairing',
   paused: 'upstream paused',
   reauth_required: 'needs re-auth',
   released: 'nothing else stood against the upstream',

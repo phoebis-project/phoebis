@@ -150,10 +150,9 @@ fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
 
 fn state_name(state: AccountState) -> Option<&'static str> {
     match state {
-        AccountState::Ready | AccountState::Refreshing => None,
+        AccountState::Ready => None,
         AccountState::Disconnected => Some("disconnected"),
         AccountState::FundingRequired => Some("funding_required"),
-        AccountState::Pairing => Some("pairing"),
         AccountState::ReauthRequired => Some("reauth_required"),
         AccountState::Unpaired => Some("unpaired"),
     }
@@ -163,8 +162,8 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// says why a pin was released without a migration: `expired` (idle past the pool's affinity TTL), `unserved`
 /// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
-/// account's state when it cannot serve (`disconnected`, `funding_required`, `pairing`, `reauth_required`,
-/// `unpaired`), `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy
+/// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
+/// `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy
 /// other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the
 /// request's window). Never empty: a pin released by a move whose destination then answered nothing carries
 /// `released`, the one fact the list above does not evaluate.
@@ -536,12 +535,7 @@ fn obstacle(
     let Some(account) = snapshot.account(&candidate.account_id) else {
         return Some(Obstacle::Operator);
     };
-    if !account.enabled
-        || !matches!(
-            account.state,
-            AccountState::Ready | AccountState::Refreshing
-        )
-    {
+    if !account.enabled || account.state != AccountState::Ready {
         return Some(Obstacle::Operator);
     }
     if let Some(cooldown) = state.cooldown(&candidate.account_id, model, now) {

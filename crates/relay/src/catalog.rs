@@ -269,7 +269,7 @@ impl CatalogService {
                 for account in accounts {
                     if matches!(
                         account.state,
-                        AccountState::Disconnected | AccountState::Pairing | AccountState::Unpaired
+                        AccountState::Disconnected | AccountState::Unpaired
                     ) {
                         continue;
                     }

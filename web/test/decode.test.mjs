@@ -336,7 +336,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
-  assert.equal(s1.keyGeneration, 1790029260002, 'the live holder names the generation its key row carries');
+  assert.equal(s1.keyGeneration, 1790070403331, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
   assert.equal(s1.requests, 2);
