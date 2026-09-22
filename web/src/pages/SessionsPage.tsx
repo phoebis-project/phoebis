@@ -134,8 +134,8 @@ export function SessionsPage() {
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
   const rows = useMemo(
     () =>
-      sessionData && recipeData
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data ?? [], pools.data ?? [], now).filter((r) => {
+      sessionData && recipeData && keys.data
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], now).filter((r) => {
             const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
             return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
           })
@@ -423,7 +423,7 @@ function SessionRows({
         {/* Spelled-out actions cost 300px of row width, which is what pushed the table past the window. */}
         <td className="right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
-            label={`Actions for session ${shortId(session.sessionId, 13)}`}
+            label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(session.sessionId)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(session.sessionId)}`) },

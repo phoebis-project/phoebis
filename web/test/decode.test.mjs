@@ -95,6 +95,11 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal(k.usage7d.tokens > 0, true);
   assert.equal(typeof k.sessionsOnRetiredSecret, 'number');
   assert.equal(k.retiredSecretLastUsedAt, null, 'a key whose retired secret never authenticated carries no time');
+  assert.equal(
+    d.decodeKey({ ...fixture('keys').keys[0], retired_secret_last_used_at: 1790029200000 }).retiredSecretLastUsedAt,
+    new Date(1790029200000).toISOString(),
+    'a retired secret carries the instant it was last used, not just a type',
+  );
   assert.equal(d.decodeKey({ ...fixture('keys').keys[0], revoked_at: 5 }).status, 'revoked');
   assert.equal(d.decodeKey({ ...fixture('keys').keys[0], expires_at: 5 }).status, 'expired');
   assert.equal(d.decodeKey({ ...fixture('keys').keys[0], enabled: false }).status, 'disabled', 'routing refuses a key that is switched off, so the row may not read active');
@@ -330,6 +335,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
+  assert.equal(s1.keyGeneration, 1790029260002, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
   assert.equal(s1.requests, 2);
