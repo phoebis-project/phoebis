@@ -52,7 +52,7 @@ pub struct NativeEdit<'a> {
     pub cache_ttl: Option<CacheTtl>,
     /// What the TTL rewrite does to a body carrying no marker at all.
     pub markerless: Markerless,
-    /// The `claude-cli/` version of the user agent and the prompt characters `BodyFacts` read, for the
+    /// The `claude-cli/` version of the user agent and the prompt units `BodyFacts` read, for the
     /// version-suffix check; `None` for a caller the check does not apply to.
     pub version_check: Option<VersionCheck<'a>>,
 }
@@ -60,7 +60,7 @@ pub struct NativeEdit<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct VersionCheck<'a> {
     pub client_version: &'a str,
-    pub prompt_chars: [char; 3],
+    pub prompt_units: [u16; 3],
 }
 
 /// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
@@ -391,7 +391,7 @@ fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
     else {
         return None;
     };
-    let expected = crate::billing::cc_version(check.client_version, check.prompt_chars);
+    let expected = crate::billing::cc_version(check.client_version, check.prompt_units);
     (expected.rsplit('.').next() != Some(suffix)).then_some("version_suffix")
 }
 

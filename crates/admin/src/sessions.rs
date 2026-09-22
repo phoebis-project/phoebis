@@ -29,6 +29,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             "the router is not available",
         ));
     };
+    // Read right after the pins ask and before the ledger read below awaits: a pin belongs to the live holder
+    // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
+    // it from stamping this request's pins with the replacement's generation.
+    let live: std::collections::BTreeMap<String, i64> = state
+        .router
+        .snapshot()
+        .keys()
+        .map(|k| (k.id.clone(), k.created_at))
+        .collect();
     let now = (state.clock)();
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state
@@ -40,14 +49,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Ok(a) => a,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
-    // Read once: a pin and a recipe belong to the live holder of their key id alone, and a ledger row's
-    // generation says whether that row's holder is still the live one or has since been replaced.
-    let live: std::collections::BTreeMap<String, i64> = state
-        .router
-        .snapshot()
-        .keys()
-        .map(|k| (k.id.clone(), k.created_at))
-        .collect();
     let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
         std::collections::BTreeMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {

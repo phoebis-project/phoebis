@@ -332,7 +332,9 @@ struct Task {
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
     store: Arc<Store>,
-    touched_at: HashMap<(String, Presented), i64>,
+    /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
+    /// rotation is a first sight of that presentation, not a repeat the grace period should swallow.
+    touched_at: HashMap<(String, Presented), (i64, Option<i64>)>,
     /// Weak on purpose: the loop ends when the last handle drops, so a test that reopens an on-disk store
     /// gets the process lock back; the task's own follow-ups upgrade it and give up when nobody is left.
     tx: mpsc::WeakSender<Command>,
@@ -715,14 +717,17 @@ impl Task {
             } => {
                 let now = (self.clock)();
                 // Debounced per presentation, so a retired-secret touch is never swallowed by a live one that
-                // landed inside the same minute: the retired stamp is what the console's count leans on.
+                // landed inside the same minute: the retired stamp is what the console's count leans on. A
+                // stamp from before a key rotated again never debounces the newly retired secret's first
+                // touch, or that secret's use would stay unstamped until the earlier grace expired on its own.
                 let slot = (key_id.clone(), presented);
-                let due = self
-                    .touched_at
-                    .get(&slot)
-                    .is_none_or(|at| now - at >= self.config.touch_interval.as_millis() as i64);
+                let due = match self.touched_at.get(&slot) {
+                    Some((_, stamped_rotation)) if *stamped_rotation != rotated_at => true,
+                    Some((at, _)) => now - at >= self.config.touch_interval.as_millis() as i64,
+                    None => true,
+                };
                 if due {
-                    self.touched_at.insert(slot, now);
+                    self.touched_at.insert(slot, (now, rotated_at));
                     let store = self.store.clone();
                     tokio::task::spawn_blocking(move || {
                         let _ = store.touch_api_key(

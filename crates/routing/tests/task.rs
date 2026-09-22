@@ -615,8 +615,9 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
             == Some(11_000)
     })
     .await;
-    // A touch that authenticated under the earlier rotation lands after a later one: the new grace stays
-    // unpresented.
+    // The key rotates again right away: the secret this presentation names is the newly retired one, a
+    // different secret from the one the debounce slot above still remembers, so its first touch is not
+    // swallowed by a grace period that belongs to the rotation before it.
     store
         .rotate_api_key(
             "k",
@@ -626,6 +627,20 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
             "t",
         )
         .unwrap();
+    now.store(21_500, Ordering::SeqCst);
+    handle.touch_key("k", Presented::Retired, Some(30_000));
+    wait_for(WRITTEN, || {
+        (store
+            .api_key("k")
+            .unwrap()
+            .unwrap()
+            .retired_secret_last_used_at
+            == Some(21_500))
+        .then_some(())
+    })
+    .await;
+    // A touch that authenticated under the earlier rotation lands after a later one: the new grace stays
+    // unpresented.
     now.store(90_000, Ordering::SeqCst);
     handle.touch_key("k", Presented::Retired, rotated_at);
     stays_for(NOT_WRITTEN, || {
@@ -634,7 +649,7 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
             .unwrap()
             .unwrap()
             .retired_secret_last_used_at
-            .is_none()
+            == Some(21_500)
     })
     .await;
 }

@@ -276,6 +276,44 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
     up.shutdown().await;
 }
 
+/// A request with no `User-Agent` header at all is not invisible to the pattern filter: it lands under the
+/// `-` marker the rollups and the console's fold already use for one.
+#[tokio::test]
+async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_dash() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    req.headers_mut().remove("user-agent");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    assert_eq!(ledgered(&h, &id).await.0.user_agent, None);
+    let matched = |agent: &str| {
+        let filter = phoebis_ledger::RequestFilter {
+            user_agent: Some(agent.into()),
+            ..Default::default()
+        };
+        h.db.read_blocking(|c| {
+            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .len()
+    };
+    assert_eq!(matched("*"), 1, "the wildcard includes a row with no agent");
+    assert_eq!(
+        matched("-"),
+        1,
+        "the exact unattributed marker selects it too"
+    );
+    up.shutdown().await;
+}
+
 /// The answer's own counts and facts reach the attempt row and the three counts reach the hour's rollup; the
 /// served model is recorded only when it is not the one the router resolved.
 #[tokio::test]
@@ -491,7 +529,7 @@ async fn a_streamed_refusal_from_another_model_records_the_served_model_and_the_
                 },
                 SseEvent {
                     event: "message_delta".into(),
-                    data: r#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null},"stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"},"usage":{"output_tokens":3}}"#.into(),
+                    data: r#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"}},"usage":{"output_tokens":3}}"#.into(),
                 },
                 SseEvent {
                     event: "message_stop".into(),

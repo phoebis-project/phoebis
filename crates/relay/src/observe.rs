@@ -83,7 +83,12 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str]) -> Answer {
     // A `message_delta` nests the stop under `delta`; a whole answer carries it at its own level.
     let stop =
         |key: &str| text(at.get(key)).or_else(|| text(at.get("delta").and_then(|d| d.get(key))));
-    let details = at.get("stop_details");
+    // A delta's own refusal details sit under `delta.stop_details`, never at the root alongside it; reading
+    // both would let a whole answer's root member leak onto a delta that never carried one.
+    let details = match at.get("delta") {
+        Some(delta) => delta.get("stop_details"),
+        None => at.get("stop_details"),
+    };
     let response = ResponseFacts {
         stop_reason: stop("stop_reason"),
         stop_sequence: stop("stop_sequence"),
@@ -212,6 +217,25 @@ mod tests {
         assert!(answer_from_json(br#"{"type":"message"}"#, &[])
             .response
             .is_empty());
+    }
+
+    #[test]
+    fn a_deltas_refusal_details_are_read_from_delta_stop_details_not_the_root() {
+        let delta = br#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"}},"usage":{"output_tokens":3}}"#;
+        let answer = answer_from_json(delta, &[]);
+        assert_eq!(
+            (
+                answer.response.stop_reason.as_deref(),
+                answer.response.refusal_category.as_deref(),
+                answer.response.refusal_recommended_model.as_deref()
+            ),
+            (Some("refusal"), Some("cyber"), Some("claude-opus-5"))
+        );
+        // A root `stop_details` beside a `delta` object is never a whole answer's own member landing on a
+        // delta by coincidence, so it must not be read once the delta has its own (possibly empty) member.
+        let root_only = br#"{"type":"message_delta","delta":{"stop_reason":"refusal"},"stop_details":{"type":"refusal","category":"root-leaked"}}"#;
+        let answer = answer_from_json(root_only, &[]);
+        assert_eq!(answer.response.refusal_category, None);
     }
 
     #[test]

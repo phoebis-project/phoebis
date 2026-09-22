@@ -352,6 +352,43 @@ async fn a_stamped_body_with_the_right_suffix_relays() {
     up.shutdown().await;
 }
 
+/// A supplementary-plane character ahead of a sampled position shifts the client's own UTF-16 indexing, not
+/// the relay's: a suffix computed the client's way for such a prompt still relays rather than being refused as
+/// drift. The fixture's own prompt is `hi`, too short to sample anything but padding, so this splices a longer
+/// one in to exercise the shift.
+#[tokio::test]
+async fn a_suffix_over_a_supplementary_character_prompt_relays() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    // "a\u{1D11E}bcdefghijklmnopqrstuvwxyz": UTF-16 units 4, 7, and 20 are 'c', 'f', 's'; sha256 of
+    // "59cf53e54c78" + "cfs" + "2.1.269", first three hex characters, is "596".
+    let spliced = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen(
+            "\"text\":\"hi\"",
+            "\"text\":\"a\u{1D11E}bcdefghijklmnopqrstuvwxyz\"",
+            1,
+        )
+        .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.596", 1);
+    let signed = phoebis_cch::sign(spliced.as_bytes()).unwrap();
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            &signed,
+            "phoebis-testkey",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(outcome(&resp).client_drift, None);
+    assert_eq!(up.requests().len(), 1, "the body reached the upstream");
+    up.shutdown().await;
+}
+
 /// A first-party body whose billing stamp this build cannot reproduce never reaches the upstream: the client
 /// moved past the pinned profile, the caller gets a 400 that names which check refused it, and the outcome
 /// carries it for the ledger.

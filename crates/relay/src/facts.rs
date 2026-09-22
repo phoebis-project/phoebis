@@ -7,9 +7,10 @@ use serde_json::Value;
 pub struct BodyFacts {
     /// The last `messages` entry has role `user` and carries no `tool_result` block.
     pub fresh_user_turn: bool,
-    /// Characters 4, 7, and 20 of the user's own prompt (the last `text` block of the first `user` message; the
-    /// system-reminder blocks precede it), `'0'` where the text is shorter, for the version suffix.
-    pub prompt_chars: [char; 3],
+    /// UTF-16 code units 4, 7, and 20 of the user's own prompt (the last `text` block of the first `user`
+    /// message; the system-reminder blocks precede it), matching the client's own JavaScript string indexing;
+    /// `b'0' as u16` where the text is shorter, for the version suffix.
+    pub prompt_units: [u16; 3],
     /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
     /// from a value spelled any other way than the client spells one.
     pub prompt_id: Option<String>,
@@ -21,7 +22,7 @@ impl BodyFacts {
         let Ok(root) = serde_json::from_slice::<Value>(body) else {
             return BodyFacts {
                 fresh_user_turn: false,
-                prompt_chars: ['0'; 3],
+                prompt_units: [b'0' as u16; 3],
                 prompt_id: None,
                 shape: RequestShape::default(),
             };
@@ -30,14 +31,14 @@ impl BodyFacts {
         let fresh_user_turn = messages
             .and_then(|m| m.last())
             .is_some_and(is_fresh_user_turn);
-        let prompt_chars = messages
+        let prompt_units = messages
             .and_then(|m| {
                 m.iter()
                     .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
             })
             .and_then(last_text)
-            .map(prompt_chars_of)
-            .unwrap_or(['0'; 3]);
+            .map(prompt_units_of)
+            .unwrap_or([b'0' as u16; 3]);
         let prompt_id = root
             .get("system")
             .and_then(Value::as_array)
@@ -75,7 +76,7 @@ impl BodyFacts {
         };
         BodyFacts {
             fresh_user_turn,
-            prompt_chars,
+            prompt_units,
             prompt_id,
             shape,
         }
@@ -130,9 +131,12 @@ fn last_text(message: &Value) -> Option<&str> {
     }
 }
 
-fn prompt_chars_of(text: &str) -> [char; 3] {
-    let chars: Vec<char> = text.chars().collect();
-    let at = |i: usize| chars.get(i).copied().unwrap_or('0');
+/// UTF-16 code units, not Unicode scalar values: the client indexes its prompt string as JavaScript does, so a
+/// supplementary-plane character ahead of a sampled position has to shift the same way here or the suffix the
+/// two sides compute diverges on a legitimate prompt.
+fn prompt_units_of(text: &str) -> [u16; 3] {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let at = |i: usize| units.get(i).copied().unwrap_or(b'0' as u16);
     [at(4), at(7), at(20)]
 }
 
@@ -166,9 +170,9 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_characters_of_a_short_prompt_pad_with_zero() {
+    fn the_prompt_units_of_a_short_prompt_pad_with_zero() {
         let body = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        assert_eq!(BodyFacts::read(body).prompt_chars, ['0', '0', '0']);
+        assert_eq!(BodyFacts::read(body).prompt_units, [b'0' as u16; 3]);
     }
 
     #[test]
@@ -177,14 +181,29 @@ mod tests {
             {"type":"text","text":"<system-reminder>ignored</system-reminder>"},
             {"type":"text","text":"01234567890123456789X1"}
         ]}]}"#;
-        assert_eq!(BodyFacts::read(body).prompt_chars, ['4', '7', 'X']);
+        assert_eq!(
+            BodyFacts::read(body).prompt_units,
+            [b'4' as u16, b'7' as u16, b'X' as u16]
+        );
     }
 
     #[test]
-    fn an_unparseable_body_reads_as_not_a_fresh_turn_with_zeroed_characters() {
+    fn a_supplementary_plane_character_shifts_the_utf16_sample_the_way_the_client_shifts_it() {
+        // The character before position 4 is one Unicode scalar value but two UTF-16 code units, so the
+        // client's sample (units 4, 7, 20) and a scalar-value sample (chars 4, 7, 20) read different letters.
+        let text = "a\u{1D11E}bcdefghijklmnopqrstuvwxyz";
+        let body = format!(r#"{{"messages":[{{"role":"user","content":"{text}"}}]}}"#);
+        assert_eq!(
+            BodyFacts::read(body.as_bytes()).prompt_units,
+            [b'c' as u16, b'f' as u16, b's' as u16]
+        );
+    }
+
+    #[test]
+    fn an_unparseable_body_reads_as_not_a_fresh_turn_with_zeroed_units() {
         let facts = BodyFacts::read(b"not json");
         assert!(!facts.fresh_user_turn);
-        assert_eq!(facts.prompt_chars, ['0', '0', '0']);
+        assert_eq!(facts.prompt_units, [b'0' as u16; 3]);
     }
 
     #[test]

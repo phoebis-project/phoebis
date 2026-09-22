@@ -19,7 +19,7 @@ pub const FIELD_ORDER: [&str; 7] = [
 pub struct Restore<'a> {
     pub cli_version: &'a str,
     pub entrypoint: &'a str,
-    pub prompt_chars: [char; 3],
+    pub prompt_units: [u16; 3],
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
     pub restore_cch: bool,
@@ -52,11 +52,14 @@ pub fn restore_billing_line(
     }
 }
 
-/// `<cli_version>.<3 hex>` where the hex is `sha256("59cf53e54c78" + c4 + c7 + c20 + cli_version)[0..3]`.
-pub fn cc_version(cli_version: &str, prompt_chars: [char; 3]) -> String {
+/// `<cli_version>.<3 hex>` where the hex is `sha256("59cf53e54c78" + u4 + u7 + u20 + cli_version)[0..3]` and
+/// `u4`, `u7`, `u20` are the sampled UTF-16 code units decoded lossily as one sequence, exactly as the client's
+/// string concatenation and UTF-8 encoding produce them: two sampled surrogates that happen to pair become one
+/// four-byte character, and a lone surrogate becomes U+FFFD.
+pub fn cc_version(cli_version: &str, prompt_units: [u16; 3]) -> String {
     use sha2::{Digest, Sha256};
     let mut input = String::from("59cf53e54c78");
-    input.extend(prompt_chars);
+    input.push_str(&String::from_utf16_lossy(&prompt_units));
     input.push_str(cli_version);
     let digest = Sha256::digest(input.as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -269,7 +272,7 @@ fn insert_whole_line(
     let fields = vec![
         format!(
             "cc_version={}",
-            cc_version(restore.cli_version, restore.prompt_chars)
+            cc_version(restore.cli_version, restore.prompt_units)
         ),
         format!("cc_entrypoint={}", restore.entrypoint),
     ];
@@ -305,30 +308,92 @@ mod tests {
     }
 
     #[test]
-    fn cc_version_hashes_the_salt_the_prompt_characters_and_the_client_version() {
-        assert_eq!(cc_version("2.1.269", ['0', '0', '0']), "2.1.269.517");
+    fn cc_version_hashes_the_salt_the_prompt_units_and_the_client_version() {
+        assert_eq!(cc_version("2.1.269", [b'0' as u16; 3]), "2.1.269.517");
     }
 
-    /// The formula as the 2.1.278 binary computes it (read 2026-09-21): characters 4, 7, and 20 of the first
-    /// user message's text, `0` for a missing one, the salt, the version, sha256, three hex characters. The
-    /// prompt below is longer than 20 characters, so every index lands on a real character.
+    /// The formula as the 2.1.278 binary computes it (read 2026-09-21): UTF-16 code units 4, 7, and 20 of the
+    /// first user message's text, `0` for a missing one, the salt, the version, sha256, three hex characters.
+    /// The prompt below is longer than 20 units and pure ASCII, so scalar-value and code-unit indexing agree.
     #[test]
     fn the_suffix_of_a_long_prompt_reproduces_the_clients_formula() {
         let prompt = "Explain how the relay restores the billing line for a reduced-shape request.";
-        let chars: Vec<char> = prompt.chars().collect();
-        assert_eq!((chars[4], chars[7], chars[20]), ('a', ' ', 'y'));
-        assert_eq!(cc_version("2.1.278", ['a', ' ', 'y']), "2.1.278.233");
-        assert_eq!(cc_version("2.1.269", ['a', ' ', 'y']), "2.1.269.3ef");
+        let units: Vec<u16> = prompt.encode_utf16().collect();
+        assert_eq!(
+            (units[4], units[7], units[20]),
+            (b'a' as u16, b' ' as u16, b'y' as u16)
+        );
+        assert_eq!(
+            cc_version("2.1.278", [units[4], units[7], units[20]]),
+            "2.1.278.233"
+        );
+        assert_eq!(
+            cc_version("2.1.269", [units[4], units[7], units[20]]),
+            "2.1.269.3ef"
+        );
         let short = "Explain";
-        let padded: Vec<char> = short
-            .chars()
-            .chain(std::iter::repeat('0'))
+        let padded: Vec<u16> = short
+            .encode_utf16()
+            .chain(std::iter::repeat(b'0' as u16))
             .take(21)
             .collect();
         assert_eq!(
             (padded[4], padded[7], padded[20]),
-            ('a', '0', '0'),
+            (b'a' as u16, b'0' as u16, b'0' as u16),
             "a short prompt pads with zeros"
+        );
+    }
+
+    /// The seat's example: a supplementary-plane character before position 4 shifts the client's UTF-16 sample
+    /// away from what a Unicode-scalar-value sample would read (`dgt`, suffix `9ad`), so a suffix computed the
+    /// old way would refuse a legitimately signed request. Verified against the client's own formula: sha256
+    /// of `"59cf53e54c78" + "cfs" + "2.1.278"`, first three hex characters, is `143`.
+    #[test]
+    fn a_supplementary_character_before_position_4_reproduces_the_clients_suffix() {
+        let prompt = "a\u{1D11E}bcdefghijklmnopqrstuvwxyz";
+        let units: Vec<u16> = prompt.encode_utf16().collect();
+        assert_eq!(
+            (units[4], units[7], units[20]),
+            (b'c' as u16, b'f' as u16, b's' as u16)
+        );
+        assert_eq!(
+            cc_version("2.1.278", [units[4], units[7], units[20]]),
+            "2.1.278.143"
+        );
+    }
+
+    /// A supplementary character straddling position 4 leaves only its low surrogate there, unpaired in the
+    /// three-unit sample; `from_utf16_lossy` reads it as U+FFFD, the same replacement the client's own decode
+    /// produces for a lone surrogate. Verified against sha256 of `"59cf53e54c78" + "\u{FFFD}gt" + "2.1.278"`.
+    #[test]
+    fn a_supplementary_character_straddling_position_4_decodes_its_lone_surrogate_as_replacement() {
+        let prompt = "abc\u{10000}efghijklmnopqrst";
+        let units: Vec<u16> = prompt.encode_utf16().collect();
+        assert_eq!(
+            (units[4], units[7], units[20]),
+            (0xDC00, b'g' as u16, b't' as u16)
+        );
+        assert_eq!(
+            cc_version("2.1.278", [units[4], units[7], units[20]]),
+            "2.1.278.373"
+        );
+    }
+
+    /// Positions 4 and 7 land on two different characters' surrogate halves that happen to pair once sampled
+    /// together; `from_utf16_lossy` combines them into one four-byte character, matching what the client's own
+    /// string concatenation and UTF-8 encoding produce. Verified against sha256 of
+    /// `"59cf53e54c78" + "\u{10037}t" + "2.1.278"`.
+    #[test]
+    fn two_unrelated_sampled_surrogates_that_happen_to_pair_decode_as_one_character() {
+        let prompt = "abcd\u{10000}\u{10437}hijklmnopqrst";
+        let units: Vec<u16> = prompt.encode_utf16().collect();
+        assert_eq!(
+            (units[4], units[7], units[20]),
+            (0xD800, 0xDC37, b't' as u16)
+        );
+        assert_eq!(
+            cc_version("2.1.278", [units[4], units[7], units[20]]),
+            "2.1.278.355"
         );
     }
 
@@ -383,7 +448,7 @@ mod tests {
         let restore = Restore {
             cli_version: "2.1.269",
             entrypoint: "sdk-cli",
-            prompt_chars: ['0', '0', '0'],
+            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: Some("req_1"),
             restore_cch: true,
@@ -410,7 +475,7 @@ mod tests {
         let restore = Restore {
             cli_version: "2.1.269",
             entrypoint: "sdk-cli",
-            prompt_chars: ['0', '0', '0'],
+            prompt_units: [b'0' as u16; 3],
             prompt_id: None,
             prev_req: Some("req_other"),
             restore_cch: false,
@@ -430,7 +495,7 @@ mod tests {
         let restore = Restore {
             cli_version: "2.1.269",
             entrypoint: "sdk-cli",
-            prompt_chars: ['0', '0', '0'],
+            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,
@@ -445,7 +510,7 @@ mod tests {
         Restore {
             cli_version: "2.1.269",
             entrypoint: "sdk-cli",
-            prompt_chars: ['0', '0', '0'],
+            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,

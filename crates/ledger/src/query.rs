@@ -237,8 +237,10 @@ pub fn list_requests(
         args.push(Box::new(like));
         let at_like = args.len();
         args.push(Box::new(escape.to_string()));
+        // The rollups and the console's fold already read an absent agent as `-`; without the coalesce a
+        // nullable column excludes such a row from both the wildcard and the exact marker.
         clauses.push(format!(
-            "user_agent LIKE ?{at_like} ESCAPE ?{}",
+            "COALESCE(user_agent, '-') LIKE ?{at_like} ESCAPE ?{}",
             at_like + 1
         ));
     }

@@ -429,7 +429,7 @@ fn restore_with<'a>(
     restore.as_ref().map(|r| Restore {
         cli_version: &r.cli_version,
         entrypoint: &r.entrypoint,
-        prompt_chars: r.prompt_chars,
+        prompt_units: r.prompt_units,
         prompt_id: r.prompt_id.as_deref(),
         prev_req: previous.request_id.as_deref(),
         restore_cch: true,
@@ -740,7 +740,7 @@ impl Relay {
                 restorable_version(version).map(|version| RestoreContext {
                     cli_version: version.to_string(),
                     entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
-                    prompt_chars: facts.prompt_chars,
+                    prompt_units: facts.prompt_units,
                     prompt_id: identity.session_id.as_deref().map(|session| {
                         self.memory.prompt_id(
                             &MemoryKey {
@@ -1031,7 +1031,7 @@ impl Relay {
                         markerless,
                         version_check: admitted.restore.as_ref().map(|r| VersionCheck {
                             client_version: &r.cli_version,
-                            prompt_chars: r.prompt_chars,
+                            prompt_units: r.prompt_units,
                         }),
                     },
                 )?;
@@ -2130,12 +2130,12 @@ enum Next {
 }
 
 /// The restoration facts computed once at admission: the client version and entrypoint the wire already named,
-/// the version-suffix characters, and the prompt id this turn carries. The previous request id is not here
+/// the version-suffix code units, and the prompt id this turn carries. The previous request id is not here
 /// because it is per-account, looked up in the failover loop against the account each attempt actually tries.
 struct RestoreContext {
     cli_version: String,
     entrypoint: String,
-    prompt_chars: [char; 3],
+    prompt_units: [u16; 3],
     prompt_id: Option<String>,
 }
 
