@@ -12,10 +12,12 @@ use phoebis_store::{MemoryRecord, MemoryStore, StoreError};
 /// The default idle bound, also the client's own session expiry default; `sessions.memory_idle_seconds`
 /// replaces it.
 pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
-/// Entries held at most; past it the least recently seen entry goes. Every string an entry holds is bounded
-/// on the way in (the key's ids and the model by `identity`, the carried prompt id by `facts`, the upstream's
-/// own ids by the response limits), so an entry is a few hundred bytes and the cap bounds memory at a few
-/// tens of megabytes on a host that never restarts.
+/// Entries held at most; past it the least recently seen entry goes. The unflushed overlay a store that stays
+/// down leaves behind is bounded by the same cap, dropping its own oldest rather than growing without limit,
+/// so the relay holds at most twice this many records while the store is failing. Every string an entry holds
+/// is bounded on the way in (the key's ids and the model by `identity`, the carried prompt id by `facts`, the
+/// upstream's own ids by the response limits), so an entry is a few hundred bytes and the cap bounds memory at
+/// a few tens of megabytes on a host that never restarts.
 pub const MEMORY_CAP: usize = 65_536;
 
 /// A minute between sweeps is often enough to keep the map from growing unbounded between requests, and rare
@@ -155,8 +157,12 @@ struct Inner {
     dirty: HashMap<MemoryKey, u64>,
     /// A keyed overlay for the entries that left the map with a change unflushed: an eviction or an idle purge
     /// moves the record here rather than losing it, and a write or a read that lands on the same key revives it
-    /// before falling back to the map or the disk.
+    /// before falling back to the map or the disk. Bounded by `cap`, the same as `entries`.
     pending: HashMap<MemoryKey, (MemoryRecord, u64)>,
+    /// Records the overlay has shed because it was already at `cap` when another arrived, since the last time
+    /// a flush reported them. Real loss, not double counting: an entry the overlay drops is one `acknowledge`
+    /// will never see.
+    dropped_pending: u64,
 }
 
 pub struct SessionMemory {
@@ -180,6 +186,7 @@ impl SessionMemory {
                 sequence: 0,
                 dirty: HashMap::new(),
                 pending: HashMap::new(),
+                dropped_pending: 0,
             }),
             cap,
             idle_ms,
@@ -350,7 +357,7 @@ impl SessionMemory {
     /// Drops entries idle past the configured bound; run by every write, at most once a minute.
     pub fn purge(&self, now: i64) {
         let mut inner = self.inner.lock().unwrap();
-        purge_locked(&mut inner, now, self.idle_ms);
+        purge_locked(&mut inner, now, self.idle_ms, self.cap);
     }
 
     /// Nothing without a store: a memory with no tier 2 accumulates no overlay to flush.
@@ -384,11 +391,11 @@ impl SessionMemory {
             Ok(Ok(Some(record))) => record,
             Ok(Ok(None)) => return,
             Ok(Err(e)) => {
-                tracing::debug!(%e, "the session memory's store could not be read");
+                tracing::warn!(%e, "the session memory's store could not be read");
                 return;
             }
             Err(e) => {
-                tracing::debug!(%e, "the session memory's read did not finish");
+                tracing::warn!(%e, "the session memory's read did not finish");
                 return;
             }
         };
@@ -467,11 +474,25 @@ impl SessionMemory {
         })
         .await;
         match flushed {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(
-                %e,
-                "the session memory could not be flushed; its changes wait for the next flush"
-            ),
+            Ok(Ok(())) => {
+                // Reported once, on the recovery that follows a streak: an outage that never drops anything
+                // stays silent here, and one that does says so exactly once rather than on every later flush.
+                let dropped = std::mem::take(&mut self.inner.lock().unwrap().dropped_pending);
+                if dropped > 0 {
+                    tracing::warn!(
+                        dropped,
+                        "the session memory's overlay dropped records while the store was unreachable"
+                    );
+                }
+            }
+            Ok(Err(e)) => {
+                let dropped = self.inner.lock().unwrap().dropped_pending;
+                tracing::warn!(
+                    %e,
+                    dropped,
+                    "the session memory could not be flushed; its changes wait for the next flush"
+                );
+            }
             Err(e) => tracing::warn!(%e, "the session memory's flush did not finish"),
         }
     }
@@ -551,13 +572,12 @@ fn evict_if_full(inner: &mut Inner, cap: usize) {
         .remove(&oldest)
         .expect("just found under the lock");
     if let Some(sequence) = inner.dirty.remove(&oldest) {
-        inner
-            .pending
-            .insert(oldest, (entry.record(entry.last_seen), sequence));
+        let record = entry.record(entry.last_seen);
+        stash_pending(inner, cap, oldest, record, sequence);
     }
 }
 
-fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64) {
+fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
     if now - inner.last_purge < PURGE_INTERVAL_MS {
         return;
     }
@@ -574,11 +594,40 @@ fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64) {
             .remove(&key)
             .expect("just found under the lock");
         if let Some(sequence) = inner.dirty.remove(&key) {
-            inner
-                .pending
-                .insert(key, (entry.record(entry.last_seen), sequence));
+            let record = entry.record(entry.last_seen);
+            stash_pending(inner, cap, key, record, sequence);
         }
     }
+}
+
+/// Inserts an overlay record, holding `pending` at `cap`: when it is already full, whichever record has the
+/// smallest `last_seen` goes, the new arrival included, since that is the one the idle purge would have shed
+/// first anyway. Counted so a flush that keeps failing can eventually say how much it lost.
+fn stash_pending(
+    inner: &mut Inner,
+    cap: usize,
+    key: MemoryKey,
+    record: MemoryRecord,
+    sequence: u64,
+) {
+    if inner.pending.len() >= cap {
+        let oldest = inner
+            .pending
+            .iter()
+            .min_by_key(|(_, (r, _))| r.last_seen)
+            .map(|(k, (r, _))| (k.clone(), r.last_seen));
+        match oldest {
+            Some((oldest_key, oldest_seen)) if oldest_seen <= record.last_seen => {
+                inner.pending.remove(&oldest_key);
+                inner.dropped_pending += 1;
+            }
+            _ => {
+                inner.dropped_pending += 1;
+                return;
+            }
+        }
+    }
+    inner.pending.insert(key, (record, sequence));
 }
 
 /// `rand::random`'s own bits, restamped with the version and variant nibbles RFC 4122 fixes for a v4 UUID.
@@ -816,6 +865,32 @@ mod tests {
         assert_eq!(keys, std::collections::HashSet::from([a, b]));
     }
 
+    #[test]
+    fn the_overlay_is_bounded_by_the_cap_and_drops_its_oldest_record_when_full() {
+        let store = Arc::new(MapStore::default());
+        let mem = SessionMemory::new(2, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX);
+        let (a, b, c, d, e) = (key("a"), key("b"), key("c"), key("d"), key("e"));
+        // Never flushed: a store that stays down leaves exactly this state behind, one eviction at a time.
+        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        mem.record_request_id(&b, "acct", "req_b", 2_000);
+        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts a into the overlay
+        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts b into the overlay
+        mem.record_request_id(&e, "acct", "req_e", 5_000); // evicts c; the overlay is full, a is dropped
+        let inner = mem.inner.lock().unwrap();
+        assert_eq!(
+            inner.pending.len(),
+            2,
+            "the overlay never grows past the cap"
+        );
+        assert!(
+            !inner.pending.contains_key(&a),
+            "the oldest last_seen left first"
+        );
+        assert!(inner.pending.contains_key(&b));
+        assert!(inner.pending.contains_key(&c));
+        assert_eq!(inner.dropped_pending, 1);
+    }
+
     #[tokio::test]
     async fn an_evicted_entry_is_read_from_the_overlay_before_the_disk() {
         let store = Arc::new(MapStore::default());
@@ -985,13 +1060,20 @@ mod tests {
         let a = key("a");
         mem.record_request_id(&a, "acct", "req_kept", 0);
         mem.flush(0).await;
+        // Overwritten after the flush and read only through the store, not the in-process copy: the two
+        // would otherwise agree on `req_kept` whether or not the idle purge ever ran.
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(a.clone(), seeded("req_disk", None, 0));
         mem.restore(&a, 61_000).await;
         assert_eq!(
             mem.previous(&a, "acct", "claude-sonnet-4-5")
                 .request_id
                 .as_deref(),
-            Some("req_kept"),
-            "the idle purge drops the in-process entry, and the same read fills it back in"
+            Some("req_disk"),
+            "the idle purge drops the in-process entry, and the same read fills it back in from the store"
         );
     }
 
