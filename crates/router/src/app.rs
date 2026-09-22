@@ -442,10 +442,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     shutdown.await;
     tracing::info!("shutting down");
     let _ = stop.send(true);
-    // Stop, close, drain, listeners: the bus arm and the poller stop before the keepalive close so no request
-    // observed during the drain is posted after the end of its session; the close enqueues a session_ended
-    // per live session; the lifecycle consumer posts those before the listeners are joined. The stop is
-    // synchronous and sits outside the timed block, so it has run whatever the block does.
+    // Stop, close, drain, listeners: the inputs stop posting starts and the poller ends before the keepalive
+    // close, so no request observed during the drain is posted after the end of its session; the close
+    // enqueues a session_ended per live session; the lifecycle consumer posts those, and the drain then ends
+    // whatever sessions are left, before the listeners are joined. The stop is synchronous and sits outside
+    // the timed block, so it has run whatever the block does.
     alert_inputs.stop();
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
@@ -473,6 +474,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     };
     // Every delivery queued before the stop lands before the ledger and the bus close.
     alerts.shutdown().await;
+    // The bus arm read through the whole drain so a request completing in it still reached the conditions it
+    // carries; with the listeners joined and the engine closed there is nothing left for it to post.
+    alert_inputs.abort();
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();
     scheduler.abort();

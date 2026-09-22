@@ -228,14 +228,16 @@ as it happens, opens nothing, and has nothing to resolve. `session_active` recei
 `session_parked` and `session_resumed`, and `session_idle` receives `session_idle`. A delivery goes to every
 enabled rule of the kind whose scope matches the session at that moment, so a rule enabled mid-session receives
 the session's later events and no start it missed; after a restart nothing is posted, since the router no longer
-knows which sessions live, and a live session's next event is posted as it comes. Each delivery lands in the
-event log as `lifecycle` with the event's name, and the Alerts view lists them as a log.
+knows which sessions live, and a live session's next event is posted as it comes. A graceful stop posts the end of
+every session it still tracks, so a session whose start was posted is never left open across the restart. Each
+delivery lands in the event log as `lifecycle` with the event's name, and the Alerts view lists them as a log.
 
 **Session active** posts `session_started` on a session's first request through the router, or on the keepalive
 companion's `session_start` when that comes first, and `session_ended` on the companion's `session_end` or when
 the session has been silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the
 companion counts as a sign of life there, so a session whose user has stepped away is not ended while its client
-is still attended. The detail's `source` says which side posted the event: `request`, `companion`, or `expiry`.
+is still attended. The detail's `source` says which side posted the event: `request`, `companion`, `expiry`, or
+`shutdown`.
 
 **Session idle** posts `session_idle` once no request has arrived on the session for the rule's threshold in
 minutes, measured from the session's last request on any of its agents, once per crossing; the session's next

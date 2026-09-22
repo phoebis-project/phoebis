@@ -4,6 +4,7 @@
 //! clocks.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -258,6 +259,19 @@ fn sweep_expired(tracked: &mut TrackedInner, expiry_ms: i64, now: i64) -> Vec<Em
     emits
 }
 
+/// Every session the map still holds ends at a graceful stop, in the shape the expiry uses: the map is the
+/// only record that this process ever posted their starts, so without this a session known from its requests
+/// alone would be left open and its first request after the restart would post a second start with no end
+/// between them. Sorted, so the ends of a shutdown come out in one order whatever the map's own is.
+fn end_tracked(tracked: &mut TrackedInner) -> Vec<Emit> {
+    let mut remaining: Vec<((String, String), SessionState)> = tracked.sessions.drain().collect();
+    remaining.sort_by(|(a, _), (b, _)| a.cmp(b));
+    remaining
+        .iter()
+        .flat_map(|((key, session), state)| end_session(key, session, state, "shutdown"))
+        .collect()
+}
+
 struct InFlight {
     agent: Option<String>,
     /// A buffered response's bytes, scanned once as a document at completion; `None` for a stream, and for a
@@ -283,6 +297,10 @@ pub struct BusArm {
     /// How long a session may go unseen before the arm forgets it. The poller retires that session's open
     /// question at the same age, so nothing the entry is kept for outlives it.
     session_expiry_ms: i64,
+    /// Raised by the teardown while the listeners drain: the arm keeps reading, because a completion landing
+    /// during the drain is the only thing that opens or clears its pool's exhaustion and nothing reconstructs
+    /// that after a restart, but it starts no session the close is about to end.
+    stopping: Arc<AtomicBool>,
     tracked: Tracked,
 }
 
@@ -340,6 +358,7 @@ impl BusArm {
             alerts,
             in_flight: HashMap::new(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
+            stopping: Arc::new(AtomicBool::new(false)),
             tracked: Tracked(Arc::new(Shared {
                 order: Mutex::new(()),
                 sessions: Mutex::new(TrackedInner {
@@ -355,6 +374,12 @@ impl BusArm {
     /// report about the same session meet.
     pub fn tracked(&self) -> Tracked {
         self.tracked.clone()
+    }
+
+    /// The flag the teardown raises, shared with the handles `spawn_inputs` returns. Public so a test that
+    /// drives the arm by hand can put it into the state the drain runs in.
+    pub fn stopping(&self) -> Arc<AtomicBool> {
+        self.stopping.clone()
     }
 
     /// How many key-and-session pairs the arm still holds, which is how a test watches the sweep.
@@ -483,7 +508,10 @@ impl BusArm {
                     let answered = client_turn && o.parent_agent_id.is_none();
                     let pair = (key.clone(), session.clone());
                     let mut tracked = self.tracked.lock();
-                    if client_turn {
+                    // Nothing starts once the teardown has begun: the close is enqueuing the ends of the
+                    // sessions this process knows, and a request that lands during the drain must not open
+                    // one behind them or arm an idle rule that will never be read again.
+                    if client_turn && !self.stopping.load(Ordering::SeqCst) {
                         emits.extend(self.observe_lifecycle(&mut tracked, &o, now));
                     }
                     // A request the session's end outran has no entry to answer against; the end took it.
@@ -1122,41 +1150,55 @@ impl Poller {
 /// The three input tasks, so the binary's teardown can stop the observers before the keepalive close, drain
 /// the lifecycle consumer after it, and abort whatever is left when the drain window closes.
 pub struct AlertInputHandles {
+    alerts: Arc<Alerts>,
     bus: tokio::task::JoinHandle<()>,
     lifecycle: Option<tokio::task::JoinHandle<()>>,
     poller: tokio::task::JoinHandle<()>,
+    stopping: Arc<AtomicBool>,
+    tracked: Tracked,
 }
 
+/// How long the drain waits for the companion's consumer and then posts the ends of what it still tracks.
+const DRAIN_BOUND: Duration = Duration::from_secs(5);
+
 impl AlertInputHandles {
-    /// Stops the bus arm and the poller. Synchronous, so once it returns no observation is applied and no
-    /// sweep runs: nothing that lands during the drain can be posted after a session's end.
+    /// Starts no session and runs no sweep from here on, and stops the poller. Synchronous, so once it
+    /// returns nothing that lands during the drain can be posted after a session's end. The bus arm itself
+    /// keeps reading until `abort`: a request that completes during the drain still opens or clears its
+    /// pool's exhaustion, and the poller's tick reads no completion, so a restart would find neither.
     pub fn stop(&mut self) {
-        self.bus.abort();
+        self.stopping.store(true, Ordering::SeqCst);
         self.poller.abort();
     }
 
     /// Waits for the lifecycle consumer to post what the engine's close enqueued (its sender is gone, so the
-    /// task ends on its own once the queue is empty). Bounded so a consumer stuck on a store write cannot
-    /// hold the shutdown. The handle is polled through a borrow, so a caller that drops this future keeps
-    /// the handle and can still abort it.
+    /// task ends on its own once the queue is empty), then ends every session still tracked. Bounded so a
+    /// consumer stuck on a store write cannot hold the shutdown. The handle is polled through a borrow, so a
+    /// caller that drops this future keeps the handle and can still abort it.
     pub async fn drain(&mut self) {
-        let Some(lifecycle) = self.lifecycle.as_mut() else {
-            return;
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut *lifecycle).await {
-            Ok(Ok(())) => {}
-            // A consumer that panicked took the session ends it had not posted with it, which is
-            // otherwise silent at shutdown.
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "the alerts lifecycle consumer did not finish cleanly")
+        if let Some(lifecycle) = self.lifecycle.as_mut() {
+            match tokio::time::timeout(DRAIN_BOUND, &mut *lifecycle).await {
+                Ok(Ok(())) => {}
+                // A consumer that panicked took the session ends it had not posted with it, which is
+                // otherwise silent at shutdown.
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "the alerts lifecycle consumer did not finish cleanly")
+                }
+                Err(_) => lifecycle.abort(),
             }
-            Err(_) => lifecycle.abort(),
         }
+        // After the companion's own ends, so a session it ended is out of the map by now and takes one end
+        // rather than two.
+        let ordered = self.tracked.ordered();
+        let emits = end_tracked(&mut self.tracked.lock());
+        emit_all(&self.alerts, emits);
+        drop(ordered);
     }
 
-    /// Aborts all three tasks, for a teardown that ran out of time before `drain` finished.
+    /// Aborts all three tasks, for a teardown past its drain or one that ran out of time inside it.
     pub fn abort(&mut self) {
         self.stop();
+        self.bus.abort();
         if let Some(lifecycle) = &self.lifecycle {
             lifecycle.abort();
         }
@@ -1170,6 +1212,7 @@ pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputH
     // The arm owns the session map and the other two read it, so it is built first.
     let mut arm = BusArm::new(alerts.clone(), &inputs);
     let tracked = arm.tracked();
+    let stopping = arm.stopping();
     let bus = spawn_subscriber(subscriber, move |mut subscriber| async move {
         while let Some(event) = subscriber.events.recv().await {
             arm.observe(event);
@@ -1184,7 +1227,7 @@ pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputH
             }
         })
     });
-    let mut poller = Poller::new(alerts, &inputs, tracked);
+    let mut poller = Poller::new(alerts.clone(), &inputs, tracked.clone());
     let tick = inputs.tick;
     let poller = tokio::spawn(async move {
         let mut interval = tokio::time::interval(tick);
@@ -1195,8 +1238,11 @@ pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputH
         }
     });
     AlertInputHandles {
+        alerts,
         bus,
         lifecycle,
         poller,
+        stopping,
+        tracked,
     }
 }

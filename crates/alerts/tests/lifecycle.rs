@@ -1074,3 +1074,127 @@ async fn a_late_observation_posts_a_start_after_the_end_when_the_bus_arm_is_not_
     );
     handles.abort();
 }
+
+/// The arm reads on while the listeners drain: a request that completes in that window is the only thing
+/// that opens or clears its pool's exhaustion, and a restart reconstructs neither.
+#[tokio::test]
+async fn a_completion_during_the_drain_opens_and_clears_the_pools_exhaustion() {
+    let rig = rig().await;
+    install(
+        &rig,
+        &[
+            rule("active", Kind::SessionActive, ScopeType::Key, Some(KEY)),
+            rule(
+                "exhausted",
+                Kind::PoolExhausted,
+                ScopeType::Pool,
+                Some("main"),
+            ),
+        ],
+    );
+    let (tx, rx) = lifecycle_channel();
+    let mut handles = spawn_inputs(
+        rig.alerts.clone(),
+        AlertInputs {
+            lifecycle: Some(rx),
+            ..inputs(&rig, BTreeMap::new())
+        },
+    );
+    // Both requests are in flight when the teardown starts, which is what the drain window is for.
+    rig.bus.publish(main_turn("r1", "s1"));
+    rig.bus.publish(main_turn("r2", "s2"));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (rig.webhook.posts().len() == 2).then_some(())
+    })
+    .await;
+    handles.stop();
+    rig.bus
+        .publish(complete("r1", Outcome::Exhausted, 429, None, None));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == Kind::PoolExhausted.as_str() && e.subject == "main")
+            .then_some(())
+    })
+    .await;
+    rig.bus
+        .publish(complete("r2", Outcome::Succeeded, 200, None, None));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .is_empty()
+            .then_some(())
+    })
+    .await;
+    drop(tx);
+    handles.drain().await;
+    settled(&rig).await;
+    let events = rig.store.alert_events(None, 10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, Kind::PoolExhausted.as_str());
+    assert!(
+        events[0].resolved_at.is_some(),
+        "the success that landed during the drain cleared it"
+    );
+    handles.abort();
+}
+
+/// A graceful stop ends every session the map still holds, whichever side registered it: the map is the only
+/// record of the starts this process posted, and the next request after the restart would otherwise post a
+/// second start with no end between them.
+#[tokio::test]
+async fn the_drain_ends_the_companions_session_and_the_request_only_one_once_each() {
+    let rig = rig().await;
+    install(
+        &rig,
+        &[rule(
+            "active",
+            Kind::SessionActive,
+            ScopeType::Key,
+            Some(KEY),
+        )],
+    );
+    let (tx, rx) = lifecycle_channel();
+    let mut handles = spawn_inputs(
+        rig.alerts.clone(),
+        AlertInputs {
+            lifecycle: Some(rx),
+            ..inputs(&rig, BTreeMap::new())
+        },
+    );
+    // One session the companion registered, one the arm knows from its own requests alone; each start is
+    // waited for, so the two arms post in the order the test reads them back.
+    tx.send(started("s1")).unwrap();
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (posted(&rig) == [active("s1", "session_started")]).then_some(())
+    })
+    .await;
+    rig.bus.publish(main_turn("r1", "s2"));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (posted(&rig).len() == 2).then_some(())
+    })
+    .await;
+    handles.stop();
+    drop(tx);
+    handles.drain().await;
+    settled(&rig).await;
+    assert_eq!(
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s2", "session_started"),
+            active("s1", "session_ended"),
+            active("s2", "session_ended"),
+        ],
+        "the companion's session and the request-only one each end exactly once"
+    );
+    assert_eq!(
+        detail_of(&rig, "session_ended")["source"],
+        "shutdown",
+        "the end names the side that posted it"
+    );
+    handles.abort();
+}
