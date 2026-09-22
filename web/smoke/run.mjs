@@ -1767,13 +1767,39 @@ m.unmount();
 
 
 m = await mount('/alerts');
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
 results.push({ name: '/alerts an idle event without a minute count reads idle, never a blank count', ok: !m.text().includes('idle for  min'), missing: [] });
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
-  const row = [...[...m.container.querySelectorAll('table')].pop().querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
+  const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
   const items = [...(row?.querySelectorAll('.deliveries li') ?? [])].map((li) => li.textContent?.trim() ?? '');
   results.push({ name: '/alerts a delivery row names the transition it belongs to', ok: items.length === 2 && items[0].startsWith('opened') && items[1].startsWith('resolved'), missing: items });
+}
+{
+  const lifecycleRows = () => [...(m.container.querySelector('.lifecycle-table')?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
+  const first = lifecycleRows()[0] ?? '';
+  results.push({
+    name: '/alerts the lifecycle log lists the newest event first, with its failed delivery',
+    ok: /^\d+m ago/.test(first) && first.includes('Session started') && first.includes('refused'),
+    missing: [first.slice(0, 120)],
+  });
+  const eventsText = [...m.container.querySelectorAll('table')][1].textContent ?? '';
+  const strayed = ['Session active', 'Session idle', 'Session parked', 'Subagent active'].filter((label) => eventsText.includes(label));
+  results.push({ name: '/alerts no lifecycle kind sits in the events table', ok: strayed.length === 0, missing: strayed });
+  const lifecycleFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter lifecycle by condition');
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue.call(lifecycleFilter, 'session_parked');
+  lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(300);
+  const parked = lifecycleRows();
+  results.push({
+    name: '/alerts the lifecycle condition filter narrows to one session kind',
+    ok: parked.length === 2 && parked.every((r) => r.includes('Session parked') || r.includes('Session resumed')),
+    missing: parked.map((r) => r.slice(0, 60)),
+  });
+  setValue.call(lifecycleFilter, 'all');
+  lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await m.settle(300);
 }
 {
   const stateFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by state');
@@ -1781,7 +1807,7 @@ results.push({ name: '/alerts an idle event without a minute count reads idle, n
   setValue.call(stateFilter, 'resolved');
   stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
   await m.settle(300);
-  const rows = [...m.container.querySelectorAll('table')].pop()?.querySelectorAll('tbody tr') ?? [];
+  const rows = [...m.container.querySelectorAll('table')][1]?.querySelectorAll('tbody tr') ?? [];
   results.push({ name: '/alerts state filter narrows to resolved events', ok: rows.length >= 2 && [...rows].every((r) => r.textContent.includes('resolved')), missing: [String(rows.length)] });
   setValue.call(stateFilter, 'all');
   stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -1835,7 +1861,7 @@ results.push({ name: '/alerts an idle event without a minute count reads idle, n
 {
   // The drift event by name rather than by position: every open event offers Resolve, and this check is about
   // the confirmation naming the subject it was opened for.
-  const eventRows = () => [...[...m.container.querySelectorAll('table')].pop().querySelectorAll('tbody tr')];
+  const eventRows = () => [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')];
   const resolve = [...(eventRows().find((r) => r.textContent.includes('client 2.1.274'))?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resolve');
   resolve?.click();
   await m.settle(250);
@@ -1862,11 +1888,23 @@ m.unmount();
   failed.unmount();
 }
 
+{
+  failNextCall('listLifecycleDeliveries', '/admin/alerts/deliveries', 'the registry is unavailable');
+  const failed = await mount('/alerts');
+  const t = failed.text();
+  results.push({
+    name: '/alerts a failed lifecycle read draws the error state where the log is',
+    ok: t.includes('Could not load the lifecycle log') && t.includes('Rules'),
+    missing: [t.slice(0, 160)],
+  });
+  failed.unmount();
+}
+
 // A fresh installation: zero rules, zero events, and a filter that matches nothing must render, not throw.
 {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const empty = await mount('/alerts');
-  expect('/alerts renders on an empty store', empty.text(), ['Rules', 'Create rule', 'Events', 'No events.']);
+  expect('/alerts renders on an empty store', empty.text(), ['Rules', 'Create rule', 'Events', 'No events.', 'Lifecycle', 'No session events.']);
   results.push({ name: '/alerts an empty store raises no console error', ok: !problems.some((p) => p.includes('toLowerCase')), missing: problems.filter((p) => p.includes('toLowerCase')) });
   const filter = [...empty.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by condition');
   const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -2093,7 +2131,7 @@ m = await mount('/keys');
 // dialog's own markup is in the DOM on every page and reaches nobody, so it is filtered out.
 for (const [path, absent, present] of [
   ['/', [], ['viewer']],
-  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events']],
+  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events', 'Lifecycle']],
   ['/analytics', [], ['Traffic', 'Latency']],
   ['/keys', ['Create API key'], ['Lifetime cost by key']],
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],

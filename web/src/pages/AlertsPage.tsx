@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, Pool, SessionLifecycleDetail, WindowId } from '@/api/types';
+import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, Delivery, LifecycleDelivery, LifecycleEventName, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
@@ -33,10 +33,10 @@ const KIND_HINT: Record<AlertKind, string> = {
   pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
   reauth_required: 'Fires when an upstream enters reauth_required. It resolves once the upstream is paired or verified again.',
   refresh_failed: 'Fires when a credential refresh fails twice in a row. It resolves on the next refresh that succeeds.',
-  session_active: "Opens on a session's first request, or on the companion's session_start, and resolves when the companion ends the session or it expires unseen.",
-  session_idle: 'Opens once no request has arrived on the session for the number of minutes chosen here, and resolves on the next request.',
-  session_parked: 'Opens when the keepalive companion reports the main agent parked and resolves when it is busy or idle again; a session without a companion never parks.',
-  subagent_active: "Opens on a subagent's first request, or on the companion's agent_start, and resolves when the agent is released, the session ends, or it expires.",
+  session_active: "Posts session_started on a session's first request, or on the companion's session_start, and session_ended when the companion ends the session or it expires unseen; one delivery per event, nothing to resolve.",
+  session_idle: 'Posts session_idle once no request has arrived on the session for the number of minutes chosen here; the next request arms it again.',
+  session_parked: 'Posts session_parked when the keepalive companion reports the main agent parked and session_resumed when it is busy or idle again; a session without a companion never parks.',
+  subagent_active: "Posts subagent_started on a subagent's first request, or on the companion's agent_start, and subagent_ended when the agent is released, the session ends, or it expires.",
   utilization_above: 'Fires when a usage sample for the chosen window reaches the threshold. It resolves once a sample reads five points below it.',
 };
 type RuleWindow = NonNullable<AlertRule['windowId']>;
@@ -60,8 +60,17 @@ const ALLOWED_SCOPES: Record<AlertKind, AlertRule['scope']['type'][]> = {
   subagent_active: ['all', 'key', 'pool'],
   utilization_above: ['all', 'any_account', 'account', 'key', 'pool'],
 };
-/** The kinds whose detail names a session, so an event of one reads as a sentence rather than as a key list. */
+/** The kinds that post one delivery per session event and open none, so they are read in the log, not the events table. */
 const LIFECYCLE_KINDS: AlertKind[] = ['session_active', 'session_idle', 'session_parked', 'subagent_active'];
+const EVENT_LABEL: Record<LifecycleEventName, string> = {
+  session_ended: 'Session ended',
+  session_idle: 'Session idle',
+  session_parked: 'Session parked',
+  session_resumed: 'Session resumed',
+  session_started: 'Session started',
+  subagent_ended: 'Subagent ended',
+  subagent_started: 'Subagent started',
+};
 /** A 2xx is the only answer the deliverer counts as landed; everything else, including no answer at all, reads as a failure. */
 const deliveryTone = (d: Delivery) => (d.status !== null && d.status < 300 ? 'good' : 'critical');
 const TRIGGER_LABEL: Record<string, string> = { hash: 'the billing-hash check' };
@@ -107,10 +116,12 @@ export function AlertsPage() {
   const [dialog, setDialog] = useState<{ rule: AlertRule | null } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [kindFilter, setKindFilter] = useState<AlertKind | 'all'>('all');
+  const [lifecycleKind, setLifecycleKind] = useState<AlertKind | 'all'>('all');
+  const lifecycle = useAsync(() => api.listLifecycleDeliveries(lifecycleKind === 'all' ? undefined : lifecycleKind), [lifecycleKind]);
   const [toast, setToast] = useState<string | null>(null);
   const now = useNow();
   const named: Named = { accounts: accounts.data ?? [], keys: keys.data ?? [], pools: pools.data ?? [] };
-  const shown = events.data ? events.data.filter((e) => kindFilter === 'all' || e.kind === kindFilter) : null;
+  const shown = events.data ? events.data.filter((e) => !LIFECYCLE_KINDS.includes(e.kind) && (kindFilter === 'all' || e.kind === kindFilter)) : null;
 
   /** Every mutation on this page reports the same way: the outcome in a toast, then a re-read of the list it changed. */
   const run = async (action: () => Promise<unknown>, message: string, reload: () => void) => {
@@ -136,7 +147,7 @@ export function AlertsPage() {
     <div className="stack">
       <Card
         title="Rules"
-        subtitle="Each rule posts a signed JSON payload to its webhook when the condition opens and again when it resolves."
+        subtitle="A rule posts a signed JSON payload to its webhook when its condition opens and resolves, or, for the four session kinds, once per session event."
         actions={canMutate && (
           <Button variant="primary" size="sm" icon={<IconPlus size={14} />} onClick={() => setDialog({ rule: null })}>
             Create rule
@@ -221,7 +232,7 @@ export function AlertsPage() {
               <span className="muted">Condition</span>
               <Select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as AlertKind | 'all')} aria-label="Filter by condition">
                 <option value="all">Any condition</option>
-                {KINDS.map((k) => (
+                {KINDS.filter((k) => !LIFECYCLE_KINDS.includes(k)).map((k) => (
                   <option key={k} value={k}>
                     {KIND_LABEL[k]}
                   </option>
@@ -285,6 +296,78 @@ export function AlertsPage() {
                     }
                   />
                 ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card
+        title="Lifecycle"
+        subtitle="Session events as they were posted, newest first; a session rule opens nothing and has nothing to resolve."
+        actions={
+          <label className="row">
+            <span className="muted">Condition</span>
+            <Select
+              value={lifecycleKind}
+              onChange={(e) => setLifecycleKind(e.target.value as AlertKind | 'all')}
+              aria-label="Filter lifecycle by condition"
+            >
+              <option value="all">Any session condition</option>
+              {LIFECYCLE_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {KIND_LABEL[k]}
+                </option>
+              ))}
+            </Select>
+          </label>
+        }
+        padded={false}
+        className="card--table"
+      >
+        <div className="table-wrap">
+          <table className="table lifecycle-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Session</th>
+                <th>Agent</th>
+                <th>Rule</th>
+                <th>Delivery</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lifecycle.error ? (
+                <tr>
+                  <td colSpan={6}>
+                    <ErrorState
+                      title="Could not load the lifecycle log"
+                      body={lifecycle.error}
+                      action={
+                        <Button size="sm" onClick={lifecycle.reload}>
+                          Try again
+                        </Button>
+                      }
+                    />
+                  </td>
+                </tr>
+              ) : lifecycle.data === null ? (
+                [0, 1, 2].map((i) => (
+                  <tr key={i}>
+                    <td colSpan={6}>
+                      <Skeleton />
+                    </td>
+                  </tr>
+                ))
+              ) : lifecycle.data.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="muted">
+                    {lifecycleKind === 'all' ? 'No session events.' : `No ${KIND_LABEL[lifecycleKind].toLowerCase()} events.`}
+                  </td>
+                </tr>
+              ) : (
+                lifecycle.data.map((d) => <LifecycleRow key={d.id} delivery={d} now={now} />)
               )}
             </tbody>
           </table>
@@ -383,6 +466,33 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
   );
 }
 
+function LifecycleRow({ delivery, now }: { delivery: LifecycleDelivery; now: number }) {
+  const { detail } = delivery;
+  return (
+    <tr>
+      <td title={fmtAbsolute(delivery.at)}>{fmtRelative(delivery.at, now)}</td>
+      <td>
+        {EVENT_LABEL[delivery.event]}
+        {delivery.event === 'session_idle' && <span className="sub">{typeof detail.idle_minutes === 'number' ? `idle for ${detail.idle_minutes} min` : 'idle'}</span>}
+        {(delivery.event === 'session_started' || delivery.event === 'session_ended') && detail.source && <span className="sub">{detail.source}</span>}
+      </td>
+      <td className="mono" title={detail.session}>
+        {detail.key}, {shortId(detail.session ?? '-', 8)}
+      </td>
+      <td className="mono">
+        {detail.agent ?? 'main'}
+        {delivery.event.startsWith('subagent') && <span className="sub">parent {detail.parent_agent ?? '-'}</span>}
+      </td>
+      <td>{KIND_LABEL[delivery.kind]}</td>
+      <td>
+        <span className="muted">#{delivery.attempt}</span>{' '}
+        <Badge tone={delivery.status !== null && delivery.status < 300 ? 'good' : 'critical'}>{delivery.status ?? 'no answer'}</Badge>
+        {delivery.error && <span className="muted"> {delivery.error}</span>}
+      </td>
+    </tr>
+  );
+}
+
 // A detail is the free-form object the signal built, so the event's kind says which keys it holds. The kinds
 // below read as a sentence; every other kind is listed as it arrived, and so is a detail missing the keys its kind
 // promises, so a shape a later build changes stays readable.
@@ -408,18 +518,13 @@ function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKi
       </>
     );
   }
-  if (LIFECYCLE_KINDS.includes(kind) && typeof detail.session === 'string') {
-    const life = detail as unknown as SessionLifecycleDetail;
+  if (kind === 'refresh_failed' && typeof detail.failures === 'number') {
+    const refresh = detail as unknown as RefreshFailedDetail;
     return (
-      <>
-        <span className="sub mono" title={life.session}>
-          key {life.key}, session {shortId(life.session, 8)}
-          {life.agent && `, agent ${life.agent}`}
-        </span>
-        {kind === 'session_active' && life.source && <span className="sub">{life.source}</span>}
-        {kind === 'session_idle' && <span className="sub">{typeof life.idle_minutes === 'number' ? `idle for ${life.idle_minutes} min` : 'idle'}</span>}
-        {kind === 'subagent_active' && <span className="sub">parent {life.parent_agent ?? '-'}</span>}
-      </>
+      <span className="sub">
+        {refresh.failures} in a row, the last {refresh.outcome === 'uncertain' ? 'lost its answer' : 'refused'}
+        {refresh.last_error ? `: ${refresh.last_error}` : ''}
+      </span>
     );
   }
   return (

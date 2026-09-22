@@ -1,7 +1,7 @@
 import type {
   Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  Delivery, KeepaliveOverview, KeepaliveRecipe, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, Settings, WindowId,
+  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, SessionLifecycleDetail, Settings, WindowId,
 } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -305,6 +305,12 @@ export function decodeAlertRule(v: unknown): AlertRule {
   return { createdAt: isoOr(r.created_at, epoch), enabled: bool(r.enabled), hasSecret: bool(r.has_secret), id: str(r.id), kind: ALERT_KINDS.find((k) => k === str(r.kind)) ?? 'utilization_above', scope: scopeOf(r.scope), threshold: numOrNull(r.threshold), updatedAt: isoOr(r.updated_at, epoch), webhookUrl: str(r.webhook_url), windowId: (['5h', '7d', '7d_oi'] as const).find((w) => w === str(r.window)) ?? null };
 }
 export const decodeDelivery = (v: unknown): Delivery => ({ at: isoOr(rec(v).at, epoch), attempt: num(rec(v).attempt), error: strOrNull(rec(v).error), state: str(rec(v).state) === 'resolved' ? 'resolved' : 'opened', status: numOrNull(rec(v).status) });
+const LIFECYCLE_EVENTS = ['session_ended', 'session_idle', 'session_parked', 'session_resumed', 'session_started', 'subagent_ended', 'subagent_started'] as const;
+// An event name a later router adds still reads as a row: the log is worth more whole than exact.
+export function decodeLifecycleDelivery(v: unknown): LifecycleDelivery {
+  const d = rec(v);
+  return { at: isoOr(d.at, epoch), attempt: num(d.attempt), detail: (d.detail && typeof d.detail === 'object' ? d.detail : {}) as SessionLifecycleDetail, error: strOrNull(d.error), event: LIFECYCLE_EVENTS.find((e) => e === str(d.event)) ?? 'session_started', id: num(d.id), kind: ALERT_KINDS.find((k) => k === str(d.kind)) ?? 'session_active', ruleId: str(d.rule_id), status: numOrNull(d.status), subject: str(d.subject) };
+}
 export function decodeAlertEvent(v: unknown): AlertEvent {
   const e = rec(v);
   return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KINDS.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };

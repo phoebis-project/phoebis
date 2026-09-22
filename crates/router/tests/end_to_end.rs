@@ -2078,6 +2078,10 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .await
         .unwrap();
     let secret = key["secret"].as_str().unwrap().to_string();
+    // Written before the first request: a session rule posts its start as the request arrives, and the
+    // lifecycle log the alerts view draws has nothing to list without one. The destination resolves to
+    // nothing, as the pool rule's below does, so the attempts land as rows without reaching a network.
+    assert_eq!(client.post(admin("/alerts/rules")).json(&serde_json::json!({ "kind": "session_active", "scope": { "type": "all" }, "webhook_url": "http://hook.invalid/life" })).send().await.unwrap().status(), 201);
     // The fixture body asks for fixed-budget thinking, which no probe may replay; an adaptive block is the
     // probe-capable shape.
     let adaptive = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
@@ -2184,6 +2188,10 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .await;
     let _ = wait_json(&client, &admin("/requests"), |v| {
         !v["requests"].as_array().unwrap().is_empty()
+    })
+    .await;
+    let _ = wait_json(&client, &admin("/alerts/deliveries"), |v| {
+        !v["deliveries"].as_array().unwrap().is_empty()
     })
     .await;
     let shots = std::env::var("PHOEBIS_SCREENSHOT_DIR")

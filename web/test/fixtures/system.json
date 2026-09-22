@@ -7,7 +7,7 @@
     "storage_ok": true,
     "ledger": {
       "schema_version": 12,
-      "written": 9,
+      "written": 10,
       "dropped": 0,
       "write_failures": 0,
       "gaps": 0,
@@ -41,7 +41,7 @@
     },
     "alerts": {
       "deliveries_failed": 0,
-      "deliveries_ok": 1,
+      "deliveries_ok": 2,
       "open": 1,
       "rules": 2
     }

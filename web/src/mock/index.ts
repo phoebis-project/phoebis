@@ -1,7 +1,7 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { ApiError } from '@/api/http';
 import type {
-  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
+  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
   ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
 import { matchesPattern } from '@/lib/pattern';
@@ -9,7 +9,7 @@ import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
-import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
+import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
 import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
@@ -117,6 +117,7 @@ export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
+  private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
   private pairings = new Map<string, { accountId: string; state: string }>();
   private pools: Pool[] = POOLS.map((p) => ({ ...p }));
   /** What the last preview minted, held beside the URL it read, so a confirm writes the rows that were shown. */
@@ -387,6 +388,11 @@ export class MockApi implements Api {
 
   listKeys() {
     return latency(this.keys);
+  }
+
+  listLifecycleDeliveries(kind?: AlertKind) {
+    const rows = emptyStore() ? [] : this.lifecycle.filter((d) => kind === undefined || d.kind === kind);
+    return latency([...rows].sort((a, b) => b.id - a.id));
   }
 
   listPools() {

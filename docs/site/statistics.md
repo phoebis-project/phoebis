@@ -270,5 +270,5 @@ Test fires one synthetic delivery through the same path.
 A viewer sees a rule's webhook host and never its full URL, since the URL can carry the receiver's credential in
 its path or query.
 
-![The Alerts view: the rules table and the open and resolved events with deliveries](assets/alerts-light.png#only-light)
-![The Alerts view: the rules table and the open and resolved events with deliveries](assets/alerts-dark.png#only-dark)
+![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-light.png#only-light)
+![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-dark.png#only-dark)

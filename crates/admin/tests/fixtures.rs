@@ -12,7 +12,7 @@ use phoebis_ledger::{
     RequestRecord,
 };
 use phoebis_store::{AccountState, Identity, NewBundle, Secret};
-use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
+use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use serde_json::{json as j, Value};
 
@@ -477,6 +477,32 @@ async fn every_route_is_captured_and_holds_its_shape() {
         Some(&cookie),
     )
     .await;
+    // A lifecycle rule is written, fired, and taken away again: the deliveries route needs a row of its own to
+    // capture, while the rules answer above stays the two rows the page is drawn from. The delivery outlives its
+    // rule, since a lifecycle row hangs off no event and holds the rule id as plain text.
+    let lifecycle = json(post(app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await).await;
+    parts.alerts.deliver_event(
+        &phoebis_alerts::Signal {
+            kind: phoebis_alerts::Kind::SessionActive,
+            account_id: None,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            subject: "desktop, session e2e-ui".into(),
+            detail: j!({ "key": "desktop", "pool": "main", "session": "e2e-ui", "source": "request" }),
+        },
+        phoebis_alerts::LifecycleEvent::SessionStarted,
+    );
+    parts.alerts.wait_idle().await;
+    assert_eq!(
+        delete(
+            app,
+            &format!("/admin/alerts/rules/{}", lifecycle["id"].as_str().unwrap()),
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        204
+    );
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_models", "/admin/accounts/business/models"),
@@ -484,6 +510,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("account_usage", "/admin/accounts/business/usage"),
         ("accounts", "/admin/accounts"),
         ("alert_events", "/admin/alerts/events"),
+        ("alert_lifecycle", "/admin/alerts/deliveries"),
         ("alert_rules", "/admin/alerts/rules"),
         ("analytics_accounts", "/admin/analytics/accounts?range=24h"),
         (

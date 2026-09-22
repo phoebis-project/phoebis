@@ -1,9 +1,9 @@
-import type { AlertEvent, AlertRule, CompanionState, KeepaliveOverview, KeepaliveRecipe, RecipeReason, Session, Settings } from '@/api/types';
+import type { AlertEvent, AlertRule, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
 import { PRICES } from './catalog';
 import { keyById } from './pools';
 import { REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
-import { ALERT_EVENT_SAMPLE, ALERT_RULE_SAMPLE, DELIVERY_SAMPLE, KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
+import { ALERT_EVENT_SAMPLE, ALERT_RULE_SAMPLE, DELIVERY_SAMPLE, KEEPALIVE_OVERVIEW_SAMPLE, LIFECYCLE_DELIVERY_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, ago, ahead, daysAgo } from './time';
 
 const rng = createRng(2_024);
@@ -349,6 +349,19 @@ export const ALERT_RULES: AlertRule[] = [
   {
     ...ALERT_RULE_SAMPLE,
     createdAt: daysAgo(46),
+    id: 'rule_parked',
+    kind: 'session_parked',
+    scope: { type: 'all', id: null },
+    threshold: null,
+    windowId: null,
+    webhookUrl: 'https://hooks.example.com/phoebis/parked',
+    enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(46),
+  },
+  {
+    ...ALERT_RULE_SAMPLE,
+    createdAt: daysAgo(46),
     id: 'rule_subagent',
     kind: 'subagent_active',
     scope: { type: 'key', id: 'desktop' },
@@ -550,45 +563,117 @@ export const ALERT_EVENTS: AlertEvent[] = [
       { ...DELIVERY_SAMPLE, at: daysAgo(12), attempt: 1, error: null, state: 'resolved', status: 200 },
     ],
   },
+];
+
+/**
+ * One session told end to end, plus a second session starting as it closes: the four session kinds post a
+ * delivery per event and open nothing, so this log is where they are read. Ids climb with `at`, which is the
+ * order the router hands them out and the order the list is sorted back into.
+ */
+export const LIFECYCLE_DELIVERIES: LifecycleDelivery[] = [
   {
-    ...ALERT_EVENT_SAMPLE,
-    id: 'evt_14',
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 101,
+    at: ago(52 * MINUTE),
     ruleId: 'rule_active',
     kind: 'session_active',
-    subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}`,
-    detail: { key: 'desktop', pool: 'all', session: SESSION_IDS[1], source: 'request' },
-    state: 'open',
-    openedAt: ago(52 * MINUTE),
-    resolvedAt: null,
-    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(52 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    event: 'session_started',
+    subject: `desktop, session ${SESSION_IDS[0].slice(0, 8)}`,
+    detail: { event: 'session_started', key: 'desktop', pool: 'all', session: SESSION_IDS[0], source: 'request' },
+    attempt: 1,
+    error: null,
+    status: 200,
   },
   {
-    ...ALERT_EVENT_SAMPLE,
-    id: 'evt_15',
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 102,
+    at: ago(48 * MINUTE),
     ruleId: 'rule_subagent',
     kind: 'subagent_active',
-    subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}, agent a7f3`,
-    detail: { agent: 'a7f3', key: 'desktop', parent_agent: 'main', pool: 'all', session: SESSION_IDS[1] },
-    state: 'resolved',
-    openedAt: ago(48 * MINUTE),
-    resolvedAt: ago(11 * MINUTE),
-    deliveries: [
-      { ...DELIVERY_SAMPLE, at: ago(48 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 },
-      { ...DELIVERY_SAMPLE, at: ago(11 * MINUTE), attempt: 1, error: null, state: 'resolved', status: 200 },
-    ],
+    event: 'subagent_started',
+    subject: `desktop, session ${SESSION_IDS[0].slice(0, 8)}, agent a7f3`,
+    detail: { agent: 'a7f3', event: 'subagent_started', key: 'desktop', parent_agent: 'main', pool: 'all', session: SESSION_IDS[0] },
+    attempt: 1,
+    error: null,
+    status: 200,
   },
   {
-    ...ALERT_EVENT_SAMPLE,
-    id: 'evt_16',
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 103,
+    at: ago(35 * MINUTE),
     ruleId: 'rule_idle',
     kind: 'session_idle',
+    event: 'session_idle',
     subject: `desktop, session ${SESSION_IDS[2].slice(0, 8)}`,
-    // The router always writes idle_minutes; the type leaves it optional, and the row must read without it.
-    detail: { key: 'desktop', pool: 'all', session: SESSION_IDS[2] },
-    state: 'open',
-    openedAt: ago(35 * MINUTE),
-    resolvedAt: null,
-    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(35 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
+    detail: { event: 'session_idle', idle_minutes: 30, key: 'desktop', pool: 'all', session: SESSION_IDS[2] },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 104,
+    at: ago(30 * MINUTE),
+    ruleId: 'rule_parked',
+    kind: 'session_parked',
+    event: 'session_parked',
+    subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}`,
+    detail: { event: 'session_parked', key: 'desktop', pool: 'all', session: SESSION_IDS[1] },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 105,
+    at: ago(22 * MINUTE),
+    ruleId: 'rule_parked',
+    kind: 'session_parked',
+    event: 'session_resumed',
+    subject: `desktop, session ${SESSION_IDS[1].slice(0, 8)}`,
+    detail: { event: 'session_resumed', key: 'desktop', pool: 'all', session: SESSION_IDS[1] },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 106,
+    at: ago(11 * MINUTE),
+    ruleId: 'rule_subagent',
+    kind: 'subagent_active',
+    event: 'subagent_ended',
+    subject: `desktop, session ${SESSION_IDS[0].slice(0, 8)}, agent a7f3`,
+    detail: { agent: 'a7f3', event: 'subagent_ended', key: 'desktop', parent_agent: 'main', pool: 'all', session: SESSION_IDS[0] },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 107,
+    at: ago(9 * MINUTE),
+    ruleId: 'rule_active',
+    kind: 'session_active',
+    event: 'session_ended',
+    subject: `desktop, session ${SESSION_IDS[0].slice(0, 8)}`,
+    detail: { event: 'session_ended', key: 'desktop', pool: 'all', session: SESSION_IDS[0], source: 'companion' },
+    attempt: 1,
+    error: null,
+    status: 200,
+  },
+  {
+    ...LIFECYCLE_DELIVERY_SAMPLE,
+    id: 108,
+    at: ago(4 * MINUTE),
+    ruleId: 'rule_active',
+    kind: 'session_active',
+    event: 'session_started',
+    subject: `desktop, session ${SESSION_IDS[3].slice(0, 8)}`,
+    detail: { event: 'session_started', key: 'desktop', pool: 'all', session: SESSION_IDS[3], source: 'request' },
+    attempt: 1,
+    error: 'refused',
+    status: null,
   },
 ];
 

@@ -585,7 +585,7 @@ export type AlertKind =
   | 'subagent_active'
   | 'utilization_above';
 
-/** What an event of one of the session-scoped kinds captured; null for the kinds that need no extra fields. */
+/** What an event captured; null for the kinds that need no extra fields, and for the session kinds, which open none. */
 export type AlertEventDetail = Record<string, unknown> | null;
 
 /**
@@ -608,16 +608,25 @@ export interface ClientDriftDetail {
   trigger: string;
 }
 
-/** What a session_active, session_idle, session_parked, or subagent_active event captured about its session. */
+export interface RefreshFailedDetail {
+  account: string;
+  failures: number;
+  last_error: string | null;
+  /** Whether the refusal was the upstream's answer or a lost one, which decides whether the token is really gone. */
+  outcome: 'failed' | 'uncertain';
+}
+
+/** What a session_active, session_idle, session_parked, or subagent_active delivery carried about its session. */
 export interface SessionLifecycleDetail {
   agent?: string;
+  event?: LifecycleEventName;
   idle_minutes?: number;
   key: string;
   last_request_at?: number;
   parent_agent?: string | null;
   pool: string | null;
   session: string;
-  source?: 'companion' | 'request';
+  source?: 'companion' | 'expiry' | 'request';
 }
 
 export interface AlertRule {
@@ -658,6 +667,22 @@ export interface Delivery {
   state: 'opened' | 'resolved';
   status: number | null;
 }
+
+/** One session event as it was posted: the log the Alerts view lists, since a lifecycle rule opens no event. */
+export interface LifecycleDelivery {
+  at: string;
+  attempt: number;
+  detail: SessionLifecycleDetail;
+  error: string | null;
+  event: LifecycleEventName;
+  id: number;
+  kind: AlertKind;
+  ruleId: string;
+  status: number | null;
+  subject: string;
+}
+
+export type LifecycleEventName = 'session_ended' | 'session_idle' | 'session_parked' | 'session_resumed' | 'session_started' | 'subagent_ended' | 'subagent_started';
 
 export interface AlertEvent {
   deliveries: Delivery[];

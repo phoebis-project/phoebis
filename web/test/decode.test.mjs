@@ -336,7 +336,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
-  assert.equal(s1.keyGeneration, 1790070403331, 'the live holder names the generation its key row carries');
+  assert.equal(s1.keyGeneration, 1790077115319, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
   assert.equal(s1.requests, 2);
@@ -424,6 +424,18 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.deepEqual(event.deliveries.map((x) => [x.attempt, x.status, x.error]), [[1, null, 'refused'], [2, 500, null], [3, 200, null]]);
   assert.ok(isIso(event.openedAt) && event.resolvedAt === null);
   assert.equal(fixture('alert_deliveries').deliveries.map(d.decodeDelivery).length, 3);
+  const [life] = fixture('alert_lifecycle').deliveries.map(d.decodeLifecycleDelivery);
+  assert.equal(life.event, 'session_started');
+  assert.equal(life.detail.session, 'e2e-ui');
+  assert.equal(life.kind, 'session_active');
+  assert.equal(life.ruleId, fixture('alert_lifecycle').deliveries[0].rule_id, 'a lifecycle delivery names the rule that posted it, which no event row holds');
+});
+
+test('a lifecycle delivery whose event name this build does not know still decodes', () => {
+  const [wire] = fixture('alert_lifecycle').deliveries;
+  const later = d.decodeLifecycleDelivery({ ...wire, event: 'session_hibernated' });
+  assert.equal(later.event, 'session_started', 'an unknown event name falls back to the first event of a session rather than throwing the log away');
+  assert.equal(d.decodeLifecycleDelivery({ ...wire, status: null, error: 'refused' }).status, null);
 });
 
 test('a session lifecycle rule keeps its threshold in minutes and a lifecycle event keeps its detail', () => {

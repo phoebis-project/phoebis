@@ -4,6 +4,7 @@ import type {
   AccountRollup,
   AlertDeliveryTest,
   AlertEvent,
+  AlertKind,
   AlertRule,
   AlertRuleInput,
   AnalyticsGroup,
@@ -17,6 +18,7 @@ import type {
   Delivery,
   KeepaliveOverview,
   KeepaliveRecipe,
+  LifecycleDelivery,
   LiveEvent,
   OveragePolicy,
   Overview,
@@ -126,6 +128,8 @@ export interface Api {
   listCatalog(): Promise<CatalogModel[]>;
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
+  /** The session events as they were posted; a lifecycle rule opens no event, so this log is all there is to read. */
+  listLifecycleDeliveries(kind?: AlertKind): Promise<LifecycleDelivery[]>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
   listRequestEvents(id: string): Promise<RequestEvent[]>;

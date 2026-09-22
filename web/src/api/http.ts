@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo } from './types';
+import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -142,6 +142,7 @@ export class HttpApi implements Api {
   listCatalog = async () => d.decodeCatalog(await this.listAccounts());
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
+  listLifecycleDeliveries = async (kind?: AlertKind) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/deliveries${qs({ kind })}`)).deliveries.map(d.decodeLifecycleDelivery);
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listQuotaSnapshots = async (): Promise<QuotaSnapshot[]> => {
     const accounts = (await this.listAccounts()).filter((a) => a.kind === 'oauth');
