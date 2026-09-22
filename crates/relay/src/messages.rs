@@ -229,16 +229,24 @@ impl Relay {
         self.memory.flush((self.clock)()).await;
     }
 
-    /// Flushes every `every`, and once an hour drops the rows past the retention; aborted and joined at
-    /// shutdown before the last flush.
+    /// Flushes every `every` and whenever the memory's overlay asks for one ahead of the tick, and once an
+    /// hour drops the rows past the retention; aborted and joined at shutdown before the last flush.
     pub fn spawn_memory_flush(self: Arc<Self>, every: Duration) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(every);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut ticks: u64 = 0;
             loop {
-                interval.tick().await;
+                // The hourly purge counts ticks alone: a flush the overlay asked for says nothing about how
+                // much time has passed, and counting it would run the purge early and ever earlier.
+                let ticked = tokio::select! {
+                    _ = interval.tick() => true,
+                    () = self.memory.flush_wanted() => false,
+                };
                 self.flush_memory().await;
+                if !ticked {
+                    continue;
+                }
                 ticks += 1;
                 let per_hour = (3_600 / every.as_secs().max(1)).max(1);
                 if ticks.is_multiple_of(per_hour) {
@@ -810,6 +818,16 @@ impl Relay {
             .as_ref()
             .filter(|_| trace.kind == Kind::Inference)
         {
+            // The parent first, and only then the key itself: a subagent whose first request after a restart
+            // arrives before its parent's next one inherits the parent's prompt id, and that lookup reads the
+            // map alone, so without the parent's own row read back a fresh id would be minted beside it.
+            if let Some(parent) = identity.parent_agent_id.as_deref() {
+                let parent_key = MemoryKey {
+                    agent_id: parent.to_string(),
+                    ..key.clone()
+                };
+                self.memory.restore(&parent_key, received_at).await;
+            }
             self.memory.restore(key, received_at).await;
         }
         // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
@@ -1615,6 +1633,13 @@ impl Relay {
             }
             Verdict::FailOver { cooldown, mark } => (cooldown, mark),
             Verdict::Commit => {
+                // The key may have been evicted and its record saved while this request was upstream. The
+                // writes below would then build a fresh entry, with no prompt id and none of the session's
+                // other accounts, and the next flush would overwrite the saved record with it. One lock while
+                // the entry is still resident, which is the usual case.
+                if let Some(key) = ctx.memory_key {
+                    self.memory.restore(key, arrived).await;
+                }
                 if let (Some(key), Some(id)) = (ctx.memory_key, head.get("request-id")) {
                     self.memory
                         .record_request_id(key, &ctx.account.id, id, arrived);

@@ -219,7 +219,30 @@ pub async fn harness_on(
     models: &[&str],
     limits: Limits,
 ) -> Harness {
-    build(store, up, accounts, pool, models, limits, None, false).await
+    build(store, up, accounts, pool, models, limits, None, false, None).await
+}
+
+/// The same builder with the session memory held to `cap` entries, for the cases that need an eviction to
+/// land at a point of their choosing rather than after sixty-five thousand sessions.
+pub async fn harness_with_memory_cap(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    cap: usize,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+        None,
+        false,
+        Some(cap),
+    )
+    .await
 }
 
 /// The default harness with the bootstrap-level `cache_diagnostics` option set, for the cases that check how it
@@ -240,6 +263,7 @@ pub async fn harness_with_cache_diagnostics_default(
         default_limits(),
         None,
         cache_diagnostics,
+        None,
     )
     .await
 }
@@ -272,6 +296,7 @@ pub async fn harness_with_bus_limits(
         limits,
         Some(bus),
         false,
+        None,
     )
     .await
 }
@@ -286,6 +311,7 @@ async fn build(
     limits: Limits,
     bus: Option<Bus>,
     cache_diagnostics: bool,
+    memory_cap: Option<usize>,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -475,8 +501,14 @@ async fn build(
         limits,
     );
     let relay = relay
-        .with_cache_diagnostics(cache_diagnostics)
-        .with_memory_store(store.clone(), Duration::from_secs(30 * 86_400));
+        .with_cache_diagnostics(cache_diagnostics);
+    // Before the store is attached, which rebuilds the memory around whatever cap it finds.
+    let relay = match memory_cap {
+        // The idle bound the relay's own default carries, so the cap is the only thing that differs.
+        Some(cap) => relay.with_session_memory(cap, Duration::from_secs(24 * 3_600)),
+        None => relay,
+    };
+    let relay = relay.with_memory_store(store.clone(), Duration::from_secs(30 * 86_400));
     let relay = match bus {
         Some(bus) => relay.with_bus(bus),
         None => relay,

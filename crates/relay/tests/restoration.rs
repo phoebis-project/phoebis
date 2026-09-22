@@ -740,3 +740,146 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
     );
     up.shutdown().await;
 }
+
+/// A subagent's first request after a restart inherits its parent's turn: the parent's own row is read back
+/// for the lookup, which reads what is in memory and nothing else.
+#[tokio::test]
+async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_id() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Arc::new(Store::open(&path, &storage_key).unwrap());
+    let h = harness_on(
+        store.clone(),
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+    )
+    .await;
+    h.app
+        .clone()
+        .oneshot(cli_request("s-1", None, None))
+        .await
+        .unwrap();
+    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
+        .unwrap()
+        .to_string();
+    h.relay.flush_memory().await;
+    drop(h);
+    drop(store);
+    let store = Arc::new(
+        wait_for(std::time::Duration::from_secs(2), || {
+            Store::open(&path, &storage_key).ok()
+        })
+        .await,
+    );
+    let h = harness_on(
+        store.clone(),
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        default_limits(),
+    )
+    .await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    // The parent has sent nothing since the restart, so its turn lives in the store alone.
+    h.app
+        .clone()
+        .oneshot(cli_request("s-1", Some("sub-1"), Some("main")))
+        .await
+        .unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
+        Some(prompt.as_str()),
+        "the subagent inherits the turn its parent left behind rather than minting one beside it"
+    );
+    up.shutdown().await;
+}
+
+/// A response that commits after its key was evicted and saved must not overwrite the saved record with the
+/// bare entry its own write would create.
+#[tokio::test]
+async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0001".into())],
+            body: br#"{"id":"msg_01","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#
+                .to_vec(),
+        })),
+    }])
+    .await;
+    let h = harness_with_memory_cap(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        1,
+    )
+    .await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    let held = tokio::spawn({
+        let app = h.app.clone();
+        async move { app.oneshot(cli_request("s-1", None, None)).await.unwrap() }
+    });
+    wait_for(std::time::Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
+        .unwrap()
+        .to_string();
+    // The one slot goes to another session while that request is still upstream, and the flush the periodic
+    // task would run saves what the eviction left behind.
+    h.app
+        .clone()
+        .oneshot(cli_request("s-2", None, None))
+        .await
+        .unwrap();
+    h.relay.flush_memory().await;
+    up.release();
+    let resp = held.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    h.relay.flush_memory().await;
+    up.set_rule_after(
+        2,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0003".into())],
+            body: b"{\"id\":\"msg_03\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    h.app
+        .clone()
+        .oneshot(tool_loop_request("s-1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[2].body), "cc_prompt_id"),
+        Some(prompt.as_str()),
+        "the commit read the saved record back rather than replacing it with a bare entry"
+    );
+    up.shutdown().await;
+}

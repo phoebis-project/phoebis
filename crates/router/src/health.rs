@@ -55,10 +55,25 @@ pub fn probe(listen: SocketAddr, timeout: Duration) -> Result<SocketAddr, String
             Err(error) => return Err(format!("proxy on {addr} sent no status line: {error}")),
         }
     }
-    let line = String::from_utf8_lossy(&head[..read]);
-    match line.split_whitespace().nth(1) {
-        Some("200") => Ok(addr),
-        Some(status) => Err(format!("proxy on {addr} answered {status}, not 200")),
-        None => Err(format!("proxy on {addr} sent no status line")),
+    // The status line ends at the first newline and nowhere else: a buffer that filled or a peer that closed
+    // before one arrived carries no status line, whatever tokens it happens to hold, and reading the status
+    // out of the whole buffer would take the second word of a greeting, or of the line after the first.
+    let Some(end) = head[..read].iter().position(|b| *b == b'\n') else {
+        return Err(format!("proxy on {addr} sent no status line"));
+    };
+    let line = String::from_utf8_lossy(&head[..end]);
+    let line = line.trim_end_matches('\r');
+    let mut fields = line.split(' ');
+    let version = fields.next().unwrap_or_default();
+    let status = fields.next().unwrap_or_default();
+    if !version.starts_with("HTTP/")
+        || status.len() != 3
+        || !status.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(format!("proxy on {addr} sent no status line"));
     }
+    if status != "200" {
+        return Err(format!("proxy on {addr} answered {status}, not 200"));
+    }
+    Ok(addr)
 }

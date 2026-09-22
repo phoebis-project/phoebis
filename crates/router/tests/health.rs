@@ -256,3 +256,58 @@ fn phoebis_config_names_the_file_when_the_flag_is_absent_and_loses_to_the_flag()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
 }
+
+/// One connection, one answer written verbatim: the bytes a real listener would never send, so the probe's
+/// own reading of the status line is what the test drives.
+fn answering_raw(bytes: &'static [u8]) -> (SocketAddr, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let served = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
+            request.push(byte[0]);
+        }
+        stream.write_all(bytes).unwrap();
+    });
+    (addr, served)
+}
+
+/// `phoebis health` against a listener answering `bytes`: its exit code and what it printed.
+fn health_against(name: &str, bytes: &'static [u8]) -> (Option<i32>, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let (addr, served) = answering_raw(bytes);
+    let config = config_file(dir.path(), name, addr);
+    let out = phoebis()
+        .args(["health", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    served.join().unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    )
+}
+
+#[test]
+fn a_first_line_that_names_no_http_version_is_no_status_line() {
+    let (code, reason) = health_against("not-http", b"NOT_HTTP 200 OK\r\n\r\n");
+    assert_eq!(code, Some(1));
+    assert!(reason.ends_with("sent no status line"), "{reason}");
+}
+
+#[test]
+fn a_version_and_a_status_on_two_lines_are_no_status_line() {
+    let (code, reason) = health_against("split", b"HTTP/1.1\r\n200 OK\r\n\r\n");
+    assert_eq!(code, Some(1));
+    assert!(reason.ends_with("sent no status line"), "{reason}");
+}
+
+#[test]
+fn a_status_line_an_eof_cut_short_is_no_status_line() {
+    let (code, reason) = health_against("eof", b"HTTP/1.1 200");
+    assert_eq!(code, Some(1));
+    assert!(reason.ends_with("sent no status line"), "{reason}");
+}
