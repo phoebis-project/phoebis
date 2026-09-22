@@ -47,6 +47,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (15, V15),
     (16, V16),
     (17, V17),
+    (18, V18),
 ];
 
 const V2: &str = r#"
@@ -225,4 +226,23 @@ DROP TABLE IF EXISTS api_key_tombstones;
 // A key says when its retired secret last authenticated, so the console can count the sessions still on it.
 const V17: &str = r#"
 ALTER TABLE api_keys ADD COLUMN retired_secret_last_used_at INTEGER;
+"#;
+
+// A lifecycle delivery hangs off no event row, so the event reference is optional and the row names its rule,
+// kind, subject, and event itself; the state check gains the value such a delivery posts under. Rows from before
+// this read an empty rule, kind, and subject.
+const V18: &str = r#"
+CREATE TABLE alert_deliveries_rebuilt (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT REFERENCES alert_events(id) ON DELETE CASCADE,
+  rule_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+  event TEXT, detail_json TEXT,
+  state TEXT NOT NULL CHECK (state IN ('event', 'opened', 'resolved')),
+  attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT
+);
+INSERT INTO alert_deliveries_rebuilt (id, event_id, state, attempt, at, status, error)
+  SELECT id, event_id, state, attempt, at, status, error FROM alert_deliveries;
+DROP TABLE alert_deliveries;
+ALTER TABLE alert_deliveries_rebuilt RENAME TO alert_deliveries;
+CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id, id);
+CREATE INDEX IF NOT EXISTS alert_deliveries_lifecycle ON alert_deliveries (kind, id) WHERE event_id IS NULL;
 "#;

@@ -68,6 +68,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage))
         .route("/admin/accounts/{id}/usage/refresh", post(usage))
         .route("/admin/accounts/{id}/verify", post(verify))
+        .route("/admin/alerts/deliveries", get(alerts::list_lifecycle))
         .route("/admin/alerts/events", get(alerts::list_events))
         .route(
             "/admin/alerts/events/{id}/deliveries",

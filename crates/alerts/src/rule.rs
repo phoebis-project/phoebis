@@ -59,6 +59,62 @@ impl Kind {
     }
 }
 
+impl Kind {
+    /// The four kinds whose rules receive a session's events as they happen rather than open one.
+    pub fn is_lifecycle(self) -> bool {
+        matches!(
+            self,
+            Kind::SessionActive | Kind::SessionIdle | Kind::SessionParked | Kind::SubagentActive
+        )
+    }
+}
+
+/// What happens to a session, each posted once as it happens to the rules of its kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleEvent {
+    SessionEnded,
+    SessionIdle,
+    SessionParked,
+    SessionResumed,
+    SessionStarted,
+    SubagentEnded,
+    SubagentStarted,
+}
+
+impl LifecycleEvent {
+    pub const ALL: [LifecycleEvent; 7] = [
+        LifecycleEvent::SessionEnded,
+        LifecycleEvent::SessionIdle,
+        LifecycleEvent::SessionParked,
+        LifecycleEvent::SessionResumed,
+        LifecycleEvent::SessionStarted,
+        LifecycleEvent::SubagentEnded,
+        LifecycleEvent::SubagentStarted,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LifecycleEvent::SessionEnded => "session_ended",
+            LifecycleEvent::SessionIdle => "session_idle",
+            LifecycleEvent::SessionParked => "session_parked",
+            LifecycleEvent::SessionResumed => "session_resumed",
+            LifecycleEvent::SessionStarted => "session_started",
+            LifecycleEvent::SubagentEnded => "subagent_ended",
+            LifecycleEvent::SubagentStarted => "subagent_started",
+        }
+    }
+
+    /// The rule kind whose rules receive it.
+    pub fn kind(self) -> Kind {
+        match self {
+            LifecycleEvent::SessionEnded | LifecycleEvent::SessionStarted => Kind::SessionActive,
+            LifecycleEvent::SessionIdle => Kind::SessionIdle,
+            LifecycleEvent::SessionParked | LifecycleEvent::SessionResumed => Kind::SessionParked,
+            LifecycleEvent::SubagentEnded | LifecycleEvent::SubagentStarted => Kind::SubagentActive,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeType {

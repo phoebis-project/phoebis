@@ -12,9 +12,9 @@ pub use destination::{admitted, ipv4_refusal, ipv6_refusal, LINK_LOCAL, LOOPBACK
 pub use engine::{AlertParts, AlertStats, Alerts, DeliveryResult, Transition};
 pub use inputs::{
     agent_subject, question_subject, spawn_inputs, AlertInputHandles, AlertInputs, BusArm,
-    LifecycleArm, Poller, SpendSource, Tracked, IDLE_MINUTES, LIFECYCLE_KINDS,
+    LifecycleArm, Poller, SpendSource, Tracked, IDLE_MINUTES,
 };
 pub use question::{
     question_in_document, question_in_event, question_text, SseCutter, SSE_BUFFER_MAX,
 };
-pub use rule::{allowed_scopes, Kind, Rule, Scope, ScopeType, Signal};
+pub use rule::{allowed_scopes, Kind, LifecycleEvent, Rule, Scope, ScopeType, Signal};

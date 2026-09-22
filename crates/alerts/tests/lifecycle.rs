@@ -1,5 +1,5 @@
-//! The session lifecycle kinds: what a request on the bus opens, what the companion's reports open and close,
-//! the idle rules and their thresholds, the expiry sweep, and what a restart leaves behind.
+//! The session lifecycle events: what a request on the bus posts, what the companion's reports post, the idle
+//! rules and their thresholds, the expiry sweep, and what a restart and a shutdown leave behind.
 mod common;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -38,6 +38,11 @@ fn main_turn(id: &str, session: &str) -> Event {
     turn(id, session, "main", None, NOW)
 }
 
+/// The session's own turn received at a given time, for a request that must clear the terminal fence.
+fn turn_at(id: &str, session: &str, received_at: i64) -> Event {
+    turn(id, session, "main", None, received_at)
+}
+
 fn idle_rule(id: &str, minutes: f64, scope: ScopeType, scope_id: Option<&str>) -> AlertRuleRow {
     AlertRuleRow {
         threshold: Some(minutes),
@@ -62,47 +67,47 @@ fn install(rig: &Rig, rows: &[AlertRuleRow]) {
     rig.alerts.reload().unwrap();
 }
 
-/// The open events as kind and subject, sorted: two events opened on the same millisecond are ordered by their
-/// random ids, which is no order a test may assert.
-fn open(rig: &Rig) -> Vec<(String, String)> {
-    let mut open: Vec<(String, String)> = rig
-        .store
-        .open_alert_events()
-        .unwrap()
-        .into_iter()
-        .map(|e| (e.kind, e.subject))
-        .collect();
-    open.sort();
-    open
-}
-
-fn detail_of(rig: &Rig, kind: Kind) -> serde_json::Value {
-    let event = rig
-        .store
-        .open_alert_events()
-        .unwrap()
-        .into_iter()
-        .find(|e| e.kind == kind.as_str())
-        .unwrap_or_else(|| panic!("no open {}", kind.as_str()));
-    serde_json::from_str(&event.detail_json.unwrap()).unwrap()
-}
-
-/// Every delivery as kind, subject, and state, sorted for the same reason the open events are.
+/// Every lifecycle delivery as kind, subject, and event, in the order they were posted.
 fn posted(rig: &Rig) -> Vec<(String, String, String)> {
-    let mut posts: Vec<(String, String, String)> = rig
-        .webhook
+    rig.webhook
         .posts()
         .into_iter()
         .map(|p| {
             (
                 p.body["kind"].as_str().unwrap().to_string(),
                 p.body["subject"].as_str().unwrap().to_string(),
-                p.body["state"].as_str().unwrap().to_string(),
+                p.body["detail"]["event"].as_str().unwrap().to_string(),
             )
         })
-        .collect();
-    posts.sort();
-    posts
+        .collect()
+}
+
+/// The detail of the newest delivery that posted `event`.
+fn detail_of(rig: &Rig, event: &str) -> serde_json::Value {
+    rig.webhook
+        .posts()
+        .into_iter()
+        .rev()
+        .find(|p| p.body["detail"]["event"] == event)
+        .unwrap_or_else(|| panic!("no {event} delivery"))
+        .body["detail"]
+        .clone()
+}
+
+fn active(session: &str, event: &str) -> (String, String, String) {
+    (
+        "session_active".into(),
+        question_subject(KEY, session),
+        event.into(),
+    )
+}
+
+fn sub(session: &str, agent: &str, event: &str) -> (String, String, String) {
+    (
+        "subagent_active".into(),
+        agent_subject(KEY, session, agent),
+        event.into(),
+    )
 }
 
 fn started(session: &str) -> SessionLifecycle {
@@ -113,49 +118,38 @@ fn started(session: &str) -> SessionLifecycle {
 }
 
 #[tokio::test]
-async fn a_sessions_first_request_opens_session_active_and_a_subagents_opens_subagent_active() {
+async fn a_sessions_first_request_posts_session_started_and_a_subagents_posts_subagent_started() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(main_turn("r1", "s1"));
     arm.observe(complete("r1", Outcome::Succeeded, 200, None, None));
     settled(&rig).await;
+    assert_eq!(posted(&rig), [active("s1", "session_started")]);
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))]
-    );
-    assert_eq!(
-        detail_of(&rig, Kind::SessionActive),
-        serde_json::json!({ "key": KEY, "pool": "main", "session": "s1", "source": "request" })
+        detail_of(&rig, "session_started"),
+        serde_json::json!({ "event": "session_started", "key": KEY, "pool": "main", "session": "s1", "source": "request" })
     );
     arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
+        posted(&rig),
         [
-            ("session_active".to_string(), question_subject(KEY, "s1")),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-1")
-            ),
+            active("s1", "session_started"),
+            sub("s1", "sub-1", "subagent_started"),
         ]
     );
     assert_eq!(
-        detail_of(&rig, Kind::SubagentActive),
-        serde_json::json!({ "agent": "sub-1", "key": KEY, "parent_agent": "main", "pool": "main", "session": "s1" })
+        detail_of(&rig, "subagent_started")["parent_agent"],
+        serde_json::json!("main")
     );
     arm.observe(main_turn("r3", "s1"));
     arm.observe(turn("r4", "s1", "sub-1", Some("main"), NOW));
     settled(&rig).await;
     assert_eq!(
-        open(&rig).len(),
-        2,
-        "a second request of either is the same condition still holding"
-    );
-    assert_eq!(
         posted(&rig).len(),
         2,
-        "and posts nothing a receiver has not already been told"
+        "a second request of either is the same session still running"
     );
     arm.observe(match main_turn("p1", "s2") {
         Event::RequestObserved(o) => Event::RequestObserved(RequestObserved {
@@ -174,9 +168,13 @@ async fn a_sessions_first_request_opens_session_active_and_a_subagents_opens_sub
     });
     settled(&rig).await;
     assert_eq!(
-        open(&rig).len(),
+        posted(&rig).len(),
         2,
         "a probe replays a session and a token count precedes a turn: neither is the session in use"
+    );
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "nothing opens"
     );
 }
 
@@ -188,13 +186,10 @@ async fn the_companion_ends_a_session_releases_an_agent_and_parks_and_resumes_th
     let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
     companion.apply(started("s1"));
     settled(&rig).await;
+    assert_eq!(posted(&rig), [active("s1", "session_started")]);
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))]
-    );
-    assert_eq!(
-        detail_of(&rig, Kind::SessionActive),
-        serde_json::json!({ "key": KEY, "pool": "main", "session": "s1", "source": "companion" })
+        detail_of(&rig, "session_started"),
+        serde_json::json!({ "event": "session_started", "key": KEY, "pool": "main", "session": "s1", "source": "companion" })
     );
     for agent in ["sub-1", "sub-2"] {
         companion.apply(SessionLifecycle::AgentStarted {
@@ -205,7 +200,7 @@ async fn the_companion_ends_a_session_releases_an_agent_and_parks_and_resumes_th
     }
     settled(&rig).await;
     assert_eq!(
-        detail_of(&rig, Kind::SubagentActive)["parent_agent"],
+        detail_of(&rig, "subagent_started")["parent_agent"],
         serde_json::Value::Null,
         "the companion's report names no parent"
     );
@@ -219,87 +214,46 @@ async fn the_companion_ends_a_session_releases_an_agent_and_parks_and_resumes_th
         session_id: "s1".into(),
     });
     settled(&rig).await;
-    assert_eq!(
-        open(&rig),
-        [
-            ("session_active".to_string(), question_subject(KEY, "s1")),
-            ("session_parked".to_string(), question_subject(KEY, "s1")),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-2")
-            ),
-        ],
-        "the released agent's event is resolved and the parked main agent's is open"
-    );
     companion.apply(SessionLifecycle::MainResumed {
         key_id: KEY.into(),
         session_id: "s1".into(),
     });
     settled(&rig).await;
-    assert!(
-        !open(&rig).iter().any(|(kind, _)| kind == "session_parked"),
-        "leaving parked resolves it"
-    );
     companion.apply(SessionLifecycle::SessionEnded {
         key_id: KEY.into(),
         session_id: "s1".into(),
     });
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [],
-        "the session's end resolves every kind of it"
-    );
-    assert_eq!(
         posted(&rig),
         [
+            active("s1", "session_started"),
+            sub("s1", "sub-1", "subagent_started"),
+            sub("s1", "sub-2", "subagent_started"),
+            sub("s1", "sub-1", "subagent_ended"),
             (
-                "session_active".to_string(),
+                "session_parked".to_string(),
                 question_subject(KEY, "s1"),
-                "opened".to_string()
-            ),
-            (
-                "session_active".to_string(),
-                question_subject(KEY, "s1"),
-                "resolved".to_string()
+                "session_parked".to_string()
             ),
             (
                 "session_parked".to_string(),
                 question_subject(KEY, "s1"),
-                "opened".to_string()
+                "session_resumed".to_string()
             ),
-            (
-                "session_parked".to_string(),
-                question_subject(KEY, "s1"),
-                "resolved".to_string()
-            ),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-1"),
-                "opened".to_string()
-            ),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-1"),
-                "resolved".to_string()
-            ),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-2"),
-                "opened".to_string()
-            ),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-2"),
-                "resolved".to_string()
-            ),
-        ],
-        "every event was delivered opened and then resolved"
+            active("s1", "session_ended"),
+            sub("s1", "sub-2", "subagent_ended"),
+        ]
     );
+    for post in rig.webhook.posts() {
+        assert_eq!(post.body["state"], "event");
+        assert_eq!(post.body["resolved_at"], serde_json::Value::Null);
+    }
+    assert!(rig.store.open_alert_events().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request() {
+async fn session_idle_posts_after_the_threshold_and_the_next_request_arms_it_again() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -309,14 +263,21 @@ async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request
         &inputs(&rig, BTreeMap::new()),
         arm.tracked(),
     );
+    let idle_count = |rig: &Rig| {
+        posted(rig)
+            .iter()
+            .filter(|(_, _, e)| e == "session_idle")
+            .count()
+    };
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
     rig.clock.store(NOW + 29 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    assert!(
-        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
-        "a minute short of the threshold is not idle"
+    assert_eq!(
+        idle_count(&rig),
+        0,
+        "a minute short of the threshold posts nothing"
     );
     // A report about the session is not the session being used, so it moves no idle clock.
     companion.apply(SessionLifecycle::MainParked {
@@ -324,36 +285,39 @@ async fn session_idle_opens_after_the_threshold_and_resolves_on_the_next_request
         session_id: "s1".into(),
     });
     settled(&rig).await;
+    assert_eq!(posted(&rig).last().unwrap().2, "session_parked");
     rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
     assert_eq!(
-        detail_of(&rig, Kind::SessionIdle),
-        serde_json::json!({ "idle_minutes": 30.0, "key": KEY, "last_request_at": NOW, "pool": "main", "session": "s1" }),
+        detail_of(&rig, "session_idle"),
+        serde_json::json!({ "event": "session_idle", "idle_minutes": 30.0, "key": KEY, "last_request_at": NOW, "pool": "main", "session": "s1" }),
         "the companion's report a minute earlier postponed nothing"
     );
     rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
     arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW + 31 * 60_000));
     settled(&rig).await;
-    assert!(
-        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+    assert_eq!(
+        idle_count(&rig),
+        1,
         "a subagent's request is the session in use"
     );
     rig.clock.store(NOW + 61 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
+    assert_eq!(idle_count(&rig), 2);
     assert_eq!(
-        detail_of(&rig, Kind::SessionIdle)["last_request_at"],
+        detail_of(&rig, "session_idle")["last_request_at"],
         serde_json::json!(NOW + 31 * 60_000),
         "the second idle is measured from the request that cleared the first"
     );
 }
 
-/// The tick's write rate: a rule that has opened for a session is not dispatched again until that session's
-/// next request, which an operator's own Resolve makes visible (the engine would take a repeat, so a second
-/// open would mean a second insert attempt against the store).
+/// The tick's post rate: a rule that has posted for a session is not dispatched again until that session's
+/// next request, which is the crossing the idle set records against a second tick that would otherwise repeat
+/// it.
 #[tokio::test]
-async fn an_idle_rule_is_dispatched_once_per_crossing_and_the_next_request_arms_it_again() {
+async fn an_idle_rule_posts_once_per_crossing_and_the_next_request_arms_it_again() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -362,26 +326,25 @@ async fn an_idle_rule_is_dispatched_once_per_crossing_and_the_next_request_arms_
         &inputs(&rig, BTreeMap::new()),
         arm.tracked(),
     );
+    let idle_count = |rig: &Rig| {
+        posted(rig)
+            .iter()
+            .filter(|(_, _, e)| e == "session_idle")
+            .count()
+    };
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
     rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    let opened = rig
-        .store
-        .open_alert_events()
-        .unwrap()
-        .into_iter()
-        .find(|e| e.kind == "session_idle")
-        .expect("the threshold opened one");
-    rig.alerts.resolve(&opened.id).unwrap();
-    settled(&rig).await;
+    assert_eq!(idle_count(&rig), 1, "the threshold posts once");
     rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    assert!(
-        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
-        "a later tick over the same idle session dispatches the rule no second time"
+    assert_eq!(
+        idle_count(&rig),
+        1,
+        "a later tick over the same idle session posts the rule no second time"
     );
     rig.clock.store(NOW + 32 * 60_000, Ordering::SeqCst);
     arm.observe(main_turn("r2", "s1"));
@@ -389,14 +352,15 @@ async fn an_idle_rule_is_dispatched_once_per_crossing_and_the_next_request_arms_
     rig.clock.store(NOW + 62 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    assert!(
-        open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+    assert_eq!(
+        idle_count(&rig),
+        2,
         "the session's next request arms the rule for its next crossing"
     );
 }
 
 #[tokio::test]
-async fn idle_rules_open_each_at_their_own_threshold_and_a_disjoint_scope_opens_nothing() {
+async fn idle_rules_post_each_at_their_own_threshold_and_a_disjoint_scope_posts_nothing() {
     let rig = rig().await;
     install(
         &rig,
@@ -407,7 +371,7 @@ async fn idle_rules_open_each_at_their_own_threshold_and_a_disjoint_scope_opens_
         ],
     );
     // A day's expiry: the sweep at the hour would otherwise retire the session the sixty-minute rule is about
-    // to open for.
+    // to post for.
     let long_lived = || AlertInputs {
         session_expiry: Duration::from_secs(86_400),
         ..inputs(&rig, BTreeMap::new())
@@ -419,47 +383,39 @@ async fn idle_rules_open_each_at_their_own_threshold_and_a_disjoint_scope_opens_
     rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    let rules_open = |rig: &Rig| {
+    // The rule id, not the subject, is what distinguishes the two thresholds; read it off the raw body.
+    let rules_posted = |rig: &Rig| {
         let mut ids: Vec<String> = rig
-            .store
-            .open_alert_events()
-            .unwrap()
-            .into_iter()
-            .map(|e| e.rule_id)
+            .webhook
+            .posts()
+            .iter()
+            .filter(|p| p.body["detail"]["event"] == "session_idle")
+            .map(|p| p.body["rule"].as_str().unwrap().to_string())
             .collect();
         ids.sort();
         ids
     };
-    assert_eq!(rules_open(&rig), ["idle30"]);
+    assert_eq!(rules_posted(&rig), ["idle30"]);
     rig.clock.store(NOW + 60 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
     assert_eq!(
-        rules_open(&rig),
+        rules_posted(&rig),
         ["idle30", "idle60"],
-        "each rule opens at its own threshold, and a pool the key is not on opens nothing"
+        "each rule posts at its own threshold, and a pool the key is not on posts nothing"
     );
     rig.clock.store(NOW + 61 * 60_000, Ordering::SeqCst);
     arm.observe(main_turn("r2", "s1"));
     settled(&rig).await;
-    assert_eq!(rules_open(&rig), Vec::<String>::new());
-    let mut resolved: Vec<String> = rig
-        .webhook
-        .posts()
-        .into_iter()
-        .filter(|p| p.body["state"] == "resolved")
-        .map(|p| p.body["rule"].as_str().unwrap().to_string())
-        .collect();
-    resolved.sort();
     assert_eq!(
-        resolved,
+        rules_posted(&rig),
         ["idle30", "idle60"],
-        "the resolved deliveries name each rule once"
+        "the session's next request posts nothing more"
     );
 }
 
 #[tokio::test]
-async fn the_expiry_sweep_resolves_every_lifecycle_event_of_a_forgotten_session() {
+async fn the_expiry_sweep_posts_the_ends_of_a_forgotten_session() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -474,48 +430,51 @@ async fn the_expiry_sweep_resolves_every_lifecycle_event_of_a_forgotten_session(
     rig.clock.store(NOW + 30 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    assert_eq!(open(&rig).len(), 3, "active, its subagent, and idle");
+    assert_eq!(posted(&rig).len(), 3, "started, subagent started, idle");
     rig.clock.store(NOW + 3_601_000, Ordering::SeqCst);
     arm.observe(main_turn("r3", "s2"));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s2"))],
-        "the forgotten session leaves nothing open and the live one is untouched"
+        posted(&rig)[3..].to_vec(),
+        vec![
+            active("s1", "session_ended"),
+            sub("s1", "sub-1", "subagent_ended"),
+            active("s2", "session_started"),
+        ],
+        "the forgotten session's ends post before the live one's start, and the sweep runs before the event is read"
     );
 }
 
 #[tokio::test]
-async fn an_expired_sessions_events_resolve_on_an_event_the_arm_has_no_request_for() {
+async fn an_expired_sessions_ends_post_on_an_event_the_arm_has_no_request_for() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     arm.observe(main_turn("r1", "s1"));
     arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW));
     settled(&rig).await;
-    assert_eq!(open(&rig).len(), 2, "the session and its subagent");
+    assert_eq!(
+        posted(&rig).len(),
+        2,
+        "the session and its subagent started"
+    );
     rig.clock.store(NOW + 3_601_000, Ordering::SeqCst);
     // A completion of a request the arm never saw: the bus drops under pressure and an in-flight entry ages
     // out, so a completion with nothing to match is the ordinary shape of both.
     arm.observe(complete("ghost", Outcome::Succeeded, 200, None, None));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [],
-        "the sweep's clears reach the store whatever the event that carried them was"
-    );
-    assert_eq!(
-        posted(&rig)
-            .iter()
-            .filter(|(_, _, state)| state == "resolved")
-            .count(),
-        2,
-        "and a receiver is told of each"
+        posted(&rig)[2..].to_vec(),
+        vec![
+            active("s1", "session_ended"),
+            sub("s1", "sub-1", "subagent_ended"),
+        ],
+        "the sweep's ends post on whatever event carried them"
     );
 }
 
 #[tokio::test]
-async fn a_session_with_no_companion_and_no_further_traffic_expires_from_the_poller_alone() {
+async fn a_session_with_no_companion_and_no_further_traffic_ends_from_the_poller_alone() {
     let rig = rig().await;
     install(
         &rig,
@@ -538,87 +497,63 @@ async fn a_session_with_no_companion_and_no_further_traffic_expires_from_the_pol
     poller.tick().await;
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        posted(&rig),
+        [active("s1", "session_started")],
         "a second short of the expiry the session is still live"
     );
     rig.clock.store(NOW + 3_600_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
-    assert_eq!(open(&rig), []);
     assert_eq!(
         posted(&rig),
         [
-            (
-                "session_active".to_string(),
-                question_subject(KEY, "s1"),
-                "opened".to_string()
-            ),
-            (
-                "session_active".to_string(),
-                question_subject(KEY, "s1"),
-                "resolved".to_string()
-            ),
+            active("s1", "session_started"),
+            active("s1", "session_ended")
         ]
     );
+    assert_eq!(detail_of(&rig, "session_ended")["source"], "expiry");
 }
 
 #[tokio::test]
-async fn open_lifecycle_events_from_before_a_restart_are_resolved_at_start_with_the_reason() {
+async fn a_restart_posts_nothing_for_what_a_previous_process_tracked_and_keeps_its_question() {
     let rig = rig().await;
-    let mut rows = lifecycle_rules();
-    rows.push(rule(
-        "ask",
-        Kind::AskUserQuestion,
-        ScopeType::Key,
-        Some(KEY),
-    ));
-    install(&rig, &rows);
-    let before = [
-        (
-            "e1",
-            "active",
-            Kind::SessionActive,
-            question_subject(KEY, "s1"),
-        ),
-        (
-            "e2",
-            "sub",
-            Kind::SubagentActive,
-            agent_subject(KEY, "s1", "sub-1"),
-        ),
-        ("e3", "idle", Kind::SessionIdle, question_subject(KEY, "s1")),
-        (
-            "e4",
-            "ask",
-            Kind::AskUserQuestion,
-            question_subject(KEY, "s1"),
-        ),
-    ];
-    for (id, rule_id, kind, subject) in &before {
+    install(&rig, &lifecycle_rules());
+    // The row's rule id must exist for the foreign key, but stays out of the reloaded cache: the question's
+    // own age-based resolve, later in this test, then closes the row without a delivery no cached rule is
+    // left to receive.
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::Key, Some(KEY)),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.store
+        .insert_alert_event(&AlertEventRow {
+            id: "q1".into(),
+            rule_id: "ask".into(),
+            kind: Kind::AskUserQuestion.as_str().into(),
+            subject: question_subject(KEY, "s1"),
+            state: "open".into(),
+            opened_at: NOW - 10 * 60_000,
+            resolved_at: None,
+            detail_json: Some(serde_json::json!({ "key": KEY, "session": "s1" }).to_string()),
+        })
+        .unwrap();
+    let question_open = |rig: &Rig| {
         rig.store
-            .insert_alert_event(&AlertEventRow {
-                id: (*id).into(),
-                rule_id: (*rule_id).into(),
-                kind: kind.as_str().into(),
-                subject: subject.clone(),
-                state: "open".into(),
-                opened_at: NOW,
-                resolved_at: None,
-                detail_json: Some(serde_json::json!({ "key": KEY, "session": "s1" }).to_string()),
-            })
-            .unwrap();
-    }
-    // The restart lands past the idle rule's threshold and short of the session expiry, which is the window
-    // in which an entry restored from the question could be taken for an idle session.
-    rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == Kind::AskUserQuestion.as_str())
+    };
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
     settled(&rig).await;
-    assert_eq!(
-        open(&rig),
-        [("ask_user_question".to_string(), question_subject(KEY, "s1"))],
+    assert!(
+        question_open(&rig),
         "the question is still waiting for the user; the lifecycle events cannot be known to be"
     );
+    assert!(rig.webhook.posts().is_empty());
     let mut poller = Poller::new(
         rig.alerts.clone(),
         &inputs(&rig, BTreeMap::new()),
@@ -627,40 +562,52 @@ async fn open_lifecycle_events_from_before_a_restart_are_resolved_at_start_with_
     poller.tick().await;
     settled(&rig).await;
     assert!(
-        !open(&rig).iter().any(|(kind, _)| kind == "session_idle"),
+        rig.webhook.posts().is_empty(),
+        "the restart itself posts nothing"
+    );
+    assert!(question_open(&rig));
+    assert_eq!(arm.tracked_sessions(), 1);
+    rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        posted(&rig)
+            .iter()
+            .all(|(_, _, event)| event != "session_idle"),
         "this process has seen no request of that session, so it cannot call it idle"
     );
-    let posts = rig.webhook.posts();
-    assert_eq!(posts.len(), 3, "one resolved delivery per lifecycle event");
-    for post in &posts {
-        assert_eq!(
-            (
-                post.body["state"].as_str(),
-                post.body["detail"]["reason"].as_str()
-            ),
-            (Some("resolved"), Some("restart")),
-            "the reason reaches the receiver in the resolved delivery"
-        );
-    }
-    arm.observe(main_turn("r1", "s1"));
+    assert_eq!(arm.tracked_sessions(), 1);
+    rig.clock.store(NOW + 61 * 60_000, Ordering::SeqCst);
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(arm.tracked_sessions(), 0, "the entry aged past the expiry");
+    assert!(
+        posted(&rig).is_empty(),
+        "an expiry ends a session this process never announced, so it posts nothing"
+    );
+    arm.observe(turn_at("r1", "s1", NOW + 61 * 60_000 + 1_000));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "a live session opens a fresh event on its next request, which also answers the question"
+        posted(&rig),
+        [active("s1", "session_started")],
+        "a live session posts a fresh start on its next request, which also answers the question"
     );
     assert_eq!(
-        detail_of(&rig, Kind::SessionActive)["pool"],
+        detail_of(&rig, "session_started")["pool"],
         serde_json::json!("main"),
         "the request names the pool a pool-scoped rule would have to match"
+    );
+    assert!(
+        !question_open(&rig),
+        "the request still answers the question the entry no longer tracks"
     );
 }
 
 /// The bus arm and the companion's arm on tasks of their own over one map, as the router runs them: whichever
-/// order the two reach the store in, a session's end leaves nothing open behind it, and a later request of
-/// that session still opens its own event rather than meeting a row nothing will ever resolve.
+/// order the two reach the engine in, a session's end leaves no start posted behind it, and a later request of
+/// that session still posts its own start rather than meeting a fence nothing will ever lift.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_request_racing_a_sessions_end_leaves_no_event_open_behind_it() {
+async fn a_request_racing_a_sessions_end_posts_the_start_before_the_end_or_nothing() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let arm = Arc::new(Mutex::new(BusArm::new(
@@ -699,28 +646,41 @@ async fn a_request_racing_a_sessions_end_leaves_no_event_open_behind_it() {
         end.unwrap();
     }
     settled(&rig).await;
-    assert_eq!(
-        open(&rig),
-        [],
-        "the end resolves what the request opened, and the request opens nothing after the end"
-    );
+    let all_posted = posted(&rig);
+    for i in 0..50 {
+        let subject = question_subject(KEY, &format!("s{i}"));
+        let events: Vec<&str> = all_posted
+            .iter()
+            .filter(|(_, s, _)| s == &subject)
+            .map(|(_, _, e)| e.as_str())
+            .collect();
+        assert!(
+            events == ["session_started", "session_ended"] || events.is_empty(),
+            "session s{i}: {events:?}"
+        );
+    }
     rig.clock.store(NOW + 1_000, Ordering::SeqCst);
     arm.lock()
         .unwrap()
         .observe(turn("later", "s0", "main", None, NOW + 1_000));
     settled(&rig).await;
+    let s0_subject = question_subject(KEY, "s0");
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s0"))],
-        "a row left open for the ended session would hold the rule and subject against this one"
+        posted(&rig)
+            .into_iter()
+            .rfind(|(_, s, _)| s == &s0_subject)
+            .unwrap()
+            .2,
+        "session_started",
+        "the later request posts a fresh start"
     );
 }
 
 #[tokio::test]
-async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request() {
+async fn a_rule_enabled_while_a_session_runs_receives_its_later_events_and_no_synthetic_start() {
     let rig = rig().await;
     // An enabled rule of the kind, watching another key: the kind being watched somewhere is not this
-    // session's event being open.
+    // session's event reaching this rule.
     install(
         &rig,
         &[rule(
@@ -734,7 +694,7 @@ async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
+        posted(&rig),
         [],
         "no rule this session matches is enabled yet"
     );
@@ -750,14 +710,21 @@ async fn a_rule_enabled_while_a_session_runs_opens_on_that_sessions_next_request
     arm.observe(main_turn("r2", "s1"));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "the session was already running when the rule was enabled"
+        posted(&rig),
+        [],
+        "the session's start was posted to nobody and is not repeated"
     );
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
+    companion.apply(SessionLifecycle::SessionEnded {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    });
+    settled(&rig).await;
+    assert_eq!(posted(&rig), [active("s1", "session_ended")]);
 }
 
 #[tokio::test]
-async fn a_session_end_enqueued_at_the_close_resolves_its_events_before_the_inputs_stop() {
+async fn a_session_end_enqueued_at_the_close_is_posted_before_the_inputs_stop() {
     let rig = rig().await;
     install(
         &rig,
@@ -769,7 +736,7 @@ async fn a_session_end_enqueued_at_the_close_resolves_its_events_before_the_inpu
         )],
     );
     let (tx, rx) = lifecycle_channel();
-    let handles = spawn_inputs(
+    let mut handles = spawn_inputs(
         rig.alerts.clone(),
         AlertInputs {
             lifecycle: Some(rx),
@@ -778,7 +745,7 @@ async fn a_session_end_enqueued_at_the_close_resolves_its_events_before_the_inpu
     );
     tx.send(started("s1")).unwrap();
     fake_upstream::wait_for(Duration::from_secs(5), || {
-        (open(&rig) == [("session_active".to_string(), question_subject(KEY, "s1"))]).then_some(())
+        (posted(&rig) == [active("s1", "session_started")]).then_some(())
     })
     .await;
     // The end is queued and the sender dropped with no await point between them and the shutdown, the way the
@@ -789,24 +756,22 @@ async fn a_session_end_enqueued_at_the_close_resolves_its_events_before_the_inpu
     })
     .unwrap();
     drop(tx);
-    handles.shutdown().await;
+    handles.stop();
+    handles.drain().await;
+    settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [],
-        "the end the queue held resolved its event before the consumer stopped"
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s1", "session_ended")
+        ],
+        "the end the queue held was posted before the consumer stopped"
     );
-    let events = rig.store.alert_events(None, 10).unwrap();
-    assert_eq!(
-        events
-            .iter()
-            .map(|e| (e.kind.as_str(), e.state.as_str()))
-            .collect::<Vec<_>>(),
-        [("session_active", "resolved")]
-    );
+    assert!(rig.store.alert_events(None, 10).unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn a_request_observed_before_the_sessions_end_but_applied_after_it_reopens_nothing() {
+async fn a_request_observed_before_the_sessions_end_but_applied_after_it_posts_nothing() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -819,25 +784,35 @@ async fn a_request_observed_before_the_sessions_end_but_applied_after_it_reopens
         session_id: "s1".into(),
     });
     settled(&rig).await;
-    assert_eq!(open(&rig), []);
+    assert_eq!(
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s1", "session_ended")
+        ]
+    );
     arm.observe(turn("r2", "s1", "main", None, NOW + 5_000));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [],
+        posted(&rig).len(),
+        2,
         "the request was received before the end the bus consumer applied after it"
     );
     arm.observe(turn("r3", "s1", "main", None, NOW + 20_000));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "a request of the session's own life opens it again"
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s1", "session_ended"),
+            active("s1", "session_started"),
+        ],
+        "a request of the session's own life posts a fresh start"
     );
 }
 
 #[tokio::test]
-async fn a_request_of_a_released_agent_applied_after_the_release_reopens_nothing() {
+async fn a_request_of_a_released_agent_applied_after_the_release_posts_nothing() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -850,22 +825,27 @@ async fn a_request_of_a_released_agent_applied_after_the_release_reopens_nothing
     arm.observe(main_turn("r1", "s1"));
     arm.observe(turn("r2", "s1", "sub-1", Some("main"), NOW));
     settled(&rig).await;
-    assert_eq!(open(&rig).len(), 2, "the session and its subagent");
+    assert_eq!(
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            sub("s1", "sub-1", "subagent_started")
+        ]
+    );
     rig.clock.store(NOW + 10_000, Ordering::SeqCst);
     companion.apply(released.clone());
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "the release resolves the agent's own event"
+        posted(&rig).last().unwrap(),
+        &sub("s1", "sub-1", "subagent_ended")
     );
     // The agent's own earlier request, applied after the release that ended its run.
     arm.observe(turn("r3", "s1", "sub-1", Some("main"), NOW + 5_000));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "a request the release outran opens nothing the release would not close"
+        posted(&rig).len(),
+        3,
+        "a request the release outran posts nothing the release would not close"
     );
     // A new run of the same agent: the start is the agent working again, and its requests count once more.
     rig.clock.store(NOW + 20_000, Ordering::SeqCst);
@@ -876,29 +856,19 @@ async fn a_request_of_a_released_agent_applied_after_the_release_reopens_nothing
     });
     arm.observe(turn("r4", "s1", "sub-1", Some("main"), NOW + 21_000));
     settled(&rig).await;
-    assert_eq!(
-        open(&rig),
-        [
-            ("session_active".to_string(), question_subject(KEY, "s1")),
-            (
-                "subagent_active".to_string(),
-                agent_subject(KEY, "s1", "sub-1")
-            ),
-        ],
-        "the agent runs again, and once"
-    );
+    assert_eq!(posted(&rig).len(), 4, "the agent runs again, and once");
     rig.clock.store(NOW + 30_000, Ordering::SeqCst);
     companion.apply(released);
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
+        posted(&rig).len(),
+        5,
         "and its second run closes like the first"
     );
 }
 
 #[tokio::test]
-async fn heartbeats_keep_a_session_from_expiring_and_leave_its_idle_clock_alone() {
+async fn heartbeats_keep_a_session_from_ending_and_leave_its_idle_clock_alone() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
     let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
@@ -914,9 +884,7 @@ async fn heartbeats_keep_a_session_from_expiring_and_leave_its_idle_clock_alone(
     };
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
-    let active = ("session_active".to_string(), question_subject(KEY, "s1"));
-    let idle = ("session_idle".to_string(), question_subject(KEY, "s1"));
-    assert_eq!(open(&rig), std::slice::from_ref(&active));
+    assert_eq!(posted(&rig), [active("s1", "session_started")]);
 
     // A session whose user has stepped away: the companion reports it is still there, and nothing else does.
     for minute in [25, 31, 59, 90, 200] {
@@ -924,19 +892,25 @@ async fn heartbeats_keep_a_session_from_expiring_and_leave_its_idle_clock_alone(
         companion.apply(heartbeat.clone());
         poller.tick().await;
         settled(&rig).await;
-        let expected: Vec<(String, String)> = if minute < 30 {
-            vec![active.clone()]
-        } else {
-            vec![active.clone(), idle.clone()]
-        };
+        let idle_count = posted(&rig)
+            .iter()
+            .filter(|(_, _, e)| e == "session_idle")
+            .count();
+        let expected = if minute < 30 { 0 } else { 1 };
         assert_eq!(
-            open(&rig),
-            expected,
+            idle_count, expected,
             "at minute {minute}: the expiry measures from the report, the idle rule from the request"
+        );
+        assert!(
+            posted(&rig).iter().all(|(_, _, e)| e != "session_ended"),
+            "at minute {minute}: the heartbeat keeps the session from ending"
         );
     }
 }
 
+/// A key's pool moves mid-session: `session_started` is posted once, to whoever matches at that moment, so the
+/// key's move to a pool whose rules would have matched gets no synthetic start; the session's next crossing is
+/// what still proves the pool the rules read updated.
 #[tokio::test]
 async fn a_key_moved_to_another_pool_matches_that_pools_rules_from_its_next_request() {
     let rig = rig().await;
@@ -955,7 +929,7 @@ async fn a_key_moved_to_another_pool_matches_that_pools_rules_from_its_next_requ
     );
     arm.observe(main_turn("r1", "s1"));
     settled(&rig).await;
-    assert_eq!(open(&rig), [], "the rules watch a pool the key is not on");
+    assert_eq!(posted(&rig), [], "the rules watch a pool the key is not on");
 
     // The operator moves the key to the pool those rules watch.
     let mut spare = rig.store.pool("main").unwrap().unwrap();
@@ -970,60 +944,99 @@ async fn a_key_moved_to_another_pool_matches_that_pools_rules_from_its_next_requ
     arm.observe(observed("r2", KEY, "spare", "s1", 0));
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        [("session_active".to_string(), question_subject(KEY, "s1"))],
-        "the session is on the new pool from its next request"
+        posted(&rig),
+        [],
+        "a start is posted once, to whoever matched then, and the moved key gets no synthetic one"
     );
-    assert_eq!(detail_of(&rig, Kind::SessionActive)["pool"], "spare");
     rig.clock.store(NOW + 31 * 60_000, Ordering::SeqCst);
     poller.tick().await;
     settled(&rig).await;
     assert_eq!(
-        detail_of(&rig, Kind::SessionIdle)["pool"],
+        detail_of(&rig, "session_idle")["pool"],
         "spare",
-        "and an idle crossing names the pool the session is on now"
+        "an idle crossing names the pool the session is on now"
     );
 }
 
 #[tokio::test]
-async fn a_clear_the_store_refused_is_offered_again_on_the_next_tick() {
+async fn an_observation_during_the_drain_is_not_posted_after_the_ends_the_close_enqueued() {
     let rig = rig().await;
     install(&rig, &lifecycle_rules());
-    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
-    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
-    let mut poller = Poller::new(
+    let (tx, rx) = lifecycle_channel();
+    let mut handles = spawn_inputs(
         rig.alerts.clone(),
-        &inputs(&rig, BTreeMap::new()),
-        arm.tracked(),
+        AlertInputs {
+            lifecycle: Some(rx),
+            ..inputs(&rig, BTreeMap::new())
+        },
     );
-    let active = ("session_active".to_string(), question_subject(KEY, "s1"));
-    arm.observe(main_turn("r1", "s1"));
-    settled(&rig).await;
-    assert_eq!(open(&rig), std::slice::from_ref(&active));
-
-    // The session ends while the store is having a bad moment. The end is the one transition that closes the
-    // row: the entry it belonged to is gone, so nothing would decide it a second time.
-    rig.store.debug_fail_next_alert_resolve();
-    companion.apply(SessionLifecycle::SessionEnded {
+    tx.send(started("s1")).unwrap();
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (posted(&rig) == [active("s1", "session_started")]).then_some(())
+    })
+    .await;
+    tx.send(SessionLifecycle::SessionEnded {
         key_id: KEY.into(),
         session_id: "s1".into(),
-    });
+    })
+    .unwrap();
+    // The binary's order: the bus arm and the poller stop before the keepalive close enqueues the ends, the
+    // consumer drains after it. A request of the session published between the two, received after the end,
+    // is never applied and posts no start after the end.
+    handles.stop();
+    rig.bus.publish(turn_at("late", "s1", NOW + 1_000));
+    drop(tx);
+    handles.drain().await;
     settled(&rig).await;
     assert_eq!(
-        open(&rig),
-        std::slice::from_ref(&active),
-        "the store refused the write, so the row is still open"
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s1", "session_ended")
+        ],
+        "the end the queue held was posted, and the late observation was not"
     );
-    assert!(
-        !posted(&rig).iter().any(|(_, _, state)| state == "resolved"),
-        "and nothing was posted for a resolve that did not happen"
-    );
+}
 
-    poller.tick().await;
-    settled(&rig).await;
-    assert_eq!(open(&rig), [], "the next tick offers the clear again");
-    assert!(
-        posted(&rig).contains(&(active.0, active.1, "resolved".to_string())),
-        "and the receiver is told once it lands"
+#[tokio::test]
+async fn a_late_observation_posts_a_start_after_the_end_when_the_bus_arm_is_not_stopped() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    let (tx, rx) = lifecycle_channel();
+    let mut handles = spawn_inputs(
+        rig.alerts.clone(),
+        AlertInputs {
+            lifecycle: Some(rx),
+            ..inputs(&rig, BTreeMap::new())
+        },
     );
+    tx.send(started("s1")).unwrap();
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (posted(&rig) == [active("s1", "session_started")]).then_some(())
+    })
+    .await;
+    tx.send(SessionLifecycle::SessionEnded {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    })
+    .unwrap();
+    drop(tx);
+    handles.drain().await;
+    // The bus arm is still running: the same late request is applied and starts the session again, which is
+    // what stopping the arm before the close prevents.
+    rig.bus.publish(turn_at("late", "s1", NOW + 1_000));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (posted(&rig).len() == 3).then_some(())
+    })
+    .await;
+    settled(&rig).await;
+    assert_eq!(
+        posted(&rig),
+        [
+            active("s1", "session_started"),
+            active("s1", "session_ended"),
+            active("s1", "session_started"),
+        ]
+    );
+    handles.abort();
 }

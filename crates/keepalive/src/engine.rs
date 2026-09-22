@@ -478,8 +478,8 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
-            // The alerts resolve a session on one end, so one already announced by the companion gets none
-            // here; the rest end now, as they would at the expiry, since nothing will report for them again.
+            // The alerts post a session's end once, so one already announced by the companion gets none here;
+            // the rest end now, as they would at the expiry, since nothing will report for them again.
             if !inner.sessions[&key].ended {
                 inner.emit(SessionLifecycle::SessionEnded {
                     key_id: key.0.clone(),

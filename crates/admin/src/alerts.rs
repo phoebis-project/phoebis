@@ -81,6 +81,19 @@ fn delivery_json(d: &AlertDeliveryRow) -> Value {
     json!({ "at": d.at, "attempt": d.attempt, "error": d.error, "id": d.id, "state": d.state, "status": d.status })
 }
 
+/// A lifecycle delivery hangs off no event, so its row says what it posted and for which rule.
+fn lifecycle_delivery_json(d: &AlertDeliveryRow) -> Value {
+    let detail = d
+        .detail_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str::<Value>(j).ok())
+        .unwrap_or(Value::Null);
+    json!({
+        "at": d.at, "attempt": d.attempt, "detail": detail, "error": d.error, "event": d.event, "id": d.id,
+        "kind": d.kind, "rule_id": d.rule_id, "state": d.state, "status": d.status, "subject": d.subject,
+    })
+}
+
 /// The question text in a detail came out of a captured response body, which the viewer may not read on the
 /// bodies route; the event route keeps that line by blanking the text for a viewer and saying it did. Past
 /// that body's own deadline the text is gone for everyone: the purge runs hourly, and no read may answer
@@ -418,6 +431,29 @@ pub(crate) async fn list_deliveries(
             Json(json!({ "deliveries": rows.iter().map(delivery_json).collect::<Vec<_>>() }))
                 .into_response()
         }
+        Err(e) => store_failure(e),
+    }
+}
+
+pub(crate) async fn list_lifecycle(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let kind = match q.get("kind").map(String::as_str) {
+        None => None,
+        Some(k) if Kind::parse(k).is_some_and(Kind::is_lifecycle) => Some(k),
+        Some(_) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "kind is session_active, session_idle, session_parked, or subagent_active",
+            )
+        }
+    };
+    match state.store.lifecycle_deliveries(kind, EVENT_LIMIT) {
+        Ok(rows) => Json(
+            json!({ "deliveries": rows.iter().map(lifecycle_delivery_json).collect::<Vec<_>>() }),
+        )
+        .into_response(),
         Err(e) => store_failure(e),
     }
 }

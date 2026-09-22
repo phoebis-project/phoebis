@@ -1,5 +1,5 @@
-//! The engine: the rules in memory, one open event per rule and subject in the store, and a delivery task per
-//! opened or resolved event.
+//! The engine: the rules in memory, one open event per rule and subject in the store for the kinds that hold a
+//! condition, a delivery per event for the lifecycle kinds, and a delivery task per event or transition.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,13 +14,9 @@ use tokio::sync::mpsc;
 use tokio_util::task::TaskTracker;
 
 use crate::deliver::{body, deliver, delivered, sign, Sleeper, Webhook};
-use crate::rule::{Kind, Rule, Signal};
+use crate::rule::{Kind, LifecycleEvent, Rule, Signal};
 
 const LOCK_POISONED: &str = "alert rules mutex poisoned by a prior panic";
-
-/// Transitions queued per event beyond the one in flight: an open and its resolve, plus room for a resolve that
-/// lands while the open still retries.
-const QUEUE_DEPTH: usize = 8;
 
 /// One transition of one event, queued to that event's own delivery worker so a resolve never overtakes the
 /// open it follows, however long the open's retries take.
@@ -28,6 +24,7 @@ pub struct Transition {
     pub event: AlertEventRow,
     pub rule: Rule,
     pub state: &'static str,
+    pub lifecycle: Option<LifecycleEvent>,
 }
 
 pub struct AlertParts {
@@ -61,8 +58,9 @@ pub struct Alerts {
     deliveries_failed: AtomicU64,
     /// Clears that reached the store, `clear` and `clear_rule` alike; what the tick's narrowing is measured by.
     clears: AtomicU64,
-    /// One sender per event whose worker is still running; an entry goes when its queue has drained.
-    queues: Mutex<HashMap<String, mpsc::Sender<Transition>>>,
+    /// One sender per event or lifecycle subject whose worker is still running; an entry goes when its queue
+    /// has drained.
+    queues: Mutex<HashMap<String, mpsc::UnboundedSender<Transition>>>,
     sleeper: Box<Sleeper>,
     /// Held from a transition's store write through its enqueue, so the queue's order is the order the
     /// transitions committed in: an opener that lost its thread between the two would otherwise let the
@@ -117,16 +115,6 @@ impl Alerts {
         &self.parts
     }
 
-    /// Whether any enabled rule watches `kind`, so an input can skip work the store would answer with nothing:
-    /// where no rule of the kind is enabled, no event of it can be open.
-    pub fn watches(&self, kind: Kind) -> bool {
-        self.rules
-            .lock()
-            .expect(LOCK_POISONED)
-            .iter()
-            .any(|r| r.enabled && r.kind == kind)
-    }
-
     /// A condition holds for a subject: every enabled matching rule without an open event for the subject opens
     /// one and posts it. Answers whether any rule matched at all, which is what an input's own record of
     /// "an event of this subject is open" may be set from: a subject no rule watches has nothing open.
@@ -157,6 +145,62 @@ impl Alerts {
         true
     }
 
+    /// A session's event for its subject: every enabled rule of the event's kind whose scope matches the
+    /// signal gets one delivery, and no event opens, so a restart has nothing to resolve and a rule enabled
+    /// mid-session receives the session's later events and no synthetic start. Answers whether any rule
+    /// matched, which an input never records: the next event is matched afresh.
+    pub fn deliver_event(self: &Arc<Self>, signal: &Signal, event: LifecycleEvent) -> bool {
+        debug_assert_eq!(signal.kind, event.kind());
+        let rules: Vec<Rule> = self
+            .rules()
+            .into_iter()
+            .filter(|r| r.enabled && r.matches(signal))
+            .collect();
+        for rule in &rules {
+            self.post_event(rule.clone(), signal, event);
+        }
+        !rules.is_empty()
+    }
+
+    /// `deliver_event` narrowed to one rule, for the idle rules, which the poller dispatches each at its own
+    /// threshold.
+    pub fn deliver_event_rule(
+        self: &Arc<Self>,
+        rule_id: &str,
+        signal: &Signal,
+        event: LifecycleEvent,
+    ) -> bool {
+        let Some(rule) = self
+            .rules()
+            .into_iter()
+            .find(|r| r.id == rule_id && r.enabled && r.matches(signal))
+        else {
+            return false;
+        };
+        self.post_event(rule, signal, event);
+        true
+    }
+
+    /// The delivery's row is built and never inserted: it carries the event's time as `opened_at`, no
+    /// `resolved_at`, and the signal's detail with the event's name, which is what the body reads.
+    fn post_event(self: &Arc<Self>, rule: Rule, signal: &Signal, event: LifecycleEvent) {
+        let now = (self.parts.clock)();
+        let mut detail = signal.detail.clone();
+        detail["event"] = serde_json::json!(event.as_str());
+        let row = AlertEventRow {
+            id: event_id(),
+            rule_id: rule.id.clone(),
+            kind: rule.kind.as_str().into(),
+            subject: signal.subject.clone(),
+            state: "event".into(),
+            opened_at: now,
+            resolved_at: None,
+            detail_json: Some(detail.to_string()),
+        };
+        self.record(&rule, &row, "lifecycle", signal, event.as_str());
+        self.post(rule, row, "event", Some(event));
+    }
+
     /// One rule's event for the signal's subject, opened atomically: the insert against the unique open index
     /// says whether this caller landed the row, and only then is the transition recorded and delivered. A
     /// concurrent opener whose insert did not land does nothing, so one incident posts once.
@@ -181,8 +225,8 @@ impl Alerts {
                 return;
             }
         }
-        self.record(&rule, &event, "alert_opened", signal);
-        self.post(rule, event, "opened");
+        self.record(&rule, &event, "alert_opened", signal, &event.id);
+        self.post(rule, event, "opened", None);
         drop(transitions);
     }
 
@@ -236,26 +280,6 @@ impl Alerts {
         Ok(self.finish(event, (self.parts.clock)()))
     }
 
-    /// `resolve` with the event's detail replaced first, so the resolved delivery carries `detail`.
-    pub fn resolve_with_detail(
-        self: &Arc<Self>,
-        event_id: &str,
-        detail: serde_json::Value,
-    ) -> Result<bool, StoreError> {
-        let Some(mut event) = self.parts.store.alert_event(event_id)? else {
-            return Ok(false);
-        };
-        if event.state != "open" {
-            return Ok(false);
-        }
-        let detail_json = detail.to_string();
-        self.parts
-            .store
-            .update_alert_event_detail(event_id, &detail_json)?;
-        event.detail_json = Some(detail_json);
-        Ok(self.finish(event, (self.parts.clock)()))
-    }
-
     /// Whether the store did its part: an event already resolved is nothing left to do and counts as done, a
     /// store that refused the write is the one case a caller may retry.
     fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) -> bool {
@@ -282,13 +306,20 @@ impl Alerts {
             detail: serde_json::from_str(event.detail_json.as_deref().unwrap_or("null"))
                 .unwrap_or(serde_json::Value::Null),
         };
-        self.record(&rule, &event, "alert_resolved", &signal);
-        self.post(rule, event, "resolved");
+        self.record(&rule, &event, "alert_resolved", &signal, &event.id);
+        self.post(rule, event, "resolved", None);
         drop(transitions);
         true
     }
 
-    fn record(&self, rule: &Rule, event: &AlertEventRow, kind: &str, signal: &Signal) {
+    fn record(
+        &self,
+        rule: &Rule,
+        event: &AlertEventRow,
+        kind: &str,
+        signal: &Signal,
+        event_ref: &str,
+    ) {
         let detail = &signal.detail;
         self.parts.ledger.record(Record::Event(EventRecord {
             at: (self.parts.clock)(),
@@ -305,7 +336,7 @@ impl Alerts {
             model: None,
             actor: None,
             detail: Some(
-                serde_json::json!({ "event": event.id, "rule": rule.id, "subject": event.subject })
+                serde_json::json!({ "event": event_ref, "rule": rule.id, "subject": event.subject })
                     .to_string(),
             ),
         }));
@@ -316,12 +347,33 @@ impl Alerts {
     /// applying notifications in arrival order ends in the right state. Producer and worker both hold the map's
     /// lock while they send and while they retire a drained queue, so a transition cannot reach a worker that
     /// has already decided to stop.
-    fn post(self: &Arc<Self>, rule: Rule, event: AlertEventRow, state: &'static str) {
-        let id = event.id.clone();
-        let transition = Transition { event, rule, state };
+    ///
+    /// A lifecycle delivery queues under its rule and subject, since it has no event. The queue is unbounded:
+    /// its length is what the event rate builds against the delivery's attempts and timeout, which a session's
+    /// park and resume cycle can push past any fixed depth on a slow receiver, and a dropped notification is
+    /// the one outcome a rule's owner cannot recover.
+    fn post(
+        self: &Arc<Self>,
+        rule: Rule,
+        event: AlertEventRow,
+        state: &'static str,
+        lifecycle: Option<LifecycleEvent>,
+    ) {
+        // A session's events on one rule queue behind each other, so an end never overtakes the start it
+        // follows, as a resolve never overtakes its open.
+        let id = lifecycle.map_or_else(
+            || event.id.clone(),
+            |_| format!("{}:{}", rule.id, event.subject),
+        );
+        let transition = Transition {
+            event,
+            rule,
+            state,
+            lifecycle,
+        };
         let mut queues = self.queues.lock().expect(LOCK_POISONED);
         let sender = queues.entry(id.clone()).or_insert_with(|| {
-            let (tx, mut rx) = mpsc::channel::<Transition>(QUEUE_DEPTH);
+            let (tx, mut rx) = mpsc::unbounded_channel::<Transition>();
             let this = self.clone();
             let key = id.clone();
             self.workers.spawn(async move {
@@ -331,6 +383,7 @@ impl Alerts {
                         &t.rule,
                         &t.event,
                         t.state,
+                        t.lifecycle,
                         this.sleeper.as_ref(),
                     )
                     .await;
@@ -351,16 +404,11 @@ impl Alerts {
             });
             tx
         });
-        match sender.try_send(transition) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(event = %id, "an alert transition was dropped: the event's delivery queue is full");
-            }
-            // A worker leaves its entry behind only by panicking, so this is a dead delivery task rather than
-            // a busy one, and every later transition for the event would be dropped the same way.
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::error!(event = %id, "an alert transition was dropped: the event's delivery worker is gone");
-            }
+        // `mpsc::error::SendError(_)` is the one error an unbounded sender answers, and it means the worker
+        // is gone: a dead delivery task rather than a busy one, and every later transition for the event
+        // would be dropped the same way.
+        if sender.send(transition).is_err() {
+            tracing::error!(event = %id, "an alert transition was dropped: the event's delivery worker is gone");
         }
     }
 

@@ -429,6 +429,91 @@ async fn events_list_with_their_deliveries_filter_by_state_and_resolve_by_hand_a
     );
 }
 
+#[tokio::test]
+async fn lifecycle_deliveries_are_listed_newest_first_by_kind_and_refuse_another_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let body = r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#;
+    let rule = json(post(&parts.app, "/admin/alerts/rules", body, Some(&cookie)).await).await;
+    for event in [
+        phoebis_alerts::LifecycleEvent::SessionStarted,
+        phoebis_alerts::LifecycleEvent::SessionEnded,
+    ] {
+        parts.alerts.deliver_event(
+            &phoebis_alerts::Signal {
+                kind: phoebis_alerts::Kind::SessionActive,
+                account_id: None,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                subject: "desktop, session s1".into(),
+                detail: serde_json::json!({ "key": "desktop", "pool": "main", "session": "s1", "source": "request" }),
+            },
+            event,
+        );
+        parts.alerts.wait_idle().await;
+    }
+    let listed = json(get(&parts.app, "/admin/alerts/deliveries", Some(&cookie)).await).await;
+    let rows = listed["deliveries"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .map(|d| d["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["session_ended", "session_started"],
+        "newest first"
+    );
+    assert_eq!(
+        rows[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            "at", "attempt", "detail", "error", "event", "id", "kind", "rule_id", "state",
+            "status", "subject"
+        ]
+    );
+    assert_eq!(
+        (
+            rows[0]["state"].as_str(),
+            rows[0]["kind"].as_str(),
+            rows[0]["rule_id"].as_str()
+        ),
+        (Some("event"), Some("session_active"), rule["id"].as_str())
+    );
+    assert_eq!(rows[0]["detail"]["event"], "session_ended");
+    let events = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
+    assert!(
+        events["events"].as_array().unwrap().is_empty(),
+        "no event opened"
+    );
+    let idle = json(
+        get(
+            &parts.app,
+            "/admin/alerts/deliveries?kind=session_idle",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(idle["deliveries"].as_array().unwrap().len(), 0);
+    let refused = get(
+        &parts.app,
+        "/admin/alerts/deliveries?kind=client_drift",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    let viewer = login(&parts.app, "viewer-secret").await;
+    assert_eq!(
+        get(&parts.app, "/admin/alerts/deliveries", Some(&viewer))
+            .await
+            .status(),
+        200
+    );
+}
+
 /// The question in a detail is text out of a captured response body, which the viewer may not read on
 /// `/admin/requests/{id}/bodies` either.
 #[tokio::test]

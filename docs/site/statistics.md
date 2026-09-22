@@ -222,45 +222,50 @@ lost counting as a failure, and resolves on the next refresh that succeeds. The 
 length of the run, the last error, and `outcome`: `failed` for a refresh the token endpoint refused, `uncertain`
 for one whose answer never arrived, so the token may or may not have rotated upstream.
 
-**Session active** opens on a session's first request through the router, or on the keepalive companion's
-`session_start` when that comes first, and resolves on the companion's `session_end` or when the session has been
-silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the companion counts as a sign
-of life there, so a session whose user has stepped away stays open while its client is still attended. The opened
-and resolved deliveries are the start and the end of the session. After a restart every open lifecycle event is
-resolved at once with `reason: restart` in its detail, since the router no longer knows which sessions live; a
-live session reopens on its next request.
+The four session kinds are events rather than conditions: a rule of one of them receives one delivery per event
+as it happens, opens nothing, and has nothing to resolve. `session_active` receives `session_started` and
+`session_ended`, `subagent_active` receives `subagent_started` and `subagent_ended`, `session_parked` receives
+`session_parked` and `session_resumed`, and `session_idle` receives `session_idle`. A delivery goes to every
+enabled rule of the kind whose scope matches the session at that moment, so a rule enabled mid-session receives
+the session's later events and no start it missed; after a restart nothing is posted, since the router no longer
+knows which sessions live, and a live session's next event is posted as it comes. Each delivery lands in the
+event log as `lifecycle` with the event's name, and the Alerts view lists them as a log.
 
-**Session idle** opens once no request has arrived on the session for the rule's threshold in minutes, measured
-from the session's last request on any of its agents, and resolves on the next request. Resolving one by hand
-ends the event and leaves the session's record of the crossing as it was, so nothing reopens while the session
-stays idle; its next request arms the rule again.
+**Session active** posts `session_started` on a session's first request through the router, or on the keepalive
+companion's `session_start` when that comes first, and `session_ended` on the companion's `session_end` or when
+the session has been silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the
+companion counts as a sign of life there, so a session whose user has stepped away is not ended while its client
+is still attended. The detail's `source` says which side posted the event: `request`, `companion`, or `expiry`.
 
-**Session parked** opens when the companion reports the main agent parked and resolves on the session's next
-request, or when the companion reports the agent busy or idle again; without a companion for the session neither
-happens. Resolving one by hand ends the event and leaves the router's record of the park as it was, so nothing
-reopens while the session stays parked; the session's next request, or the companion's next report of the agent
-busy or idle, arms the condition again.
+**Session idle** posts `session_idle` once no request has arrived on the session for the rule's threshold in
+minutes, measured from the session's last request on any of its agents, once per crossing; the session's next
+request arms the rule again.
 
-**Subagent active** opens on a subagent's first request, or on the companion's `agent_start`, and resolves when
-the companion releases the agent, when the session ends, or at the session's expiry. The detail names the parent
-agent when the client sent `x-claude-code-parent-agent-id`.
+**Session parked** posts `session_parked` when the companion reports the main agent parked and `session_resumed`
+on the session's next request or when the companion reports the agent busy or idle again; without a companion
+for the session neither happens.
+
+**Subagent active** posts `subagent_started` on a subagent's first request, or on the companion's `agent_start`,
+and `subagent_ended` when the companion releases the agent, when the session ends, or at the session's expiry.
+The detail names the parent agent when the client sent `x-claude-code-parent-agent-id`.
 
 **Utilization above threshold** fires when a usage sample for the chosen window reaches the threshold and
 resolves once a sample reads five points below it.
 
-At most one open event exists per rule and subject; an event resolves either on the condition its description
-names or by hand, through Resolve. A webhook may not point at `localhost` or a `.localhost` name, a loopback,
-link-local, or unspecified address; the refusal reads `webhook_url must not point at {reason}`, and the same
-check runs again on every delivery against whatever address DNS actually answers with, since a name can resolve
-differently over time.
+For the other eight kinds at most one open event exists per rule and subject; an event resolves either on the
+condition its description names or by hand, through Resolve. A webhook may not point at `localhost` or a
+`.localhost` name, a loopback, link-local, or unspecified address; the refusal reads `webhook_url must not point
+at {reason}`, and the same check runs again on every delivery against whatever address DNS actually answers with,
+since a name can resolve differently over time.
 
 A delivery posts a JSON body with the keys `detail`, `kind`, `opened_at`, `resolved_at`, `router`, `rule`,
-`state` (`opened` or `resolved`), and `subject`, in that order. When the rule has a secret, the body carries an
-`x-router-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the secret; a rule with a
-secret never posts unsigned. Delivery makes three attempts, the first immediate and the next two after waits of
-1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a redirect would carry the
-signature to a URL it was never computed for. A 2xx response counts as delivered, and Test fires one synthetic
-delivery through the same path.
+`state` (`opened` or `resolved` for an event's two transitions, `event` for a session event, whose `opened_at`
+is the event's time and whose `resolved_at` is null), and `subject`, in that order. When the rule has a secret,
+the body carries an `x-router-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the
+secret; a rule with a secret never posts unsigned. Delivery makes three attempts, the first immediate and the
+next two after waits of 1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a
+redirect would carry the signature to a URL it was never computed for. A 2xx response counts as delivered, and
+Test fires one synthetic delivery through the same path.
 
 A viewer sees a rule's webhook host and never its full URL, since the URL can carry the receiver's credential in
 its path or query.

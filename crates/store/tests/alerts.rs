@@ -24,7 +24,7 @@ fn rule(id: &str) -> AlertRuleRow {
 #[test]
 fn rules_are_stored_with_a_sealed_secret_that_only_has_secret_reveals() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 17);
+    assert_eq!(store.schema_version().unwrap(), 18);
     store
         .upsert_alert_rule(&rule("r1"), Some(Some(&Secret::new("hunter2"))), "admin")
         .unwrap();
@@ -162,7 +162,12 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
     let id = store
         .insert_alert_delivery(&AlertDeliveryRow {
             id: 0,
-            event_id: "e1".into(),
+            event_id: Some("e1".into()),
+            rule_id: "r1".into(),
+            kind: "reauth_required".into(),
+            subject: "business".into(),
+            event: None,
+            detail_json: None,
             state: "opened".into(),
             attempt: 1,
             at: 2_001,
@@ -173,7 +178,12 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
     store
         .insert_alert_delivery(&AlertDeliveryRow {
             id: 0,
-            event_id: "e1".into(),
+            event_id: Some("e1".into()),
+            rule_id: "r1".into(),
+            kind: "reauth_required".into(),
+            subject: "business".into(),
+            event: None,
+            detail_json: None,
             state: "opened".into(),
             attempt: 2,
             at: 3_001,
@@ -232,7 +242,12 @@ fn events_open_once_per_rule_and_subject_resolve_and_cascade_with_their_deliveri
     store
         .insert_alert_delivery(&AlertDeliveryRow {
             id: 0,
-            event_id: "e2".into(),
+            event_id: Some("e2".into()),
+            rule_id: "r1".into(),
+            kind: "reauth_required".into(),
+            subject: "business".into(),
+            event: None,
+            detail_json: None,
             state: "opened".into(),
             attempt: 1,
             at: 5_001,
@@ -376,5 +391,64 @@ fn a_question_is_purged_on_the_body_retention_while_its_event_stays() {
     assert!(
         store.alert_event("old").unwrap().is_some(),
         "the event outlives the prompt content it carried"
+    );
+}
+
+#[test]
+fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_on_the_resolved_mark(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.upsert_alert_rule(&rule("r1"), None, "test").unwrap();
+    let mut ids = Vec::new();
+    for (at, event) in [(1_000, "session_started"), (2_000, "session_ended")] {
+        ids.push(
+            store
+                .insert_alert_delivery(&AlertDeliveryRow {
+                    id: 0,
+                    event_id: None,
+                    rule_id: "r1".into(),
+                    kind: "reauth_required".into(),
+                    subject: "desktop, session s1".into(),
+                    event: Some(event.into()),
+                    detail_json: Some(format!(r#"{{"event":"{event}","session":"s1"}}"#)),
+                    state: "event".into(),
+                    attempt: 1,
+                    at,
+                    status: Some(200),
+                    error: None,
+                })
+                .unwrap(),
+        );
+    }
+    let listed = store.lifecycle_deliveries(None, 10).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|d| (d.id, d.event.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (ids[1], Some("session_ended")),
+            (ids[0], Some("session_started"))
+        ]
+    );
+    assert_eq!(listed[0].event_id, None);
+    assert_eq!(
+        store
+            .lifecycle_deliveries(Some("session_idle"), 10)
+            .unwrap(),
+        []
+    );
+    assert_eq!(
+        store
+            .lifecycle_deliveries(Some("reauth_required"), 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    store.purge_alert_events_before(1_500, 0, 3_000).unwrap();
+    assert_eq!(
+        store.lifecycle_deliveries(None, 10).unwrap().len(),
+        1,
+        "the older delivery aged out on the resolved-events mark"
     );
 }

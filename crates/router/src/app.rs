@@ -258,7 +258,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         store: store.clone(),
         webhook: Arc::new(phoebis_alerts::ReqwestWebhook::new(ALLOW_LOCAL_WEBHOOKS)),
     });
-    let alert_inputs = phoebis_alerts::spawn_inputs(
+    let mut alert_inputs = phoebis_alerts::spawn_inputs(
         alerts.clone(),
         phoebis_alerts::AlertInputs {
             body_capture_max_hours: config.stats.body_capture_max_hours,
@@ -431,12 +431,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     shutdown.await;
     tracing::info!("shutting down");
     let _ = stop.send(true);
-    // Held rather than returned: a listener that failed still leaves the routing writer to drain and two
-    // tasks to abort, so the teardown below runs either way and the error is the last thing that happens.
+    // Stop, close, drain, listeners: the bus arm and the poller stop before the keepalive close so no request
+    // observed during the drain is posted after the end of its session; the close enqueues a session_ended
+    // per live session; the lifecycle consumer posts those before the listeners are joined. The stop is
+    // synchronous and sits outside the timed block, so it has run whatever the block does.
+    alert_inputs.stop();
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
         // which the drain is about to drop.
         keepalive.shutdown().await;
+        alert_inputs.drain().await;
         tokio::join!(&mut proxy, &mut admin_server, &mut metrics_server)
     })
     .await
@@ -452,12 +456,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             proxy.abort();
             admin_server.abort();
             metrics_server.abort();
+            alert_inputs.abort();
             Ok(())
         }
     };
-    // The lifecycle consumer resolves the ends the keepalive close enqueued before it stops; every delivery of
-    // an event opened before the stop then lands before the ledger and the bus close.
-    alert_inputs.shutdown().await;
+    // Every delivery queued before the stop lands before the ledger and the bus close.
     alerts.shutdown().await;
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();

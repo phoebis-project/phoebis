@@ -35,7 +35,7 @@ async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpo
     };
     rig.store.upsert_alert_rule(&dead, None, "test").unwrap();
     rig.alerts.reload().unwrap();
-    let handles = spawn_inputs(
+    let mut handles = spawn_inputs(
         rig.alerts.clone(),
         common::inputs(&rig, Default::default()).with_tick(Duration::from_millis(50)),
     );
@@ -110,6 +110,7 @@ async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpo
             .all(|d| d.status.is_none() && d.error.is_some()),
         "three failed attempts against a closed port: {rows:?}"
     );
-    handles.shutdown().await;
+    handles.stop();
+    handles.drain().await;
     hook.shutdown().await;
 }

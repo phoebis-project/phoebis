@@ -12,7 +12,7 @@ use sha2::Sha256;
 
 use crate::destination::{refusal_of, GuardedResolver};
 use crate::engine::{AlertParts, DeliveryResult};
-use crate::rule::Rule;
+use crate::rule::{LifecycleEvent, Rule};
 
 /// A boxed future rather than an async trait, so the fake in the tests needs no extra crate.
 pub type Sleeper = dyn Fn(Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
@@ -159,6 +159,7 @@ pub async fn deliver(
     rule: &Rule,
     event: &AlertEventRow,
     state: &str,
+    lifecycle: Option<LifecycleEvent>,
     sleeper: &Sleeper,
 ) -> DeliveryResult {
     let raw = body(rule, event, state, &parts.router_name);
@@ -186,7 +187,13 @@ pub async fn deliver(
         let landed = status.is_some_and(delivered);
         let row = AlertDeliveryRow {
             id: 0,
-            event_id: event.id.clone(),
+            // A lifecycle delivery opens no event, so the row names what it posted itself.
+            event_id: lifecycle.is_none().then(|| event.id.clone()),
+            rule_id: rule.id.clone(),
+            kind: rule.kind.as_str().into(),
+            subject: event.subject.clone(),
+            event: lifecycle.map(|e| e.as_str().into()),
+            detail_json: event.detail_json.clone(),
             state: state.into(),
             attempt,
             at: (parts.clock)(),

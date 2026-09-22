@@ -38,7 +38,14 @@ pub struct AlertEventRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlertDeliveryRow {
     pub id: u64,
-    pub event_id: String,
+    /// `None` for a lifecycle delivery, which opens no event.
+    pub event_id: Option<String>,
+    pub rule_id: String,
+    pub kind: String,
+    pub subject: String,
+    /// The lifecycle event's name; `None` for an event's transition.
+    pub event: Option<String>,
+    pub detail_json: Option<String>,
     pub state: String,
     pub attempt: u32,
     pub at: i64,
@@ -53,6 +60,8 @@ fn secret_aad(rule_id: &str) -> String {
 const RULE_COLUMNS: &str = "id, kind, scope_type, scope_id, threshold, window, webhook_url, secret_sealed IS NOT NULL, enabled, created_at, updated_at";
 const EVENT_COLUMNS: &str =
     "id, rule_id, kind, subject, state, opened_at, resolved_at, detail_json";
+const DELIVERY_COLUMNS: &str =
+    "id, event_id, rule_id, kind, subject, event, detail_json, state, attempt, at, status, error";
 
 fn row_to_rule(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRuleRow> {
     Ok(AlertRuleRow {
@@ -80,6 +89,23 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertEventRow> {
         opened_at: r.get(5)?,
         resolved_at: r.get(6)?,
         detail_json: r.get(7)?,
+    })
+}
+
+fn row_to_delivery(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertDeliveryRow> {
+    Ok(AlertDeliveryRow {
+        id: r.get::<_, i64>(0)? as u64,
+        event_id: r.get(1)?,
+        rule_id: r.get(2)?,
+        kind: r.get(3)?,
+        subject: r.get(4)?,
+        event: r.get(5)?,
+        detail_json: r.get(6)?,
+        state: r.get(7)?,
+        attempt: r.get::<_, i64>(8)? as u32,
+        at: r.get(9)?,
+        status: r.get::<_, Option<i64>>(10)?.map(|s| s as u16),
+        error: r.get(11)?,
     })
 }
 
@@ -314,15 +340,6 @@ impl Store {
 
     /// `false` when the event is already resolved, so a second resolver does not move the timestamp.
     pub fn resolve_alert_event(&self, id: &str, at: i64) -> Result<bool, StoreError> {
-        #[cfg(any(test, feature = "debug-hooks"))]
-        if self
-            .fail_next_alert_resolve
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Err(StoreError::Io(std::io::Error::other(
-                "injected resolve failure",
-            )));
-        }
         let conn = self.conn.lock().expect(LOCK_POISONED);
         Ok(conn.execute(
             "UPDATE alert_events SET state = 'resolved', resolved_at = ?2 WHERE id = ?1 AND state = 'open'",
@@ -333,28 +350,36 @@ impl Store {
     pub fn insert_alert_delivery(&self, row: &AlertDeliveryRow) -> Result<u64, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "INSERT INTO alert_deliveries (event_id, state, attempt, at, status, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![row.event_id, row.state, row.attempt, row.at, row.status, row.error],
+            "INSERT INTO alert_deliveries (event_id, rule_id, kind, subject, event, detail_json, state, attempt, at, status, error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![row.event_id, row.rule_id, row.kind, row.subject, row.event, row.detail_json, row.state, row.attempt, row.at, row.status, row.error],
         )?;
         Ok(conn.last_insert_rowid() as u64)
     }
 
     pub fn alert_deliveries(&self, event_id: &str) -> Result<Vec<AlertDeliveryRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
-            "SELECT id, event_id, state, attempt, at, status, error FROM alert_deliveries WHERE event_id = ?1 ORDER BY id",
-        )?;
-        let rows = stmt.query_map(params![event_id], |r| {
-            Ok(AlertDeliveryRow {
-                id: r.get::<_, i64>(0)? as u64,
-                event_id: r.get(1)?,
-                state: r.get(2)?,
-                attempt: r.get::<_, i64>(3)? as u32,
-                at: r.get(4)?,
-                status: r.get::<_, Option<i64>>(5)?.map(|s| s as u16),
-                error: r.get(6)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id = ?1 ORDER BY id"
+        ))?;
+        let rows = stmt.query_map(params![event_id], row_to_delivery)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+
+    /// The deliveries that opened no event, newest first: the lifecycle log the console lists, narrowed to one
+    /// rule kind when asked.
+    pub fn lifecycle_deliveries(
+        &self,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AlertDeliveryRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IS NULL AND (?1 IS NULL OR kind = ?1) \
+             ORDER BY id DESC LIMIT ?2"
+        ))?;
+        let rows = stmt.query_map(params![kind, limit as i64], row_to_delivery)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
     }
@@ -384,6 +409,11 @@ impl Store {
                         THEN opened_at < ?1 \
                         ELSE json_extract(detail_json, '$.question_expires_at') <= ?2 END",
             params![questions_before, now],
+        )?;
+        // A lifecycle delivery has no event to cascade from, so it ages out on the same mark.
+        conn.execute(
+            "DELETE FROM alert_deliveries WHERE event_id IS NULL AND at < ?1",
+            params![resolved_before],
         )?;
         Ok(purged)
     }

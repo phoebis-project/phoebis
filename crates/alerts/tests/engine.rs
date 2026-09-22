@@ -1,5 +1,5 @@
 mod common;
-use phoebis_alerts::{Kind, ScopeType, Signal};
+use phoebis_alerts::{Kind, LifecycleEvent, ScopeType, Signal};
 use common::*;
 
 #[tokio::test]
@@ -192,6 +192,181 @@ async fn two_concurrent_openers_of_one_subject_land_one_event_and_one_delivery()
     assert_eq!(
         events.iter().filter(|e| e.kind == "alert_opened").count(),
         1
+    );
+}
+
+#[tokio::test]
+async fn a_lifecycle_event_posts_one_delivery_per_matching_rule_opens_nothing_and_logs_lifecycle() {
+    let rig = rig().await;
+    for (id, scope, sid) in [
+        ("all", ScopeType::All, None),
+        ("desktop", ScopeType::Key, Some("desktop")),
+        ("laptop", ScopeType::Key, Some("laptop")),
+    ] {
+        rig.store
+            .upsert_alert_rule(&rule(id, Kind::SessionActive, scope, sid), None, "test")
+            .unwrap();
+    }
+    rig.store
+        .upsert_alert_rule(
+            &rule("off", Kind::SessionActive, ScopeType::All, None).with_enabled(false),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let signal = Signal {
+        detail: serde_json::json!({ "key": "desktop", "pool": "main", "session": "s1", "source": "request" }),
+        ..signal(
+            Kind::SessionActive,
+            None,
+            Some("desktop"),
+            Some("main"),
+            "desktop, session s1",
+        )
+    };
+    assert!(rig
+        .alerts
+        .deliver_event(&signal, LifecycleEvent::SessionStarted));
+    assert!(
+        rig.alerts
+            .deliver_event(&signal, LifecycleEvent::SessionStarted),
+        "a repeat posts again"
+    );
+    settled(&rig).await;
+    let posts = rig.webhook.posts();
+    assert_eq!(
+        posts.len(),
+        4,
+        "two rules match, twice; the laptop key's rule and the disabled one never"
+    );
+    let mut rules: Vec<&str> = posts
+        .iter()
+        .map(|p| p.body["rule"].as_str().unwrap())
+        .collect();
+    rules.sort_unstable();
+    assert_eq!(rules, ["all", "all", "desktop", "desktop"]);
+    assert_eq!(
+        posts[0]
+            .body
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            "detail",
+            "kind",
+            "opened_at",
+            "resolved_at",
+            "router",
+            "rule",
+            "state",
+            "subject"
+        ]
+    );
+    assert_eq!(
+        (
+            posts[0].body["state"].as_str(),
+            posts[0].body["opened_at"].as_i64(),
+            &posts[0].body["resolved_at"]
+        ),
+        (Some("event"), Some(NOW), &serde_json::Value::Null)
+    );
+    assert_eq!(posts[0].body["detail"]["event"], "session_started");
+    assert_eq!(posts[0].body["detail"]["session"], "s1");
+    assert!(
+        rig.store.open_alert_events().unwrap().is_empty(),
+        "nothing opens"
+    );
+    let deliveries = rig.store.lifecycle_deliveries(None, 10).unwrap();
+    assert_eq!(deliveries.len(), 4);
+    assert!(deliveries.iter().all(|d| d.event_id.is_none()
+        && d.event.as_deref() == Some("session_started")
+        && d.kind == "session_active"
+        && d.subject == "desktop, session s1"
+        && d.state == "event"));
+    let events = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        let rows = rig.db.events(0, i64::MAX, 100).await.unwrap();
+        (rows.iter().filter(|e| e.kind == "lifecycle").count() == 4).then_some(rows)
+    })
+    .await;
+    let row = &events[0];
+    assert_eq!(
+        (row.key_id.as_deref(), row.session_id.as_deref()),
+        (Some("desktop"), Some("s1"))
+    );
+    let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (detail["event"].as_str(), detail["subject"].as_str()),
+        (Some("session_started"), Some("desktop, session s1"))
+    );
+    assert!(events
+        .iter()
+        .all(|e| e.kind != "alert_opened" && e.kind != "alert_resolved"));
+    assert_eq!(rig.alerts.stats().open, 0);
+}
+
+#[tokio::test]
+async fn a_burst_of_lifecycle_events_on_a_held_webhook_is_delivered_in_full_and_in_order() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule(
+                "parked",
+                Kind::SessionParked,
+                ScopeType::Key,
+                Some("desktop"),
+            ),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    // The first delivery hangs in the receiver; the rest wait on the rule's subject queue, which holds
+    // however many a park and resume cycle produces while the receiver is slow.
+    let hold = rig.webhook.hold_posts();
+    let signal = signal(
+        Kind::SessionParked,
+        None,
+        Some("desktop"),
+        Some("main"),
+        "desktop, session s1",
+    );
+    let expected: Vec<&str> = (0..20)
+        .map(|i| {
+            if i % 2 == 0 {
+                "session_parked"
+            } else {
+                "session_resumed"
+            }
+        })
+        .collect();
+    for i in 0..20 {
+        let event = if i % 2 == 0 {
+            LifecycleEvent::SessionParked
+        } else {
+            LifecycleEvent::SessionResumed
+        };
+        assert!(rig.alerts.deliver_event(&signal, event));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        rig.webhook.posts().len(),
+        1,
+        "the first delivery is in flight and held"
+    );
+    rig.webhook.release_posts(&hold);
+    settled(&rig).await;
+    let posted: Vec<String> = rig
+        .webhook
+        .posts()
+        .iter()
+        .map(|p| p.body["detail"]["event"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        posted, expected,
+        "twenty deliveries, none dropped, in the order posted"
     );
 }
 
