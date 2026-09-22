@@ -1,0 +1,247 @@
+name: Release
+on:
+  # A pull request that touches the image's inputs builds amd64 without pushing, so a broken Dockerfile is caught
+  # before a release runs it.
+  pull_request:
+    paths:
+      - .dockerignore
+      - .github/workflows/release.yml
+      - Cargo.lock
+      - Cargo.toml
+      - Dockerfile
+      - crates/**
+      - web/**
+      - "!web/e2e/**"
+      - "!web/smoke/**"
+      - "!web/test/**"
+  release:
+    types: [published]
+  # The dry run: every platform is built and smoked, nothing is pushed.
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+env:
+  IMAGE: ghcr.io/daystrom-labs/phoebis
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    outputs:
+      exporter: ${{ steps.decide.outputs.exporter }}
+      image: ${{ steps.decide.outputs.image }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+      push: ${{ steps.decide.outputs.push }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\([^"]*\)"$/\1/p}' Cargo.toml)
+          if ! { [ -n "$version" ] && [ "$(printf '%s\n' "$version" | wc -l)" = 1 ]; }; then
+            echo "Cargo.toml has no single workspace version"
+            exit 1
+          fi
+          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64"}'
+          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64"}'
+          if [ "$EVENT" = release ]; then
+            printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+              || { echo "release tag '$TAG' is not X.Y.Z or X.Y.Z-suffix"; exit 1; }
+            [ "$TAG" = "$version" ] \
+              || { echo "release tag '$TAG' differs from the workspace version '$version' in Cargo.toml"; exit 1; }
+            grep -Eq "^## ${TAG//./\\.}( |\$)" docs/site/changelog.md \
+              || { echo "docs/site/changelog.md has no '## $TAG' section for this release"; exit 1; }
+            {
+              echo "exporter=type=image,push-by-digest=true,name-canonical=true,push=true"
+              echo "image=$IMAGE"
+              echo "matrix=[$amd64,$arm64]"
+              echo "push=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            if [ "$EVENT" = pull_request ]; then
+              matrix="[$amd64]"
+            else
+              matrix="[$amd64,$arm64]"
+            fi
+            {
+              echo "exporter=type=docker,dest=/tmp/phoebis.tar"
+              echo "image=phoebis:smoke"
+              echo "matrix=$matrix"
+              echo "push=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  build:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.guard.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - if: needs.guard.outputs.push == 'true'
+        uses: docker/login-action@v4
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          cache-from: type=gha,scope=${{ matrix.slug }}
+          cache-to: type=gha,scope=${{ matrix.slug }},mode=max
+          context: .
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: ${{ needs.guard.outputs.exporter }}
+          platforms: ${{ matrix.platform }}
+          # The docker exporter takes no attestation manifests, so the dry run and the pull request build none.
+          provenance: ${{ needs.guard.outputs.push == 'true' && 'mode=max' || 'false' }}
+          sbom: ${{ needs.guard.outputs.push == 'true' }}
+          tags: ${{ needs.guard.outputs.image }}
+      - if: needs.guard.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - if: needs.guard.outputs.push == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          name: digest-${{ matrix.slug }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+      - if: needs.guard.outputs.push != 'true' && matrix.slug == 'linux-amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          name: image-linux-amd64
+          path: /tmp/phoebis.tar
+          retention-days: 1
+  smoke:
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - if: needs.guard.outputs.push == 'true'
+        uses: docker/login-action@v4
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - if: needs.guard.outputs.push == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: digest-linux-amd64
+          path: ${{ runner.temp }}/digests
+      - if: needs.guard.outputs.push != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: image-linux-amd64
+          path: ${{ runner.temp }}
+      - id: image
+        env:
+          PUSH: ${{ needs.guard.outputs.push }}
+        run: |
+          if [ "$PUSH" = true ]; then
+            ref="$IMAGE@sha256:$(ls "$RUNNER_TEMP/digests")"
+            docker pull "$ref"
+          else
+            docker load -i "$RUNNER_TEMP/phoebis.tar"
+            ref=phoebis:smoke
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - env:
+          REF: ${{ steps.image.outputs.ref }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          printed=$(docker run --rm "$REF" --version)
+          [ "$printed" = "phoebis $VERSION" ] || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
+          tmp=$(mktemp -d)
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$tmp/storage.key"
+          chmod 0444 "$tmp/storage.key"
+          printf 'ROUTER_ADMIN_SECRET=smoke-admin\nROUTER_VIEWER_SECRET=smoke-viewer\nRUST_LOG=info\n' > "$tmp/phoebis.env"
+          docker run --rm --env-file "$tmp/phoebis.env" \
+            -v "$PWD/deploy/config.container.yaml:/etc/phoebis/config.yaml:ro" \
+            -v "$tmp/storage.key:/run/secrets/router-storage-key:ro" "$REF" check-config
+          docker volume create phoebis-smoke-data
+          docker run -d --name phoebis-smoke --env-file "$tmp/phoebis.env" -p 127.0.0.1:18081:8081 \
+            -v "$PWD/deploy/config.container.yaml:/etc/phoebis/config.yaml:ro" \
+            -v "$tmp/storage.key:/run/secrets/router-storage-key:ro" \
+            -v phoebis-smoke-data:/var/lib/phoebis "$REF"
+          status=starting
+          for _ in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' phoebis-smoke)
+            [ "$status" = healthy ] && break
+            sleep 1
+          done
+          [ "$status" = healthy ] || { docker logs phoebis-smoke; echo "the container is '$status' after 30 s"; exit 1; }
+          # The console's shell is served without a session: the page must be the built bundle, not the
+          # placeholder the crate's build script embeds when npm fails, and one of its assets must be served.
+          shell=$(curl -fsS http://127.0.0.1:18081/)
+          case "$shell" in
+            *'<!-- phoebis-ui placeholder -->'*) echo "the image serves the placeholder console page"; exit 1;;
+          esac
+          asset=$(printf '%s' "$shell" | grep -o '/assets/[^"'"'"' ]*' | head -1)
+          [ -n "$asset" ] || { echo "the console page references no /assets/ path"; exit 1; }
+          curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
+          started=$(date +%s)
+          docker stop -t 40 phoebis-smoke
+          stopped=$(( $(date +%s) - started ))
+          docker logs phoebis-smoke
+          [ "$stopped" -lt 40 ] || { echo "docker stop took ${stopped}s, past the grace period"; exit 1; }
+          echo "healthy, and stopped in ${stopped}s"
+  publish:
+    if: needs.guard.outputs.push == 'true'
+    needs: [guard, smoke]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          # The major-only tag would name 0.x releases that break each other; latest never names a prerelease.
+          flavor: latest=false
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }},enable=${{ !startsWith(env.VERSION, '0.') }}
+            type=raw,value=latest,enable=${{ !contains(env.VERSION, '-') }}
+            type=sha,prefix=sha-
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          args=()
+          while IFS= read -r tag; do [ -n "$tag" ] && args+=(-t "$tag"); done <<< "$TAGS"
+          refs=()
+          for digest in *; do refs+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+      - run: |
+          docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \
+            | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | unique
+                     | contains(["amd64", "arm64"])'

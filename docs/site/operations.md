@@ -1,7 +1,8 @@
 # Operations
 
 The router keeps its state in two SQLite files and one key file. This page covers backing them up, what the storage
-key protects, upgrading the binary, re-pinning the Claude Code build the router is measured against, and publishing this site.
+key protects, upgrading the binary or the container, re-pinning the Claude Code build the router is measured against,
+publishing this site, and releasing the container image.
 
 ## Backup
 
@@ -89,6 +90,13 @@ There is no re-key command, so recovering from a lost or replaced key means:
 7. Confirm the upgrade with `phoebis --version`, then `GET /admin/system` for `version`, `storage_ok`, and
    `ledger.write_failures` reading `0`.
 
+Under the container, the same sequence is: read the changelog, take the backup, set `image:` in `compose.yaml` to
+the new version, validate the mounted configuration with the new image (`docker compose run --rm phoebis
+check-config`, which reads the service's environment file and mounts), then `docker compose up -d`. Compose
+replaces the container, stopping the old one with the 40-second grace period that covers the drain, and the new
+binary migrates both databases on the volume as it opens them. `docker compose ps` reads `healthy` once
+`phoebis health` has answered, and `GET /admin/system` confirms the version.
+
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations are additive, so an older binary can still read a registry a newer one
 migrated. A ledger migration can rebuild a table instead, so returning to an older binary after an upgrade means
@@ -157,6 +165,31 @@ then check that the published URL answers `404` before treating the site as take
 
 To build the site locally, run `pipx run zensical build --clean` at the repository root; it writes `site/`. `pipx
 run zensical serve` previews it.
+
+## Releasing
+
+A GitHub release publishes the container image. The workflow runs on a published release, on a manual dispatch,
+and on a pull request that touches the image's inputs (the Dockerfile, the workflow, the manifests, the crates, or
+the console's sources). To release:
+
+1. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease),
+   head the changelog's section for it `## X.Y.Z`, and merge to `main`.
+2. Create the release on GitHub with the tag `X.Y.Z` on that commit, no `v` prefix. Publishing it starts the
+   workflow.
+3. The workflow refuses the release before anything builds when the tag has another shape, differs from the
+   workspace version, or has no `## X.Y.Z` section in the changelog, naming both values. Otherwise it builds
+   `linux/amd64` and `linux/arm64` on native runners and pushes each by digest, runs the amd64 image through
+   `--version` (which must print the version), `check-config` against `deploy/config.container.yaml`, and a
+   container in the compose example's shape that must reach `healthy` within 30 seconds, serve the built console
+   (the page from the admin listener is not the placeholder and one of its assets is served) and stop within
+   the grace period, and then publishes one manifest list at `ghcr.io/daystrom-labs/phoebis` under
+   `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never for a prerelease), and
+   `sha-<short commit>`.
+
+A failed smoke leaves untagged digests in the registry and no tag; a failed guard leaves nothing. A manual dispatch
+(Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without pushing;
+run it after a change to the Dockerfile or the workflow, and before the first release. The package inherits the
+repository's visibility: while the repository is private, pulling needs a token with `read:packages`.
 
 ## License
 

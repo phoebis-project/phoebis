@@ -9,6 +9,8 @@ __pycache__/
 
 # Runtime data
 /config.yaml
+/deploy/phoebis.env
+/deploy/storage.key
 /data/
 *.sqlite
 *.sqlite-shm

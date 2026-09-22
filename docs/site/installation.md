@@ -28,12 +28,14 @@ install -d -m 0700 ~/.config/phoebis
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
 sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
   -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
-  deploy/config.example.yaml > config.yaml
+  deploy/config.example.yaml > ~/.config/phoebis/config.yaml
+export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
 export ROUTER_ADMIN_SECRET=$(openssl rand -base64 36) ROUTER_VIEWER_SECRET=$(openssl rand -base64 36)
-target/release/phoebis --config config.yaml
+target/release/phoebis
 ```
 
 The key is created once and never replaced: every stored credential is sealed under it and there is no re-key.
+`PHOEBIS_CONFIG` names the file for every `phoebis` call in that shell ([commands](#commands)).
 
 ## Install as a service
 
@@ -75,6 +77,53 @@ other invocation, so the env file has to be sourced into this one shell first; p
 `sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable ROUTER_ADMIN_SECRET is
 unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 
+## Run the container
+
+Every release publishes `ghcr.io/daystrom-labs/phoebis:<version>` for `linux/amd64` and `linux/arm64`. The
+image holds the binary alone: no shell, no configuration, no key, and no price table (the shipped one is compiled
+in). It runs as uid 65532, reads `/etc/phoebis/config.yaml` (`PHOEBIS_CONFIG` is set in the image, so `phoebis` needs no
+flag), keeps both databases under `/var/lib/phoebis`, and probes its own proxy listener with `phoebis health` every 30
+seconds, which Docker reports as the container's health.
+
+`deploy/compose.yaml` and `deploy/config.container.yaml` are the example: the three listeners bind every interface
+inside the container, the proxy port is published on every host interface, and the admin and metrics ports on the
+host's loopback only. In an empty directory:
+
+```sh title="Set up the compose directory"
+install -m 0644 deploy/compose.yaml compose.yaml
+install -m 0644 deploy/config.container.yaml config.yaml
+install -m 0600 deploy/phoebis.env.example phoebis.env
+sudo install -m 0400 -o 65532 -g 65532 /dev/null storage.key
+head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee storage.key >/dev/null
+```
+
+Edit `phoebis.env` and replace both secrets with long random strings that differ; both it and `storage.key` hold
+secrets and stay out of version control. The key file is owned by uid 65532 at mode `0400` because Compose
+mounts a file secret with the host file's owner and mode, and that uid is the one the process runs as. Set
+`image:` in `compose.yaml` to the version you want, then:
+
+```sh title="Start, watch, and stop"
+docker compose up -d
+docker compose ps            # "healthy" once phoebis health has answered
+docker compose logs -f phoebis
+docker compose down          # SIGTERM, then up to 40 seconds for the 30-second drain
+```
+
+The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
+so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
+`config.yaml` sets `admin.plain_http: true` with no `origin`, so the cookie is issued without `Secure` and any
+hostname that reaches the port logs in. Publishing the port on a LAN address is one edit to the `ports` line
+(`"8081:8081"`), and then the admin secret at login and the session cookie on every call cross that LAN in the
+clear; that is the same trust decision the proxy port's publication already makes. For TLS, set `plain_http:
+false`, set `origin` to the front's `https://` URL, terminate TLS in front of the published port, and open exactly
+the hostname and port `origin` names: a login from any other origin is refused with `403`.
+
+The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its place
+needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the volume
+is read at the next start, as `stats.pricing_path` in the container configuration names it. Pulling the image needs
+`docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
+[operations page](operations.md#upgrades).
+
 ## Commands
 
 | Command | Effect |
@@ -105,7 +154,7 @@ On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 3
 `proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
 sends `HEAD /api/hello`, and prints `proxy answers on {addr}` on a `200` or one line saying why not; the whole
 probe, connect included, is bounded by three seconds. The container image runs it as its health check every 30
-seconds.
+seconds ([the container](#run-the-container)).
 
 ## Environment variables
 
