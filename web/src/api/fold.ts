@@ -41,10 +41,10 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
   if (by === 'user_agent') {
-    // The rollups file a row that named no client under 'unknown'; under a pattern list it falls with every
-    // other unmatched client under 'other', as the breakdown route files it.
-    if (agentGroups.length === 0) return r.userAgent ?? 'unknown';
-    return agentGroups.find((p) => matchesPattern(p, r.userAgent ?? '')) ?? 'other';
+    // The rollups file a row that named no client under '-', which every route answers as unattributed; under
+    // a pattern list it falls with every other unmatched client under 'other', as the breakdown route does.
+    if (agentGroups.length === 0) return r.userAgent ?? '-';
+    return agentGroups.find((p) => matchesPattern(p, r.userAgent ?? '-')) ?? 'other';
   }
   return 'all';
 };
@@ -52,7 +52,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
 export interface FoldOptions {
   /** Patterns naming the groups under `user_agent`; a row falls in the first that matches, the rest under `other`. */
   agentGroups?: string[];
-  /** Patterns a row's client must match one of; a row with no client matches none. */
+  /** Patterns a row's client must match one of; a row that named no client is matched as `-`, as the rollups file it. */
   agentPatterns?: string[];
 }
 
@@ -64,7 +64,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const groups = new Map<string, AnalyticsGroup>();
   const lists = new Map<string, RequestLog[]>();
   const patterns = options.agentPatterns ?? [];
-  const kept = patterns.length ? rows.filter((r) => patterns.some((p) => matchesPattern(p, r.userAgent ?? ''))) : rows;
+  const kept = patterns.length ? rows.filter((r) => patterns.some((p) => matchesPattern(p, r.userAgent ?? '-'))) : rows;
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
     const g = groups.get(key) ?? empty(key, key === '-' ? 'unattributed' : key);

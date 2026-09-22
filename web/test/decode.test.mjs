@@ -177,9 +177,8 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failover.transport, 'sse');
   assert.equal(failover.usage.cacheRead, 500);
   assert.equal(failover.usage.thinking, 40);
-  assert.equal(failover.shape.effort, 'high');
-  assert.equal(failover.shape.toolCount, 12);
-  assert.equal(failover.attempts[1].response.stopReason, 'end_turn');
+  assert.deepEqual(failover.shape, { contextEdits: ['clear_thinking_20251015'], effort: 'high', maxTokens: 32_000, messageCount: 1, requestedServiceTier: null, requestedSpeed: null, systemBlocks: 4, temperature: null, thinkingBudget: 31_999, thinkingType: 'enabled', toolCount: 12 });
+  assert.deepEqual(failover.attempts[1].response, { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null });
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
   assert.equal(failed.errorCode, 'upstream_error');
@@ -220,7 +219,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 3);
-  assert.equal(typeof desktop.tokens.thinking, 'number');
+  assert.equal(desktop.tokens.thinking, 120);
   assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
   assert.equal(desktop.errors.upstream_error, 1);
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
@@ -289,7 +288,8 @@ test('a session fold groups on the client each row named', () => {
   assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)', 'the row carries the agent the route answers');
   const rows = [captured, { ...failed, userAgent: 'phoebis-batch/0.9 (external, ci)' }, { ...failed, id: 'r-none', userAgent: null }];
   const groups = d.foldGroups(rows, 'user_agent');
-  assert.deepEqual(groups.map((g) => g.key).sort(), ['claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)', 'unknown']);
+  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)'], 'a row that named no client falls under the marker the rollups file it as');
+  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'which every route answers as unattributed');
   assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });
   assert.deepEqual(named.map((g) => g.key).sort(), ['claude-cli/2.1.*', 'other', 'phoebis-batch/*'], 'the row that named no client falls under other, as the breakdown route files it');
