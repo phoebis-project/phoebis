@@ -121,6 +121,16 @@ pub struct RoutingConfig {
 pub struct SessionsConfig {
     #[serde(default = "default_session_expiry")]
     pub expire_after_seconds: u64,
+    /// Entries the in-process session memory holds at most; past it the least recently seen entry goes to
+    /// disk and out of memory.
+    #[serde(default = "default_memory_cap")]
+    pub memory_cap: usize,
+    /// How long an entry may go unseen before the in-process memory drops it; the on-disk copy outlives it.
+    #[serde(default = "default_memory_idle")]
+    pub memory_idle_seconds: u64,
+    /// How long the on-disk copy of a session's memory is kept after its last request.
+    #[serde(default = "default_memory_retention")]
+    pub memory_retention_days: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +183,12 @@ pub enum ConfigError {
     LedgerPath { path: PathBuf },
     #[error("routing.max_attempts must be between 1 and 8, not {value}")]
     MaxAttemptsOutOfRange { value: u8 },
+    #[error("sessions.memory_cap must be between 1 and 1048576, not {value}")]
+    MemoryCapOutOfRange { value: usize },
+    #[error("sessions.memory_idle_seconds must be at least 60")]
+    MemoryIdleTooShort,
+    #[error("sessions.memory_retention_days must be at least 1")]
+    MemoryRetentionTooShort,
     #[error("admin.origin is required unless admin.plain_http is set")]
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
@@ -254,6 +270,9 @@ impl Default for SessionsConfig {
     fn default() -> Self {
         SessionsConfig {
             expire_after_seconds: default_session_expiry(),
+            memory_cap: default_memory_cap(),
+            memory_idle_seconds: default_memory_idle(),
+            memory_retention_days: default_memory_retention(),
         }
     }
 }
@@ -317,6 +336,19 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     }
     if config.sessions.expire_after_seconds < 60 {
         return Err(ConfigError::SessionExpiryTooShort);
+    }
+    // A million entries is a few hundred megabytes at the sizes `identity` and `facts` bound a record to, and
+    // the most a host should be asked to hold for this; a zero cap would drop every entry on its next write.
+    if !(1..=1_048_576).contains(&config.sessions.memory_cap) {
+        return Err(ConfigError::MemoryCapOutOfRange {
+            value: config.sessions.memory_cap,
+        });
+    }
+    if config.sessions.memory_idle_seconds < 60 {
+        return Err(ConfigError::MemoryIdleTooShort);
+    }
+    if config.sessions.memory_retention_days < 1 {
+        return Err(ConfigError::MemoryRetentionTooShort);
     }
     if !(1..=168).contains(&config.stats.body_capture_max_hours) {
         return Err(ConfigError::BodyCaptureMaxOutOfRange {
@@ -482,6 +514,18 @@ fn default_session_expiry() -> u64 {
     86_400
 }
 
+fn default_memory_cap() -> usize {
+    65_536
+}
+
+fn default_memory_idle() -> u64 {
+    86_400
+}
+
+fn default_memory_retention() -> u32 {
+    30
+}
+
 /// Stands in for a secret until `load` resolves it. `load` is the only way to obtain a `Config`, and it
 /// replaces every one of these before it returns.
 fn unresolved() -> Secret {
@@ -610,6 +654,59 @@ mod tests {
                 Err(ConfigError::Syntax(_))
             ),
             "the registry blocks left the file"
+        );
+    }
+
+    #[test]
+    fn the_session_memory_keys_default_to_the_constants_and_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        let config = load(&file(dir.path(), "defaults", "")).unwrap();
+        assert_eq!(
+            (
+                config.sessions.memory_cap,
+                config.sessions.memory_idle_seconds,
+                config.sessions.memory_retention_days
+            ),
+            (65_536, 86_400, 30)
+        );
+        for (name, body, expected) in [
+            (
+                "cap-low",
+                "sessions:\n  memory_cap: 0\n",
+                "sessions.memory_cap must be between 1 and 1048576, not 0",
+            ),
+            (
+                "cap-high",
+                "sessions:\n  memory_cap: 1048577\n",
+                "sessions.memory_cap must be between 1 and 1048576, not 1048577",
+            ),
+            (
+                "idle",
+                "sessions:\n  memory_idle_seconds: 59\n",
+                "sessions.memory_idle_seconds must be at least 60",
+            ),
+            (
+                "retention",
+                "sessions:\n  memory_retention_days: 0\n",
+                "sessions.memory_retention_days must be at least 1",
+            ),
+        ] {
+            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{name}");
+        }
+        let custom = load(&file(
+            dir.path(),
+            "custom",
+            "sessions:\n  memory_cap: 1024\n  memory_idle_seconds: 600\n  memory_retention_days: 7\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            (
+                custom.sessions.memory_cap,
+                custom.sessions.memory_retention_days
+            ),
+            (1024, 7)
         );
     }
 }

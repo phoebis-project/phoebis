@@ -4,6 +4,7 @@ mod accounts;
 mod alerts;
 mod credentials;
 mod lock;
+mod memory;
 mod pricing;
 mod registry;
 mod routing;
@@ -27,6 +28,7 @@ pub use credentials::{
     AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
     Secret,
 };
+pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use pricing::PricingVersion;
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,

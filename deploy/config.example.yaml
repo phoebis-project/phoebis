@@ -42,6 +42,11 @@ routing:
   max_attempts: 3
 sessions:
   expire_after_seconds: 86400
+  # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
+  # may go unseen before it leaves memory, and how long its on-disk copy is kept.
+  memory_cap: 65536
+  memory_idle_seconds: 86400
+  memory_retention_days: 30
 stats:
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72

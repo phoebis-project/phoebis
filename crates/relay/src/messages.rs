@@ -46,7 +46,9 @@ use crate::facts::BodyFacts;
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{identify, RequestIdentity};
-use crate::memory::{uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP};
+use crate::memory::{
+    uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
+};
 use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
@@ -169,7 +171,7 @@ impl Relay {
             drift: DriftGuard,
             limits,
             manager,
-            memory: Arc::new(SessionMemory::new(MEMORY_CAP)),
+            memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
             pool,
             resolver,
             router,
@@ -190,6 +192,15 @@ impl Relay {
     pub fn with_cache_diagnostics(self, enabled: bool) -> Relay {
         Relay {
             cache_diagnostics: enabled,
+            ..self
+        }
+    }
+
+    /// The session memory's bounds from the bootstrap file: the entries held in process and how long one may
+    /// go unseen before it is dropped from memory.
+    pub fn with_session_memory(self, cap: usize, idle: Duration) -> Relay {
+        Relay {
+            memory: Arc::new(SessionMemory::new(cap, idle.as_millis() as i64)),
             ..self
         }
     }

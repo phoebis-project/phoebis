@@ -221,6 +221,11 @@ routing:
   max_attempts: 3
 sessions:
   expire_after_seconds: 86400
+  # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
+  # may go unseen before it leaves memory, and how long its on-disk copy is kept.
+  memory_cap: 65536
+  memory_idle_seconds: 86400
+  memory_retention_days: 30
 stats:
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
@@ -356,9 +361,24 @@ Refused with:
 
 ### sessions
 
-Defaults whole: `expire_after_seconds` is how long a session may go without a request before it leaves the
-Sessions view, taking its pin and any keepalive recipe with it; default `86400`, at least 60, refused with
-`sessions.expire_after_seconds must be at least 60`.
+Defaults whole. `expire_after_seconds` is how long a session may go without a request before it leaves the
+Sessions view, taking its pin and any keepalive recipe with it. The three `memory_` keys bound the relay's
+memory of a session's previous request id and prompt id, the record behind `cc_prev_req` and `cc_prompt_id`
+([client](client.md#the-environment-block)).
+
+| Key | Default | Accepts |
+| --- | --- | --- |
+| `expire_after_seconds` | `86400` | at least 60 |
+| `memory_cap` | `65536` | 1 to 1048576 entries held in process; past it the least recently seen entry leaves memory |
+| `memory_idle_seconds` | `86400` | at least 60; how long an entry may go unseen before it leaves memory |
+| `memory_retention_days` | `30` | at least 1; how long the on-disk copy of an entry is kept after its last request |
+
+Refused with:
+
+- `expire_after_seconds`: `sessions.expire_after_seconds must be at least 60`
+- `memory_cap`: `sessions.memory_cap must be between 1 and 1048576, not {value}`
+- `memory_idle_seconds`: `sessions.memory_idle_seconds must be at least 60`
+- `memory_retention_days`: `sessions.memory_retention_days must be at least 1`
 
 ### stats
 
@@ -415,7 +435,7 @@ refused with `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
-`keepalive` bounds, `routing.catalog_sync_interval_seconds`, `sessions.expire_after_seconds`,
+`keepalive` bounds, `routing.catalog_sync_interval_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.retention_days`,
 `quota.sample_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name
 the same file. The first failure is the one reported, so fix the file top to bottom to find the next one.

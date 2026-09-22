@@ -6,8 +6,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 
 use phoebis_store::AccountRow;
+pub use phoebis_store::MemoryKey;
 
-/// Entries idle this long are dropped, which is also the client's own session expiry default.
+/// The default idle bound, also the client's own session expiry default; `sessions.memory_idle_seconds`
+/// replaces it.
 pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
 /// Entries held at most; past it the least recently seen entry goes. Every string an entry holds is bounded
 /// on the way in (the key's ids and the model by `identity`, the carried prompt id by `facts`, the upstream's
@@ -18,13 +20,6 @@ pub const MEMORY_CAP: usize = 65_536;
 /// A minute between sweeps is often enough to keep the map from growing unbounded between requests, and rare
 /// enough that a purge never costs a hot request its own lock hold.
 const PURGE_INTERVAL_MS: i64 = 60_000;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MemoryKey {
-    pub key_id: String,
-    pub session_id: String,
-    pub agent_id: String,
-}
 
 /// A field or beta the relay inserted on its own; what a 400 rule strips and a latch names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -85,10 +80,11 @@ struct Inner {
 pub struct SessionMemory {
     inner: Mutex<Inner>,
     cap: usize,
+    idle_ms: i64,
 }
 
 impl SessionMemory {
-    pub fn new(cap: usize) -> SessionMemory {
+    pub fn new(cap: usize, idle_ms: i64) -> SessionMemory {
         SessionMemory {
             inner: Mutex::new(Inner {
                 entries: HashMap::new(),
@@ -96,6 +92,7 @@ impl SessionMemory {
                 last_purge: 0,
             }),
             cap,
+            idle_ms,
         }
     }
 
@@ -231,10 +228,10 @@ impl SessionMemory {
         })
     }
 
-    /// Drops entries idle past `MEMORY_IDLE_MS`; run by every write, at most once a minute.
+    /// Drops entries idle past the configured bound; run by every write, at most once a minute.
     pub fn purge(&self, now: i64) {
         let mut inner = self.inner.lock().unwrap();
-        purge_locked(&mut inner, now);
+        purge_locked(&mut inner, now, self.idle_ms);
     }
 }
 
@@ -278,14 +275,12 @@ fn evict_if_full(entries: &mut HashMap<MemoryKey, Entry>, cap: usize) {
     }
 }
 
-fn purge_locked(inner: &mut Inner, now: i64) {
+fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64) {
     if now - inner.last_purge < PURGE_INTERVAL_MS {
         return;
     }
     inner.last_purge = now;
-    inner
-        .entries
-        .retain(|_, e| now - e.last_seen < MEMORY_IDLE_MS);
+    inner.entries.retain(|_, e| now - e.last_seen < idle_ms);
 }
 
 /// `rand::random`'s own bits, restamped with the version and variant nibbles RFC 4122 fixes for a v4 UUID.
@@ -333,7 +328,7 @@ mod tests {
 
     #[test]
     fn the_cap_evicts_the_least_recently_seen_entry() {
-        let mem = SessionMemory::new(2);
+        let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
         let id_a = mem.prompt_id(&a, None, false, None, 1_000);
         mem.prompt_id(&b, None, false, None, 2_000);
@@ -348,19 +343,31 @@ mod tests {
 
     #[test]
     fn the_purge_drops_an_entry_idle_past_the_bound() {
-        let mem = SessionMemory::new(10);
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("a");
         let id = mem.prompt_id(&a, None, false, None, 0);
-        let id_after = mem.prompt_id(&a, None, false, None, MEMORY_IDLE_MS);
+        // The second call must clear both gates: the idle bound itself, and PURGE_INTERVAL_MS since the
+        // sweep only runs once a minute, so it lands at their sum rather than at the idle bound alone.
+        let id_after = mem.prompt_id(&a, None, false, None, MEMORY_IDLE_MS + PURGE_INTERVAL_MS);
         assert_ne!(
             id, id_after,
-            "an entry idle the whole bound is purged before this call sees it"
+            "an entry idle the whole bound is purged once the once-a-minute sweep next runs"
+        );
+
+        // An idle bound far shorter than PURGE_INTERVAL_MS still waits on the sweep: the entry is stale
+        // well before the sweep runs, but the sweep, not the bound, decides when it is dropped.
+        let custom = SessionMemory::new(10, 1_000);
+        let id = custom.prompt_id(&a, None, false, None, 0);
+        let id_after = custom.prompt_id(&a, None, false, None, PURGE_INTERVAL_MS + 1_000);
+        assert_ne!(
+            id, id_after,
+            "a 1-second bound is enforced only once the 60-second sweep gate opens, at 60_000 + 1_000"
         );
     }
 
     #[test]
     fn a_latch_answers_refuses_only_for_the_row_it_was_set_with() {
-        let mem = SessionMemory::new(10);
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let account = row(1, 1);
         mem.latch(&account, Injected::Cch);
         assert!(mem.refuses(&account, Injected::Cch));
@@ -380,7 +387,7 @@ mod tests {
 
     #[test]
     fn previous_is_isolated_per_account() {
-        let mem = SessionMemory::new(10);
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("s");
         mem.record_request_id(&a, "acct-a", "req_a", 1_000);
         mem.record_request_id(&a, "acct-b", "req_b", 1_000);

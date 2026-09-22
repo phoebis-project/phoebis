@@ -226,7 +226,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             },
         )
         .with_bus(bus.clone())
-        .with_cache_diagnostics(config.compatibility.cache_diagnostics),
+        .with_cache_diagnostics(config.compatibility.cache_diagnostics)
+        .with_session_memory(
+            config.sessions.memory_cap,
+            Duration::from_secs(config.sessions.memory_idle_seconds),
+        ),
     );
     // The companion's reports reach the alerts off the request bus, which drops under pressure while a
     // session's start and end must not.
