@@ -187,6 +187,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
   assert.equal(failed.errorCode, 'upstream_error');
+  assert.equal(failed.clientDrift, 'hash');
   assert.equal(failed.outcome, 'failed');
   assert.equal(d.decodeRequest(fixture('request').request).id, 'r-failover');
   const moved = fixture('request').events.map(d.decodeRequestEvent);

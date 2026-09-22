@@ -28,7 +28,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "id": r.id, "at": r.received_at, "finished_at": r.finished_at, "key_id": r.key_id, "pool_id": r.pool_id,
         "account_id": last.map(|a| a.account_id.clone()), "session_id": r.session_id, "agent_id": r.agent_id, "parent_agent_id": r.parent_agent_id,
         "model": r.model, "canonical_model": r.canonical_model, "kind": r.kind, "origin": r.origin, "transport": if r.stream { "sse" } else { "json" },
-        "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
+        "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "client_drift": r.client_drift, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
         "request_truncated": r.request_truncated, "response_truncated": r.response_truncated,
         "user_agent": r.user_agent,

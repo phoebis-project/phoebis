@@ -372,6 +372,9 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         ttfc_ms: complete.ttfc_ms,
         duration_ms: Some(complete.finished_at - observed.received_at),
         error_code: complete.error_code.clone(),
+        // Set here rather than only in the attempt loop above: a drift refusal answers before any account is
+        // selected, so it has no attempt row to carry the kind, and the request row is the one place left.
+        client_drift: complete.client_drift.clone(),
         kept_warm: false,
         bodies_captured: bodies.is_some(),
         request_truncated: false,

@@ -220,7 +220,7 @@ export function decodeRequest(v: unknown): RequestLog {
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissedInputTokens: null, cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), clientDrift: strOrNull(r.client_drift), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
     kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: (['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const).find((o) => o === str(r.outcome)) ?? 'failed',
     poolId: strOrNull(r.pool_id), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),

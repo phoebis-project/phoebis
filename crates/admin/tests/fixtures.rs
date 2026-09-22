@@ -346,15 +346,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }),
     });
     parts.ledger.record(Record::Request {
-        request: request(
-            key_generation,
-            "r-failed",
-            now - 120_000,
-            "desktop",
-            "s2",
-            502,
-            "failed",
-        ),
+        request: RequestRecord {
+            client_drift: Some("hash".into()),
+            ..request(
+                key_generation,
+                "r-failed",
+                now - 120_000,
+                "desktop",
+                "s2",
+                502,
+                "failed",
+            )
+        },
         attempts: vec![attempt(
             "r-failed",
             1,

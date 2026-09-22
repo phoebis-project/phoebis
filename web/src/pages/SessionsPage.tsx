@@ -204,9 +204,24 @@ export function SessionsPage() {
           ) : undefined
         }
       >
-        {rows === null && sessions.error ? (
+        {rows === null && (sessions.error ?? keys.error ?? recipes.error) ? (
           <div style={{ padding: 20 }}>
-            <ErrorState title="Could not load the sessions" body={sessions.error} action={<Button size="sm" onClick={sessions.reload}>Try again</Button>} />
+            <ErrorState
+              title="Could not load the sessions"
+              body={sessions.error ?? keys.error ?? recipes.error ?? ''}
+              action={
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    sessions.reload();
+                    keys.reload();
+                    recipes.reload();
+                  }}
+                >
+                  Try again
+                </Button>
+              }
+            />
           </div>
         ) : rows === null ? (
           <div style={{ padding: 20 }}>

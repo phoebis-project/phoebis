@@ -67,7 +67,7 @@ pub fn reconcile_key_generations(
                 after_rowid = *last_rowid;
                 for (_, row) in &page {
                     // Folded rather than updated in place: the new binary may already have filed a row under
-                    // the live generation with the same other six parts, and the primary key admits no second.
+                    // the live generation with the same other seven parts, and the primary key admits no second.
                     let stamped = RollupRow {
                         key_generation: key.created_at,
                         ..row.clone()

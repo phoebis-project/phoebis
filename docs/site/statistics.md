@@ -27,6 +27,9 @@ Percentiles for every millisecond latency and for output tokens per second come 
 64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading
 the percentile, and the value carries the error of the bucket it falls in.
 
+Every ledger read the admin routes, the usage page, and the metrics listener make runs on a blocking worker off
+the request runtime, so a slow analytics query never delays proxy traffic.
+
 ## Quota samples
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit
@@ -60,7 +63,7 @@ shows a captured body in the request drawer, with a control to copy it.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 keeps them forever) |
+| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
 | Quota and extra-usage samples | `quota.sample_retention_days` (30 days by default) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |

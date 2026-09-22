@@ -334,6 +334,8 @@ export interface RequestLog {
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
+  /** The kind a client-drift refusal answered with (`hash` or `version_suffix`); `null` for every other request. */
+  clientDrift: string | null;
   costUsd: number;
   durationMs: number | null;
   errorCode: string | null;

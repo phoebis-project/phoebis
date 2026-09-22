@@ -1003,7 +1003,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 11);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 12);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -1041,7 +1041,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 11);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 12);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1566,8 +1566,8 @@ mod tests {
                 [],
             )
             .unwrap();
-            // The version-7 column list and placeholders, written here so this test does not depend on the
-            // constant it is checking.
+            // The version-7 column list: every column a later migration added, stripped back out of the live
+            // constant, so a future column addition needs no matching edit here.
             let v7 = COLUMNS.replace(", effort", "").replace(
                 ", thinking_tokens, web_search_requests, web_fetch_requests",
                 "",
@@ -1632,7 +1632,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 11);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 12);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = old;

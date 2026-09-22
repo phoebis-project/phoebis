@@ -25,9 +25,13 @@ pub struct RequestRecord {
     pub ttfc_ms: Option<i64>,
     pub duration_ms: Option<i64>,
     pub error_code: Option<String>,
+    /// The kind a client-drift refusal answered with, whether or not the refusal reached an account: `hash` or
+    /// `version_suffix`. `None` for a request that never tripped either self-check.
+    pub client_drift: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
-    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured.
+    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured. Derived
+    /// on read from `bodies`; the writer's value is never stored.
     pub request_truncated: bool,
     pub response_truncated: bool,
     /// The caller's `User-Agent` as it was sent, `None` when it sent none.

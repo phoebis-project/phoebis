@@ -550,6 +550,10 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
         ),
         (Some(false), Some("reporting"), Some(1))
     );
+    assert!(
+        live["keepalive"]["state"].is_string(),
+        "the live generation carries a recipe before the release, so the release below can be seen to discard it"
+    );
     let historical = rows
         .iter()
         .find(|r| r["key_generation"] == g - 1)

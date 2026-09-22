@@ -312,14 +312,14 @@ pub(crate) fn insert_request_in(
         .is_some();
     let kept_warm = request.kept_warm || marked;
     tx.execute(
-        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
+        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)",
         params![
             request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
             request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
             request.status.map(i64::from), request.outcome, request.attempts, request.request_bytes.map(|n| n as i64),
             request.response_bytes.map(|n| n as i64), request.ttfb_ms, request.ttfc_ms, request.duration_ms, request.error_code,
-            kept_warm, request.bodies_captured, request.user_agent,
+            request.client_drift, kept_warm, request.bodies_captured, request.user_agent,
             request.effort, request.thinking_type, request.thinking_budget.map(|n| n as i64), request.max_tokens.map(|n| n as i64),
             i64::from(request.tool_count), i64::from(request.system_blocks), i64::from(request.message_count),
             request.context_edits, request.temperature, request.requested_speed, request.requested_service_tier,
@@ -365,7 +365,7 @@ pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), 
     Ok(())
 }
 
-pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, \
+pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, \
 (SELECT LENGTH(b.request_body) < b.request_len_seen FROM bodies b WHERE b.request_id = requests.id), \
 (SELECT LENGTH(b.response_body) < b.response_len_seen FROM bodies b WHERE b.request_id = requests.id) FROM requests";
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, pricing_version, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model FROM attempts";
@@ -395,26 +395,27 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         ttfc_ms: r.get(20)?,
         duration_ms: r.get(21)?,
         error_code: r.get(22)?,
-        kept_warm: r.get(23)?,
-        bodies_captured: r.get(24)?,
+        client_drift: r.get(23)?,
+        kept_warm: r.get(24)?,
+        bodies_captured: r.get(25)?,
         // NULL for a request with no bodies row, or one whose capture has already been purged: a purged
         // capture reads as whole rather than as a cut it no longer holds evidence of.
-        request_truncated: r.get::<_, Option<bool>>(39)?.unwrap_or(false),
-        response_truncated: r.get::<_, Option<bool>>(40)?.unwrap_or(false),
-        user_agent: r.get(25)?,
-        effort: r.get(26)?,
-        thinking_type: r.get(27)?,
-        thinking_budget: r.get::<_, Option<i64>>(28)?.map(|n| n as u64),
-        max_tokens: r.get::<_, Option<i64>>(29)?.map(|n| n as u64),
-        tool_count: r.get::<_, i64>(30)? as u32,
-        system_blocks: r.get::<_, i64>(31)? as u32,
-        message_count: r.get::<_, i64>(32)? as u32,
-        context_edits: r.get(33)?,
-        temperature: r.get(34)?,
-        requested_speed: r.get(35)?,
-        requested_service_tier: r.get(36)?,
-        presented_retired: r.get(37)?,
-        rotation_at: r.get(38)?,
+        request_truncated: r.get::<_, Option<bool>>(40)?.unwrap_or(false),
+        response_truncated: r.get::<_, Option<bool>>(41)?.unwrap_or(false),
+        user_agent: r.get(26)?,
+        effort: r.get(27)?,
+        thinking_type: r.get(28)?,
+        thinking_budget: r.get::<_, Option<i64>>(29)?.map(|n| n as u64),
+        max_tokens: r.get::<_, Option<i64>>(30)?.map(|n| n as u64),
+        tool_count: r.get::<_, i64>(31)? as u32,
+        system_blocks: r.get::<_, i64>(32)? as u32,
+        message_count: r.get::<_, i64>(33)? as u32,
+        context_edits: r.get(34)?,
+        temperature: r.get(35)?,
+        requested_speed: r.get(36)?,
+        requested_service_tier: r.get(37)?,
+        presented_retired: r.get(38)?,
+        rotation_at: r.get(39)?,
     })
 }
 
@@ -599,7 +600,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 11);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 12);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -685,7 +686,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 11, "and answered what the connection holds");
+        assert_eq!(version, 12, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -700,7 +701,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            11,
+            12,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }

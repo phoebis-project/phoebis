@@ -215,6 +215,9 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 11: a request says whether it presented a retired secret and under which rotation, so the count of
 /// sessions still on the previous secret is scoped to the rotation whose grace is running.
+///
+/// Version 12: a request refused for client drift keeps the kind on its own row, not only on the alert and the
+/// attempt the refusal never reached.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -441,5 +444,9 @@ ALTER TABLE bodies ADD COLUMN response_len_seen INTEGER NOT NULL DEFAULT 0;",
         11,
         "ALTER TABLE requests ADD COLUMN presented_retired INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE requests ADD COLUMN rotation_at INTEGER;",
+    ),
+    (
+        12,
+        "ALTER TABLE requests ADD COLUMN client_drift TEXT;",
     ),
 ];

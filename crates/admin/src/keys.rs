@@ -265,8 +265,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     let (week, lifetime) = totals(&state).await;
-    // A row this route just created has never been rotated, so no session can be on a secret of its yet to
-    // exist: the grouped read would answer nothing worth its cost.
+    // A key this route just created has never rotated, so no session can present a retired secret of it.
     match key_json(&state, &row, &week, &lifetime, 0) {
         Ok(mut v) => {
             v["secret"] = json!(secret);

@@ -442,6 +442,39 @@ async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_
     up.shutdown().await;
 }
 
+/// A client-drift refusal answers before any account is selected, so it has no attempt row to carry the kind;
+/// the request row is where an operator reads which self-check refused it.
+#[tokio::test]
+async fn a_version_suffix_drift_refusal_is_recorded_on_the_request_row() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let native =
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+            .unwrap()
+            .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1);
+    let drifted = String::from_utf8(phoebis_cch::sign(native.as_bytes()).unwrap()).unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_with_native_body(drifted, KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (row, attempts) = ledgered(&h, &id).await;
+    assert_eq!(row.client_drift.as_deref(), Some("version_suffix"));
+    assert!(
+        attempts.is_empty(),
+        "the drift check runs before any account is tried"
+    );
+    up.shutdown().await;
+}
+
 /// A fallback model refused the request: the answer's own model and the refusal's details reach the row, since
 /// the model that served is not the one the router resolved.
 #[tokio::test]

@@ -418,6 +418,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             sql.push_str(&format!("ALTER TABLE attempts DROP COLUMN {column}; "));
         }
         for column in [
+            "client_drift",
             "context_edits",
             "effort",
             "max_tokens",
@@ -442,7 +443,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 11);
+    assert_eq!(db.schema_version().await.unwrap(), 12);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

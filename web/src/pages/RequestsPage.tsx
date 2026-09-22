@@ -395,6 +395,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
                 { label: 'Duration', value: fmtMs(r.durationMs) },
                 { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },
+                ...(r.clientDrift ? [{ label: 'Client drift', value: r.clientDrift, mono: true }] : []),
               ]}
             />
           </section>
@@ -444,13 +445,13 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                       })}
                     <CacheRow attempt={a} usage={r.usage} />
                   </ul>
-                  {(a.response.stopReason || a.response.servedModel || a.response.clearedInputTokens !== null) && (
+                  {(a.response.stopReason || a.response.servedModel || (a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0)) && (
                     <div className="attempt__response secondary">
                       {a.response.stopReason && <span>stopped: {a.response.stopReason}{a.response.refusalCategory ? ` (${a.response.refusalCategory}${a.response.refusalRecommendedModel ? `, try ${a.response.refusalRecommendedModel}` : ''})` : ''}</span>}
                       {a.response.servedModel && <span className="mono">served by {a.response.servedModel}</span>}
                       {a.response.speed && <span>{a.response.speed}</span>}
                       {a.response.inferenceGeo && <span>{a.response.inferenceGeo}</span>}
-                      {a.response.clearedInputTokens !== null && <span>{fmtInt(a.response.clearedInputTokens)} tokens cleared by context edits</span>}
+                      {a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0 && <span>{fmtInt(a.response.clearedInputTokens)} tokens cleared by context edits</span>}
                     </div>
                   )}
                   {a.cooldownSet && (
