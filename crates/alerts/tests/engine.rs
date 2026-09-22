@@ -79,6 +79,15 @@ async fn a_signal_opens_one_event_per_matching_rule_and_subject_and_a_clear_reso
             && posts[0].body["rule"] == "any"
     );
     assert!(posts.iter().all(|p| p.signature.is_none()));
+    let any_event = open.iter().find(|e| e.rule_id == "any").unwrap();
+    assert!(
+        rig.store
+            .alert_deliveries(&any_event.id)
+            .unwrap()
+            .iter()
+            .all(|d| d.detail_json.is_none()),
+        "a stateful delivery reads its body off the event; the row itself carries no copy of the detail"
+    );
     rig.alerts.signal(&signal(
         Kind::ReauthRequired,
         Some("direct"),

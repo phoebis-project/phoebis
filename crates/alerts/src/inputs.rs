@@ -115,11 +115,10 @@ pub struct Tracked(Arc<Shared>);
 
 #[derive(Default)]
 struct Shared {
-    /// Taken before the map and held through the store work a decision produced, so the store sees the opens
-    /// and the clears in the order the map decided them. The three arms run on tasks of their own: without it
-    /// an open decided before a session's end could insert its row after that end's clear had run, and
-    /// nothing would ever resolve that row, because the map entry it belongs to is gone and the unique open
-    /// index refuses every later event of the same rule and subject.
+    /// Taken before the map and held through the store work or the posts a decision produced, so an open and
+    /// a clear reach the store, and a session's events post, in the order the map decided them. The three arms
+    /// run on tasks of their own: without it, a decision that raced a session's end could still land after the
+    /// end's own work had run, and nothing would ever revisit it once the map entry it belongs to is gone.
     order: Mutex<()>,
     sessions: Mutex<TrackedInner>,
 }
@@ -206,19 +205,20 @@ fn session_parked_signal(key: &str, session: &str, pool: Option<&str>) -> Signal
 }
 
 /// What a session's end posts: `session_ended` with how it ended (`companion` for the channel, `expiry` for the
-/// sweep), and one `subagent_ended` per subagent still running under it. The entry is gone by the time these
-/// are delivered, so the caller takes it out of the map first. An entry restored from an open question has no
-/// start this process posted, so its expiry and the companion's end post nothing and the entry is dropped in
-/// silence: a lifecycle event is posted only for a session this process observed live.
+/// sweep) only when this process posted the session's own start, and one `subagent_ended` per subagent still
+/// running under it regardless, since an agent enters the map only through its own start and an entry restored
+/// from an open question never holds one. The entry is gone by the time these are delivered, so the caller
+/// takes it out of the map first.
 fn end_session(key: &str, session: &str, state: &SessionState, source: &str) -> Vec<Emit> {
-    if !state.started {
-        return Vec::new();
-    }
     let pool = state.pool.as_deref();
-    let mut emits = vec![Emit {
-        event: LifecycleEvent::SessionEnded,
-        signal: Box::new(session_active_signal(key, session, pool, source)),
-    }];
+    let mut emits = if state.started {
+        vec![Emit {
+            event: LifecycleEvent::SessionEnded,
+            signal: Box::new(session_active_signal(key, session, pool, source)),
+        }]
+    } else {
+        Vec::new()
+    };
     emits.extend(state.agents.iter().map(|(agent, parent)| Emit {
         event: LifecycleEvent::SubagentEnded,
         signal: Box::new(subagent_active_signal(
@@ -453,8 +453,8 @@ impl BusArm {
         let now = (self.alerts.parts().clock)();
         self.in_flight
             .retain(|_, e| now - e.seen_at < IN_FLIGHT_TTL_MS);
-        // One ordering guard for everything this event decides, so the sweep's clears and the opens below
-        // reach the store in that order and ahead of whatever the other two arms decide next. Held through a
+        // One ordering guard for everything this event decides, so the sweep's ends and the posts below
+        // reach the engine in that order and ahead of whatever the other two arms decide next. Held through a
         // handle of its own, so reading the event below still has the arm to itself.
         let tracked = self.tracked.clone();
         let ordered = tracked.ordered();
@@ -462,7 +462,7 @@ impl BusArm {
         // opened rather than from the turn that asked, and the poller retires both at the same expiry.
         let mut emits = sweep_expired(&mut self.tracked.lock(), self.session_expiry_ms, now);
         // The event is read in a call of its own: an arm of it that returns early, as a completion with no
-        // request of ours does, must not carry the sweep's clears out of the function with it.
+        // request of ours does, must not carry the sweep's ends out of the function with it.
         self.read(event, now, &mut emits);
         // The map is free again: what this event decided is posted now, in the order it was decided.
         emit_all(&self.alerts, emits);

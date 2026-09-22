@@ -224,6 +224,9 @@ async fn the_companion_ends_a_session_releases_an_agent_and_parks_and_resumes_th
         session_id: "s1".into(),
     });
     settled(&rig).await;
+    // Each rule's deliveries queue on their own key and run on their own worker task, so this exact
+    // interleaving across the subagent and parked keys holds on the current-thread test runtime; a
+    // multi-thread flavour would need the assertion split per key.
     assert_eq!(
         posted(&rig),
         [
@@ -434,6 +437,9 @@ async fn the_expiry_sweep_posts_the_ends_of_a_forgotten_session() {
     rig.clock.store(NOW + 3_601_000, Ordering::SeqCst);
     arm.observe(main_turn("r3", "s2"));
     settled(&rig).await;
+    // Each of the three subjects here queues on its own key and runs on its own worker task, so this exact
+    // interleaving holds on the current-thread test runtime; a multi-thread flavour would need the assertion
+    // split per key.
     assert_eq!(
         posted(&rig)[3..].to_vec(),
         vec![
@@ -590,17 +596,16 @@ async fn a_restart_posts_nothing_for_what_a_previous_process_tracked_and_keeps_i
     assert_eq!(
         posted(&rig),
         [active("s1", "session_started")],
-        "a live session posts a fresh start on its next request, which also answers the question"
+        "a live session posts a fresh start on its next request"
     );
     assert_eq!(
         detail_of(&rig, "session_started")["pool"],
         serde_json::json!("main"),
         "the request names the pool a pool-scoped rule would have to match"
     );
-    assert!(
-        !question_open(&rig),
-        "the request still answers the question the entry no longer tracks"
-    );
+    // The question's own state is not this test's claim: the poller's age-based expiry, not this request,
+    // closes the row by this point in the timeline; a restored question's resolve on the client's next turn
+    // is `a_question_open_before_the_arm_existed_resolves_on_the_next_client_turn`'s claim.
 }
 
 /// The bus arm and the companion's arm on tasks of their own over one map, as the router runs them: whichever
@@ -864,6 +869,35 @@ async fn a_request_of_a_released_agent_applied_after_the_release_posts_nothing()
         posted(&rig).len(),
         5,
         "and its second run closes like the first"
+    );
+}
+
+#[tokio::test]
+async fn a_session_with_only_a_subagent_started_ends_the_subagent_and_posts_no_session_events() {
+    let rig = rig().await;
+    install(&rig, &lifecycle_rules());
+    // No request or session_start report ever reaches this session: only a subagent's own start does, so the
+    // entry it creates never sees `state.started` set.
+    let arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    let mut companion = LifecycleArm::new(rig.alerts.clone(), rig.router.clone(), arm.tracked());
+    companion.apply(SessionLifecycle::AgentStarted {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+        agent_id: "sub-1".into(),
+    });
+    settled(&rig).await;
+    companion.apply(SessionLifecycle::SessionEnded {
+        key_id: KEY.into(),
+        session_id: "s1".into(),
+    });
+    settled(&rig).await;
+    assert_eq!(
+        posted(&rig),
+        [
+            sub("s1", "sub-1", "subagent_started"),
+            sub("s1", "sub-1", "subagent_ended"),
+        ],
+        "the subagent's own start and end post; the session itself was never announced"
     );
 }
 

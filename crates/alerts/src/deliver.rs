@@ -193,7 +193,9 @@ pub async fn deliver(
             kind: rule.kind.as_str().into(),
             subject: event.subject.clone(),
             event: lifecycle.map(|e| e.as_str().into()),
-            detail_json: event.detail_json.clone(),
+            // Read only for a lifecycle row: a stateful event's detail can carry a captured question the
+            // purge blanks in `alert_events` alone, and a copy here would outlive that redaction.
+            detail_json: lifecycle.and_then(|_| event.detail_json.clone()),
             state: state.into(),
             attempt,
             at: (parts.clock)(),
