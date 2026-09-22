@@ -9,6 +9,9 @@ use crate::{Store, StoreError, LOCK_POISONED};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MemoryKey {
     pub key_id: String,
+    /// The holder's `created_at`. An id is reusable, so entries of the key that held it before are another
+    /// holder's and must never be read as the current one's.
+    pub key_generation: i64,
     pub session_id: String,
     pub agent_id: String,
 }
@@ -36,8 +39,8 @@ impl MemoryStore for Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
             "SELECT record_version, payload, last_seen FROM session_memory \
-             WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3",
-            params![key.key_id, key.session_id, key.agent_id],
+             WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
+            params![key.key_id, key.key_generation, key.session_id, key.agent_id],
             |r| {
                 Ok(MemoryRecord {
                     record_version: r.get::<_, i64>(0)? as u32,
@@ -55,14 +58,17 @@ impl MemoryStore for Store {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO session_memory (key_id, session_id, agent_id, record_version, payload, last_seen) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-                 ON CONFLICT(key_id, session_id, agent_id) DO UPDATE SET record_version = excluded.record_version, \
-                 payload = excluded.payload, last_seen = excluded.last_seen",
+                "INSERT INTO session_memory \
+                 (key_id, key_generation, session_id, agent_id, record_version, payload, last_seen) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                 ON CONFLICT(key_id, key_generation, session_id, agent_id) DO UPDATE SET \
+                 record_version = excluded.record_version, payload = excluded.payload, \
+                 last_seen = excluded.last_seen",
             )?;
             for (key, record) in records {
                 stmt.execute(params![
                     key.key_id,
+                    key.key_generation,
                     key.session_id,
                     key.agent_id,
                     record.record_version,

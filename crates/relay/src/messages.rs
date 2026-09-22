@@ -796,6 +796,7 @@ impl Relay {
         let memory_key = match (trace.kind, identity.session_id.as_deref()) {
             (Kind::Inference | Kind::Probe, Some(session)) => Some(MemoryKey {
                 key_id: key.id.clone(),
+                key_generation: key.created_at,
                 session_id: session.into(),
                 agent_id: identity.agent_id.clone(),
             }),
@@ -825,6 +826,7 @@ impl Relay {
                         self.memory.prompt_id(
                             &MemoryKey {
                                 key_id: key.id.clone(),
+                                key_generation: key.created_at,
                                 session_id: session.into(),
                                 agent_id: identity.agent_id.clone(),
                             },

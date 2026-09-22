@@ -296,8 +296,8 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     assert_eq!(tables, 0, "the upgrade dropped the table");
 }
 
-/// A reissued id must not read what the deleted holder left behind: `delete_api_key` cascades `session_memory`
-/// by `key_id` the same way it cascades `pins`.
+/// A deleted key's memory rows can never be read again, so `delete_api_key` cascades `session_memory` by
+/// `key_id` the same way it cascades `pins` rather than leaving them for the retention purge.
 #[test]
 fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
@@ -307,6 +307,7 @@ fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
         .unwrap();
     let memory_key = MemoryKey {
         key_id: "back".into(),
+        key_generation: 1_000,
         session_id: "s-1".into(),
         agent_id: "main".into(),
     };
@@ -324,7 +325,7 @@ fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
     assert_eq!(
         MemoryStore::load(&store, &memory_key).unwrap(),
         None,
-        "the deleted key's memory must not outlive it, for a reissued id to read"
+        "the deleted key's memory goes with the key"
     );
 }
 

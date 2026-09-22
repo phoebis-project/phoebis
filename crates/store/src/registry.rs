@@ -738,7 +738,8 @@ impl Store {
             return Err(StoreError::KeyNotFound(id.to_string()));
         }
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
-        // A deleted id is reissued at once, so a row left behind here would be read as the new holder's own.
+        // Nothing reads these rows again, since a key created under the id next takes a later generation;
+        // dropping them here spares the retention purge a table of dead entries.
         tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
         let now = now_ms();
         record_change(&tx, now, actor, "key_deleted", id, "{}")?;

@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::Request;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::{AccountKind, StorageKey, Store};
+use phoebis_store::{AccountKind, ApiKeyRow, StorageKey, Store};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -500,6 +500,7 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
     let app = h.app.clone();
     let key = MemoryKey {
         key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
         session_id: "s-1".into(),
         agent_id: "main".into(),
     };
@@ -589,6 +590,7 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         .to_string();
     let key = MemoryKey {
         key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
         session_id: "s-1".into(),
         agent_id: "main".into(),
     };
@@ -657,6 +659,84 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
             .as_deref(),
         Some("req_up_0002"),
         "the restored entry took the new request's id"
+    );
+    up.shutdown().await;
+}
+
+/// An id is reusable, so what the previous holder of `desktop` left in the session memory must never reach the
+/// key created under it next: the memory is keyed by the holder's generation as well as its id, and the store's
+/// cascade alone would still leave the in-process entry and its unflushed change behind.
+#[tokio::test]
+async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_memory() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(cli_request("s-1", None, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let first_generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
+    h.store.delete_api_key("desktop", "test").unwrap();
+    h.store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "desktop".into(),
+                label: "desktop".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                allowed_models: None,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: h.store.api_key_digest(KEY).to_vec(),
+                prefix: phoebis_store::key_prefix(KEY),
+                created_at: NOW,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+            },
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert_ne!(
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        first_generation,
+        "the replacement holder is a later generation of the same id"
+    );
+    // What the flush task does on its own tick: the entry the deleted holder left dirty is written back after
+    // the store's cascade removed its row.
+    h.relay.flush_memory().await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(tool_loop_request("s-1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let second = billing_line(&up.requests()[1].body);
+    assert_eq!(
+        field(&second, "cc_prev_req"),
+        None,
+        "the new holder's first request on the session names no previous answer"
     );
     up.shutdown().await;
 }

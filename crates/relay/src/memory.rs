@@ -240,6 +240,7 @@ impl SessionMemory {
                 parent_agent.and_then(|agent| {
                     let parent_key = MemoryKey {
                         key_id: key.key_id.clone(),
+                        key_generation: key.key_generation,
                         session_id: key.session_id.clone(),
                         agent_id: agent.to_string(),
                     };
@@ -728,6 +729,7 @@ mod tests {
     fn key(session: &str) -> MemoryKey {
         MemoryKey {
             key_id: "k".into(),
+            key_generation: 1,
             session_id: session.into(),
             agent_id: "main".into(),
         }

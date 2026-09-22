@@ -5,6 +5,7 @@ use phoebis_store::{MemoryKey, MemoryRecord, MemoryStore, StorageKey, Store};
 fn key(agent: &str) -> MemoryKey {
     MemoryKey {
         key_id: "desktop".into(),
+        key_generation: 1_000,
         session_id: "s1".into(),
         agent_id: agent.into(),
     }

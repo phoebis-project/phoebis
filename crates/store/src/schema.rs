@@ -248,14 +248,15 @@ CREATE INDEX IF NOT EXISTS alert_deliveries_event ON alert_deliveries (event_id,
 CREATE INDEX IF NOT EXISTS alert_deliveries_lifecycle ON alert_deliveries (kind, id) WHERE event_id IS NULL;
 "#;
 
-// The relay's session memory on disk: one row per key, session, and agent, the payload a JSON document the
-// relay owns and the version the shape it was written in, so the store never reads inside it and a later
-// shape reads older rows by their version. `last_seen` is what the retention purge measures from.
+// The relay's session memory on disk: one row per key generation, session, and agent, the payload a JSON
+// document the relay owns and the version the shape it was written in, so the store never reads inside it and
+// a later shape reads older rows by their version. The generation is in the key because an id is reusable and
+// what one holder saw is never the next holder's. `last_seen` is what the retention purge measures from.
 const V19: &str = r#"
 CREATE TABLE IF NOT EXISTS session_memory (
-  key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
   record_version INTEGER NOT NULL, payload TEXT NOT NULL, last_seen INTEGER NOT NULL,
-  PRIMARY KEY (key_id, session_id, agent_id)
+  PRIMARY KEY (key_id, key_generation, session_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS session_memory_seen ON session_memory (last_seen);
 "#;

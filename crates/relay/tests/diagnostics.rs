@@ -757,6 +757,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
     assert_diagnosed_turn(&up.requests()[2], Some("msg_turn"));
     let key = phoebis_relay::MemoryKey {
         key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
         session_id: "s1".into(),
         agent_id: "main".into(),
     };
