@@ -713,7 +713,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
 m.unmount();
 
 m = await mount('/keys');
-expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool default', 'revoked', 'Create API key', 'Never']);
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool default', 'revoked', 'Create API key', 'Never', 'still on the previous secret']);
+{
+  const retired = [...m.container.querySelectorAll('.card--table tbody tr .sub')].find((s) => (s.textContent ?? '').includes('still on the previous secret'));
+  results.push({
+    name: '/keys a rotated key counts the sessions still on the previous secret',
+    ok: retired?.textContent?.trim() === '1 session still on the previous secret' && (retired.getAttribute('title') ?? '').startsWith('Previous secret last used '),
+    missing: [retired?.textContent?.trim() ?? 'absent', retired?.getAttribute('title') ?? 'no title'],
+  });
+}
 {
   // A key an operator switched off is refused at routing, so the table may not draw it as active.
   const rowOf = (name) => [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
@@ -1361,14 +1369,14 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions the tile counts sessions with a companion', ok: /\d+ with a companion/.test(tile?.textContent ?? ''), missing: [tile?.textContent ?? 'absent'] });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 16, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
   const ci = rows().filter((r) => r.children[1]?.textContent === 'ci');
   results.push({ name: '/sessions still lists both ci sessions', ok: ci.length === 2, missing: [String(ci.length)] });
   const ciCells = ci.map((r) => [r.children[10]?.textContent?.trim(), r.children[11]?.textContent?.trim()]);
   results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
   const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'api key' || t === 'subscription');
-  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 15 && kinds.includes('subscription') && kinds.includes('api key'), missing: [...new Set(kinds)] });
+  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 16 && kinds.includes('subscription') && kinds.includes('api key'), missing: [...new Set(kinds)] });
   {
     const unrouted = rows().find((r) => r.children[3]?.textContent?.trim() === '-');
     results.push({
@@ -1388,7 +1396,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => r.children[5]?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 16 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 15, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 17 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 16, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(r.children[6]?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -1414,7 +1422,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a re-created pin says so under the session id',
-      ok: epochLines.length === 3 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
+      ok: epochLines.length === 4 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
       missing: epochLines,
     });
     const lasts = rows().map((r) => r.children[7]?.textContent?.trim() ?? '');
@@ -1489,6 +1497,51 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await m.settle(200);
   }
 
+  // One row per key, generation and session: a key id created again leaves the earlier holder's sessions in
+  // the ledger, so the id they share appears twice.
+  {
+    const idOf = (r) => r.children[2]?.getAttribute('title') ?? '';
+    const shared = rows().filter((r) => idOf(r) !== '' && idOf(r) === idOf(rows()[0]));
+    const gone = shared.find((r) => r.children[1]?.querySelector('.sub') !== null);
+    const live = shared.find((r) => r.children[1]?.querySelector('.sub') === null);
+    results.push({ name: '/sessions a session id held by two generations of a key is two rows', ok: shared.length === 2 && gone !== undefined && live !== undefined, missing: [String(shared.length), idOf(rows()[0])] });
+    results.push({
+      name: '/sessions the earlier holder is marked, carries no agents and no recipe',
+      ok:
+        gone !== undefined &&
+        gone.children[1]?.querySelector('.sub')?.textContent?.trim() === 'deleted holder' &&
+        (gone.children[1]?.querySelector('.sub')?.getAttribute('title') ?? '').includes('no longer exists') &&
+        gone.children[8]?.textContent?.trim() === '0' &&
+        gone.children[10]?.textContent?.trim() === 'no recipe' &&
+        (gone.children[10]?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id; nothing is scheduled for it',
+      missing: gone ? [...gone.children].map((c) => c.textContent?.trim() ?? '') : ['absent'],
+    });
+    results.push({
+      name: '/sessions the live holder keeps the recipes of the id they share',
+      ok: live !== undefined && Number(live.children[8]?.textContent?.trim()) > 0 && live.children[10]?.querySelector('.badge') !== null,
+      missing: live ? [live.children[8]?.textContent?.trim() ?? '', live.children[10]?.textContent?.trim() ?? ''] : ['absent'],
+    });
+    const liveItems = (await openMenu(live)).map((b) => b.textContent?.trim());
+    await openMenu(live);
+    const goneItems = (await openMenu(gone)).map((b) => b.textContent?.trim());
+    await openMenu(gone);
+    results.push({
+      name: '/sessions only the live holder can be released',
+      ok: liveItems.includes('Release') && goneItems.length === 2 && !goneItems.includes('Release'),
+      missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
+    });
+    gone?.click();
+    await m.settle(200);
+    const detail = m.container.querySelector('.srow__detail');
+    results.push({
+      name: '/sessions the earlier holder opens on its own, with none of the live holder recipes',
+      ok: m.container.querySelectorAll('.srow__detail').length === 1 && (detail?.querySelectorAll('.agents__row').length ?? -1) === 0 && (detail?.textContent ?? '').includes('this key id was created again and the session belongs to the earlier holder'),
+      missing: [String(m.container.querySelectorAll('.srow__detail').length), detail?.textContent?.slice(0, 160) ?? 'absent'],
+    });
+    gone?.click();
+    await m.settle(200);
+  }
+
   // A row opens into one line per agent and closes again.
   rows()[0]?.click();
   await m.settle(150);
@@ -1518,7 +1571,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 16, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -1693,12 +1746,19 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
   await m.navigate('/sessions');
   {
+    const id = busyRow()?.children[2]?.getAttribute('title') ?? '';
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
     release?.click();
     await m.settle(250);
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 15, missing: [String(rows().length)] });
+    const released = rows().filter((r) => r.children[2]?.getAttribute('title') === id);
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 16, missing: [String(rows().length)] });
+    results.push({
+      name: '/sessions releasing the live holder leaves the earlier one in the ledger',
+      ok: released.length === 1 && released[0].children[1]?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
+      missing: released.map((r) => r.children[1]?.textContent?.trim() ?? ''),
+    });
   }
 }
 m.unmount();
@@ -1817,7 +1877,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Quota samples (days)', 'Body capture, max hours', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', '0.4.2']);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 // The label and its value run together in textContent, which is what pins the URL to the About row.
 expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);

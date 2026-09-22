@@ -239,6 +239,10 @@ export interface ApiKey {
   notes: string | null;
   poolId: string;
   prefix: string;
+  /** When the secret the last rotation retired last authenticated; null until it does or once rotation clears it. */
+  retiredSecretLastUsedAt: string | null;
+  /** Live sessions whose newest request still presented the previous secret; 0 once the grace ends. */
+  sessionsOnRetiredSecret: number;
   status: KeyStatus;
   usage7d: { cost: number; requests: number; tokens: number };
 }
@@ -501,8 +505,12 @@ export interface Session {
   companionSince: string | null;
   createdAt: string | null;
   epoch: number | null;
+  /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
+  historical: boolean;
   /** `state` is null when the session carries no cache-warming recipe at all. */
   keepalive: { nextProbeAt: string | null; state: KeepaliveState | null };
+  /** The `created_at` of the key that owns the session. */
+  keyGeneration: number;
   keyId: string;
   /** Last ledgered client request; null for a session that has not been seen in the ledger. */
   lastRequestAt: string | null;
@@ -694,7 +702,7 @@ export interface Settings {
   listeners: { admin: string; metrics: string; proxy: string };
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
-  retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number };
+  retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
 }

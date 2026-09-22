@@ -150,6 +150,8 @@ export function decodeKey(v: unknown): ApiKey {
     notes: strOrNull(k.notes),
     poolId: str(k.pool_id),
     prefix: str(k.prefix),
+    retiredSecretLastUsedAt: isoOrNull(k.retired_secret_last_used_at),
+    sessionsOnRetiredSecret: num(k.sessions_on_retired_secret),
     // Routing refuses a key that is revoked, expired or switched off, in that order of finality; a row from
     // a route that reports no `enabled` is taken as on rather than off.
     status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : bool(k.enabled, true) ? 'active' : 'disabled',
@@ -281,7 +283,7 @@ const agentState = (v: unknown): Session['keepalive']['state'] => (['busy', 'idl
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agents: num(s.agents), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), keepalive: { nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyId: str(s.key_id), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id) };
+  return { accountId: strOrNull(s.account_id), agents: num(s.agents), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id) };
 }
 
 const RECIPE_REASONS = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
@@ -327,7 +329,7 @@ export function decodeSettings(v: unknown): Settings {
     lastSyncAt: isoOrNull(s.last_sync_at),
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     pricing: decodePricing(s.pricing),
-    retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days) },
+    retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
   };
 }

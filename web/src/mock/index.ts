@@ -443,7 +443,7 @@ export class MockApi implements Api {
   }
 
   releaseSession(keyId: string, sessionId: string) {
-    this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId));
+    this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId && !s.historical));
     return latency(undefined, 250);
   }
 
@@ -474,7 +474,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, `Unknown key ${id}`, 'not_found'));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 8) };
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 8), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }

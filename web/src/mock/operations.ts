@@ -72,6 +72,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     accountId: spec.accountId,
     model: spec.model,
     epoch: i < 3 ? 2 : 1,
+    historical: false,
+    keyGeneration: Date.parse(keyById.get(spec.keyId)!.createdAt),
     createdAt: ago(createdAgo),
     lastUsedAt: ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
@@ -99,7 +101,9 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   epoch: null,
+  historical: false,
   keepalive: { nextProbeAt: null, state: null },
+  keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
   lastUsedAt: null,
@@ -177,6 +181,24 @@ for (const pin of SESSIONS) {
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
 }
+
+// The earlier holder of the `desktop` key id, which the analytics story already draws as `desktop (deleted)`:
+// the ledger keeps its sessions until they expire, with no recipe of their own. It joins the list after the
+// probe times are filled in because it carries the live session's id, which would otherwise hand it that
+// session's next probe.
+const firstDesktop = SESSIONS[0];
+SESSIONS.push({
+  ...firstDesktop,
+  agents: 0,
+  companion: 'none',
+  companionSince: null,
+  createdAt: null,
+  historical: true,
+  keepalive: { nextProbeAt: null, state: null },
+  keyGeneration: firstDesktop.keyGeneration - 14 * DAY,
+  lastUsedAt: null,
+  pinned: false,
+});
 
 // Counted off the recipes so the tiles cannot drift from the table below them.
 const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
@@ -579,6 +601,6 @@ export const SETTINGS: Settings = {
   lastSyncAt: ago(40 * 1000),
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped table' },
-  retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30 },
+  retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
   sessions: { expireAfterSeconds: 86_400 },
 };

@@ -237,13 +237,14 @@ export function SettingsPage() {
           <>
             <KeyValue
               rows={[
-                { label: 'Ledger (days)', value: fmtInt(s.retention.ledgerDays), mono: true, title: 'Per-request rows and hourly rollups.' },
+                { label: 'Ledger (days)', value: s.retention.ledgerDays === 0 ? 'forever' : fmtInt(s.retention.ledgerDays), mono: true, title: 'Per-request rows, attempts, and events; 0 keeps them forever.' },
+                { label: 'Rollups (days)', value: s.retention.rollupDays === 0 ? 'forever' : fmtInt(s.retention.rollupDays), mono: true, title: 'Hourly rollups; 0 keeps them forever.' },
                 { label: 'Quota samples (days)', value: fmtInt(s.retention.quotaSamplesDays), mono: true, title: '5-minute utilization samples per upstream.' },
                 { label: 'Body capture, max hours', value: fmtInt(s.retention.bodyCaptureMaxHours), mono: true, title: "Upper bound for any pool's or key's capture retention." },
               ]}
             />
             <p className="muted" style={{ marginTop: 10 }}>
-              {bootstrapNote('stats.retention_days, quota.sample_retention_days, and stats.body_capture_max_hours')}
+              {bootstrapNote('stats.retention_days, stats.rollup_retention_days, quota.sample_retention_days, and stats.body_capture_max_hours')}
             </p>
           </>
         ) : (

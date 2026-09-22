@@ -24,6 +24,9 @@ const STATE_HINT: Record<RecipeState, string> = {
   probing: 'A probe is in flight right now.',
 };
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
+const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledger keeps its sessions until they expire';
+const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
+const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
 const KIND_LABEL: Record<Account['kind'], string> = { api_key: 'api key', oauth: 'subscription' };
 const KIND_HINT: Record<Account['kind'], string> = {
   api_key: 'API key upstream: billed per token, no quota windows',
@@ -47,6 +50,9 @@ interface Row {
   session: Session;
 }
 
+/** One session id can be held by two generations of a key id, so all three name a row. */
+const rowKey = (session: Session) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
+
 /** When the pool stopped probing: the max idle time counted from the session's last activity. */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   const seconds = pool?.keepalive.maxIdleSeconds ?? 0;
@@ -58,22 +64,38 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
   const bySession = new Map<string, KeepaliveRecipe[]>();
-  for (const r of recipes) bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
+  // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
+  // an earlier holder of the same key id reads none of them.
+  const liveGeneration = (keyId: string) => {
+    const k = keyById.get(keyId);
+    return k ? Date.parse(k.createdAt) : null;
+  };
+  for (const r of recipes) {
+    const g = liveGeneration(r.keyId);
+    if (g === null) continue;
+    const id = `${r.keyId}:${g}:${r.sessionId}`;
+    bySession.set(id, [...(bySession.get(id) ?? []), r]);
+  }
   return sessions.map((session) => {
-    const agents = bySession.get(session.sessionId) ?? [];
+    const agents = bySession.get(rowKey(session)) ?? [];
     const key = keyById.get(session.keyId) ?? null;
     const pool = key ? poolById.get(key.poolId) ?? null : null;
     // Every agent held for the idle limit means the retained prompts are already
     // gone, so the session reads as having no recipe even though the rows remain.
     const idleLimitOnly = agents.length > 0 && agents.every((a) => a.reason === 'idle_limit');
     const causes: string[] = [];
-    if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
-    if (key?.keepaliveOptOut) causes.push(`key ${key.name} opts out`);
-    if (idleLimitOnly) {
-      const ranOut = idleLimitRanOutAt(session, pool);
-      causes.push(ranOut ? `the idle limit ran out ${fmtRelative(ranOut, now)}` : 'the idle limit ran out');
+    // The live key's pool and opt-out say nothing about a session that no longer belongs to it, so an earlier
+    // holder carries that reason alone.
+    if (session.historical) causes.push(HISTORICAL_CAUSE);
+    else {
+      if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
+      if (key?.keepaliveOptOut) causes.push(`key ${key.name} opts out`);
+      if (idleLimitOnly) {
+        const ranOut = idleLimitRanOutAt(session, pool);
+        causes.push(ranOut ? `the idle limit ran out ${fmtRelative(ranOut, now)}` : 'the idle limit ran out');
+      }
+      if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
-    if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     return { account: accountById.get(session.accountId ?? '') ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
   });
 }
@@ -134,7 +156,7 @@ export function SessionsPage() {
     );
   };
   const warmingSomewhere = (pools.data ?? []).some((p) => p.keepalive.enabled);
-  const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(r.session.sessionId));
+  const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(rowKey(r.session)));
   const toggle = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -176,7 +198,7 @@ export function SessionsPage() {
         subtitle="One row per session; open a row for the cache-warming recipe each agent carries"
         actions={
           rows && rows.length > 0 ? (
-            <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => r.session.sessionId)))} aria-pressed={allOpen}>
+            <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
               {allOpen ? 'Collapse all' : 'Expand all'}
             </Button>
           ) : undefined
@@ -217,10 +239,10 @@ export function SessionsPage() {
               <tbody>
                 {rows.map((row) => (
                   <SessionRows
-                    key={row.session.sessionId}
+                    key={rowKey(row.session)}
                     row={row}
-                    open={expanded.has(row.session.sessionId)}
-                    onToggle={() => toggle(row.session.sessionId)}
+                    open={expanded.has(rowKey(row.session))}
+                    onToggle={() => toggle(rowKey(row.session))}
                     now={now}
                     canMutate={canMutate}
                     columns={columns}
@@ -304,7 +326,14 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        <td className="mono">{session.keyId}</td>
+        <td className="mono">
+          {session.keyId}
+          {session.historical && (
+            <span className="sub" title={HISTORICAL_HINT}>
+              deleted holder
+            </span>
+          )}
+        </td>
         <td className="mono" title={session.sessionId}>
           {shortId(session.sessionId, 13)}
           {(session.epoch ?? 1) > 1 && (
@@ -379,7 +408,7 @@ function SessionRows({
               {summary && <span className="sub">{summary}</span>}
             </>
           ) : (
-            <span className="muted" title={NO_RECIPE_HINT}>
+            <span className="muted" title={session.historical ? HISTORICAL_NO_RECIPE_HINT : NO_RECIPE_HINT}>
               no recipe
             </span>
           )}
@@ -398,7 +427,7 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(session.sessionId)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(session.sessionId)}`) },
-              ...(canMutate ? [{ label: 'Release', onClick: onRelease }] : []),
+              ...(canMutate && !session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />
         </td>

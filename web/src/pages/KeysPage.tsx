@@ -175,6 +175,12 @@ export function KeysPage() {
                             {k.status}
                           </Badge>
                           {k.lastUsedAt && <span className="sub">used {fmtRelative(k.lastUsedAt, now)}</span>}
+                          {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
+                          {k.sessionsOnRetiredSecret > 0 && (
+                            <span className="sub" title={k.retiredSecretLastUsedAt ? `Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}` : undefined}>
+                              {k.sessionsOnRetiredSecret} {k.sessionsOnRetiredSecret === 1 ? 'session' : 'sessions'} still on the previous secret
+                            </span>
+                          )}
                         </td>
                         {canMutate && (
                           <td className="right">
