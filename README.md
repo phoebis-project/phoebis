@@ -19,7 +19,7 @@ install -d -m 0700 ~/.config/phoebis
 [ -e ~/.config/phoebis/storage.key ] ||
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
 sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/dev_loopback_http: false/dev_loopback_http: true/' -e '/^  origin:/d' \
+  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > config.yaml
 export ROUTER_ADMIN_SECRET=$(openssl rand -base64 36) ROUTER_VIEWER_SECRET=$(openssl rand -base64 36)
 target/release/phoebis --config config.yaml

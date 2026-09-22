@@ -68,6 +68,70 @@ async fn login_sets_a_cookie_and_viewer_cannot_mutate() {
 }
 
 #[tokio::test]
+async fn the_cookie_carries_secure_exactly_when_plain_http_is_off() {
+    use common::{post, post_from};
+    let (loopback, _up) = common::admin_app().await;
+    let plain = post(
+        &loopback,
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+    )
+    .await;
+    assert_eq!(plain.status(), 204);
+    assert!(!cookie_attributes(&plain).contains("Secure"));
+
+    let (pinned, _up) = common::admin_app_with_origin("https://phoebis.example").await;
+    let secure = post_from(
+        &pinned,
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "https://phoebis.example",
+    )
+    .await;
+    assert_eq!(secure.status(), 204);
+    assert!(cookie_attributes(&secure).contains("Secure"));
+}
+
+#[tokio::test]
+async fn an_origin_set_under_plain_http_is_still_enforced() {
+    use common::{json, post_from};
+    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
+    let forged = post_from(
+        &app,
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "http://elsewhere",
+    )
+    .await;
+    assert_eq!(forged.status(), 403);
+    assert_eq!(json(forged).await["error"], "origin is not allowed");
+
+    let allowed = post_from(
+        &app,
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "http://phoebis.lan:8081",
+    )
+    .await;
+    assert_eq!(allowed.status(), 204);
+    assert!(!cookie_attributes(&allowed).contains("Secure"));
+}
+
+fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> String {
+    response
+        .headers()
+        .get("set-cookie")
+        .expect("a login response carries the session cookie")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
 async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app().await;

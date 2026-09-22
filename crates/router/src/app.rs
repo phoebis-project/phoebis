@@ -296,7 +296,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 .map(|secret| Secret::new(secret.expose())),
         },
         clock: clock.clone(),
-        dev_loopback_http: config.admin.dev_loopback_http,
+        plain_http: config.admin.plain_http,
         origin: config.admin.origin.clone(),
         vault: vault.clone(),
         started_at: (clock)(),

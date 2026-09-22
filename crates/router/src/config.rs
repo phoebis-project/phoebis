@@ -40,14 +40,15 @@ pub struct Config {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
-    /// Serves the session cookie without `Secure` over cleartext, which only a loopback listener makes
-    /// defensible.
-    #[serde(default)]
-    pub dev_loopback_http: bool,
     pub listen: SocketAddr,
     /// The URL origin the admin API compares every mutation's `Origin` header against.
     #[serde(default)]
     pub origin: Option<String>,
+    /// Serves the session cookie without `Secure` and makes `origin` optional, on any listen address. Off
+    /// loopback that puts the admin secret and the cookie on the wire in the clear, which is the operator's
+    /// trust decision for the network the listener is published on, as it is for the proxy listener.
+    #[serde(default)]
+    pub plain_http: bool,
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
@@ -162,8 +163,6 @@ pub enum ConfigError {
     BodyCaptureMaxOutOfRange { value: u32 },
     #[error("routing.catalog_sync_interval_seconds must be at least 300")]
     CatalogIntervalTooShort,
-    #[error("admin.dev_loopback_http serves the session cookie over cleartext, so admin.listen must be a loopback address, not {listen}")]
-    DevModeNotLoopback { listen: SocketAddr },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
@@ -174,7 +173,7 @@ pub enum ConfigError {
     LedgerPath { path: PathBuf },
     #[error("routing.max_attempts must be between 1 and 8, not {value}")]
     MaxAttemptsOutOfRange { value: u8 },
-    #[error("admin.origin is required unless admin.dev_loopback_http is set")]
+    #[error("admin.origin is required unless admin.plain_http is set")]
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
@@ -221,9 +220,9 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 impl fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdminConfig")
-            .field("dev_loopback_http", &self.dev_loopback_http)
             .field("listen", &self.listen)
             .field("origin", &self.origin)
+            .field("plain_http", &self.plain_http)
             .field("secret", &"***")
             .field("secret_env", &self.secret_env)
             .field("viewer_secret", &self.viewer_secret.as_ref().map(|_| "***"))
@@ -289,13 +288,7 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: config.compatibility.usage_entrypoint.clone(),
         });
     }
-    if config.admin.dev_loopback_http {
-        if !config.admin.listen.ip().is_loopback() {
-            return Err(ConfigError::DevModeNotLoopback {
-                listen: config.admin.listen,
-            });
-        }
-    } else if config.admin.origin.is_none() {
+    if !config.admin.plain_http && config.admin.origin.is_none() {
         // Without an origin to compare against, the admin API has nothing to tell a browser's cross-site
         // write from an operator's own.
         return Err(ConfigError::MissingOrigin);
@@ -506,7 +499,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
@@ -526,7 +519,7 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  dev_loopback_http: true\n\
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\n\
              compatibility:\n{compatibility}\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  \
              encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
             key.display(),

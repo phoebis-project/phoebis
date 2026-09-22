@@ -1,4 +1,5 @@
-//! The `phoebis` command line: run the router, or check a configuration without starting anything.
+//! The `phoebis` command line: run the router, check a configuration without starting anything, or probe a
+//! running proxy listener.
 
 use std::path::PathBuf;
 
@@ -11,9 +12,11 @@ use clap::{Parser, Subcommand};
     about = "Relays Claude Code traffic to Anthropic"
 )]
 struct Cli {
+    /// The bootstrap file; `PHOEBIS_CONFIG` names it when the flag is absent.
     #[arg(
         long,
         global = true,
+        env = "PHOEBIS_CONFIG",
         default_value = "./config.yaml",
         value_name = "PATH"
     )]
@@ -26,6 +29,8 @@ struct Cli {
 enum Command {
     /// Validate the configuration and list what it binds, without opening the store or a listener.
     CheckConfig,
+    /// Probe the proxy listener's `/api/hello`: exit 0 when it answers 200, 1 otherwise.
+    Health,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -68,6 +73,16 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Some(Command::Health) => match phoebis_router::health::probe(config.proxy.listen, phoebis_router::health::TIMEOUT) {
+            Ok(addr) => {
+                println!("proxy answers on {addr}");
+                Ok(())
+            }
+            Err(reason) => {
+                println!("{reason}");
+                std::process::exit(1)
+            }
+        },
         None => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?

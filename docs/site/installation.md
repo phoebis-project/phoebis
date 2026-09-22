@@ -27,7 +27,7 @@ install -d -m 0700 ~/.config/phoebis
 [ -e ~/.config/phoebis/storage.key ] ||
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
 sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/dev_loopback_http: false/dev_loopback_http: true/' -e '/^  origin:/d' \
+  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > config.yaml
 export ROUTER_ADMIN_SECRET=$(openssl rand -base64 36) ROUTER_VIEWER_SECRET=$(openssl rand -base64 36)
 target/release/phoebis --config config.yaml
@@ -63,8 +63,8 @@ drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening
 Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
 `/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
 `storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.pricing_path` at
-`/etc/phoebis/pricing.yaml`. Set `admin.origin`, or `admin.dev_loopback_http: true` on a loopback listener behind an
-SSH tunnel. Then validate it before enabling the service:
+`/etc/phoebis/pricing.yaml`. Set `admin.origin`, or `admin.plain_http: true` on a loopback listener behind an SSH
+tunnel. Then validate it before enabling the service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -81,10 +81,12 @@ unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains for up to 30 seconds. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
+| `phoebis health --config ./config.yaml` | Probes the proxy listener and exits 0 when it answers, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
-`--config` defaults to `./config.yaml`. `check-config` opens neither the store nor a socket, so it is safe to
-run against a production file while the router is up. It prints, in order:
+`--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
+that path instead, and the flag wins when both are given. `check-config` opens neither the store nor a socket,
+so it is safe to run against a production file while the router is up. It prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen}`
@@ -99,6 +101,12 @@ run against a production file while the router is up. It prints, in order:
 
 On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds.
 
+`health` loads the file the way `check-config` does, so it needs the same environment. It connects to
+`proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
+sends `HEAD /api/hello`, and prints `proxy answers on {addr}` on a `200` or one line saying why not; the whole
+probe, connect included, is bounded by three seconds. The container image runs it as its health check every 30
+seconds.
+
 ## Environment variables
 
 The bootstrap file names environment variables and never holds a secret. `phoebis` resolves them at startup and
@@ -107,8 +115,9 @@ else. The two admin secrets must differ: a viewer secret that equals the admin o
 read-only login into a full one, and `phoebis` refuses to start with `{first} and {second} resolve to the same
 secret`.
 
-| Variable in the example file | Named by | Holds |
+| Variable | Named by | Holds |
 | --- | --- | --- |
+| `PHOEBIS_CONFIG` | `phoebis` itself, when `--config` is absent | The path of the bootstrap file. |
 | `ROUTER_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
 | `ROUTER_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
 
@@ -123,11 +132,11 @@ the registry, not the bootstrap file.
 # Bootstrap settings only. Every secret is named here and read from the environment at startup, so this file
 # can be committed and read by anyone who may read the deployment.
 admin:
-  # With dev_loopback_http the session cookie is served without Secure over cleartext, which only a loopback
-  # listener makes defensible. Left false here, so origin is required and TLS is terminated in front.
-  dev_loopback_http: false
   listen: 127.0.0.1:8081
   origin: https://phoebis.example
+  # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
+  # false here, so origin is required and TLS is terminated in front.
+  plain_http: false
   secret_env: ROUTER_ADMIN_SECRET
   viewer_secret_env: ROUTER_VIEWER_SECRET
 compatibility:
@@ -194,18 +203,25 @@ Required.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `dev_loopback_http` | `false` | `true` only when `listen` is a loopback address |
 | `listen` | required | a socket address |
-| `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `dev_loopback_http` |
+| `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `plain_http` |
+| `plain_http` | `false` | `true` serves the console over plain HTTP on any address |
 | `secret_env` | required | the variable holding the admin secret |
 | `viewer_secret_env` | unset | the variable holding the read-only secret |
 
+With `plain_http: true` the session cookie is issued without `Secure` and `origin` may be left unset. On a
+loopback listener behind an SSH tunnel that costs nothing. On any other address the admin secret at login and
+the session cookie on every call cross the network in the clear, so publishing the admin port on a LAN is the
+operator's trust decision, as it already is for the proxy listener. An `origin` set under the flag, such as
+`http://phoebis.lan:8081`, is still compared against every mutation's `Origin` header and every WebSocket upgrade.
+For TLS, keep the flag off, set `origin` to the front's `https://` URL, and terminate TLS in front of the
+listener; a browser returns the `Secure` cookie to `http://localhost` as well, so the flag-off shape also works
+from the host's own browser when `origin` names `http://localhost:8081`.
+
 Refused with:
 
-- `dev_loopback_http`: `admin.dev_loopback_http serves the session cookie over cleartext, so admin.listen must
-  be a loopback address, not {listen}`
 - `listen`: a YAML error
-- `origin`: `admin.origin is required unless admin.dev_loopback_http is set`
+- `origin`: `admin.origin is required unless admin.plain_http is set`
 - `secret_env`: `environment variable {name} is unset or empty`
 - `viewer_secret_env`: the same message, plus `{first} and {second} resolve to the same secret` when it equals
   the admin secret

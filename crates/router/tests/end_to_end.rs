@@ -242,7 +242,7 @@ async fn the_binary_is_populated_through_the_admin_api_and_routes_without_a_rest
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  dev_loopback_http: true
+  plain_http: true
 compatibility:
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
@@ -484,7 +484,7 @@ async fn a_forced_429_on_one_seat_migrates_the_session_through_the_binary() {
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  dev_loopback_http: true
+  plain_http: true
 compatibility:
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
@@ -701,7 +701,7 @@ async fn a_session_crossing_into_overage_migrates_under_prefer_plan_through_the_
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  dev_loopback_http: true
+  plain_http: true
 compatibility:
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
@@ -995,35 +995,36 @@ usage:
 }
 
 #[test]
-fn shared_secrets_and_cleartext_administration_off_loopback_are_rejected() {
+fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
     std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret");
     std::env::set_var("TEST_SHARED_SECRET", "admin-secret");
-    let loopback_dev = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  dev_loopback_http: true";
-    let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  dev_loopback_http: true";
-    let public_dev =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true";
+    let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  plain_http: true";
     let public_plain =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: false";
-    assert!(load(&config_with(dir.path(), "ok", loopback_dev)).is_ok());
+        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+    let public_plain_with_origin =
+        "  listen: 0.0.0.0:8081\n  origin: http://phoebis.lan:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+    let public_secure =
+        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false";
+    assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
     assert!(matches!(
         load(&config_with(dir.path(), "dup", shared)),
         Err(ConfigError::DuplicateSecret { .. })
     ));
+    assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
+    let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();
+    assert_eq!(pinned.admin.origin.as_deref(), Some("http://phoebis.lan:8081"));
     assert!(matches!(
-        load(&config_with(dir.path(), "dev", public_dev)),
-        Err(ConfigError::DevModeNotLoopback { .. })
-    ));
-    assert!(matches!(
-        load(&config_with(dir.path(), "origin", public_plain)),
+        load(&config_with(dir.path(), "origin", public_secure)),
         Err(ConfigError::MissingOrigin)
     ));
 
     // A storage path that names no database file inside a directory never reaches the store.
-    let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_dev)).unwrap();
+    let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_plain)).unwrap();
     let rootless = dir.path().join("rootless.yaml");
     std::fs::write(
         &rootless,
@@ -1045,8 +1046,7 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-    let base =
-        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
         let path = dir.path().join(format!("{name}.yaml"));
@@ -1218,8 +1218,7 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-    let base =
-        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true";
+    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
         let path = dir.path().join(format!("{name}.yaml"));
@@ -1290,7 +1289,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     std::fs::write(dir.path().join("pricing.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), pricing = dir.path().join("pricing.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
         addr = up.addr(), ca = dir.path().join("ca.pem").display(),
@@ -1532,7 +1531,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -1758,7 +1757,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -1931,7 +1930,7 @@ async fn the_admin_listener_serves_the_ui_beside_the_api() {
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  dev_loopback_http: true
+  plain_http: true
 compatibility:
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
@@ -2044,7 +2043,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  dev_loopback_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -2314,7 +2313,7 @@ async fn the_four_client_runs_relayed_through_the_binary_grade_equal_to_the_fixt
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  dev_loopback_http: true
+  plain_http: true
 compatibility:
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64

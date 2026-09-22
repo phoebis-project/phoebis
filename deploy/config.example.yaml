@@ -1,11 +1,11 @@
 # Bootstrap settings only. Every secret is named here and read from the environment at startup, so this file
 # can be committed and read by anyone who may read the deployment.
 admin:
-  # With dev_loopback_http the session cookie is served without Secure over cleartext, which only a loopback
-  # listener makes defensible. Left false here, so origin is required and TLS is terminated in front.
-  dev_loopback_http: false
   listen: 127.0.0.1:8081
   origin: https://phoebis.example
+  # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
+  # false here, so origin is required and TLS is terminated in front.
+  plain_http: false
   secret_env: ROUTER_ADMIN_SECRET
   viewer_secret_env: ROUTER_VIEWER_SECRET
 compatibility:

@@ -237,7 +237,7 @@ async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
         Ok((cookie, _)) => {
             let mut attributes =
                 format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-            if !state.dev_loopback_http {
+            if !state.plain_http {
                 attributes.push_str("; Secure");
             }
             set_cookie(StatusCode::NO_CONTENT, &attributes)

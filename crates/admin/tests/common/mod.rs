@@ -168,7 +168,7 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
 /// The full harness with the alert webhook destination check on, as every running router has it. The other
 /// builders leave it off so a rule may name the fake receiver, which is on loopback.
 pub async fn admin_parts_full_refusing_local_webhooks() -> Full {
-    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, None, false).await)
+    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false).await)
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
@@ -267,9 +267,24 @@ pub async fn quarantined_parts(
     (parts.app, parts.up, parts.store, parts.manager)
 }
 
-/// An app that pins its admin origin, as every configuration outside the loopback development mode must.
+/// An app that pins its admin origin, as every configuration outside plain HTTP must.
 pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
     let parts = app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await;
+    (parts.app, parts.up)
+}
+
+/// The origin-pinned app with `plain_http` on as well: the one shape that still enforces an origin while the
+/// cookie travels without `Secure`, which no other builder produces since they tie the two together.
+pub async fn admin_app_plain_with_origin(origin: &str) -> (Router, FakeUpstream) {
+    let parts = app_with_webhook_policy(
+        None,
+        ACCOUNT_UUID,
+        Some(origin.to_string()),
+        true,
+        None,
+        true,
+    )
+    .await;
     (parts.app, parts.up)
 }
 
@@ -481,13 +496,16 @@ async fn app_with(
     origin: Option<String>,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    app_with_webhook_policy(identity, upstream_uuid, origin, store, true).await
+    // Every builder but the plain-with-origin one ties this to whether an origin is pinned.
+    let plain_http = origin.is_none();
+    app_with_webhook_policy(identity, upstream_uuid, origin, plain_http, store, true).await
 }
 
 async fn app_with_webhook_policy(
     identity: Option<Identity>,
     upstream_uuid: &str,
     origin: Option<String>,
+    plain_http: bool,
     store: Option<Arc<Store>>,
     allow_local_webhooks: bool,
 ) -> Parts {
@@ -714,8 +732,7 @@ async fn app_with_webhook_policy(
             viewer: Some(Secret::new("viewer-secret")),
         },
         clock,
-        // The two go together: an origin is pinned exactly where the admin API is not on loopback.
-        dev_loopback_http: origin.is_none(),
+        plain_http,
         origin,
         vault: vault.clone(),
         started_at: NOW,
