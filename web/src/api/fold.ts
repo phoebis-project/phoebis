@@ -1,4 +1,5 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { countOf, emptyCounts } from '@/lib/counts';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
@@ -14,7 +15,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   cacheMissReasons: emptyCacheMissReasons(),
   cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
   costUsd: 0,
-  errors: {},
+  errors: emptyCounts(),
   exhausted: 0,
   expiredBetweenTurns: 0,
   failed: 0,
@@ -108,7 +109,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.outcome === 'rejected') g.rejected += 1;
     else if (r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
-    if (r.errorCode) g.errors[r.errorCode] = (g.errors[r.errorCode] ?? 0) + 1;
+    if (r.errorCode) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
     g.attempts += r.attempts.length;
     // A failover is an account change between adjacent attempts, as the ledger's delta_of counts it; a retry
     // on the same account is none.
@@ -180,7 +181,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached'] as const) out[k] += g[k];
     out.cost = { cacheRead: plus(out.cost.cacheRead, g.cost.cacheRead), cacheWrite: plus(out.cost.cacheWrite, g.cost.cacheWrite), input: out.cost.input + g.cost.input, output: out.cost.output + g.cost.output };
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
-    for (const [code, n] of Object.entries(g.errors)) out.errors[code] = (out.errors[code] ?? 0) + n;
+    for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;

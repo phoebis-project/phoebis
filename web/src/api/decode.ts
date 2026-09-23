@@ -6,6 +6,7 @@ import type {
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
 
@@ -260,6 +261,12 @@ const missReasons = (v: unknown): Record<CacheMissReason, number> => {
   for (const [reason, n] of Object.entries(rec(v))) out[reason] = num(n);
   return out;
 };
+/** The route answers an error code as the upstream or the router named it, so the codes are data, not a closed set. */
+const counts = (v: unknown): Record<string, number> => {
+  const out = emptyCounts();
+  for (const [name, n] of Object.entries(rec(v))) out[name] = num(n);
+  return out;
+};
 const histogram = (v: unknown): number[] => { const h = list(v).map((x) => num(x)); return h.length === BUCKET_COUNT ? h : emptyHistogram(); };
 const quartet = (v: unknown) => { const q = rec(v); return { p50: numOrNull(q.p50), p90: numOrNull(q.p90), p95: numOrNull(q.p95), p99: numOrNull(q.p99) }; };
 
@@ -273,7 +280,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   return {
     attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cost: { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) }, costUsd: num(g.cost_usd),
-    errors: Object.fromEntries(Object.entries(rec(g.errors)).map(([k, n]) => [k, num(n)])), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
+    errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },

@@ -1,5 +1,6 @@
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestKind, WastedProbeReason } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { emptyCounts } from '@/lib/counts';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { keyById } from './pools';
@@ -126,7 +127,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const succeeded = sum(counted, (r) => r.requests.ok);
   const requests = succeeded + rateLimited + overloaded + upstreamError;
   const failovers = sum(counted, (r) => r.failovers);
-  const errors: Record<string, number> = {};
+  const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
   if (overloaded) errors.overloaded_error = overloaded;
   if (upstreamError) errors.api_error = upstreamError;

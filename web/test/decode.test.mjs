@@ -397,6 +397,22 @@ test('a cache-miss reason named like an object member keeps its name as its labe
   assert.equal(Object.getPrototypeOf(mocked.cacheMissReasons), null, 'the mock sums into a map with no inherited members too');
 });
 
+test('an error code named like an object member keeps its count under its code, and every sum of it is a number', async () => {
+  const codes = ['__proto__', 'constructor'];
+  const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+  // JSON.parse keeps `__proto__` as an own key, as the route's body arrives; an object literal would set the prototype.
+  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], errors: JSON.parse('{"__proto__": 2, "constructor": 3}') });
+  assert.deepEqual(codes.map((c) => own(group.errors, c)), [2, 3], 'the decoder keeps each count under its code');
+  const wire = fixture('requests').requests.find((r) => r.id === 'r-captured');
+  const [folded] = d.foldGroups(codes.map((errorCode) => ({ ...d.decodeRequest(wire), errorCode })), 'all');
+  assert.deepEqual(codes.map((c) => own(folded.errors, c)), [1, 1], 'a session fold counts each under its code');
+  const summed = d.sumGroups([group, folded]);
+  assert.deepEqual(codes.map((c) => own(summed.errors, c)), [3, 4], 'the sum is a number for each');
+  const to = new Date();
+  const [mocked] = await new d.MockApi().getAnalyticsBreakdown({ from: new Date(to.getTime() - 86_400_000).toISOString(), groupBy: 'key', to: to.toISOString() });
+  assert.equal(Object.getPrototypeOf(mocked.errors), null, 'the mock sums into a map with no inherited members too');
+});
+
 test('the session fold buckets a range the way the analytics routes do', () => {
   const hour = 3_600_000;
   const day = 24 * hour;
