@@ -473,7 +473,7 @@ impl SessionMemory {
                 return None;
             }
         };
-        if record.last_seen < now.saturating_sub(self.retention_ms) {
+        if expired(record.last_seen, now, self.retention_ms) {
             return None;
         }
         Entry::from_record(&record, now)
@@ -488,11 +488,10 @@ impl SessionMemory {
     /// save has landed.
     pub fn snapshot_dirty(&self, now: i64) -> Vec<(MemoryKey, MemoryRecord, u64)> {
         let mut inner = self.inner.lock().unwrap();
-        let cutoff = now.saturating_sub(self.retention_ms);
         let expired_pending: Vec<MemoryKey> = inner
             .pending
             .iter()
-            .filter(|(_, (record, _))| record.last_seen < cutoff)
+            .filter(|(_, (record, _))| expired(record.last_seen, now, self.retention_ms))
             .map(|(key, _)| key.clone())
             .collect();
         for key in expired_pending {
@@ -506,7 +505,7 @@ impl SessionMemory {
                 inner
                     .entries
                     .get(*key)
-                    .is_some_and(|entry| entry.last_seen < cutoff)
+                    .is_some_and(|entry| expired(entry.last_seen, now, self.retention_ms))
             })
             .cloned()
             .collect();
@@ -631,6 +630,12 @@ impl SessionMemory {
     }
 }
 
+/// Whether a row last seen at `last_seen` has fallen behind `now` by more than `retention_ms`: the one
+/// retention comparison every read-through, snapshot, and revive path judges a record by.
+fn expired(last_seen: i64, now: i64, retention_ms: i64) -> bool {
+    last_seen < now.saturating_sub(retention_ms)
+}
+
 /// The entry for `(key, account_id)`, inserting either level fresh when absent.
 fn account_entry<'a>(
     inner: &'a mut Inner,
@@ -672,7 +677,7 @@ fn revive_pending(
     };
     // Judged as the read-through judges a row: an expired record revived here would be written back under
     // a fresh timestamp, which is what the dirty tier's filter exists to prevent.
-    if record.last_seen < now.saturating_sub(retention_ms) {
+    if expired(record.last_seen, now, retention_ms) {
         inner.pending.remove(key);
         inner.expired_unsaved += 1;
         return false;
