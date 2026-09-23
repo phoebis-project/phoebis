@@ -46,8 +46,9 @@ credential on the right](assets/upstreams-dark.png#only-dark)
 ## With `curl`
 
 Whenever `admin.origin` is set, every admin mutation has to carry a matching `Origin` header, and the router
-refuses the request otherwise. The loopback development mode is the only configuration allowed to leave `origin`
-unset, and there no origin is checked. Log in first and keep the cookie:
+refuses the request otherwise. With `origin` unset, a request that carries no `Origin` is admitted, and one
+naming another host is refused the same way. Every request that carries a body also needs `Content-Type:
+application/json` (the curl lines below already carry it). Log in first and keep the cookie:
 
 ```sh
 curl -sS -c jar.txt -X POST https://phoebis.example/admin/session \
@@ -99,7 +100,7 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/con
 account's usage windows.
 
 A loopback deployment behind an SSH tunnel uses `http://127.0.0.1:8081` in place of `https://phoebis.example` in
-every example above, and checks no `Origin`.
+every example above, and sends no `Origin`.
 
 ## Account states
 

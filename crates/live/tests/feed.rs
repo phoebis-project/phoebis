@@ -543,3 +543,91 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_check_that_fails_before_the_snapshot_sends_only_the_close() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, 0).await;
+    h.alive.store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut client = connect(&h, true).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match client.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame,
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                    panic!("a text frame arrived before the close: {text}")
+                }
+                Some(Ok(_)) => continue,
+                other => panic!("the socket ended without a close frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the close arrives promptly");
+    let frame = closed.expect("a close frame with a reason");
+    assert_eq!(u16::from(frame.code), 1008);
+    assert_eq!(frame.reason, "session ended");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_ended_session_drops_its_queued_backlog_ahead_of_the_close() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, 24).await;
+    let mut client = connect(&h, true).await;
+    let _ = next_event(&mut client).await;
+    h.bus.publish(observed("backlog", NOW, 24));
+    h.alive.store(false, std::sync::atomic::Ordering::SeqCst);
+    for index in 0..100u32 {
+        h.bus.publish(chunk(
+            "backlog",
+            index,
+            bytes::Bytes::from_static(
+                b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\n",
+            ),
+        ));
+    }
+    let closed = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match client.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame,
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                    panic!("a backlog delta reached the client: {text}")
+                }
+                Some(Ok(_)) => continue,
+                other => panic!("the socket ended without a close frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the writer notices the ended session");
+    let frame = closed.expect("a close frame with a reason");
+    assert_eq!(u16::from(frame.code), 1008);
+    assert_eq!(frame.reason, "session ended");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_open_at_shutdown_is_closed_within_the_bound() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, 0).await;
+    let mut client = connect(&h, true).await;
+    let _ = next_event(&mut client).await;
+    tokio::time::timeout(Duration::from_secs(2), h.feed.shutdown())
+        .await
+        .expect("shutdown returns within the bound");
+    let ended = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match client.next().await {
+                None => return true,
+                Some(Err(_)) => return true,
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) => return true,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(ended, "the socket ended after the shutdown");
+    up.shutdown().await;
+}

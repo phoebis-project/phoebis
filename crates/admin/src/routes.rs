@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Request, State};
-use axum::http::header::{CACHE_CONTROL, COOKIE, ORIGIN, SET_COOKIE, UPGRADE};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
+    TRANSFER_ENCODING, UPGRADE,
+};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -178,11 +181,53 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     // not the configured admin origin is a forged request rather than a mistake. The login is checked too: a
     // forced login is a real attack, and it is the one mutation an unauthenticated caller can reach.
     if mutation || websocket {
-        if let Some(expected) = &state.origin {
-            let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
-            if presented != Some(expected.as_str()) {
-                return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
+        let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
+        match &state.origin {
+            Some(expected) => {
+                if presented != Some(expected.as_str()) {
+                    return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
+                }
             }
+            // No configured origin means plain HTTP on a host the operator trusts. A browser still sends
+            // `Origin` on every cross-site write and every handshake, and a value naming another authority
+            // than the request's own `Host` is another page on this host driving the console; a request
+            // with no `Origin` (curl, the health probe) is admitted.
+            None => {
+                if let Some(origin) = presented {
+                    let host = request
+                        .headers()
+                        .get(HOST)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if !same_authority(origin, host) {
+                        return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
+                    }
+                }
+            }
+        }
+    }
+    // A cross-site `fetch` may carry `text/plain` without a preflight; requiring the JSON media type on a
+    // body-carrying mutation makes every such write a preflighted one, which the browser refuses without
+    // CORS headers. The login is a mutation too.
+    let with_body = matches!(method, Method::PATCH | Method::POST | Method::PUT);
+    if with_body && carries_body(request.headers()) {
+        let json = request
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| {
+                v.split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            })
+            .unwrap_or(false);
+        if !json {
+            return Some(failure(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "content type must be application/json",
+            ));
         }
     }
 
@@ -211,6 +256,32 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
 fn viewer_may_mutate(method: &Method, path: &str) -> bool {
     (method == Method::DELETE && path == LOGIN_PATH)
         || (path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh"))
+}
+
+/// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case.
+pub(crate) fn same_authority(origin: &str, host: &str) -> bool {
+    let authority = origin
+        .get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("http://"))
+        .map(|_| &origin[7..])
+        .or_else(|| {
+            origin
+                .get(..8)
+                .filter(|p| p.eq_ignore_ascii_case("https://"))
+                .map(|_| &origin[8..])
+        });
+    authority.is_some_and(|a| !a.is_empty() && a.eq_ignore_ascii_case(host))
+}
+
+/// Whether the request carries a body a browser would attach a real `Content-Type` to: a `Content-Length` past
+/// zero, or any `Transfer-Encoding` (chunked bodies never announce a length).
+fn carries_body(headers: &HeaderMap) -> bool {
+    let has_length = headers
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|n| n > 0);
+    has_length || headers.contains_key(TRANSFER_ENCODING)
 }
 
 fn presented_cookie(headers: &HeaderMap) -> Option<String> {
@@ -1125,5 +1196,20 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
         // The value is built from a base64url token and fixed attributes, so this is unreachable short
         // of a bug; refusing the login beats answering with no cookie at all.
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "cookie could not be set"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_authority;
+
+    #[test]
+    fn same_authority_names_the_requests_own_host_case_insensitively() {
+        assert!(same_authority("http://localhost:8081", "localhost:8081"));
+        assert!(same_authority("HTTP://LocalHost:8081", "localhost:8081"));
+        assert!(!same_authority("http://localhost:5173", "localhost:8081"));
+        assert!(!same_authority("null", "localhost:8081"));
+        assert!(!same_authority("https://localhost:8081", "localhost"));
+        assert!(!same_authority("ftp://localhost:8081", "localhost:8081"));
     }
 }

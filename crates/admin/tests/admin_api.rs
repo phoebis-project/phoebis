@@ -176,6 +176,81 @@ fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> Strin
 }
 
 #[tokio::test]
+async fn without_a_configured_origin_a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
+    use common::{json, login, post, post_from, send_with_host};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let foreign = post_from(
+        &parts.app,
+        pause,
+        "",
+        Some(&cookie),
+        "http://localhost:5173",
+    )
+    .await;
+    assert_eq!(foreign.status(), 403);
+    assert_eq!(json(foreign).await["error"], "origin is not allowed");
+    // The same-host check compares against what the request says its Host is.
+    let (origin, host) = ("http://localhost:8081", "localhost:8081");
+    let same = send_with_host(&parts.app, "POST", pause, "", Some(&cookie), origin, host).await;
+    assert_ne!(
+        same.status(),
+        403,
+        "an origin that names the request's own host is admitted"
+    );
+    let none = post(&parts.app, pause, "", Some(&cookie)).await;
+    assert_ne!(none.status(), 403, "curl sends no Origin");
+}
+
+#[tokio::test]
+async fn a_body_carrying_mutation_needs_the_json_content_type() {
+    use common::{json, login, send_typed};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let key = r#"{"id":"k","label":"K","pool_id":"main"}"#;
+    let plain = send_typed(
+        &parts.app,
+        "POST",
+        "/admin/keys",
+        key,
+        Some(&cookie),
+        Some("text/plain"),
+    )
+    .await;
+    assert_eq!(plain.status(), 415);
+    assert_eq!(
+        json(plain).await["error"],
+        "content type must be application/json"
+    );
+    let untyped = send_typed(&parts.app, "POST", "/admin/keys", key, Some(&cookie), None).await;
+    assert_eq!(untyped.status(), 415);
+    let login_body = r#"{"secret":"admin-secret"}"#;
+    let typed = Some("application/json; charset=utf-8");
+    let charset = send_typed(
+        &parts.app,
+        "POST",
+        "/admin/session",
+        login_body,
+        None,
+        typed,
+    )
+    .await;
+    assert_eq!(
+        charset.status(),
+        204,
+        "a parameter after the media type is fine"
+    );
+    let bodiless = send_typed(&parts.app, "POST", pause, "", Some(&cookie), None).await;
+    assert_ne!(
+        bodiless.status(),
+        415,
+        "a mutation with no body carries no content type"
+    );
+}
+
+#[tokio::test]
 async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app().await;

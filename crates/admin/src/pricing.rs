@@ -21,6 +21,22 @@ const IMPORT_MAX_BYTES: usize = 16 << 20;
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(30);
 const PREVIEW_TTL_MS: i64 = 10 * 60 * 1_000;
 
+/// What an import records as its source: enough to say where a table came from, never the credential a
+/// query string or userinfo may carry, since the label is answered to the viewer role and kept per version.
+pub(crate) fn source_label(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return url.to_string();
+    };
+    let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+    format!(
+        "{}://{}{}{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or(""),
+        port,
+        parsed.path()
+    )
+}
+
 pub(crate) fn table_json(table: &PriceTable, versions: &[PricingVersion]) -> Value {
     json!({
         "version": table.version, "effective": table.effective, "source": table.source,
@@ -80,7 +96,7 @@ pub(crate) async fn import(State(state): State<Arc<AdminState>>, body: Bytes) ->
         token.clone(),
         PendingImport {
             models: diff.models.clone(),
-            source: input.url,
+            source: source_label(&input.url),
             expires_at: now + PREVIEW_TTL_MS,
         },
     );
@@ -151,5 +167,18 @@ pub(crate) async fn confirm(State(state): State<Arc<AdminState>>, body: Bytes) -
     match state.store.pricing_versions() {
         Ok(versions) => (StatusCode::CREATED, Json(table_json(&table, &versions))).into_response(),
         Err(e) => store_failure(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_label;
+
+    #[test]
+    fn source_label_keeps_the_authority_and_path_and_drops_credentials_and_the_query() {
+        assert_eq!(
+            source_label("https://user:pw@host:8443/p/prices.json?access_token=x#f"),
+            "https://host:8443/p/prices.json"
+        );
     }
 }

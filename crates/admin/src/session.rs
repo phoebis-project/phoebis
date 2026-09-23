@@ -135,6 +135,17 @@ impl Sessions {
         Some((session.id.clone(), session.role))
     }
 
+    /// Whether the session named by `session_id` still stands, without renewing it: a live socket asks this on
+    /// every message it sends, and a socket is not the activity the idle deadline measures.
+    pub fn is_live(&self, session_id: &str, now: i64) -> bool {
+        let state = self.state.lock().expect(LOCK_POISONED);
+        state.sessions.values().any(|s| {
+            s.id == session_id
+                && now.saturating_sub(s.last_seen) <= self.idle.as_millis() as i64
+                && now.saturating_sub(s.created_at) <= self.absolute.as_millis() as i64
+        })
+    }
+
     pub fn logout(&self, cookie: &str) {
         self.state
             .lock()

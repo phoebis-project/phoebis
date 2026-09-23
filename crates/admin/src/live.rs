@@ -27,9 +27,18 @@ pub(crate) async fn upgrade(
             "this route upgrades to a WebSocket",
         );
     };
+    // The permit a connection holds is released when hyper hands the socket to its upgrade task, so the
+    // sockets carry their own bound.
+    let Some(slot) = state.live.slot() else {
+        return failure(StatusCode::SERVICE_UNAVAILABLE, "live feed at capacity");
+    };
     let preview = caller.role == Role::Admin;
     let live = state.live.clone();
-    upgrade.on_upgrade(move |socket| async move { live.attach(socket, preview).await })
+    let sessions = state.sessions.clone();
+    let clock = state.clock.clone();
+    let session_id = caller.session_id;
+    let alive: phoebis_live::SessionCheck = Box::new(move || sessions.is_live(&session_id, (clock)()));
+    upgrade.on_upgrade(move |socket| async move { live.attach(socket, preview, alive, slot).await })
 }
 
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a

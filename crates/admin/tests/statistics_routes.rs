@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
 use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
-use common::{get, json, login, post};
+use common::{delete, get, json, login, post};
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use futures::StreamExt;
 
 const HOUR: i64 = 3_600_000;
 
@@ -78,7 +79,8 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
             "test",
         )
         .unwrap();
-    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let label = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let url = format!("{label}?access_token=PLACEHOLDER-TOKEN");
     let preview = json(
         post(
             &parts.app,
@@ -172,7 +174,7 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     assert!(table["version"].as_str().unwrap().starts_with("imported-"));
     assert_eq!(
         (table["effective"].as_str(), table["source"].as_str()),
-        (Some("1970-01-01"), Some(url.as_str())),
+        (Some("1970-01-01"), Some(label.as_str())),
         "the import time (the frozen clock) is the effective date"
     );
     assert_eq!(
@@ -181,6 +183,27 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
         "the shipped four plus the imported one"
     );
     assert_eq!(table["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        table["versions"][0]["source"].as_str(),
+        Some(label.as_str())
+    );
+    let pricing_view = json(get(&parts.app, "/admin/pricing", Some(&viewer)).await).await;
+    assert_eq!(pricing_view["source"].as_str(), Some(label.as_str()));
+    assert_eq!(
+        pricing_view["versions"][0]["source"].as_str(),
+        Some(label.as_str())
+    );
+    let settings_view = json(get(&parts.app, "/admin/settings", Some(&viewer)).await).await;
+    assert_eq!(
+        settings_view["pricing"]["source"].as_str(),
+        Some(label.as_str())
+    );
+    for body in [&table, &pricing_view, &settings_view] {
+        assert!(
+            !body.to_string().contains("PLACEHOLDER-TOKEN"),
+            "the import credential never reaches an answer"
+        );
+    }
     assert_eq!(
         post(
             &parts.app,
@@ -713,4 +736,89 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     );
     let _ = admin_ws.close(None).await;
     let _ = viewer_ws.close(None).await;
+}
+
+#[tokio::test]
+async fn the_live_socket_closes_when_its_session_ends() {
+    let parts = common::admin_parts_full().await;
+    let addr = common::serve(parts.app.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
+            "ws://{addr}/admin/live"
+        ))
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    assert_eq!(common::next_text(&mut ws).await["kind"], "snapshot");
+    assert_eq!(
+        delete(&parts.app, "/admin/session", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    let closed = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame,
+                Some(Ok(_)) => continue,
+                other => panic!("the socket ended without a close frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the writer's tick notices the ended session within five seconds");
+    let frame = closed.expect("a close frame with a reason");
+    assert_eq!(u16::from(frame.code), 1008);
+    assert_eq!(frame.reason, "session ended");
+}
+
+#[tokio::test]
+async fn the_sixty_fifth_live_socket_is_refused_until_one_closes() {
+    let parts = common::admin_parts_full().await;
+    let addr = common::serve(parts.app.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let connect = || {
+        let cookie = cookie.clone();
+        async move {
+            let mut request =
+                tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+                    format!("ws://{addr}/admin/live"),
+                )
+                .unwrap();
+            request
+                .headers_mut()
+                .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
+            tokio_tungstenite::connect_async(request).await
+        }
+    };
+    let mut sockets = Vec::new();
+    for _ in 0..phoebis_live::MAX_SOCKETS {
+        let (mut ws, _) = connect().await.unwrap();
+        assert_eq!(common::next_text(&mut ws).await["kind"], "snapshot");
+        sockets.push(ws);
+    }
+    match connect().await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 503);
+            let body = response.body().clone().unwrap_or_default();
+            assert!(String::from_utf8_lossy(&body).contains("live feed at capacity"));
+        }
+        other => panic!("the 65th upgrade is refused before the handshake: {other:?}"),
+    }
+    let _ = sockets.pop().unwrap().close(None).await;
+    // The slot frees once the server notices the close, which is not synchronous with sending it.
+    let (mut admitted, _) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(pair) = connect().await {
+                return pair;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("a slot frees once a socket closes");
+    assert_eq!(common::next_text(&mut admitted).await["kind"], "snapshot");
 }

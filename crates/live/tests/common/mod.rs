@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::future::IntoFuture;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use axum::routing::get;
 use axum::Router;
 use phoebis_bus::Bus;
 use phoebis_ledger::{PriceTable, Pricing};
-use phoebis_live::{LiveConfig, LiveEvent, LiveFeed};
+use phoebis_live::{LiveConfig, LiveEvent, LiveFeed, SessionCheck};
 use phoebis_oauth::Clock;
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -39,6 +39,9 @@ pub const NOW: i64 = 1_000_000;
 pub const A: &str = "sk-ant-oat01-AAAA";
 
 pub struct Harness {
+    /// The flag the ws route's session check reads; a test flips it to simulate the session ending. `true` by
+    /// default, so a test that never touches it gets an ordinary connection.
+    pub alive: Arc<AtomicBool>,
     pub app: Router,
     pub bus: Bus,
     pub clock: Arc<AtomicI64>,
@@ -216,25 +219,33 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         .with_bus(bus.clone()),
     );
     let ws_feed = feed.clone();
-    let ws_app =
-        Router::new()
-            .route(
-                "/live",
-                get(
-                    |State(feed): State<LiveFeed>,
-                     Query(q): Query<Preview>,
-                     ws: WebSocketUpgrade| async move {
+    let alive = Arc::new(AtomicBool::new(true));
+    let route_alive = alive.clone();
+    let ws_app = Router::new()
+        .route(
+            "/live",
+            get(
+                move |State(feed): State<LiveFeed>,
+                      Query(q): Query<Preview>,
+                      ws: WebSocketUpgrade| {
+                    let alive = route_alive.clone();
+                    async move {
+                        let slot = feed.slot().expect("room");
+                        let check: SessionCheck = Box::new(move || alive.load(Ordering::SeqCst));
                         ws.on_upgrade(move |socket| async move {
-                            feed.attach(socket, q.preview.unwrap_or(true)).await
+                            feed.attach(socket, q.preview.unwrap_or(true), check, slot)
+                                .await
                         })
-                    },
-                ),
-            )
-            .with_state(ws_feed);
+                    }
+                },
+            ),
+        )
+        .with_state(ws_feed);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let ws_addr = listener.local_addr().unwrap();
     tokio::spawn(axum::serve(listener, ws_app).into_future());
     Harness {
+        alive,
         app: router(relay),
         bus,
         clock: clock_cell,

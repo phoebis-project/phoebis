@@ -466,15 +466,83 @@ async fn send(
     cookie: Option<&str>,
     origin: Option<&str>,
 ) -> Response<Body> {
-    let mut request = Request::builder()
-        .method(method)
-        .uri(path)
-        .header("content-type", "application/json");
+    send_ex(
+        app,
+        method,
+        path,
+        body,
+        cookie,
+        origin,
+        None,
+        Some("application/json"),
+    )
+    .await
+}
+
+/// A request naming its own `Origin` and `Host`, for the same-authority check that compares one against the
+/// other rather than against a configured value.
+pub async fn send_with_host(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: &str,
+    host: &str,
+) -> Response<Body> {
+    send_ex(
+        app,
+        method,
+        path,
+        body,
+        cookie,
+        Some(origin),
+        Some(host),
+        Some("application/json"),
+    )
+    .await
+}
+
+/// A request whose `Content-Type` is the given value, or none at all.
+pub async fn send_typed(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    content_type: Option<&str>,
+) -> Response<Body> {
+    send_ex(app, method, path, body, cookie, None, None, content_type).await
+}
+
+// A real request's `Content-Length` reflects what a client actually sent; a non-empty body here carries the
+// same header so the gate's `carries_body` check sees what a browser's would.
+#[allow(clippy::too_many_arguments)]
+async fn send_ex(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+    host: Option<&str>,
+    content_type: Option<&str>,
+) -> Response<Body> {
+    let mut request = Request::builder().method(method).uri(path);
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    if !body.is_empty() {
+        request = request.header("content-length", body.len().to_string());
+    }
     if let Some(cookie) = cookie {
         request = request.header("cookie", format!("phoebis_admin={cookie}"));
     }
     if let Some(origin) = origin {
         request = request.header("origin", origin);
+    }
+    if let Some(host) = host {
+        request = request.header("host", host);
     }
     app.clone()
         .oneshot(request.body(Body::from(body.to_owned())).unwrap())
