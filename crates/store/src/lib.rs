@@ -21,12 +21,13 @@ use hmac::{Hmac, Mac};
 use rand::Rng;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub use accounts::{AccountKind, AccountRow, AccountState, Identity, INFERENCE_HOST};
 pub use alerts::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow};
 pub use credentials::{
-    AttemptOutcome, CredentialBundle, LastAttempt, NewBundle, PendingAttempt, ResolvedAttempt,
-    Secret,
+    AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
+    ResolvedAttempt, Secret,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use pricing::PricingVersion;
@@ -63,6 +64,8 @@ pub enum StoreError {
     },
     #[error("sealed credential could not be decrypted")]
     Crypto,
+    #[error("the slot was disconnected or replaced while the pairing ran")]
+    Disconnected,
     #[error("another account already holds this identity")]
     IdentityTaken,
     #[error("storage key file must hold exactly 32 raw bytes or 64 hex characters")]
@@ -88,6 +91,7 @@ pub enum StoreError {
 }
 
 /// The AES-256 key sealing every credential and API-key secret in the store.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct StorageKey([u8; 32]);
 
 impl StorageKey {

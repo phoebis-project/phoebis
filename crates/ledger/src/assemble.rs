@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use phoebis_bus::{
-    AccountSelected, Event, Outcome, RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
+    user_agent_of, AccountSelected, Event, Outcome, RequestComplete, RequestObserved,
+    ResponseChunk, ResponseHead,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -383,11 +384,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 .as_ref()
                 .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
         }),
-        user_agent: observed
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-            .map(|(_, value)| value.clone()),
+        user_agent: user_agent_of(&observed.headers),
         effort: observed.shape.effort.clone(),
         thinking_type: observed.shape.thinking_type.clone(),
         thinking_budget: observed.shape.thinking_budget,
@@ -1022,5 +1019,24 @@ mod tests {
             (Some(MAX_CAPTURED_BODY), (MAX_CAPTURED_BODY + 10) as u64),
             "the stored body is cut at the cap; the seen length is the full count"
         );
+    }
+
+    #[test]
+    fn a_user_agent_past_the_bound_is_cut_to_it() {
+        let mut a = Assembler::new(clock());
+        let Event::RequestObserved(mut request) = observed("r14", None) else {
+            unreachable!()
+        };
+        request.headers = vec![("user-agent".into(), "a".repeat(300))];
+        assert!(a.observe(Event::RequestObserved(request)).is_empty());
+        let Some(Record::Request { request, .. }) = a
+            .observe(complete("r14", 0, None, Outcome::Succeeded, 200, None))
+            .pop()
+        else {
+            panic!()
+        };
+        let user_agent = request.user_agent.expect("a user agent was observed");
+        assert_eq!(user_agent.len(), USER_AGENT_MAX_BYTES);
+        assert!(user_agent.chars().all(|c| c == 'a'));
     }
 }

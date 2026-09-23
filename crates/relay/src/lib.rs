@@ -46,7 +46,7 @@ pub use messages::{
 };
 pub use portability::is_portable;
 pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
-pub use serve::serve;
+pub use serve::{serve, Limits as ListenLimits};
 pub use sse::{SseEvent, SseParser};
 
 /// A request the relay refuses before it reaches the upstream.

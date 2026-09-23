@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use axum::http::Request;
 use axum::Router;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
 use crate::messages::{router, Relay};
@@ -21,6 +21,14 @@ use crate::messages::{router, Relay};
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+/// What bounds a connection before a request exists on it: the wait for its head, and how many the listener
+/// holds at once. Both are compiled in; the router names the values.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub header_read_timeout: Duration,
+    pub max_connections: usize,
+}
 
 /// Serves the relayed routes, and whatever `extra` adds beside them, until `stop` flips, then waits for the
 /// connections already accepted. `extra` is merged rather than nested so a route on it keeps its full path;
@@ -30,6 +38,7 @@ pub async fn serve(
     relay: Arc<Relay>,
     extra: Router,
     mut stop: watch::Receiver<bool>,
+    limits: Limits,
 ) -> std::io::Result<()> {
     let app = router(relay).merge(extra);
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
@@ -38,9 +47,21 @@ pub async fn serve(
     //
     // Left at hyper's default parser configuration on purpose: the recorder ends a head where this builder's
     // `httparse` pass ends it, and a leniency option set here would have to be given to the recorder too.
-    let builder = hyper::server::conn::http1::Builder::new();
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    // hyper's own 30 second default is silently off until a timer is set; the timeout is named here so the
+    // listener's bound does not depend on a default that a timer-less builder discards.
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(limits.header_read_timeout);
+    let slots = Arc::new(Semaphore::new(limits.max_connections));
     let graceful = GracefulShutdown::new();
     loop {
+        // A permit is taken before the accept so a full listener leaves connections in the kernel's backlog
+        // rather than holding a task and a buffer for each; the permit rides with the connection task.
+        let permit = tokio::select! {
+            permit = slots.clone().acquire_owned() => permit.expect("the listener's semaphore is never closed"),
+            _ = stopped(&mut stop) => break,
+        };
         let stream = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
@@ -64,6 +85,7 @@ pub async fn serve(
         // No upgrades: no route on the relayed surface switches protocols.
         let connection = graceful.watch(builder.serve_connection(io, service));
         tokio::spawn(async move {
+            let _slot = permit;
             if let Err(error) = connection.await {
                 tracing::debug!(%error, "a relayed connection ended early");
             }

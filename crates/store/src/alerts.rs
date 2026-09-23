@@ -2,6 +2,8 @@
 //! edits pools and keys. The webhook secret is sealed like an API-key secret and never read back whole by a
 //! route; `has_secret` is what the UI learns.
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension};
 use url::Url;
 
@@ -365,6 +367,36 @@ impl Store {
         let rows = stmt.query_map(params![event_id], row_to_delivery)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
+    }
+
+    /// Every listed event's deliveries in one query, grouped by event id, for a page that lists several events
+    /// at once: the caller would otherwise run `alert_deliveries` once per row. An id with no deliveries is
+    /// absent from the map rather than holding an empty vector.
+    pub fn alert_deliveries_for(
+        &self,
+        event_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<AlertDeliveryRow>>, StoreError> {
+        let mut grouped: HashMap<String, Vec<AlertDeliveryRow>> = HashMap::new();
+        if event_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let marks: Vec<String> = (1..=event_ids.len()).map(|i| format!("?{i}")).collect();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IN ({}) ORDER BY event_id, id",
+            marks.join(", ")
+        ))?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(event_ids.iter().copied()),
+            row_to_delivery,
+        )?;
+        for row in rows {
+            let row = row?;
+            if let Some(event_id) = row.event_id.clone() {
+                grouped.entry(event_id).or_default().push(row);
+            }
+        }
+        Ok(grouped)
     }
 
     /// The deliveries that opened no event, newest first: the lifecycle log the console lists, narrowed to one

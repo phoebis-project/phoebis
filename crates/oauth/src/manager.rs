@@ -543,9 +543,10 @@ impl Inner {
                 generation,
                 account_uuid: account_uuid(&account),
             }),
-            // The lifecycle moved while this refresh was in flight, so the slot was disconnected and the
-            // bundle belongs to an account that no longer exists in this shape.
-            Err(StoreError::Stale) => {
+            // The lifecycle or the incarnation moved while this refresh was in flight, so the slot was
+            // disconnected or replaced; a generation race between two commits reads the same to a refresh,
+            // since either way the bundle this refresh held no longer names the account's current state.
+            Err(StoreError::Stale | StoreError::Disconnected) => {
                 self.resolve(
                     attempt,
                     account.incarnation,
@@ -650,11 +651,11 @@ fn refresh_margin(bundle: &CredentialBundle) -> i64 {
 
 /// Renders a store fault into a shareable refresh failure. `AcquireError::Store` carries the real
 /// `StoreError`, which wraps io, SQLite, and serde errors that cannot be cloned and so cannot reach every
-/// caller joined to one refresh; a `Stale` is not a fault at all, it means the slot was disconnected while
-/// the refresh was in flight.
+/// caller joined to one refresh; `Stale` and `Disconnected` are not faults at all, they mean the slot moved
+/// while the refresh was in flight.
 fn store_failure(error: StoreError) -> RefreshFailure {
     match error {
-        StoreError::Stale => RefreshFailure::Disconnected,
+        StoreError::Stale | StoreError::Disconnected => RefreshFailure::Disconnected,
         other => RefreshFailure::Unavailable(format!("store: {other}")),
     }
 }

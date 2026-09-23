@@ -198,7 +198,7 @@ fn stale_generation_is_rejected() {
     let bumped = store.bump_lifecycle("a").unwrap();
     assert!(matches!(
         store.commit_credentials("a", 1, 1, None, None, &bundle("at-4")),
-        Err(StoreError::Stale)
+        Err(StoreError::Disconnected)
     ));
     assert!(
         store.credentials("a").unwrap().is_none(),
@@ -383,7 +383,7 @@ fn a_deleted_incarnations_refresh_cannot_commit_into_the_slot_that_took_its_id()
     // Every generation restarted at 1 with the new row, so only the incarnation can tell these apart.
     assert!(matches!(
         store.commit_credentials("a", 1, 1, Some(1), None, &bundle("from-the-dead")),
-        Err(StoreError::Stale)
+        Err(StoreError::Disconnected)
     ));
     assert_eq!(
         store

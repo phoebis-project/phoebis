@@ -293,7 +293,7 @@ pub(crate) async fn patch(
                 StoreError::Stale => {
                     return failure(
                         StatusCode::CONFLICT,
-                        "the account changed while the edit was being verified",
+                        "the account changed while the edit was being saved",
                     )
                 }
                 _ => return store_failure(error),

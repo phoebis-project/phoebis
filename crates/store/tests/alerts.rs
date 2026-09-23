@@ -452,3 +452,59 @@ fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_
         "the older delivery aged out on the resolved-events mark"
     );
 }
+
+#[test]
+fn deliveries_for_several_events_come_back_grouped() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.upsert_alert_rule(&rule("r1"), None, "test").unwrap();
+    let mut expected: Vec<(String, Vec<u64>)> = Vec::new();
+    for subject in ["e1", "e2", "e3"] {
+        let event = AlertEventRow {
+            id: subject.into(),
+            rule_id: "r1".into(),
+            kind: "reauth_required".into(),
+            subject: subject.into(),
+            state: "open".into(),
+            opened_at: 2_000,
+            resolved_at: None,
+            detail_json: None,
+        };
+        assert!(store.insert_alert_event(&event).unwrap());
+        let mut ids = Vec::new();
+        for attempt in [1, 2] {
+            ids.push(
+                store
+                    .insert_alert_delivery(&AlertDeliveryRow {
+                        id: 0,
+                        event_id: Some(subject.into()),
+                        rule_id: "r1".into(),
+                        kind: "reauth_required".into(),
+                        subject: subject.into(),
+                        event: None,
+                        detail_json: None,
+                        state: "opened".into(),
+                        attempt,
+                        at: 2_000 + attempt as i64,
+                        status: Some(200),
+                        error: None,
+                    })
+                    .unwrap(),
+            );
+        }
+        ids.sort_unstable();
+        expected.push((subject.into(), ids));
+    }
+    let grouped = store
+        .alert_deliveries_for(&["e1", "e2", "e3", "no-such-event"])
+        .unwrap();
+    assert_eq!(grouped.len(), 3, "the id with no deliveries carries no key");
+    for (event_id, ids) in &expected {
+        let mut got: Vec<u64> = grouped[event_id].iter().map(|d| d.id).collect();
+        got.sort_unstable();
+        assert_eq!(&got, ids);
+        assert!(grouped[event_id]
+            .iter()
+            .all(|d| d.event_id == Some(event_id.clone())));
+    }
+    assert!(!grouped.contains_key("no-such-event"));
+}

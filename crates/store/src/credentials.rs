@@ -1,7 +1,7 @@
 //! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
 
 use rusqlite::{params, OptionalExtension};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
@@ -27,7 +27,7 @@ impl std::fmt::Debug for Secret {
 
 // Wire shape sealed inside a credentials row's `sealed` blob; everything else about the bundle is a
 // plain column.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Zeroize, ZeroizeOnDrop)]
 struct SealedTokens {
     access_token: String,
     refresh_token: Option<String>,
@@ -45,6 +45,18 @@ pub struct CredentialBundle {
     /// The account lifecycle this bundle was committed under. A holder that captured the bundle before a
     /// slow request compares it to tell a rotation of the same slot from a disconnect and a re-pair.
     pub lifecycle_generation: u64,
+}
+
+/// A credential's bookkeeping fields without its sealed tokens, for a view that shows nothing the caller
+/// could use to authenticate.
+#[derive(Debug)]
+pub struct CredentialMetadata {
+    pub generation: u64,
+    pub lifecycle_generation: u64,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub refresh_expires_at: Option<i64>,
+    pub scopes: String,
 }
 
 #[derive(Debug)]
@@ -163,17 +175,17 @@ impl Store {
             return Ok(None);
         };
 
-        let plaintext = crypto::open(
+        let plaintext = Zeroizing::new(crypto::open(
             &self.key,
             &credential_aad(account_id, generation),
             &nonce,
             &sealed,
-        )?;
+        )?);
         let tokens: SealedTokens = serde_json::from_slice(&plaintext)?;
 
         Ok(Some(CredentialBundle {
             access_token: Secret::new(&tokens.access_token),
-            refresh_token: tokens.refresh_token.map(|t| Secret::new(&t)),
+            refresh_token: tokens.refresh_token.as_deref().map(Secret::new),
             issued_at,
             expires_at,
             refresh_expires_at,
@@ -183,11 +195,38 @@ impl Store {
         }))
     }
 
-    /// Commits a new credential generation in one transaction: the incarnation, the lifecycle generation,
-    /// and the credential generation are checked against the account's current state (`Stale` on mismatch), a
-    /// missing refresh token is folded forward from the previous plaintext, and `attempt_id`, if given, is
-    /// resolved as `Committed` here too, so a crash between the two writes cannot leave a committed bundle
-    /// behind a pending attempt.
+    /// The bookkeeping fields of an account's credential without opening its sealed blob, for a view that
+    /// shows nothing the caller could use to authenticate.
+    pub fn credential_metadata(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<CredentialMetadata>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation \
+             FROM credentials WHERE account_id = ?1",
+            params![account_id],
+            |row| {
+                Ok(CredentialMetadata {
+                    generation: row.get::<_, i64>(0)? as u64,
+                    issued_at: row.get(1)?,
+                    expires_at: row.get(2)?,
+                    refresh_expires_at: row.get(3)?,
+                    scopes: row.get(4)?,
+                    lifecycle_generation: row.get::<_, i64>(5)? as u64,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
+    /// Commits a new credential generation in one transaction: the incarnation and the lifecycle generation
+    /// are checked against the account's current state (`Disconnected` on mismatch, since either one moving
+    /// means the slot was disconnected or replaced), the credential generation likewise (`Stale` on mismatch,
+    /// a race with another write to the same bundle), a missing refresh token is folded forward from the
+    /// previous plaintext, and `attempt_id`, if given, is resolved as `Committed` here too, so a crash between
+    /// the two writes cannot leave a committed bundle behind a pending attempt.
     ///
     /// The incarnation is what the lifecycle generation cannot answer for: deleting a slot and recreating it
     /// under the same id restarts every generation at 1, so only the incarnation tells a refresh that began
@@ -216,7 +255,7 @@ impl Store {
         if account_incarnation as u64 != incarnation
             || account_lifecycle as u64 != lifecycle_generation
         {
-            return Err(StoreError::Stale);
+            return Err(StoreError::Disconnected);
         }
 
         let existing: Option<(i64, Vec<u8>, Vec<u8>)> = tx
@@ -240,14 +279,14 @@ impl Store {
             // decrypt the row being replaced to carry its refresh token forward.
             None => match &existing {
                 Some((generation, sealed, nonce)) => {
-                    let plaintext = crypto::open(
+                    let plaintext = Zeroizing::new(crypto::open(
                         &self.key,
                         &credential_aad(account_id, *generation),
                         nonce,
                         sealed,
-                    )?;
-                    let previous: SealedTokens = serde_json::from_slice(&plaintext)?;
-                    previous.refresh_token
+                    )?);
+                    let mut previous: SealedTokens = serde_json::from_slice(&plaintext)?;
+                    previous.refresh_token.take()
                 }
                 None => None,
             },
@@ -258,7 +297,7 @@ impl Store {
             access_token: bundle.access_token.expose().to_owned(),
             refresh_token,
         };
-        let plaintext = serde_json::to_vec(&payload)?;
+        let plaintext = Zeroizing::new(serde_json::to_vec(&payload)?);
         let (nonce, sealed) = crypto::seal(
             &self.key,
             &credential_aad(account_id, new_generation as i64),

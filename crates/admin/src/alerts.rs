@@ -98,8 +98,12 @@ fn lifecycle_delivery_json(d: &AlertDeliveryRow) -> Value {
 /// bodies route; the event route keeps that line by blanking the text for a viewer and saying it did. Past
 /// that body's own deadline the text is gone for everyone: the purge runs hourly, and no read may answer
 /// prompt content the operator's retention has already let go.
-fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value, StoreError> {
-    let deliveries = state.store.alert_deliveries(&e.id)?;
+fn event_json(
+    state: &AdminState,
+    role: Role,
+    e: &AlertEventRow,
+    deliveries: &[AlertDeliveryRow],
+) -> Value {
     let mut detail = e
         .detail_json
         .as_deref()
@@ -119,7 +123,7 @@ fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value
             }
         }
     }
-    Ok(json!({
+    json!({
         "deliveries": deliveries.iter().map(delivery_json).collect::<Vec<_>>(),
         "detail": detail,
         "id": e.id,
@@ -129,7 +133,7 @@ fn event_json(state: &AdminState, role: Role, e: &AlertEventRow) -> Result<Value
         "rule_id": e.rule_id,
         "state": e.state,
         "subject": e.subject,
-    }))
+    })
 }
 
 /// The reason a destination is refused, or `None` for one a rule may name. This covers the address a rule
@@ -409,13 +413,23 @@ pub(crate) async fn list_events(
         Ok(r) => r,
         Err(e) => return store_failure(e),
     };
-    let mut events = Vec::with_capacity(rows.len());
-    for row in &rows {
-        match event_json(&state, caller.role, row) {
-            Ok(v) => events.push(v),
-            Err(e) => return store_failure(e),
-        }
-    }
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    let deliveries = match state.store.alert_deliveries_for(&ids) {
+        Ok(d) => d,
+        Err(e) => return store_failure(e),
+    };
+    let empty: Vec<AlertDeliveryRow> = Vec::new();
+    let events: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            event_json(
+                &state,
+                caller.role,
+                row,
+                deliveries.get(&row.id).unwrap_or(&empty),
+            )
+        })
+        .collect();
     Json(json!({ "events": events })).into_response()
 }
 
@@ -477,9 +491,12 @@ pub(crate) async fn resolve_event(
         Err(e) => return store_failure(e),
     }
     match state.store.alert_event(&id) {
-        Ok(Some(row)) => event_json(&state, caller.role, &row)
-            .map(|v| Json(v).into_response())
-            .unwrap_or_else(store_failure),
+        Ok(Some(row)) => match state.store.alert_deliveries(&row.id) {
+            Ok(deliveries) => {
+                Json(event_json(&state, caller.role, &row, &deliveries)).into_response()
+            }
+            Err(e) => store_failure(e),
+        },
         Ok(None) => failure(StatusCode::NOT_FOUND, "alert event not found"),
         Err(e) => store_failure(e),
     }

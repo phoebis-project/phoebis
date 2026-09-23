@@ -5,8 +5,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Event, Phase, RequestComplete, RequestObserved, ResponseChunk,
-    ResponseHead, Usage,
+    user_agent_of, AccountSelected, AttemptOutcome, Event, Phase, RequestComplete, RequestObserved,
+    ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_ledger::Pricing;
 use phoebis_oauth::Clock;
@@ -199,11 +199,7 @@ impl LiveState {
             state: "in_flight".into(),
             status: None,
             transport: if o.stream { "sse" } else { "json" }.into(),
-            user_agent: o
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-                .map(|(_, value)| value.clone()),
+            user_agent: user_agent_of(&o.headers),
             usage: LiveUsage::default(),
         };
         let captures = o.body_capture_hours > 0;
@@ -726,7 +722,7 @@ fn delta_text(events: Vec<SseEvent>) -> Option<String> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use phoebis_bus::{Kind, Origin, Outcome, RequestShape, ResponseFacts};
+    use phoebis_bus::{Kind, Origin, Outcome, RequestShape, ResponseFacts, USER_AGENT_MAX_BYTES};
     use phoebis_ledger::PriceTable;
 
     fn observed(id: &str) -> Event {
@@ -949,5 +945,23 @@ mod tests {
             Some(200.0 / 5.0),
             "two streams of 100 tokens inside the five-second window"
         );
+    }
+
+    #[test]
+    fn a_user_agent_past_the_bound_is_cut_to_it() {
+        let mut state = state();
+        let Event::RequestObserved(mut request) = observed("a") else {
+            unreachable!()
+        };
+        request.headers = vec![("user-agent".into(), "a".repeat(300))];
+        state.apply(Event::RequestObserved(request));
+        let entry = state
+            .snapshot(false)
+            .in_flight
+            .into_iter()
+            .find(|r| r.id == "a")
+            .expect("the request is in flight");
+        let user_agent = entry.user_agent.expect("a user agent was observed");
+        assert_eq!(user_agent.len(), USER_AGENT_MAX_BYTES);
     }
 }

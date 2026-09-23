@@ -429,6 +429,23 @@ pub fn header_published(name: &str) -> bool {
     !HEADER_DENYLIST.contains(&lower.as_str())
 }
 
+/// Bound on the `User-Agent` a ledger row or a live entry keeps, the same as the identity fields carry: the
+/// header reaches both from a request refused before any key was read, so it is the one string an
+/// unauthenticated caller can put there.
+pub const USER_AGENT_MAX_BYTES: usize = 256;
+
+pub fn user_agent_of(headers: &[(String, String)]) -> Option<String> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+        .map(|(_, v)| v)?;
+    let mut end = value.len().min(USER_AGENT_MAX_BYTES);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(value[..end].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +506,16 @@ mod tests {
         );
         assert!(!facts.is_empty());
         assert!(ResponseFacts::default().is_empty());
+    }
+
+    #[test]
+    fn a_user_agent_past_the_bound_is_cut_at_a_char_boundary() {
+        // "é" is two bytes; landing the cut mid-character would produce invalid UTF-8.
+        let long = format!("{}é{}", "a".repeat(255), "b".repeat(44));
+        let headers = vec![("User-Agent".to_string(), long)];
+        let cut = user_agent_of(&headers).unwrap();
+        assert!(cut.len() <= USER_AGENT_MAX_BYTES);
+        assert_eq!(cut, "a".repeat(255));
+        assert!(user_agent_of(&[]).is_none());
     }
 }

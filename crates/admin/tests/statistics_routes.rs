@@ -822,3 +822,18 @@ async fn the_sixty_fifth_live_socket_is_refused_until_one_closes() {
     .expect("a slot frees once a socket closes");
     assert_eq!(common::next_text(&mut admitted).await["kind"], "snapshot");
 }
+
+#[tokio::test]
+async fn a_non_numeric_limit_on_the_request_log_is_refused() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let refused = get(&parts.app, "/admin/requests?limit=abc", Some(&cookie)).await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(json(refused).await["error"], "limit is not a number");
+    assert_eq!(
+        get(&parts.app, "/admin/requests?limit=5", Some(&cookie))
+            .await
+            .status(),
+        200
+    );
+}

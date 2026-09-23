@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use phoebis_relay::Relay;
 use phoebis_store::{AccountKind, ApiKeyRow};
@@ -225,6 +226,10 @@ async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender
         relay,
         axum::Router::new(),
         stop_rx,
+        phoebis_relay::ListenLimits {
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 64,
+        },
     ));
     (addr, stop)
 }

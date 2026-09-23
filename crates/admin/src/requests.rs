@@ -134,11 +134,14 @@ pub(crate) async fn list(
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice()) {
         return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
     }
-    let limit = q
-        .get("limit")
-        .and_then(|l| l.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1, MAX_LIMIT);
+    let limit = match q.get("limit") {
+        None => DEFAULT_LIMIT,
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => return failure(StatusCode::BAD_REQUEST, "limit is not a number"),
+        },
+    }
+    .clamp(1, MAX_LIMIT);
     let cursor = q.get("cursor").cloned();
     if cursor.as_deref().is_some_and(|c| {
         c.split_once(':')

@@ -693,9 +693,6 @@ async fn pairing_confirm(
             return refusal;
         }
     };
-    if row.lifecycle_generation != pending.lifecycle_generation {
-        return conflict(&state, "the account was disconnected while pairing");
-    }
     // An identity is permanent: `bump_lifecycle` clears credentials but never the binding, so a slot
     // stays with the upstream account it was first paired to. Moving a slot elsewhere means deleting it.
     if row
@@ -732,15 +729,28 @@ async fn pairing_confirm(
         Ok(current) => current.map(|bundle| bundle.generation),
         Err(error) => return unstored(&state, error),
     };
+    // The lifecycle carried from the exchange, not `row`'s own read: the store's fence is the one that
+    // counts, and it has to be checked against what the pairing started from, not against a read this same
+    // request just took, or a disconnect that landed before this call would pass its own fresh state back
+    // to itself.
     if let Err(error) = state.store.commit_credentials(
         &row.id,
         row.incarnation,
-        row.lifecycle_generation,
+        pending.lifecycle_generation,
         expected,
         None,
         &pending.bundle,
     ) {
-        return unstored(&state, error);
+        return match error {
+            StoreError::Disconnected => {
+                conflict(&state, "the account was disconnected while pairing")
+            }
+            StoreError::Stale => conflict(
+                &state,
+                "the credential changed while pairing; start the pairing again",
+            ),
+            other => unstored(&state, other),
+        };
     }
     if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
         return unstored(&state, error);
@@ -993,7 +1003,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .served_models(&row.id)
         .map(|models| models.len())
         .unwrap_or_default();
-    let bundle = state.store.credentials(&row.id).ok().flatten();
+    let credential = state.store.credential_metadata(&row.id).ok().flatten();
     let attempt = state.store.last_refresh_attempt(&row.id).ok().flatten();
     // The store refuses to open a second attempt while one is unresolved or uncertain, so the newest
     // attempt is the only one either state can be hiding in.
@@ -1029,10 +1039,10 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "account_uuid": identity.account_uuid,
             "organization_uuid": identity.organization_uuid,
         })),
-        "credential": bundle.map(|bundle| json!({
-            "access_expires_at": bundle.expires_at,
-            "refresh_expires_at": bundle.refresh_expires_at,
-            "generation": bundle.generation,
+        "credential": credential.map(|credential| json!({
+            "access_expires_at": credential.expires_at,
+            "refresh_expires_at": credential.refresh_expires_at,
+            "generation": credential.generation,
             "last_refresh_at": attempt.as_ref().and_then(|attempt| attempt.resolved_at),
             "last_error": attempt
                 .as_ref()

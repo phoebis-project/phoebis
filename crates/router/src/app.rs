@@ -2,7 +2,7 @@
 //! ends them.
 
 use std::collections::HashMap;
-use std::future::{Future, IntoFuture};
+use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,13 +15,14 @@ use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{CatalogService, Limits, Relay};
+use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay};
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
 use crate::config::{Config, UpstreamConfig};
+use crate::listen;
 
 /// Whether an alert rule may aim its webhook at an address only this host can reach. Off in the binary; the
 /// routes refuse such a destination when a rule is written and the deliverer drops it out of every answer a
@@ -42,6 +43,13 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
 
 const HTTPS_PORT: u16 = 443;
+
+/// A connection that has not sent a request head by then is holding a slot for nothing; the caps keep a
+/// flood of such connections from taking the listener's descriptors with it.
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const PROXY_MAX_CONNECTIONS: usize = 4_096;
+const ADMIN_MAX_CONNECTIONS: usize = 256;
+const METRICS_MAX_CONNECTIONS: usize = 64;
 
 /// Well past the largest measured request; a body beyond it is refused rather than buffered.
 const MAX_REQUEST_BYTES: usize = 32 << 20;
@@ -406,8 +414,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     };
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
-    // The relayed surface is served through the relay's own accept loop rather than `axum::serve`: only there
-    // can each connection be wrapped so the caller's original header spelling survives hyper's parse.
+    // The relayed surface is served through the relay's own accept loop so every connection can be wrapped
+    // to preserve the caller's original header spelling; the admin and metrics listeners share a plainer
+    // loop with the same header read timeout and connection cap.
     let mut proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
@@ -417,27 +426,38 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             clock.clone(),
         )),
         proxy_stop,
+        ListenLimits {
+            header_read_timeout: HEADER_READ_TIMEOUT,
+            max_connections: PROXY_MAX_CONNECTIONS,
+        },
     ));
-    let mut admin_server = tokio::spawn(
-        axum::serve(admin_listener, admin_app)
-            .with_graceful_shutdown(stopped(stop_rx.clone()))
-            .into_future(),
-    );
-    let mut metrics_server = tokio::spawn(
-        axum::serve(
-            metrics_listener,
-            metrics_router(
-                metrics.clone(),
-                router_task.clone(),
-                pricing.clone(),
-                bus.clone(),
-                clock.clone(),
-                Some(keepalive_gauge_source),
-            ),
-        )
-        .with_graceful_shutdown(stopped(stop_rx))
-        .into_future(),
-    );
+    let mut admin_server = tokio::spawn(listen::serve(
+        admin_listener,
+        admin_app,
+        stop_rx.clone(),
+        ListenLimits {
+            header_read_timeout: HEADER_READ_TIMEOUT,
+            max_connections: ADMIN_MAX_CONNECTIONS,
+        },
+        true,
+    ));
+    let mut metrics_server = tokio::spawn(listen::serve(
+        metrics_listener,
+        metrics_router(
+            metrics.clone(),
+            router_task.clone(),
+            pricing.clone(),
+            bus.clone(),
+            clock.clone(),
+            Some(keepalive_gauge_source),
+        ),
+        stop_rx,
+        ListenLimits {
+            header_read_timeout: HEADER_READ_TIMEOUT,
+            max_connections: METRICS_MAX_CONNECTIONS,
+        },
+        false,
+    ));
 
     shutdown.await;
     tracing::info!("shutting down");
@@ -554,10 +574,6 @@ fn split_authority(authority: &str) -> Option<(&str, u16)> {
         host.trim_start_matches('[').trim_end_matches(']'),
         port.parse().ok()?,
     ))
-}
-
-async fn stopped(mut stop: tokio::sync::watch::Receiver<bool>) {
-    let _ = stop.wait_for(|stop| *stop).await;
 }
 
 fn init_tracing() {

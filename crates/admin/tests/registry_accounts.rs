@@ -323,6 +323,26 @@ async fn a_write_whose_reload_fails_answers_503_and_publishes_on_the_next_reload
 }
 
 #[tokio::test]
+async fn a_disconnect_between_the_exchange_and_the_confirm_answers_a_conflict() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    store.bump_lifecycle("business").unwrap();
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        json(confirmed).await["error"],
+        "the account was disconnected while pairing"
+    );
+}
+
+#[tokio::test]
 async fn served_models_are_listed_written_and_synced_and_a_clash_is_refused() {
     let (app, up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;

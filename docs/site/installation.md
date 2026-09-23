@@ -490,10 +490,15 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
+| Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Drain window | 30 seconds for requests still in flight on shutdown. |
+| Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger channel | 4,096 records; a full channel drops and records a `ledger_gap` event. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, a 32 MiB request cap. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
+| User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |
+
+A connection past a listener's cap waits in the kernel's backlog until one closes.
