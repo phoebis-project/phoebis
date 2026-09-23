@@ -80,10 +80,12 @@ async fn a_failover_writes_cooldown_set_and_pin_migrated_and_the_account_rollup_
     .await;
     let a = rollups.iter().find(|r| r.account_id == "a").unwrap();
     let b = rollups.iter().find(|r| r.account_id == "b").unwrap();
-    // The classifier rounds the deadline up to the next second: until is 4_601_000 ms, at is NOW.
+    // The classifier rounds the deadline up to the next second: until is 4_601_000 ms, at is NOW. Of the
+    // 3,601 s elapsed, only the 2,600 that fall before this hour's end book here; the rest books to the next
+    // hour, outside this query's window.
     assert_eq!(
         (a.pins_created, a.pins_migrated_out, a.cooldown_seconds),
-        (1, 1, 3_601)
+        (1, 1, 2_600)
     );
     assert_eq!((b.pins_migrated_in, b.pins_created), (1, 0));
     up.shutdown().await;
@@ -170,6 +172,55 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
             .find(|e| e.kind == "catalog_synced" && e.account_id.as_deref() == Some("a"))
     })
     .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_uncertain_refresh_mirrors_as_refresh_uncertain() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        (0, None),
+        LedgerConfig {
+            event_poll: Duration::from_millis(50),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    let uncertain = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            uncertain,
+            1,
+            phoebis_store::AttemptOutcome::Uncertain("token request timed out".into()),
+        )
+        .unwrap();
+    let failed = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            failed,
+            1,
+            phoebis_store::AttemptOutcome::Failed(
+                "refresh rejected with status 401 (invalid_grant)".into(),
+            ),
+        )
+        .unwrap();
+    let kinds = wait_for_async(Duration::from_secs(5), || async {
+        let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
+        rows.iter()
+            .any(|e| e.kind == "refresh_failed")
+            .then(|| rows.iter().map(|e| e.kind.clone()).collect::<Vec<_>>())
+    })
+    .await;
+    assert!(
+        kinds.contains(&"refresh_uncertain".to_string()),
+        "an uncertain outcome mirrors as its own kind: {kinds:?}"
+    );
+    assert!(
+        kinds.contains(&"refresh_failed".to_string()),
+        "a plain failure still mirrors as refresh_failed: {kinds:?}"
+    );
     up.shutdown().await;
 }
 

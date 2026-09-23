@@ -215,7 +215,11 @@ pub fn spawn_event_mirror(
                     if let Ok(attempts) = store.refresh_attempts_resolved_after(last_resolved.0, last_resolved.1, MIRROR_BATCH) {
                         for attempt in attempts {
                             last_resolved = (attempt.resolved_at, attempt.id);
-                            let kind = if attempt.outcome == "committed" { "refresh_succeeded" } else { "refresh_failed" };
+                            let kind = match attempt.outcome.as_str() {
+                                "committed" => "refresh_succeeded",
+                                "uncertain" => "refresh_uncertain",
+                                _ => "refresh_failed",
+                            };
                             ledger.record(Record::Event(EventRecord {
                                 at: attempt.resolved_at,
                                 kind: kind.into(),

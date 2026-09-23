@@ -388,8 +388,8 @@ pub struct AccountRollupRow {
     /// Seconds of overage that ended in this hour: the whole span lands where it ended, so a range total is
     /// right and one hour's value can exceed 3,600.
     pub overage_seconds: u64,
-    /// Seconds of cooldown that began in this hour: the whole span lands where it started, so a range total
-    /// is right and one hour's value can exceed 3,600.
+    /// Seconds of cooldown booked to the hour each part elapses in; more than one scope cooling down at once
+    /// can still push one hour's value past 3,600.
     pub cooldown_seconds: u64,
     pub pins_created: u64,
     pub pins_migrated_in: u64,
@@ -610,46 +610,50 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
         ("cooldown_set", Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
             let accounted = read_span(tx, account, scope)?;
-            let seconds = match detail["until"].as_i64() {
-                // An extension announces a new end for a cooldown already counted, so the time this event
-                // adds is only what it moves the end past, and past now: the elapsed part is already spent.
-                Some(until) => {
-                    let from = accounted
-                        .map(|(_, until)| until)
-                        .unwrap_or(event.at)
-                        .max(event.at);
-                    let seconds = ((until - from).max(0) / 1_000) as u64;
-                    write_span(
-                        tx,
-                        account,
-                        scope,
-                        // The hour the tail was counted in is the one a clear has to take it back from.
-                        match seconds > 0 {
-                            true => hour,
-                            false => accounted.map(|(hour, _)| hour).unwrap_or(hour),
-                        },
-                        accounted.map(|(_, held)| held.max(until)).unwrap_or(until),
-                    )?;
-                    seconds
-                }
-                None => 0,
+            let Some(until) = detail["until"].as_i64() else {
+                return Ok(());
             };
-            fold_account(
-                tx,
-                &AccountRollupRow {
-                    cooldown_seconds: seconds,
-                    ..row(account)
-                },
-            )
+            // Only what this announcement adds past the end already counted, and past now, is new time in
+            // cooldown; it is booked hour by hour so a clear can take back exactly the part each hour never
+            // saw.
+            let from = accounted.unwrap_or(event.at).max(event.at);
+            let mut cursor = from;
+            while cursor < until {
+                let bucket = hour_of(cursor);
+                let end = until.min((bucket + 3_600) * 1_000);
+                let seconds = ((end - cursor) / 1_000) as u64;
+                if seconds > 0 {
+                    fold_account(
+                        tx,
+                        &AccountRollupRow {
+                            hour: bucket,
+                            cooldown_seconds: seconds,
+                            ..row(account)
+                        },
+                    )?;
+                    add_segment(tx, account, scope, bucket, seconds)?;
+                }
+                cursor = end;
+            }
+            write_span(tx, account, scope, accounted.unwrap_or(until).max(until))
         }
         ("cooldown_cleared", Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
-            let Some((counted_in, until)) = take_span(tx, account, scope)? else {
+            let Some(until) = take_span(tx, account, scope)? else {
                 return Ok(());
             };
-            // The part of the span that never elapsed was never time in cooldown.
-            let seconds = ((until - event.at).max(0) / 1_000) as u64;
-            unfold_cooldown(tx, counted_in, account, seconds)
+            for (bucket, counted) in take_segments(tx, account, scope)? {
+                // The part of this hour's segment that lies after the clear never elapsed.
+                let start_ms = bucket * 1_000;
+                let end_ms = (bucket + 3_600) * 1_000;
+                let unelapsed =
+                    ((until.min(end_ms) - event.at.max(start_ms)).max(0) / 1_000) as u64;
+                let seconds = unelapsed.min(counted);
+                if seconds > 0 {
+                    unfold_cooldown(tx, bucket, account, seconds)?;
+                }
+            }
+            Ok(())
         }
         ("overage_ended", Some(account)) => {
             let seconds = detail["since"]
@@ -713,32 +717,33 @@ fn unfold_cooldown(
     write_account(tx, &row)
 }
 
-/// The hour and the end one scope's cooldown is currently accounted to, for the fold to measure the next
-/// announcement against.
+/// The end one scope's cooldown is currently accounted to, for the fold to measure the next announcement
+/// against.
 fn read_span(
     tx: &Transaction<'_>,
     account_id: &str,
     scope: &str,
-) -> Result<Option<(i64, i64)>, LedgerError> {
+) -> Result<Option<i64>, LedgerError> {
     Ok(tx
         .query_row(
-            "SELECT hour, until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
+            "SELECT until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2",
             params![account_id, scope],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .optional()?)
 }
 
+/// The `hour` column stays for a ledger opened at an older schema; nothing reads it now that `cooldown_segments`
+/// books each hour's contribution on its own.
 fn write_span(
     tx: &Transaction<'_>,
     account_id: &str,
     scope: &str,
-    hour: i64,
     until: i64,
 ) -> Result<(), LedgerError> {
     tx.execute(
-        "INSERT OR REPLACE INTO cooldown_spans (account_id, scope, hour, until) VALUES (?1, ?2, ?3, ?4)",
-        params![account_id, scope, hour, until],
+        "INSERT OR REPLACE INTO cooldown_spans (account_id, scope, hour, until) VALUES (?1, ?2, 0, ?3)",
+        params![account_id, scope, until],
     )?;
     Ok(())
 }
@@ -747,7 +752,7 @@ fn take_span(
     tx: &Transaction<'_>,
     account_id: &str,
     scope: &str,
-) -> Result<Option<(i64, i64)>, LedgerError> {
+) -> Result<Option<i64>, LedgerError> {
     let span = read_span(tx, account_id, scope)?;
     if span.is_some() {
         tx.execute(
@@ -756,6 +761,45 @@ fn take_span(
         )?;
     }
     Ok(span)
+}
+
+/// Adds to an hour's booked cooldown seconds for a scope, so a later announcement in the same hour accumulates
+/// rather than overwrites.
+fn add_segment(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    scope: &str,
+    hour: i64,
+    seconds: u64,
+) -> Result<(), LedgerError> {
+    tx.execute(
+        "INSERT INTO cooldown_segments (account_id, scope, hour, seconds) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(account_id, scope, hour) DO UPDATE SET seconds = seconds + excluded.seconds",
+        params![account_id, scope, hour, seconds as i64],
+    )?;
+    Ok(())
+}
+
+/// Every hour a scope's open cooldown booked seconds into, removed so a clear reads each exactly once.
+fn take_segments(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    scope: &str,
+) -> Result<Vec<(i64, u64)>, LedgerError> {
+    let segments = {
+        let mut stmt = tx.prepare(
+            "SELECT hour, seconds FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2",
+        )?;
+        let rows = stmt.query_map(params![account_id, scope], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    tx.execute(
+        "DELETE FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2",
+        params![account_id, scope],
+    )?;
+    Ok(segments)
 }
 
 const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, effort, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
@@ -1003,7 +1047,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 13);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 14);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -1041,7 +1085,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 13);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 14);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1265,6 +1309,96 @@ mod tests {
             ]),
             20,
             "the forty seconds that never elapsed leave the hour that counted them"
+        );
+    }
+
+    const HOUR: i64 = 3_600_000;
+
+    fn folded_by_hour(events: &[EventRecord]) -> BTreeMap<i64, u64> {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        db.write(|c| {
+            let tx = c.transaction()?;
+            for event in events {
+                fold_event(&tx, event)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.hour, r.cooldown_seconds))
+            .collect()
+    }
+
+    #[test]
+    fn an_extension_across_an_hour_boundary_cleared_early_counts_only_the_elapsed_seconds_per_hour()
+    {
+        // Set at 0 until 2h, extended at 1h until 3h, cleared at 1h30: 5,400 s elapsed, 3,600 in hour 0 and
+        // 1,800 in hour 1, nothing in hour 2.
+        let by_hour = folded_by_hour(&[
+            cooldown_set_event(0, 2 * HOUR),
+            cooldown_set_event(HOUR, 3 * HOUR),
+            cooldown_cleared_event(HOUR + HOUR / 2),
+        ]);
+        assert_eq!(by_hour.get(&0).copied().unwrap_or(0), 3_600);
+        assert_eq!(by_hour.get(&3_600).copied().unwrap_or(0), 1_800);
+        assert_eq!(by_hour.get(&7_200).copied().unwrap_or(0), 0);
+    }
+
+    /// A stored ledger at version 13 has no segments table. The migration adds it, and the boundary case that
+    /// needs it runs on the file that was already there.
+    #[test]
+    fn a_ledger_from_the_previous_schema_gains_the_segments_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            let tx = conn.transaction().unwrap();
+            for (_, sql) in crate::schema::MIGRATIONS
+                .iter()
+                .filter(|(v, _)| *v < crate::schema::MIGRATIONS.last().unwrap().0)
+            {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
+                params![(crate::schema::MIGRATIONS.last().unwrap().0 - 1).to_string()],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_blocking(read_version).unwrap(),
+            crate::schema::MIGRATIONS.last().unwrap().0
+        );
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_event(&tx, &cooldown_set_event(0, 2 * HOUR))?;
+            fold_event(&tx, &cooldown_set_event(HOUR, 3 * HOUR))?;
+            fold_event(&tx, &cooldown_cleared_event(HOUR + HOUR / 2))?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap();
+        let by_hour: BTreeMap<i64, u64> = rows
+            .into_iter()
+            .map(|r| (r.hour, r.cooldown_seconds))
+            .collect();
+        assert_eq!(
+            (
+                by_hour.get(&0).copied().unwrap_or(0),
+                by_hour.get(&3_600).copied().unwrap_or(0),
+                by_hour.get(&7_200).copied().unwrap_or(0)
+            ),
+            (3_600, 1_800, 0),
+            "the interval folds per hour on a ledger that predates the table it is kept in"
         );
     }
 
@@ -1632,7 +1766,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 13);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 14);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = old;

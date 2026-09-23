@@ -311,8 +311,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(13), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that stores a request's own truncation flags"
+        (Some(14), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that books cooldown seconds per hour"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(

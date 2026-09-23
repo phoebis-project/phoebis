@@ -7,7 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::SubscriberStats;
-use phoebis_ledger::{AttemptRecord, LedgerConfig, Metrics, PriceTable, RequestRecord, RoutingGauges};
+use phoebis_ledger::{
+    AttemptRecord, LedgerConfig, Metrics, PriceTable, QuotaSampleRecord, RequestRecord,
+    RoutingGauges,
+};
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use tower::ServiceExt;
@@ -192,6 +195,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
         ],
         overage: vec![("a".into(), true), ("b".into(), false)],
         pins_by_pool: vec![("main".into(), 7)],
+        live_accounts: BTreeSet::from(["a".to_string()]),
         ..RoutingGauges::default()
     };
     let text = metrics.render(&gauges, &[], 0);
@@ -354,6 +358,38 @@ fn every_registered_family_renders_and_nothing_else_does() {
     let mut sorted = order.clone();
     sorted.sort();
     assert_eq!(order, sorted, "families render in name order");
+}
+
+#[test]
+fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
+    let metrics = Metrics::new();
+    metrics.observe_samples(&[
+        QuotaSampleRecord {
+            account_id: "a".into(),
+            window: "5h".into(),
+            utilization: Some(0.4),
+            ..Default::default()
+        },
+        QuotaSampleRecord {
+            account_id: "b".into(),
+            window: "5h".into(),
+            utilization: Some(0.9),
+            ..Default::default()
+        },
+    ]);
+    let gauges = RoutingGauges {
+        live_accounts: BTreeSet::from(["a".to_string()]),
+        ..RoutingGauges::default()
+    };
+    let text = metrics.render(&gauges, &[], 0);
+    assert!(
+        text.contains(r#"phoebis_account_ratelimit_utilization{account="a",window="5h"} 0.4"#),
+        "{text}"
+    );
+    assert!(
+        !text.contains("account=\"b\""),
+        "a deleted account's last reading does not scrape forever: {text}"
+    );
 }
 
 #[test]

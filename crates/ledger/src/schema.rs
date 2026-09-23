@@ -1,6 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `kept_warm_marks`, and `events`, plus `meta`
-//! for the schema marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, and
+//! `events`, plus `meta` for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -159,6 +159,13 @@ CREATE TABLE IF NOT EXISTS cooldown_spans (
   until INTEGER NOT NULL,
   PRIMARY KEY (account_id, scope)
 );
+CREATE TABLE IF NOT EXISTS cooldown_segments (
+  account_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  seconds INTEGER NOT NULL,
+  PRIMARY KEY (account_id, scope, hour)
+);
 CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   at INTEGER NOT NULL,
@@ -186,9 +193,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// gains the agent, which SQLite cannot do to a primary key in place: the table is rebuilt, and every row
 /// folded before the column existed takes the reserved id.
 ///
-/// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end it has
-/// already counted for a scope, and the hour it counted it in, to add only what an extension moves the end
-/// by and to take back what a clear cut short.
+/// Version 4: cooldown time is an interval, not a sum of announcements. The fold needs the end already
+/// counted for a scope, to add only what an extension moves it by.
 ///
 /// Version 5: the due probes a scheduling gate withheld are a count of their own, and a kept-warm credit
 /// leaves a mark for a request row that has not landed yet, since the engine credits at completion while the
@@ -222,6 +228,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 13: a request's truncation is stored on its own row rather than recomputed from the bodies table,
 /// since a capture cut by a chunk lost after the last one that arrived never raises `response_len_seen` past
 /// what the row already stored, leaving the recompute no way to see the cut.
+///
+/// Version 14: a cooldown's seconds are booked to the hour each part elapses in, not to the hour an
+/// announcement was recorded, so an extension crossing an hour boundary and a clear that lands mid-hour each
+/// affect only the hours they actually touch. `cooldown_segments` keeps each hour's own booked contribution
+/// for a clear to read back; `cooldown_spans` keeps the account's currently accounted end alone.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -457,5 +468,9 @@ ALTER TABLE requests ADD COLUMN rotation_at INTEGER;",
         13,
         "ALTER TABLE requests ADD COLUMN request_truncated INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE requests ADD COLUMN response_truncated INTEGER NOT NULL DEFAULT 0;",
+    ),
+    (
+        14,
+        "CREATE TABLE IF NOT EXISTS cooldown_segments (account_id TEXT NOT NULL, scope TEXT NOT NULL, hour INTEGER NOT NULL, seconds INTEGER NOT NULL, PRIMARY KEY (account_id, scope, hour));",
     ),
 ];

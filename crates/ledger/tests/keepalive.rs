@@ -445,7 +445,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 13);
+    assert_eq!(db.schema_version().await.unwrap(), 14);
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

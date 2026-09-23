@@ -435,6 +435,41 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     assert_eq!(totals["k1"].requests, 1);
 }
 
+#[test]
+fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, key: &str, kind: &str| {
+        let (mut request, mut attempts) = synthetic_day(3).swap_remove(0);
+        request.id = id.into();
+        request.key_id = Some(key.into());
+        request.key_generation = 0;
+        request.received_at = 1_000;
+        request.kind = kind.into();
+        for attempt in &mut attempts {
+            attempt.request_id = id.into();
+        }
+        db.insert_request(&request, &attempts, None).unwrap();
+    };
+    plant("r1", "k1", "probe");
+    plant("r2", "k2", "inference");
+    let live = LiveKeys(BTreeMap::from([
+        ("k1".to_string(), 0),
+        ("k2".to_string(), 0),
+    ]));
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let default_groups = breakdown(&filtered, "key", false, &live, &[]);
+    assert!(
+        !default_groups.iter().any(|g| g.key == "k1"),
+        "a group whose rows are all probes stays out of the default breakdown: {default_groups:?}"
+    );
+    let with_probes = breakdown(&filtered, "key", true, &live, &[]);
+    assert!(
+        with_probes.iter().any(|g| g.key == "k1"),
+        "the same group appears once probes count as requests: {with_probes:?}"
+    );
+}
+
 /// One request the replace path rewrites, always under the same id.
 fn replaced(id: &str) -> RequestRecord {
     RequestRecord {

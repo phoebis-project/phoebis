@@ -727,6 +727,9 @@ fn sum_groups(
             entry.0.add(row);
         }
     }
+    // A group whose rows in the range are all probes never touched the request side; without this it would
+    // report zero requests rather than staying out of a breakdown that does not count probes as requests.
+    sums.retain(|_, (sum, _)| probes_counted || sum.requests > 0);
     let mut out: Vec<GroupRow> = sums
         .iter()
         .map(|(k, (sum, probes))| {

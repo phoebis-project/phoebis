@@ -1,7 +1,7 @@
 //! Prometheus text format, rendered by hand: a handful of counters and gauges with bounded label sets, and
 //! one histogram over the same 64 buckets the rollups use.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use axum::http::header::CONTENT_TYPE;
@@ -263,6 +263,15 @@ impl Metrics {
                 "phoebis_account_ratelimit_utilization" => {
                     if let Some(series) = inner.gauges.get("phoebis_account_ratelimit_utilization") {
                         for (labels, value) in series {
+                            // A deleted account's last reading would otherwise scrape forever; the registry is
+                            // the list of accounts that exist.
+                            let live = labels
+                                .iter()
+                                .find(|(k, _)| *k == "account")
+                                .is_some_and(|(_, v)| gauges.live_accounts.contains(v));
+                            if !live {
+                                continue;
+                            }
                             out.push_str(&format!(
                                 "phoebis_account_ratelimit_utilization{} {}\n",
                                 render_labels(labels),
@@ -398,6 +407,9 @@ pub struct RoutingGauges {
     pub overage: Vec<(String, bool)>,
     pub pins_by_pool: Vec<(String, u64)>,
     pub keepalive_agents: KeepaliveAgents,
+    /// The accounts the registry still holds, for `render` to drop a deleted account's stale utilization
+    /// reading rather than scrape it forever.
+    pub live_accounts: BTreeSet<String>,
 }
 
 pub async fn gather(
@@ -437,12 +449,12 @@ pub async fn gather(
         .into_iter()
         .map(|(id, e)| (id, e.in_use))
         .collect();
-    let mut accounts: Vec<String> = snapshot.accounts().map(|a| a.id.clone()).collect();
-    accounts.sort();
-    for id in accounts {
-        let in_use = overages.get(&id).copied().unwrap_or(false);
-        gauges.overage.push((id, in_use));
+    let live_accounts: BTreeSet<String> = snapshot.accounts().map(|a| a.id.clone()).collect();
+    for id in &live_accounts {
+        let in_use = overages.get(id).copied().unwrap_or(false);
+        gauges.overage.push((id.clone(), in_use));
     }
+    gauges.live_accounts = live_accounts;
     if let Ok(pins) = router.pins().await {
         let mut by_pool: BTreeMap<String, u64> = BTreeMap::new();
         for pin in pins {

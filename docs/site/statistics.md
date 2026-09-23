@@ -178,7 +178,8 @@ pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two 
 merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served
 from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range;
 Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible
-time, and pin churn per upstream.
+time, and pin churn per upstream. Cooldown time books to the hour it elapses in as the interval runs, and a cooldown
+cleared early gives back only the hours it never held.
 
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)
