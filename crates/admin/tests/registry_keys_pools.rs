@@ -1164,3 +1164,66 @@ async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
         "the answer carries the generation the store stamped, not the route's clock"
     );
 }
+
+#[tokio::test]
+async fn a_pool_patch_carrying_members_applies_both_or_refuses_before_the_policy_lands() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let refused = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"affinity_ttl_seconds":120,"members":[{"account_id":"business","priority":0},{"account_id":"ghost","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 404);
+    assert_eq!(json(refused).await["error"], "account ghost not found");
+    let kept = json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            kept["affinity_ttl_seconds"].as_u64(),
+            kept["members"].as_array().map(Vec::len),
+            kept["members"][0]["account_id"].as_str()
+        ),
+        (Some(3600), Some(1), Some("direct")),
+        "a member list naming an unknown account refuses before the policy is written"
+    );
+    let both = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"affinity_ttl_seconds":120,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":2}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(both.status(), 200);
+    let body = json(both).await;
+    let members: Vec<(&str, u64)> = body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["account_id"].as_str().unwrap(),
+                m["priority"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        (body["affinity_ttl_seconds"].as_u64(), members),
+        (Some(120), vec![("business", 0), ("direct", 2)]),
+        "one PATCH changes the policy and the members together"
+    );
+    let reread = json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (&reread["affinity_ttl_seconds"], &reread["members"]),
+        (&body["affinity_ttl_seconds"], &body["members"])
+    );
+}

@@ -4,6 +4,7 @@ import type {
   Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
   Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
+import type { NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
@@ -21,6 +22,40 @@ const MOCK_SEED = 4_211;
 
 // A short delay keeps loading states honest without making the mock feel slow.
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+/**
+ * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
+ * drifts from the route is refused here rather than agreed with.
+ */
+const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
+  ['coldProbeLimit', 'cold_probe_limit', 1, 20],
+  ['retrySeconds', 'retry_seconds', 1, 3_600],
+  ['retryMaxSeconds', 'retry_max_seconds', 1, 604_800],
+  ['maxIdleSeconds', 'max_idle_seconds', 0, 31_536_000],
+  ['maxIdleTicks', 'max_idle_ticks', 0, 1_000_000],
+  ['leadSeconds5m', 'lead_seconds_5m', 0, 299],
+  ['leadSeconds1h', 'lead_seconds_1h', 0, 3_599],
+  ['jitterSeconds5m', 'jitter_seconds_5m', 0, 299],
+  ['jitterSeconds1h', 'jitter_seconds_1h', 0, 3_599],
+  ['netNegativeGraceProbes', 'net_negative_grace_probes', 0, 100],
+];
+
+/** The affinity floor and the keepalive policy's refusals, first one first, as the pool routes answer them. */
+const poolRefusal = (input: PoolInput): string | null => {
+  const affinity = input.affinityTtlSeconds;
+  if (affinity !== 0 && affinity < 60) return 'affinity_ttl_seconds is 0 or at least 60';
+  const k = input.keepalive;
+  for (const [key, field, min, max] of KEEPALIVE_RANGES) {
+    const value = k[key];
+    if (value < min || value > max) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
+    if (key === 'retrySeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
+  }
+  if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
+  if (k.enabled && affinity < 300) {
+    return 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed';
+  }
+  return null;
+};
 
 // The registered redirect is a loopback port on the machine running Claude Code,
 // so the callback the operator pastes carries both halves of the exchange.
@@ -491,7 +526,8 @@ export class MockApi implements Api {
   }
 
   revokeKey(id: string) {
-    this.keys = this.keys.map((k) => (k.id === id ? { ...k, status: 'revoked' as const } : k));
+    // The route switches a revoked key off in the same write, and an edit sends that flag back.
+    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
     return latency(undefined, 250);
   }
 
@@ -550,7 +586,12 @@ export class MockApi implements Api {
   updateKey(id: string, input: KeyInput): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
-    const next = { ...this.keys[idx], ...input };
+    const { expiresAt: expiry, ...rest } = input;
+    const current = this.keys[idx];
+    const expiresAt = expiry === undefined ? current.expiresAt : expiry;
+    // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
+    const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
+    const next: ApiKey = { ...current, ...rest, expiresAt, status };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     return latency(next, 250);
   }
@@ -558,6 +599,8 @@ export class MockApi implements Api {
   updatePool(id: string, input: PoolInput): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
+    const refusal = poolRefusal(input);
+    if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
       return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
     }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
+import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -12,6 +12,7 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
+import { KEEPALIVE_BOUNDS, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STRATEGY_LABEL, STRATEGY_RULE, SUB_STRATEGY_LABEL, kindOrdered, sampleDriven } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -34,35 +35,31 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an upstream in extra usage as unavailable until its window resets' },
 ];
-const PROBE_FIELDS: { help: string; key: NumericTuningKey; label: string; min?: number }[] = [
-  { key: 'leadSeconds5m', label: 'Lead time, 5m cache (s)', help: 'How long before a 5-minute entry expires its probe is due. The lead has to cover the round trip and the jitter below, or the entry expires before the probe lands.', min: 1 },
+const PROBE_FIELDS: { help: string; key: NumericTuningKey; label: string }[] = [
+  { key: 'leadSeconds5m', label: 'Lead time, 5m cache (s)', help: 'How long before a 5-minute entry expires its probe is due. The lead has to cover the round trip and the jitter below, or the entry expires before the probe lands.' },
   {
     key: 'leadSeconds1h',
     label: 'Lead time, 1h cache (s)',
     help: 'The same for 1-hour entries. The lead is larger because the entry is worth more: missing the refresh costs a full 1-hour write, so the probe is given room for a retry before the entry goes cold.',
-    min: 1,
   },
-  { key: 'jitterSeconds5m', label: 'Jitter, 5m cache (s)', help: 'Random seconds taken off the 5-minute due time, so sessions that started together do not all probe in the same instant.', min: 0 },
-  { key: 'jitterSeconds1h', label: 'Jitter, 1h cache (s)', help: 'The same spread for 1-hour entries, wider because their due times cluster on the hour.', min: 0 },
+  { key: 'jitterSeconds5m', label: 'Jitter, 5m cache (s)', help: 'Random seconds taken off the 5-minute due time, so sessions that started together do not all probe in the same instant.' },
+  { key: 'jitterSeconds1h', label: 'Jitter, 1h cache (s)', help: 'The same spread for 1-hour entries, wider because their due times cluster on the hour.' },
   {
     key: 'coldProbeLimit',
     label: 'Cold probe limit',
     help: "A cold probe is one whose response shows no cache read for the prefix it was meant to keep warm, because the entry had already expired or the upstream changed. After this many cold probes in a row the recipe pauses until the next real request. A cold probe is the expensive kind (it rewrites the entry instead of reading it), so a streak also drags the session's net negative; the grace probes in this section are what lets the next turn recover. A probe that migrated the session does not count.",
-    min: 0,
   },
-  { key: 'retrySeconds', label: 'Retry backoff base (s)', help: 'How long the recipe waits after a probe fails on the transport or with a server error. Each further failure doubles the wait.', min: 1 },
-  { key: 'retryMaxSeconds', label: 'Retry backoff max (s)', help: 'Ceiling for that doubling, so a long upstream outage settles into a steady retry instead of growing without bound.', min: 1 },
+  { key: 'retrySeconds', label: 'Retry backoff base (s)', help: 'How long the recipe waits after a probe fails on the transport or with a server error. Each further failure doubles the wait.' },
+  { key: 'retryMaxSeconds', label: 'Retry backoff max (s)', help: 'Ceiling for that doubling, so a long upstream outage settles into a steady retry instead of growing without bound.' },
   {
     key: 'maxIdleSeconds',
     label: 'Max idle seconds',
     help: "Stop probing the main conversation agent once this much time has passed since its own last real request. It applies to that agent only: subagents stop when their lifecycle ends, at their Stop hook or the end of the session, never by idle time. 0 keeps probing while the pin lives.",
-    min: 0,
   },
   {
     key: 'maxIdleTicks',
     label: 'Max idle ticks',
     help: 'The same limit counted in probes: stop after this many probes with no real request in between. It applies to the main conversation agent only, for the same reason as the idle seconds above. 0 means no limit.',
-    min: 0,
   },
 ];
 const NET_NEGATIVE_HELP =
@@ -85,6 +82,7 @@ const KEEPALIVE_SUMMARY_HINT =
   'Cold limit: consecutive probes that read no cache before the recipe pauses. Idle: time without a real request on the main conversation agent before probing stops. Net-negative stop: probes left once a session has spent more on probes than it saved.';
 const CAPTURE_HELP = 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.';
 const AFFINITY_HINT = "Idle time before a session's pin expires. Off means every request picks an upstream afresh.";
+const AFFINITY_CUSTOM_HINT = 'A custom value is at least 60 seconds; 0 turns affinity off.';
 const KEEPALIVE_GATE = "Requires session affinity of at least 5 minutes. A probe follows the session's pin; a shorter pin cannot keep the session on the upstream it warmed.";
 const KEEPALIVE_WARNING = 'Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.';
 
@@ -284,6 +282,10 @@ function PoolCard({
             <dt>Migration</dt>
             <dd className="num">{pool.migrateAboveUtilization === null ? <span className="muted">Migrate off</span> : `Migrate above ${fmtPct(pool.migrateAboveUtilization)} utilization`}</dd>
           </div>
+          <div>
+            <dt>Selection</dt>
+            <dd className="num">{pool.selectBelowUtilization === null ? <span className="muted">Select-below off</span> : `Select below ${fmtPct(pool.selectBelowUtilization)} utilization`}</dd>
+          </div>
           <div className="pool__policy-wide">
             <dt>Keep prompt caches warm</dt>
             <dd>
@@ -409,7 +411,9 @@ function PoolCard({
                     P{m.priority}
                   </span>
                   <Link to={`/upstreams/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
-                  <span className="pool__eligibility">{a ? <Eligibility account={a} now={now} /> : null}</span>
+                  <span className="pool__eligibility">
+                    <Eligibility verdict={m.eligible} account={a} now={now} />
+                  </span>
                 </li>
               );
             })}
@@ -434,18 +438,19 @@ function PoolCard({
   );
 }
 
-function Eligibility({ account, now }: { account: Account; now: number }) {
-  if (account.status === 'reauth_required') return <Badge tone="critical">reauth required</Badge>;
-  if (account.status === 'cooldown' && account.cooldowns[0]) {
-    return (
-      <Badge tone="warning" title={fmtAbsolute(account.cooldowns[0].until)}>
-        cooldown ends {fmtRelative(account.cooldowns[0].until, now)}
-      </Badge>
-    );
-  }
-  if (account.extraUsage?.inUse) return <Badge tone="serious">overage</Badge>;
-  if (!account.routingEnabled) return <Badge tone="neutral">disabled</Badge>;
-  return <Badge tone="good">eligible</Badge>;
+/** The route's verdict, the one the selection-order strip reads; the account only adds when and why. */
+function Eligibility({ verdict, account, now }: { account: Account | undefined; now: number; verdict: MemberEligibility }) {
+  if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
+  if (verdict === 'overage') return <Badge tone="serious">overage</Badge>;
+  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known upstream'}>unavailable</Badge>;
+  const until = account?.cooldowns.find((c) => c.scope === 'account')?.until;
+  return until ? (
+    <Badge tone="warning" title={fmtAbsolute(until)}>
+      cooldown ends {fmtRelative(until, now)}
+    </Badge>
+  ) : (
+    <Badge tone="warning">cooldown</Badge>
+  );
 }
 
 type ProbeTuning = Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled' | 'warmSubagents'>;
@@ -469,6 +474,8 @@ interface PoolForm {
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
+  selectBelow: number;
+  selectBelowOn: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   tuning: ProbeTuning;
@@ -495,6 +502,8 @@ const blankForm = (): PoolForm => ({
   name: '',
   overage: 'prefer_plan',
   preferSubscription: false,
+  selectBelow: 80,
+  selectBelowOn: false,
   status: 'active',
   strategy: 'least_utilized',
   tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
@@ -520,6 +529,9 @@ const formFrom = (pool: Pool): PoolForm => ({
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
+  // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
+  selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
+  selectBelowOn: pool.selectBelowUtilization !== null,
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
@@ -620,7 +632,31 @@ export function PoolDialog({
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
-  const valid = form.name.trim().length > 0 && Object.keys(form.members).length > 0 && form.affinity >= 0 && (!form.migrateOn || (form.migrate >= 50 && form.migrate <= 100));
+  const warming = form.keepalive && !keepaliveBlocked;
+  const input: PoolInput = {
+    affinityTtlSeconds: form.affinity,
+    apiKeySubStrategy: form.apiKeySubStrategy,
+    bodyCaptureHours: form.capture ? form.captureHours : 0,
+    cacheDiagnostics: form.cacheDiagnostics,
+    cacheTtl: form.cacheTtl,
+    defaultAllowedModels: form.allowed.length ? form.allowed : null,
+    // With warming off the block is hidden, so what it holds goes back as stored: an edit left in it can
+    // neither reach the policy nor hold up the save.
+    keepalive: warming
+      ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
+      : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
+    members: Object.entries(form.members).map(([accountId, priority]) => ({ accountId, priority })),
+    migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
+    name: form.name.trim(),
+    overagePolicy: form.overage,
+    // The stored answer, not the toggle's state: a sample-driven strategy draws it on, and sending that back
+    // would overwrite what the operator chose with what the strategy forced.
+    preferSubscription: form.preferSubscription,
+    selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
+    status: form.status,
+    strategy: form.strategy,
+  };
+  const valid = validatePoolInput(input, new Set(accounts.map((a) => a.id)));
 
   const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
   const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
@@ -644,7 +680,7 @@ export function PoolDialog({
 
   const moveKey = async () => {
     if (!moving || !moveTo) return;
-    await api.updateKey(moving.id, { allowedModels: moving.allowedModels, bodyCaptureHours: moving.bodyCaptureHours, keepaliveOptOut: moving.keepaliveOptOut, name: moving.name, notes: moving.notes, poolId: moveTo });
+    await api.updateKey(moving.id, { allowedModels: moving.allowedModels, bodyCaptureHours: moving.bodyCaptureHours, enabled: moving.enabled, keepaliveOptOut: moving.keepaliveOptOut, name: moving.name, notes: moving.notes, poolId: moveTo });
     setMoved((prev) => new Set(prev).add(moving.id));
     setMoving(null);
     onKeysChanged();
@@ -663,24 +699,6 @@ export function PoolDialog({
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const input: PoolInput = {
-      affinityTtlSeconds: form.affinity,
-      apiKeySubStrategy: form.apiKeySubStrategy,
-      bodyCaptureHours: form.capture ? form.captureHours : 0,
-      cacheDiagnostics: form.cacheDiagnostics,
-      cacheTtl: form.cacheTtl,
-      defaultAllowedModels: form.allowed.length ? form.allowed : null,
-      keepalive: { ...form.tuning, costCapUsdPerDay: form.keepalive && form.capEnabled ? form.capUsd : null, enabled: form.keepalive && !keepaliveBlocked, warmSubagents: form.warmSubagents },
-      members: Object.entries(form.members).map(([accountId, priority]) => ({ accountId, priority })),
-      migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
-      name: form.name.trim(),
-      overagePolicy: form.overage,
-      // The stored answer, not the toggle's state: a sample-driven strategy draws it on, and sending that back
-      // would overwrite what the operator chose with what the strategy forced.
-      preferSubscription: form.preferSubscription,
-      status: form.status,
-      strategy: form.strategy,
-    };
     try {
       if (pool) await api.updatePool(pool.id, input);
       else await api.createPool(input);
@@ -754,7 +772,7 @@ export function PoolDialog({
               </Field>
             )}
           </div>
-          <Field label="Session affinity" hint={AFFINITY_HINT}>
+          <Field label="Session affinity" hint={form.customAffinity ? `${AFFINITY_HINT} ${AFFINITY_CUSTOM_HINT}` : AFFINITY_HINT}>
             <span className="chips" role="group" aria-label="Session affinity">
               {AFFINITY_PICKS.map((pick) => {
                 const on = !form.customAffinity && form.affinity === pick.seconds;
@@ -768,7 +786,7 @@ export function PoolDialog({
                 custom
               </button>
             </span>
-            {form.customAffinity && <Input type="number" min={0} step={30} value={form.affinity} onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))} style={{ width: 120 }} aria-label="Session affinity in seconds" />}
+            {form.customAffinity && <Input type="number" min={60} step={30} value={form.affinity} onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))} style={{ width: 120 }} aria-label="Session affinity in seconds" />}
           </Field>
           <div className="capture">
             <label className="row">
@@ -779,6 +797,18 @@ export function PoolDialog({
             {form.migrateOn && (
               <Field label="Utilization (%)" hint="A pinned session moves to another member once its upstream crosses this line on any window.">
                 <Input type="number" min={50} max={100} value={form.migrate} onChange={(e) => set('migrate', Number(e.target.value))} style={{ width: 120 }} />
+              </Field>
+            )}
+          </div>
+          <div className="capture">
+            <label className="row">
+              <input type="checkbox" checked={form.selectBelowOn} onChange={(e) => set('selectBelowOn', e.target.checked)} />
+              <span className="field__label">Select below utilization</span>
+              {!form.selectBelowOn && <span className="muted">Off</span>}
+            </label>
+            {form.selectBelowOn && (
+              <Field label="Utilization (%)" hint="A pick passes over members at or above this 5-hour utilization, unless every member is.">
+                <Input type="number" min={0} max={100} value={form.selectBelow} onChange={(e) => set('selectBelow', Number(e.target.value))} style={{ width: 120 }} aria-label="Select below utilization (%)" />
               </Field>
             )}
           </div>
@@ -977,7 +1007,8 @@ export function PoolDialog({
                   <Field label="Grace probes after the net turns negative" hint={NET_NEGATIVE_GRACE_HELP}>
                     <Input
                       type="number"
-                      min={0}
+                      min={KEEPALIVE_BOUNDS.netNegativeGraceProbes.min}
+                      max={KEEPALIVE_BOUNDS.netNegativeGraceProbes.max}
                       value={form.tuning.netNegativeGraceProbes}
                       onChange={(e) => setTuning('netNegativeGraceProbes', Math.max(0, Number(e.target.value)))}
                       style={{ width: 120 }}
@@ -990,7 +1021,7 @@ export function PoolDialog({
                 <div className="form-row">
                   {PROBE_FIELDS.map((f) => (
                     <Field key={f.key} label={f.label} hint={f.help}>
-                      <Input type="number" min={f.min} value={form.tuning[f.key]} onChange={(e) => setTuning(f.key, Number(e.target.value))} />
+                      <Input type="number" min={KEEPALIVE_BOUNDS[f.key].min} max={KEEPALIVE_BOUNDS[f.key].max} value={form.tuning[f.key]} onChange={(e) => setTuning(f.key, Number(e.target.value))} />
                     </Field>
                   ))}
                 </div>

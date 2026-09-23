@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api, type KeyInput } from '@/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '@/api';
 import type { ApiKey, CreatedApiKey, KeyStatus, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -7,6 +7,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
+import { keyFormOf, keyInputOf, type CaptureMode } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -14,7 +15,7 @@ const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
-type CaptureMode = 'inherit' | 'off' | 'override';
+const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
 
 export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), []);
@@ -177,7 +178,7 @@ export function KeysPage() {
                           {k.lastUsedAt && <span className="sub">used {fmtRelative(k.lastUsedAt, now)}</span>}
                           {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
                           {k.sessionsOnRetiredSecret > 0 && (
-                            <span className="sub" title={k.retiredSecretLastUsedAt ? `Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}` : undefined}>
+                            <span className="sub" title={k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}>
                               {k.sessionsOnRetiredSecret} {k.sessionsOnRetiredSecret === 1 ? 'session' : 'sessions'} still on the previous secret
                             </span>
                           )}
@@ -314,8 +315,10 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
   const [captureHours, setCaptureHours] = useState(6);
   const [optOut, setOptOut] = useState(false);
+  const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const settings = useAsync(() => api.getSettings(), []);
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
@@ -325,33 +328,34 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
 
   useEffect(() => {
     if (!open) return;
-    setName(existing?.name ?? '');
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
-    setPoolId(existing?.poolId ?? initialPoolId ?? pools[0]?.id ?? '');
-    setModelMode(existing?.allowedModels ? 'selected' : 'pool');
-    setSelected(existing?.allowedModels ?? []);
-    setExpiry('never');
-    setNotes(existing?.notes ?? '');
-    setCaptureMode(existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit');
-    setCaptureHours(existing?.bodyCaptureHours || 6);
-    setOptOut(existing?.keepaliveOptOut ?? false);
+    const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
+    setName(form.name);
+    setPoolId(form.poolId);
+    setModelMode(form.modelMode);
+    setSelected(form.selected);
+    setExpiry(form.expiry);
+    setNotes(form.notes);
+    setCaptureMode(form.captureMode);
+    setCaptureHours(form.captureHours);
+    setOptOut(form.optOut);
+    setEnabled(form.enabled);
     setBusy(false);
     setError(null);
   }, [open, existing, initialPoolId, pools]);
+
+  // The callout leads the first section, and the operator may be reading another one when the save is refused.
+  // jsdom leaves scrollIntoView undefined.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [error]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const input: KeyInput = {
-      name: name.trim(),
-      poolId,
-      allowedModels: modelMode === 'selected' ? selected : null,
-      notes: notes.trim() || null,
-      bodyCaptureHours: captureMode === 'inherit' ? null : captureMode === 'off' ? 0 : captureHours,
-      keepaliveOptOut: optOut,
-    };
+    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, modelMode, name, notes, optOut, poolId, selected }, Date.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input);
@@ -376,7 +380,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
       body: (
         <>
           {error && (
-            <div className="callout callout--critical" role="alert">
+            <div ref={errorRef} className="callout callout--critical" role="alert">
               <IconWarning size={16} />
               <div>{error}</div>
             </div>
@@ -401,18 +405,30 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
               <div>Moving this key ends its current session pins.</div>
             </div>
           )}
-          {!existing && (
-            <Field label="Expiry">
-              <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ width: 220 }}>
-                <option value="never">No expiration</option>
-                <option value="7">7 days</option>
-                <option value="30">30 days</option>
-                <option value="60">60 days</option>
-                <option value="90">90 days</option>
-                <option value="365">1 year</option>
-              </Select>
-            </Field>
+          {existing && (
+            <div className="field--inline field">
+              <span className="field__text">
+                <span className="field__label">Enabled</span>
+                <p className="field__hint">Off refuses the key at routing and keeps it, so it can be switched back on without a new secret.</p>
+              </span>
+              {/* The route refuses to re-enable a revoked key, so its switch says so rather than offering it. */}
+              <span title={existing.status === 'revoked' ? 'a revoked key cannot be re-enabled' : undefined}>
+                <Toggle checked={enabled} onChange={setEnabled} label="Enabled" disabled={existing.status === 'revoked'} />
+              </span>
+            </div>
           )}
+          <Field label="Expiry">
+            <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ width: 220 }} aria-label="Expiry">
+              {existing && <option value="keep">Keep the current expiry</option>}
+              {!existing && <option value="never">No expiration</option>}
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="60">60 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+              {existing && <option value="never">No expiration</option>}
+            </Select>
+          </Field>
           <Field label="Notes">
             <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this key lives and who holds it" />
           </Field>

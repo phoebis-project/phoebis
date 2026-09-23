@@ -424,10 +424,18 @@ expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-son
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
+  // The route's verdict per member, which the selection-order strip beside it reads too: personal is in overage on
+  // an upstream that needs funding, which the route answers unavailable, not overage.
+  const badges = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li .pool__eligibility .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
+  results.push({
+    name: '/pools card badges each member from the route verdict',
+    ok: badges.length === 4 && badges[0][0] === 'eligible' && badges[1][0].startsWith('cooldown ends') && badges[1][1] === 'badge--warning' && JSON.stringify(badges[2]) === JSON.stringify(['unavailable', 'badge--critical', 'funding required']) && badges[3][0] === 'eligible',
+    missing: badges.map((b) => b.join(' | ')),
+  });
 }
 {
   const order = m.container.querySelector('.pool .selection-order');
@@ -505,6 +513,23 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(120);
   const custom = dlg?.querySelector('input[aria-label="Session affinity in seconds"]');
   results.push({ name: '/pools custom affinity reveals the seconds input', ok: custom?.value === '600', missing: [custom?.value] });
+  {
+    // The route refuses 1 to 59 seconds, so the dialog holds the save rather than sending it.
+    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(custom, '30');
+    custom?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({
+      name: '/pools a custom affinity of 30 s holds the save and the hint says what 0 does',
+      ok: save()?.disabled === true && custom?.getAttribute('min') === '60' && (dlg?.textContent ?? '').includes('A custom value is at least 60 seconds; 0 turns affinity off.'),
+      missing: [String(save()?.disabled), custom?.getAttribute('min') ?? 'no min', (dlg?.textContent ?? '').includes('0 turns affinity off') ? '' : 'no hint'],
+    });
+    setter.call(custom, '0');
+    custom?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({ name: '/pools a custom affinity of 0 turns affinity off and frees the save', ok: save()?.disabled === false, missing: [String(save()?.disabled)] });
+  }
   chips.find((c) => c.textContent?.trim() === '10m')?.click();
   await m.settle(120);
 
@@ -516,6 +541,23 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   expect('/pools migrate on reveals a percent field', dlg?.textContent ?? '', ['Utilization (%)', 'A pinned session moves to another member once its upstream crosses this line on any window.']);
   migrateBox?.click();
   await m.settle(120);
+
+  // The select-below threshold sits beside migration and reads the same way: off, or a percent.
+  {
+    const selectBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Select below utilization'));
+    const rowText = selectBox?.closest('label')?.textContent ?? '';
+    results.push({ name: '/pools select-below starts off beside migration', ok: selectBox?.checked === false && rowText.includes('Off') && selectBox?.closest('.capture')?.previousElementSibling?.textContent?.includes('Migrate above utilization') === true, missing: [String(selectBox?.checked), rowText] });
+    selectBox?.click();
+    await m.settle(120);
+    const percent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+    results.push({
+      name: '/pools select-below on reveals a percent field from 0 to 100',
+      ok: percent?.value === '80' && percent?.getAttribute('min') === '0' && percent?.getAttribute('max') === '100' && (dlg?.textContent ?? '').includes('A pick passes over members at or above this 5-hour utilization, unless every member is.'),
+      missing: [percent?.value ?? 'absent', percent?.getAttribute('min') ?? '', percent?.getAttribute('max') ?? ''],
+    });
+    selectBox?.click();
+    await m.settle(120);
+  }
 
   // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
   expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.']);
@@ -558,6 +600,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   const tuningValues = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])].map((i) => i.value);
   results.push({ name: '/pools probe tuning defaults', ok: JSON.stringify(tuningValues) === JSON.stringify(['60', '360', '5', '30', '2', '30', '300', '3600', '0']), missing: tuningValues });
   results.push({ name: '/pools cold probe limit defaults to 2', ok: tuningValues[4] === '2', missing: [tuningValues[4] ?? 'absent'] });
+  {
+    const inputs = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])];
+    const ranges = inputs.map((i) => `${i.getAttribute('min')}-${i.getAttribute('max')}`);
+    results.push({ name: '/pools probe tuning inputs carry the policy ranges', ok: JSON.stringify(ranges) === JSON.stringify(['0-299', '0-3599', '0-299', '0-3599', '1-20', '1-3600', '1-604800', '0-31536000', '0-1000000']), missing: ranges });
+    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(inputs[4], '0');
+    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const coldHeld = save()?.disabled === true;
+    setter.call(inputs[4], '2');
+    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    setter.call(inputs[6], '10');
+    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const retryHeld = save()?.disabled === true;
+    setter.call(inputs[6], '300');
+    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({ name: '/pools a cold probe limit of 0 or a retry ceiling under the base holds the save', ok: coldHeld && retryHeld && save()?.disabled === false, missing: [String(coldHeld), String(retryHeld), String(save()?.disabled)] });
+  }
   tuning?.click();
   await m.settle(120);
   results.push({ name: '/pools probe tuning collapses again', ok: !(dlg?.textContent ?? '').includes('Cold probe limit'), missing: [] });
@@ -713,6 +776,46 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
+{
+  // An edit left in the tuning of a pool whose warming ends up off is neither sent nor allowed to hold the save:
+  // the mock refuses a cold probe limit of 0 the way the route does, so a save that sent it would stay open.
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const chip = (label) => [...(dlg?.querySelectorAll('[aria-label="Session affinity"] .pill') ?? [])].find((c) => c.textContent?.trim() === label);
+  const warm = () => dlg?.querySelector('button[role="switch"][aria-label="Keep prompt caches warm"]');
+  const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+  chip('1h')?.click();
+  await m.settle(120);
+  warm()?.click();
+  await m.settle(120);
+  [...(dlg?.querySelectorAll('.collapsible__summary') ?? [])].find((b) => b.textContent?.includes('Probe tuning'))?.click();
+  await m.settle(120);
+  const cold = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])][4];
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(cold, '0');
+  cold?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
+  const heldWhileOn = save()?.disabled === true;
+  warm()?.click();
+  await m.settle(120);
+  const freedWhenOff = save()?.disabled === false;
+  chip('off')?.click();
+  await m.settle(120);
+  save()?.click();
+  await m.settle(700);
+  const open = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex');
+  results.push({
+    name: '/pools tuning left in a block whose warming is off is not sent and holds nothing',
+    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && (card?.textContent ?? '').includes('Affinity off'),
+    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card ? '' : 'no codex card'],
+  });
+  if ((open?.textContent ?? '').includes('Edit pool codex')) {
+    [...(open?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+  }
+}
 m.unmount();
 
 m = await mount('/keys');
@@ -721,7 +824,9 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const retired = [...m.container.querySelectorAll('.card--table tbody tr .sub')].find((s) => (s.textContent ?? '').includes('still on the previous secret'));
   results.push({
     name: '/keys a rotated key counts the sessions still on the previous secret',
-    ok: retired?.textContent?.trim() === '1 session still on the previous secret' && (retired.getAttribute('title') ?? '').startsWith('Previous secret last used '),
+    ok:
+      retired?.textContent?.trim() === '1 session still on the previous secret' &&
+      (retired.getAttribute('title') ?? '').startsWith('Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched. Previous secret last used '),
     missing: [retired?.textContent?.trim() ?? 'absent', retired?.getAttribute('title') ?? 'no title'],
   });
 }
@@ -785,6 +890,39 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(700);
     const secretDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
     expect('/keys secret modal', secretDlg?.textContent ?? '', ['API key created', 'phoebis-', 'Copy']);
+    {
+      // Copied is said only once the clipboard took the secret; this is its one display, so a failed or absent
+      // clipboard says so and leaves the text on screen to select.
+      const copy = () => [...(secretDlg?.querySelectorAll('.secret button') ?? [])][0];
+      const shown = () => secretDlg?.querySelector('.secret code')?.textContent?.startsWith('phoebis-') === true;
+      const clipboard = (value) => Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value });
+      const states = [];
+      const press = async () => {
+        copy()?.click();
+        await m.settle(60);
+        states.push(`${copy()?.textContent?.trim()} | ${copy()?.className.includes('btn--danger') ? 'danger' : 'ghost'} | ${copy()?.getAttribute('title') ?? ''} | ${shown() ? 'shown' : 'gone'}`);
+      };
+      await press();
+      clipboard({ writeText: () => Promise.resolve() });
+      await press();
+      clipboard({ writeText: () => Promise.reject(new Error('denied')) });
+      await press();
+      delete window.navigator.clipboard;
+      await m.settle(1_700);
+      states.push(copy()?.textContent?.trim() ?? 'absent');
+      results.push({
+        name: '/keys Copy says Copied only after the clipboard write and says why it failed otherwise',
+        ok:
+          JSON.stringify(states) ===
+          JSON.stringify([
+            'Copy failed, select the text | danger | select the text and copy it by hand | shown',
+            'Copied | ghost |  | shown',
+            'Copy failed, select the text | danger | select the text and copy it by hand | shown',
+            'Copy',
+          ]),
+        missing: states,
+      });
+    }
     await m.settle(200);
     expect('/keys table has new key', m.text(), ['smoke']);
     const done = [...m.container.querySelectorAll('dialog[open] button')].find((b) => b.textContent?.trim() === 'Done');
@@ -801,7 +939,17 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   edit?.click();
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save']);
+  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key at routing']);
+  {
+    const expiry = editDlg?.querySelector('select[aria-label="Expiry"]');
+    const toggle = editDlg?.querySelector('button[role="switch"][aria-label="Enabled"]');
+    const options = [...(expiry?.options ?? [])].map((o) => o.value);
+    results.push({
+      name: '/keys edit dialog draws the Enabled switch and an expiry that keeps the current one by default',
+      ok: toggle !== null && toggle?.disabled === false && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
+      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', expiry?.value ?? 'no expiry select', options.join(',')],
+    });
+  }
   {
     const radios = [...(editDlg?.querySelectorAll('.radio-list[aria-label="Capture request and response bodies"] .radio-list__item') ?? [])].map((l) => l.textContent?.trim().replace(/\s+/g, ' '));
     results.push({ name: '/keys capture offers inherit, override and off', ok: radios.length === 3 && radios[0].startsWith('Inherit from pool (') && radios[1].startsWith('Override:') && radios[2] === 'Off for this key', missing: radios });
@@ -815,6 +963,38 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     expect('/keys moving pool shows note', editDlg?.textContent ?? '', ['Moving this key ends its current session pins.']);
   }
   [...(editDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
+  // Every edit sends the switch, so an edit that touches nothing else has to send a disabled key back disabled.
+  const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
+  const rowOf = (name) => rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name);
+  const editOf = async (name) => {
+    rowOf(name)?.querySelector('.menu__trigger')?.click();
+    await m.settle(120);
+    [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await m.settle(300);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const batch = await editOf('batch');
+  const off = batch?.querySelector('button[role="switch"][aria-label="Enabled"]')?.getAttribute('aria-checked');
+  foot(batch, 'Save')?.click();
+  await m.settle(700);
+  const saved = !(([...m.container.querySelectorAll('dialog[open]')].pop()?.textContent ?? '').includes('Edit batch'));
+  results.push({
+    name: '/keys saving a disabled key unchanged keeps it disabled',
+    ok: off === 'false' && saved && rowOf('batch')?.querySelector('.badge')?.textContent?.trim() === 'disabled',
+    missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('.badge')?.textContent?.trim() ?? 'no batch row'],
+  });
+  const ci = await editOf('ci');
+  const lock = ci?.querySelector('button[role="switch"][aria-label="Enabled"]');
+  results.push({
+    name: '/keys a revoked key cannot be switched back on',
+    ok: lock?.disabled === true && lock?.getAttribute('aria-checked') === 'false' && lock?.parentElement?.getAttribute('title') === 'a revoked key cannot be re-enabled',
+    missing: [String(lock?.disabled), String(lock?.getAttribute('aria-checked')), lock?.parentElement?.getAttribute('title') ?? 'no title'],
+  });
+  foot(ci, 'Cancel')?.click();
   await m.settle(200);
 }
 {

@@ -108,6 +108,28 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal('secret' in d.decodeKey(fixture('key_created')), false);
 });
 
+test('a key keeps its enabled flag beside the status the flag folds into', () => {
+  const row = fixture('keys').keys[0];
+  assert.equal(d.decodeKey(row).enabled, true);
+  const off = d.decodeKey({ ...row, enabled: false });
+  assert.deepEqual([off.enabled, off.status], [false, 'disabled']);
+  const lapsed = d.decodeKey({ ...row, enabled: false, expires_at: 5 });
+  assert.deepEqual([lapsed.enabled, lapsed.status], [false, 'expired'], 'an expired key that was also switched off says so, which the status alone cannot');
+  const silent = { ...row };
+  delete silent.enabled;
+  assert.equal(d.decodeKey(silent).enabled, true, 'a row without the flag reads as on, as its status does');
+});
+
+test('a key edit sends enabled every time and expires_at only when the dialog changed it', () => {
+  const input = { allowedModels: null, bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, name: 'batch', notes: null, poolId: 'codex' };
+  const kept = d.encodeKey({ ...input, expiresAt: undefined });
+  assert.equal(kept.enabled, false);
+  assert.equal('expires_at' in kept, false, 'an absent expiry leaves the stored one alone');
+  assert.equal(d.encodeKey({ ...input, expiresAt: null }).expires_at, null, 'null clears the expiry');
+  assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: '2026-10-01T00:00:00.000Z' }).expires_at, Date.parse('2026-10-01T00:00:00.000Z'), 'the route takes milliseconds');
+  assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: undefined }).enabled, true);
+});
+
 test('a pool decodes its policy, status, members, and traffic', () => {
   const [p] = fixture('pools').pools.map(d.decodePool);
   assert.equal(p.name, 'Main');
@@ -124,6 +146,16 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
+});
+
+test('a pool decodes its select-below threshold and encodes it back', () => {
+  const row = fixture('pools').pools[0];
+  assert.equal(d.decodePool(row).selectBelowUtilization, null, 'the captured pool sets none');
+  const p = d.decodePool({ ...row, select_below_utilization: 0.4 });
+  assert.equal(p.selectBelowUtilization, 0.4);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.equal(back.select_below_utilization, 0.4);
+  assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
 });
 
 test('a pool decodes round robin, both subscription flags, and the sub-strategy, and encodes the stored one back', () => {

@@ -130,3 +130,29 @@ test('the live feed reconnects behind a live session and stops once it is gone',
   assert.equal(unauthorized, 1, 'the page reaches the login screen the way every other read does');
   expired();
 });
+
+test('a pool save is one PATCH that carries the members with the settings', async () => {
+  const row = JSON.parse(readFileSync(new URL('./fixtures/pools.json', import.meta.url), 'utf8')).body.pools[0];
+  const calls = stub(() => answer(200, row));
+  await new HttpApi().updatePool('main', {
+    affinityTtlSeconds: 600,
+    apiKeySubStrategy: 'priority_random',
+    bodyCaptureHours: 0,
+    cacheDiagnostics: null,
+    cacheTtl: { enabled: false, inOverage: null, main: '1h', models: [], subagent: '5m' },
+    defaultAllowedModels: null,
+    keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
+    members: [{ accountId: 'business', priority: 0 }, { accountId: 'direct', priority: 1 }],
+    migrateAboveUtilization: null,
+    name: row.label,
+    overagePolicy: 'prefer_plan',
+    preferSubscription: false,
+    selectBelowUtilization: 0.4,
+    status: 'active',
+    strategy: 'least_utilized',
+  });
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['PATCH', '/admin/pools/main']], 'a second write could fail after the first landed');
+  const body = JSON.parse(calls[0].init.body);
+  assert.deepEqual(body.members, [{ account_id: 'business', priority: 0 }, { account_id: 'direct', priority: 1 }]);
+  assert.equal(body.select_below_utilization, 0.4);
+});

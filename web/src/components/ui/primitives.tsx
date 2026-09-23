@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import type { BadgeTone } from '@/lib/quota';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
-import { IconCheck, IconChevron, IconCopy, IconSearch, IconX } from './icons';
+import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
 export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
   return (
@@ -159,23 +159,33 @@ export function Tabs<T extends string>({ value, onChange, tabs }: { onChange: (v
 }
 
 export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<'copied' | 'failed' | 'idle'>('idle');
   useEffect(() => {
-    if (!copied) return;
-    const id = window.setTimeout(() => setCopied(false), 1600);
+    if (state === 'idle') return;
+    const id = window.setTimeout(() => setState('idle'), 1600);
     return () => window.clearTimeout(id);
-  }, [copied]);
+  }, [state]);
   return (
     <Button
       size={size}
-      variant="ghost"
-      icon={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+      variant={state === 'failed' ? 'danger' : 'ghost'}
+      icon={state === 'copied' ? <IconCheck size={14} /> : state === 'failed' ? <IconWarning size={14} /> : <IconCopy size={14} />}
+      title={state === 'failed' ? 'select the text and copy it by hand' : undefined}
       onClick={() => {
-        navigator.clipboard?.writeText(text).catch(() => undefined);
-        setCopied(true);
+        void (async () => {
+          try {
+            if (!navigator.clipboard) throw new Error('no clipboard');
+            await navigator.clipboard.writeText(text);
+            setState('copied');
+          } catch {
+            // The secret dialog is the one place this matters: saying Copied without a write lets the operator
+            // close the only display of a secret they never received.
+            setState('failed');
+          }
+        })();
       }}
     >
-      {copied ? 'Copied' : label}
+      {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed, select the text' : label}
     </Button>
   );
 }

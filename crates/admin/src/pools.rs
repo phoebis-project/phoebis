@@ -355,8 +355,48 @@ pub(crate) async fn patch(
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
+    if let Some(members) = &input.members {
+        for member in members {
+            match state.store.account(&member.account_id) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return failure(
+                        StatusCode::NOT_FOUND,
+                        &format!("account {} not found", member.account_id),
+                    )
+                }
+                Err(error) => return store_failure(error),
+            }
+        }
+    }
     if let Err(error) = state.store.update_pool(&row, ACTOR) {
         return store_failure(error);
+    }
+    if let Some(members) = &input.members {
+        if let Err(error) = state.store.set_pool_members(
+            &row.id,
+            &members
+                .iter()
+                .map(|m| (m.account_id.clone(), m.priority))
+                .collect::<Vec<_>>(),
+            ACTOR,
+        ) {
+            let reason = match error {
+                StoreError::AccountNotFound(id) => format!("account {id} not found"),
+                error => {
+                    tracing::warn!(pool = %row.id, %error, "a pool's members could not be replaced");
+                    "storage failure".to_string()
+                }
+            };
+            // Routing should run on the settings the store now holds; a refused reload has logged itself and
+            // the next successful one publishes them.
+            let _ = reload_or_refuse(&state).await;
+            // The policy landed; saying so is what lets the operator retry the member half alone.
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("the pool's settings were saved; its members were not: {reason}"),
+            );
+        }
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;

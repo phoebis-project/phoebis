@@ -253,6 +253,55 @@ async function poolCachingControls(theme) {
 }
 
 /**
+ * The routing tab's select-below threshold against the migration threshold it sits beside: the same checkbox row
+ * and the same percent field, so either reading smaller or lighter than the other is the defect to catch.
+ */
+async function poolSelectBelow(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.getByRole('button', { name: 'Routing', exact: true }).click();
+  } catch (error) {
+    say(`the pool dialog never reached its routing tab (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+    const box = dialog.locator('label.row', { hasText: label }).locator('input[type="checkbox"]');
+    if ((await box.count()) !== 1) say(`no ${label} checkbox`);
+    else if (!(await box.isChecked())) await box.check();
+  }
+  await settle();
+  const pair = await dialog.evaluate((el) => {
+    const read = (row) => {
+      const text = getComputedStyle(row.querySelector('.field__label'));
+      const input = row.parentElement.querySelector('input[type="number"]');
+      const field = input ? getComputedStyle(input) : null;
+      return {
+        box: `${row.querySelector('input[type="checkbox"]').getBoundingClientRect().width}`,
+        input: field ? `${input.getBoundingClientRect().height} ${field.fontSize} ${field.paddingTop} ${field.paddingLeft} ${field.borderTopWidth} ${field.borderTopColor}` : null,
+        label: `${text.fontSize} ${text.fontWeight} ${text.color}`,
+      };
+    };
+    const row = (text) => [...el.querySelectorAll('label.row')].find((r) => r.textContent?.includes(text));
+    const migrate = row('Migrate above utilization');
+    const select = row('Select below utilization');
+    return migrate && select ? { migrate: read(migrate), select: read(select) } : null;
+  });
+  if (!pair) {
+    say('the migration and select-below rows are not both drawn to compare');
+  } else {
+    measurements.push(`${theme} /pools migrate above ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
+    const differs = ['box', 'input', 'label'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
+    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
+/**
  * The compatibility card on Settings, and its geometry against the About card it sits above. The two carry the
  * same kind of read-only rows from the same bootstrap file, so a card that reads smaller than its neighbour is
  * the defect this page would show first.
@@ -531,6 +580,7 @@ try {
       if (view.path === '/pools') {
         await poolChips(theme);
         await poolCachingControls(theme);
+        await poolSelectBelow(theme);
       }
       if (view.path === '/analytics') await wastedProbeRows(theme);
       if (view.path === '/settings') await compatibilityCard(theme);

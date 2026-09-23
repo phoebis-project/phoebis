@@ -37,7 +37,7 @@ const SYNC = {
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
-  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ allowedModels: null, bodyCaptureHours: null, expiresInDays: null, keepaliveOptOut: false, name: 'sync', notes: null, poolId: 'all' }) },
+  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ allowedModels: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'sync', notes: null, poolId: 'all' }) },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   live_messages: { decode: (b) => ({ ...d.decodeLiveSnapshot(b.snapshot.snapshot), recent: [d.decodeLiveRequest(b.deltas[0].delta.request)] }), mock: (api) => { let snapshot; const stop = api.subscribeLive((e) => { if (e.kind === 'snapshot') snapshot = e.snapshot; }); stop(); return snapshot; } },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('team') },
@@ -123,3 +123,35 @@ for (const [name, paths] of Object.entries(CLOSED)) {
     }
   });
 }
+
+/** The pool as the dialog would send it back unchanged, so a refusal below is the one field the case edits. */
+const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
+
+test('the mock refuses the affinity and the keepalive values the route refuses', async () => {
+  const api = new d.MockApi();
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  const refused = async (input, message) => assert.rejects(api.updatePool('all', input), (e) => e.status === 400 && e.message === message);
+  await refused({ ...poolInputOf(all), affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false } }, 'affinity_ttl_seconds is 0 or at least 60');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, coldProbeLimit: 0 } }, 'keepalive.cold_probe_limit must be between 1 and 20, not 0');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, leadSeconds5m: 300 } }, 'keepalive.lead_seconds_5m must be between 0 and 299, not 300');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, retryMaxSeconds: 10, retrySeconds: 30 } }, 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, costCapUsdPerDay: 0 } }, 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number');
+  await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
+  assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
+  const saved = await api.updatePool('all', { ...poolInputOf(all), selectBelowUtilization: 0.4, keepalive: { ...all.keepalive, enabled: false } });
+  assert.deepEqual([saved.selectBelowUtilization, saved.keepalive.enabled], [0.4, false]);
+});
+
+test('the mock stores a key edit\'s enabled flag and expiry and folds them into the status', async () => {
+  const api = new d.MockApi();
+  const batch = (await api.listKeys()).find((k) => k.id === 'batch');
+  assert.deepEqual([batch.enabled, batch.status], [false, 'disabled']);
+  const edit = { allowedModels: batch.allowedModels, bodyCaptureHours: batch.bodyCaptureHours, enabled: false, keepaliveOptOut: batch.keepaliveOptOut, name: 'nightly', notes: batch.notes, poolId: batch.poolId };
+  const renamed = await api.updateKey('batch', { ...edit, expiresAt: undefined });
+  assert.deepEqual([renamed.name, renamed.enabled, renamed.status, renamed.expiresAt], ['nightly', false, 'disabled', batch.expiresAt], 'an absent expiry leaves the stored one alone');
+  const on = await api.updateKey('batch', { ...edit, enabled: true, expiresAt: '2099-01-01T00:00:00.000Z' });
+  assert.deepEqual([on.enabled, on.status, on.expiresAt], [true, 'active', '2099-01-01T00:00:00.000Z']);
+  const lapsed = await api.updateKey('batch', { ...edit, enabled: true, expiresAt: '2000-01-01T00:00:00.000Z' });
+  assert.equal(lapsed.status, 'expired');
+  assert.equal((await api.updateKey('batch', { ...edit, enabled: true, expiresAt: null })).expiresAt, null);
+});

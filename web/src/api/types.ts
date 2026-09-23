@@ -217,6 +217,8 @@ export interface Pool {
   /** What selection runs under: the stored flag, or the order a sample-driven strategy forces. */
   preferSubscriptionEffective: boolean;
   requests24h: number;
+  /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
+  selectBelowUtilization: number | null;
   /** `active` and `disabled` are set by hand; the rest are observed. */
   status: 'active' | 'degraded' | 'disabled' | 'exhausted';
   strategy: PoolStrategy;
@@ -230,6 +232,8 @@ export interface ApiKey {
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;
+  /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
+  enabled: boolean;
   expiresAt: string | null;
   id: string;
   /** Sessions on this key never receive cache-warming probes. */

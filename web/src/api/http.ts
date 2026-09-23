@@ -245,11 +245,8 @@ export class HttpApi implements Api {
   };
   updateAlertRule = async (id: string, input: AlertRuleInput) => d.decodeAlertRule(await call('PATCH', `/admin/alerts/rules/${enc(id)}`, d.encodeRule(input)));
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
-  updatePool = async (id: string, input: PoolInput) => {
-    const { members, ...rest } = d.encodePool(input);
-    await call('PATCH', `/admin/pools/${enc(id)}`, rest);
-    return d.decodePool(await call('PUT', `/admin/pools/${enc(id)}/members`, { members }));
-  };
+  // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.
+  updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));
   updateServedModels = async (accountId: string, models: ServedModel[]) => {
     await call('PUT', `/admin/accounts/${enc(accountId)}/models`, { models: models.map((m) => ({ long_context: m.longContext, selected: m.selected, upstream_id: m.upstreamId })) });
     return d.decodeAccount(await call('GET', `/admin/accounts/${enc(accountId)}`));

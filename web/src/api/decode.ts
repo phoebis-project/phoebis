@@ -141,10 +141,13 @@ export function decodeKey(v: unknown): ApiKey {
   const k = rec(v);
   const expires = isoOrNull(k.expires_at);
   const revoked = isoOrNull(k.revoked_at);
+  // A row from a route that reports no `enabled` is taken as on rather than off.
+  const enabled = bool(k.enabled, true);
   return {
     allowedModels: k.allowed_models === null || k.allowed_models === undefined ? null : strings(k.allowed_models),
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
+    enabled,
     expiresAt: expires,
     id: str(k.id),
     keepaliveOptOut: bool(k.keepalive_opt_out),
@@ -156,9 +159,8 @@ export function decodeKey(v: unknown): ApiKey {
     prefix: str(k.prefix),
     retiredSecretLastUsedAt: isoOrNull(k.retired_secret_last_used_at),
     sessionsOnRetiredSecret: num(k.sessions_on_retired_secret),
-    // Routing refuses a key that is revoked, expired or switched off, in that order of finality; a row from
-    // a route that reports no `enabled` is taken as on rather than off.
-    status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : bool(k.enabled, true) ? 'active' : 'disabled',
+    // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
+    status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
     usage7d: { cost: num(rec(k.usage_7d).cost_usd), requests: num(rec(k.usage_7d).requests), tokens: num(rec(k.usage_7d).tokens) },
   };
 }
@@ -208,6 +210,7 @@ export function decodePool(v: unknown): Pool {
     preferSubscription: bool(p.prefer_subscription),
     preferSubscriptionEffective: bool(p.prefer_subscription_effective),
     requests24h: num(p.requests_24h),
+    selectBelowUtilization: numOrNull(p.select_below_utilization),
     status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
     strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'least_utilized',
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
@@ -382,7 +385,11 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
   }
 }
 
-export const encodeKey = (i: KeyInput) => ({ allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId });
+export const encodeKey = (i: KeyInput) => ({
+  allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
+  keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId,
+});
 export const encodePool = (i: PoolInput) => ({
   affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, in_overage: i.cacheTtl.inOverage, main: i.cacheTtl.main, models: i.cacheTtl.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: i.cacheTtl.subagent },
@@ -391,6 +398,6 @@ export const encodePool = (i: PoolInput) => ({
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
   // No `prefer_subscription_effective`: the route computes it from the stored flag and the strategy, and an input
   // that carried one could contradict the strategy it was saved with.
-  prefer_subscription: i.preferSubscription, strategy: i.strategy,
+  prefer_subscription: i.preferSubscription, select_below_utilization: i.selectBelowUtilization, strategy: i.strategy,
 });
 export const encodeRule = (i: AlertRuleInput) => ({ enabled: i.enabled, kind: i.kind, scope: i.scope, ...(i.secret === undefined ? {} : { secret: i.secret }), threshold: i.threshold, webhook_url: i.webhookUrl, window: i.windowId });
