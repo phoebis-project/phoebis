@@ -66,6 +66,19 @@ impl Write for BoundedSink {
 }
 
 impl BoundedSink {
+    /// Starts a call under its own budget. A refusal must not outlive the call it happened in: a decoder fed
+    /// again afterward (post-commit inspection reusing the hold's decoder is the one caller that does) is
+    /// judged on that later write alone, not on a trip a previous, already-answered call left behind.
+    fn prepare(&mut self, budget: usize) {
+        self.buf.clear();
+        self.budget = budget;
+        self.tripped = false;
+        #[cfg(test)]
+        {
+            self.high_water = 0;
+        }
+    }
+
     /// Ends one decoder call: the refused write answers as the bound, any other failure as it came, and a
     /// clean call hands over what it decoded.
     fn collect(&mut self, budget: usize, wrote: io::Result<()>) -> Result<Vec<u8>, TransportError> {
@@ -138,7 +151,7 @@ struct GzipDecoder(Option<flate2::write::GzDecoder<BoundedSink>>);
 impl Decoder for GzipDecoder {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         // A write-side decoder keeps what it just decoded until the next write, so without the flush a caller
         // reading the stream as it arrives would see one chunk's bytes only after the following chunk.
         let wrote = d.write_all(input).and_then(|()| d.flush());
@@ -147,7 +160,7 @@ impl Decoder for GzipDecoder {
 
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.try_finish();
         let out = d.get_mut().collect(budget, wrote)?;
         self.0 = None;
@@ -165,14 +178,14 @@ struct DeflateDecoder(Option<flate2::write::ZlibDecoder<BoundedSink>>);
 impl Decoder for DeflateDecoder {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.write_all(input).and_then(|()| d.flush());
         d.get_mut().collect(budget, wrote)
     }
 
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.try_finish();
         let out = d.get_mut().collect(budget, wrote)?;
         self.0 = None;
@@ -190,14 +203,14 @@ struct BrotliDecoder(Option<brotli::DecompressorWriter<BoundedSink>>);
 impl Decoder for BrotliDecoder {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.write_all(input).and_then(|()| d.flush());
         d.get_mut().collect(budget, wrote)
     }
 
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.close();
         let out = d.get_mut().collect(budget, wrote)?;
         self.0 = None;
@@ -215,14 +228,14 @@ struct ZstdDecoder(Option<zstd::stream::write::Decoder<'static, BoundedSink>>);
 impl Decoder for ZstdDecoder {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.write_all(input).and_then(|()| d.flush());
         d.get_mut().collect(budget, wrote)
     }
 
     fn finish_bounded(&mut self, budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
-        d.get_mut().budget = budget;
+        d.get_mut().prepare(budget);
         let wrote = d.flush();
         let out = d.get_mut().collect(budget, wrote)?;
         self.0 = None;
@@ -364,6 +377,24 @@ mod tests {
             assert!(matches!(error, TransportError::TooLarge(65536)), "{error}");
             assert!(d.retained() <= 64 * 1024 + 64 * 1024, "{}", d.retained());
         }
+    }
+
+    #[test]
+    fn a_write_after_a_refusal_is_judged_on_its_own_size() {
+        let mut sink = BoundedSink {
+            budget: 4,
+            ..Default::default()
+        };
+        assert!(sink.write(b"12345").is_err(), "past the budget of 4");
+        assert!(matches!(
+            sink.collect(4, Ok(())),
+            Err(TransportError::TooLarge(4))
+        ));
+        // A caller that feeds the sink again (post-commit inspection reusing the hold's decoder is the one
+        // that does) prepares it under its own budget first, so the earlier trip does not answer for it.
+        sink.prepare(10);
+        sink.write_all(b"ok").unwrap();
+        assert_eq!(sink.collect(10, Ok(())).unwrap(), b"ok");
     }
 
     #[test]

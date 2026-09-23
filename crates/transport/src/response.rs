@@ -364,4 +364,49 @@ mod tests {
         );
         feeder.abort();
     }
+
+    /// One trailer line under `MAX_CHUNK_LINE`, repeated `count` times, so the per-line bound never trips and
+    /// only the running total decides.
+    fn trailer_wire(count: usize) -> Vec<u8> {
+        let line = format!("X-Trailer: {}\r\n", "a".repeat(985));
+        let mut wire = b"5\r\nhello\r\n0\r\n".to_vec();
+        for _ in 0..count {
+            wire.extend_from_slice(line.as_bytes());
+        }
+        wire.extend_from_slice(b"\r\n");
+        wire
+    }
+
+    #[tokio::test]
+    async fn trailer_lines_each_under_the_line_bound_whose_sum_crosses_the_trailer_bound_are_refused(
+    ) {
+        // 17 lines of 998 bytes each: none trips MAX_CHUNK_LINE (1024) alone, but their sum (16,966) passes
+        // MAX_TRAILERS (16,384).
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        let feeder = tokio::spawn(async move {
+            let _ = writer.write_all(&trailer_wire(17)).await;
+        });
+        let mut body = BodyReader::new(reader, BytesMut::new(), Framing::Chunked);
+        assert_eq!(body.next_chunk().await.unwrap().unwrap().as_ref(), b"hello");
+        let error = body.next_chunk().await.unwrap_err();
+        assert!(
+            error.to_string().contains("chunk framing too long"),
+            "{error}"
+        );
+        feeder.abort();
+    }
+
+    #[tokio::test]
+    async fn the_same_trailer_lines_summing_just_under_the_trailer_bound_are_accepted() {
+        // 16 lines of 998 bytes: a sum of 15,968, under MAX_TRAILERS.
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        writer.write_all(&trailer_wire(16)).await.unwrap();
+        drop(writer);
+        let mut body = BodyReader::new(reader, BytesMut::new(), Framing::Chunked);
+        assert_eq!(body.next_chunk().await.unwrap().unwrap().as_ref(), b"hello");
+        assert!(
+            body.next_chunk().await.unwrap().is_none(),
+            "the body ends cleanly once the trailers are read"
+        );
+    }
 }

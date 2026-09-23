@@ -717,36 +717,21 @@ impl Relay {
         let client_version = self.drift.check(&parts.headers);
         // A caller that stops sending holds a task and a buffer for nothing; the idle bound the stream side
         // already gives an upstream is the fair one here too.
-        let raw = match tokio::time::timeout(
+        let body_read = match tokio::time::timeout(
             self.limits.idle_timeout,
             axum::body::to_bytes(body, self.limits.max_request_bytes),
         )
         .await
         {
-            Ok(Ok(raw)) => raw,
-            Err(_) => {
-                trace.observed(
-                    Some(&key),
-                    None,
-                    &parts.headers,
-                    Bytes::new(),
-                    false,
-                    capture_hours,
-                    RequestShape::default(),
-                    presented == Presented::Retired,
-                    key.rotated_at,
-                );
-                return self.refused(
-                    &trace,
-                    relay_failure(&RelayError::BodyTimeout),
-                    Some(&key),
-                    None,
-                    client_version.as_deref(),
-                );
-            }
+            Ok(Ok(raw)) => Ok(raw),
+            Err(_) => Err(RelayError::BodyTimeout),
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
             // no complete request to relay.
-            Ok(Err(_)) => {
+            Ok(Err(_)) => Err(RelayError::BodyTooLarge),
+        };
+        let raw = match body_read {
+            Ok(raw) => raw,
+            Err(error) => {
                 trace.observed(
                     Some(&key),
                     None,
@@ -760,7 +745,7 @@ impl Relay {
                 );
                 return self.refused(
                     &trace,
-                    relay_failure(&RelayError::BodyTooLarge),
+                    relay_failure(&error),
                     Some(&key),
                     None,
                     client_version.as_deref(),
