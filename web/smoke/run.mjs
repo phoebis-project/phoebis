@@ -2220,7 +2220,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, webhook URLs beyond their host, and question text', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 {
   // Each row names its bootstrap key the way the compatibility card does, since the route reads these and never writes them.
@@ -2517,7 +2517,7 @@ await m.navigate('/alerts');
   const badge = m.container.querySelector('.topbar__right .badge');
   results.push({
     name: 'viewer: the role badge names every redaction the viewer secret carries',
-    ok: badge?.getAttribute('title') === 'Viewer secret: read everything except captured bodies, live previews, webhook URLs beyond their host, and question text',
+    ok: badge?.getAttribute('title') === 'Viewer secret: read everything except captured bodies, live previews, question text, and webhook URLs beyond their host',
     missing: [badge?.getAttribute('title') ?? 'no role badge'],
   });
 }

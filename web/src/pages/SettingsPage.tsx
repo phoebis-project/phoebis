@@ -198,7 +198,7 @@ export function SettingsPage() {
           <div>
             <b>Viewer secret</b>
             <p className="muted">
-              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured bodies, live previews, webhook URLs beyond their host, and question text. Cannot create, edit, or delete.
+              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured bodies, live previews, question text, and webhook URLs beyond their host. Cannot create, edit, or delete.
             </p>
           </div>
           <SecretBadge configured={s?.access.viewerConfigured ?? false} />
