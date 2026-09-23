@@ -16,8 +16,8 @@ npm run dev      # http://127.0.0.1:5173
 npm run build    # typecheck, then bundle into dist/
 ```
 
-Node 20 and npm 9 or newer. The dependency list is React 18, react-router-dom 7, and Recharts; styling is plain CSS
-with custom properties.
+Node 20.19 or a later 20, or 22.12 or later, and npm 9 or newer (`.nvmrc` and the `engines` field say so). The
+dependency list is React 18, react-router-dom 7, and Recharts; styling is plain CSS with custom properties.
 
 ## Where the mock's data comes from
 

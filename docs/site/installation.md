@@ -11,9 +11,9 @@ bad value gets.
 cargo build --release
 ```
 
-The binary lands at `target/release/phoebis`. The embedded console needs Node 20 or newer and npm on the path: the
-build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older than its
-sources. `PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a placeholder
+The binary lands at `target/release/phoebis`. The embedded console needs Node 20.19 or a later 20, or 22.12 or later, and
+npm on the path: the build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older
+than its sources. `PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a placeholder
 page in place of the console.
 
 The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which needs cmake,

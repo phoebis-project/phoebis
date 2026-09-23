@@ -14,7 +14,7 @@ export default defineConfig({
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,
     lib: { entry: fileURLToPath(new URL('./entry.tsx', import.meta.url)), formats: ['es'], fileName: () => 'entry.js' },
-    rollupOptions: { external: [] },
+    rolldownOptions: { external: [] },
     minify: false,
     cssCodeSplit: false,
     // The api module awaits the mock's dynamic import at the top level, which needs a target that carries it.

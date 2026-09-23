@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
+#[path = "build_support.rs"]
+mod build_support;
+
+use build_support::{node_supported, parse_node_version, NODE_RANGES};
+
 const PLACEHOLDER_MARKER: &str = "<!-- phoebis-ui placeholder -->";
 
 /// Written inside `node_modules`, so wiping the directory takes the stamp with it.
@@ -79,6 +84,24 @@ fn main() {
             (Some(stamped), Some(lock)) => stamped >= lock,
             _ => false,
         };
+        // Another Node fails deep inside the bundler with a message that names nothing an operator can act on, so
+        // the ranges are checked and named before npm runs.
+        let version = Command::new("node")
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let found = if version.is_empty() {
+            "no node on the path"
+        } else {
+            version.as_str()
+        };
+        assert!(
+            parse_node_version(&version).is_some_and(node_supported),
+            "the console build needs Node {NODE_RANGES}; found {found}"
+        );
         // `npm ci` needs the network only when the lockfile's packages are not in the npm cache.
         let modules = from_this_lockfile || {
             let installed = run(&["ci", "--no-audit", "--no-fund"]);

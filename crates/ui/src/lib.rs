@@ -135,3 +135,7 @@ fn finish(mut response: Response, cache: &'static str) -> Response {
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     response
 }
+
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;

@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "build:mock": "VITE_PHOEBIS_MOCK=1 vite build --outDir dist-mock",
@@ -23,10 +26,10 @@
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.7.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "jsdom": "25.0.1",
     "playwright": "1.63.0",
     "typescript": "^5.6.3",
-    "vite": "6.4.3"
+    "vite": "8.3.0"
   }
 }
