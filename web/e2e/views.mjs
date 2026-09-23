@@ -11,6 +11,16 @@ if (!secret || !dir) {
   console.error('set PHOEBIS_E2E_SECRET and PHOEBIS_SCREENSHOT_DIR');
   process.exit(2);
 }
+// A router seeds its registry at real time, so its pass starts the page's clock at the launch instant; the mock
+// anchors its story at load, so its pass names a fixed one.
+const clockOrigin = process.env.PHOEBIS_E2E_CLOCK ? Date.parse(process.env.PHOEBIS_E2E_CLOCK) : Date.now();
+if (Number.isNaN(clockOrigin)) {
+  console.error('PHOEBIS_E2E_CLOCK is not an instant');
+  process.exit(2);
+}
+// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
+// upstream, a list with nothing in it); the mock's story has subscription upstreams and no empty list there.
+const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -90,11 +100,37 @@ const VIEWS = [
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
 ];
 
+/** How far the page's clock moves per step. */
+const CLOCK_STEP_MS = 100;
+/** Room for a view to load: the session check, the view's reads, and whatever those start in turn. */
+const LOAD_MS = 2_000;
+/** The fixed stretch every view runs for before its shot, so the live feed's ticks land alike in every run. */
+const SHOT_MS = 1_500;
+
 const failures = [];
 /** Printed at the end: the numbers behind the geometry checks, so a run can be read as a measurement. */
 const measurements = [];
-const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: { height: 800, width: 1280 } });
+// A tile repainted in part can anti-alias a rounded corner a shade apart from one painted whole, and which
+// happens depends on when the paints land, so every raster is a whole one.
+const browser = await chromium.launch({ args: ['--disable-partial-raster'] });
+const context = await browser.newContext({
+  reducedMotion: 'reduce',
+  timezoneId: 'UTC',
+  viewport: { height: 800, width: 1280 },
+});
+// Animations are cut so a screenshot never lands mid-transition.
+await context.addInitScript(() => {
+  document.addEventListener('DOMContentLoaded', () => {
+    const style = document.createElement('style');
+    style.textContent = [
+      '*, *::before, *::after {',
+      '  animation-duration: 0s !important; animation-delay: 0s !important;',
+      '  transition-duration: 0s !important; transition-delay: 0s !important;',
+      '}',
+    ].join('\n');
+    document.head.append(style);
+  });
+});
 const page = await context.newPage();
 // The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
 // logs that answer as a failed resource, and it is the one console error the pass expects. Chromium puts the
@@ -111,6 +147,33 @@ page.on('console', (m) => {
   if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${page.url()}: ${m.text()}`);
 });
 page.on('pageerror', (e) => failures.push(`page error on ${page.url()}: ${e.message}`));
+
+/**
+ * Resolves once the console's entry module has run to its end, its top-level await on the mock included, so the
+ * story the mock anchors at load reads the paused clock before any step moves it.
+ */
+const booted = () => page.evaluate(() => import(document.querySelector('script[type="module"][src]').src).then(() => true));
+
+/**
+ * Two of the page's own frames: every task the last step queued (a render, the effects after it, the timers
+ * those start) has run by then however slow the page is, so each step starts from the same page. Playwright
+ * polls on the real frame clock, which the paused one leaves alone.
+ */
+const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globalThis.__e2eFrames ?? 0) + 1) % 3 === 0, null, { polling: 'raf' });
+
+/**
+ * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency,
+ * the live feed's ticks, the relative labels) happens here, in fixed steps. A step jumps to its end and fires
+ * what fell due on the way there, so a timer the page starts in reply counts from the step's end however late
+ * the reply lands; every run takes the same steps and draws every view at the same instants.
+ */
+async function advance(ms) {
+  for (let spent = 0; spent < ms; spent += CLOCK_STEP_MS) {
+    await settle();
+    await page.clock.fastForward(CLOCK_STEP_MS);
+  }
+  await settle();
+}
 
 async function poolChips(theme) {
   const chips = await page.evaluate(() => {
@@ -428,9 +491,16 @@ async function wastedProbeRows(theme) {
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
+  // The same pin the jsdom smoke run applies, over the timers as well as the date: `install` alone keeps the
+  // clock running at the wall's pace, so it is paused at the origin and moves only when `advance` moves it.
+  await page.clock.install({ time: clockOrigin });
+  await page.clock.pauseAt(clockOrigin);
   await page.goto(`${base}/`);
+  await booted();
+  await advance(LOAD_MS);
   await page.getByLabel('Admin or viewer secret').fill(secret);
   await page.getByRole('button', { name: 'Log in' }).click();
+  await advance(LOAD_MS);
   await page.waitForSelector('.stat-grid');
 
   for (const theme of ['light', 'dark']) {
@@ -439,6 +509,8 @@ try {
     for (const view of VIEWS) {
       at = `${theme} ${view.path}`;
       await page.goto(`${base}${view.path}`);
+      await booted();
+      await advance(LOAD_MS);
       try {
         await page.waitForSelector(view.wait, { timeout: 15_000 });
       } catch {
@@ -449,7 +521,7 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
-      if (view.path === '/') {
+      if (view.path === '/' && !mock) {
         await remainingCards(theme);
         await errorStateBox(theme);
       }
@@ -465,6 +537,7 @@ try {
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
+      await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
     }
   }

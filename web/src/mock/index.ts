@@ -2,7 +2,7 @@ import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { ApiError } from '@/api/http';
 import type {
   Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
-  ServedModel, Session, SessionInfo, Settings, SyncResult,
+  Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
@@ -16,6 +16,9 @@ import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
+// Fixed, like the live feed's draw: a pass over the mock reads the same secrets every run.
+const MOCK_SEED = 4_211;
+
 // A short delay keeps loading states honest without making the mock feel slow.
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
@@ -23,13 +26,26 @@ const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) =>
 // so the callback the operator pastes carries both halves of the exchange.
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
 
-/** The smoke runner writes this so every mount starts signed in instead of on the login screen. */
+/**
+ * The signed-in role, which outlives a reload the way the router's session cookie does: the smoke runner writes
+ * it so every mount starts signed in, and a login writes it so a browser pass that loads each view by URL stays
+ * signed in.
+ */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
-const seededSession = (): boolean => {
+const seededRole = (): Role | null => {
   try {
-    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
+    const role = localStorage.getItem(SEEDED_SESSION_KEY);
+    return role === null ? null : role === 'viewer' ? 'viewer' : 'admin';
   } catch {
-    return false;
+    return null;
+  }
+};
+const seedRole = (role: Role | null) => {
+  try {
+    if (role === null) localStorage.removeItem(SEEDED_SESSION_KEY);
+    else localStorage.setItem(SEEDED_SESSION_KEY, role);
+  } catch {
+    // No storage (the Node tests): the session lives on the instance alone.
   }
 };
 
@@ -123,7 +139,7 @@ export class MockApi implements Api {
   /** What the last preview minted, held beside the URL it read, so a confirm writes the rows that were shown. */
   private pricePreview: { models: ModelPrice[]; token: string; url: string } | null = null;
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
-  private secretRng = createRng(Date.now() % 100_000);
+  private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
   private settings: Settings = { ...SETTINGS };
@@ -347,7 +363,8 @@ export class MockApi implements Api {
 
   getSession(): Promise<SessionInfo | null> {
     if (this.session) return latency(this.session, 60);
-    return latency(seededSession() ? { role: 'admin' as const, sessionId: 'mock-admin' } : null, 60);
+    const role = seededRole();
+    return latency(role ? { role, sessionId: `mock-${role}` } : null, 60);
   }
 
   getSettings() {
@@ -424,11 +441,13 @@ export class MockApi implements Api {
   login(secret: string): Promise<SessionInfo> {
     if (secret !== 'admin' && secret !== 'viewer') return Promise.reject(new ApiError(401, 'that secret does not match', null));
     this.session = { role: secret, sessionId: `mock-${secret}` };
+    seedRole(secret);
     return latency(this.session, 200);
   }
 
   logout() {
     this.session = null;
+    seedRole(null);
     return latency(undefined, 150);
   }
 

@@ -41,7 +41,10 @@ process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?
 // weekday, so a check over a synthetic week reads a different draw for every hour the runner starts in. A
 // clock that starts at one fixed weekday afternoon and advances from there gives every run the same story
 // while intervals, relative labels, and the scroll guards keep seeing time pass. The zone is pinned to UTC by
-// the smoke script for the same reason.
+// the smoke script for the same reason. Every date needle a check below compares against derives from
+// CLOCK_ORIGIN through the same formatter the page uses, never from a literal or the wall clock; the formatter
+// is exercised in UTC only. A date the story fixes outright, such as the pricing table's effective date, is a
+// literal on both sides and reads the same at any clock.
 const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const started = performance.now();
 const WallClock = Date;
@@ -900,6 +903,19 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   const back = [...m.container.querySelectorAll('tbody tr')].map((r) => r.querySelector('.sub.mono')?.textContent);
   results.push({ name: '/requests Previous returns to the earlier page', ok: back[0] === firstPage[0], missing: [String(back[0])] });
   results.push({ name: '/requests the pager says more rows are available', ok: m.text().includes('more available'), missing: [] });
+}
+{
+  // The row's age is taken from the pinned origin and the needle is that origin moved back by it, rendered with
+  // fmtAbsolute's own options (24h, restored above): a story anchored anywhere but the pinned clock fails the
+  // age bound, and a title rendered in another zone or shape fails the match.
+  const first = m.container.querySelector('.requests__table tbody tr');
+  const printed = first?.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+  const row = printed ? requests.find((r) => r.id.startsWith(printed)) : undefined;
+  const age = row ? CLOCK_ORIGIN - Date.parse(row.at) : Number.NaN;
+  const needle = new Date(CLOCK_ORIGIN - age).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hour12: false, minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
+  const title = first?.querySelector('td[title]')?.getAttribute('title') ?? '';
+  // The story spans the day before its anchor, and every row sits at least a second before it.
+  results.push({ name: '/requests renders an absolute time from the pinned clock', ok: age > 0 && age <= 86_460_000 && title === needle, missing: [`age ${age} ms`, `title ${title}`, `needle ${needle}`] });
 }
 {
   const trail429 = requests.filter((r) => r.attempts.length > 1 && r.attempts[0].upstreamStatus === 429 && r.attempts[r.attempts.length - 1].upstreamStatus === 200);

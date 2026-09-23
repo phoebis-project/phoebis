@@ -74,3 +74,52 @@ for (const [name, row] of Object.entries(SYNC)) {
     assert.deepEqual(findings, [], `${name} drifts from the decoded fixture`);
   });
 }
+
+/**
+ * Where a decoded member is a closed string set, the mock's values must be members: an unknown value falls
+ * through every label table on a page, which the shape comparison above cannot see. Numbers and dates stay
+ * unchecked. Every row of the mock's answer is walked, not only the first.
+ */
+const CLOSED = {
+  accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
+  alert_lifecycle: { '[].event': d.LIFECYCLE_EVENT_VALUES },
+  alert_rules: { '[].kind': d.ALERT_KIND_VALUES, '[].scope.type': d.SCOPE_TYPE_VALUES, '[].windowId': [...d.WINDOW_ID_VALUES, null] },
+  keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
+  live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },
+  pools: {
+    '[].apiKeySubStrategy': d.SUB_STRATEGY_VALUES,
+    '[].members[].eligible': d.ELIGIBILITY_VALUES,
+    '[].overagePolicy': d.OVERAGE_POLICY_VALUES,
+    '[].status': d.POOL_STATUS_VALUES,
+    '[].strategy': d.POOL_STRATEGY_VALUES,
+  },
+  requests: {
+    '.requests[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES,
+    '.requests[].kind': d.REQUEST_KIND_VALUES,
+    '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
+  },
+  sessions: { '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
+};
+
+/** Every value `path` names in `value`, beside the concrete path it sits at; `[]` fans out over a list's rows. */
+function members(value, path, at = '') {
+  if (path === '') return [[at, value]];
+  const step = /^(\[\]|\.[A-Za-z0-9_]+)/.exec(path)[0];
+  const rest = path.slice(step.length);
+  if (step !== '[]') return members(value?.[step.slice(1)], rest, `${at}${step}`);
+  // A member that is not a list where the path expects one is itself the finding, so it is reported as a value.
+  return Array.isArray(value) ? value.flatMap((row, i) => members(row, rest, `${at}[${i}]`)) : [[at, value]];
+}
+
+for (const [name, paths] of Object.entries(CLOSED)) {
+  test(`the mock answers ${name} with values inside the decoder's closed sets`, async () => {
+    const answered = await SYNC[name].mock(new d.MockApi());
+    for (const [path, set] of Object.entries(paths)) {
+      const found = members(answered, path);
+      // An answer with nothing at the path would pass without checking a single value.
+      assert.ok(found.length > 0, `${name}${path}: the mock's answer holds no value there`);
+      const outside = found.filter(([, v]) => !set.includes(v)).map(([at, v]) => `${at}: ${JSON.stringify(v)}`);
+      assert.deepEqual(outside, [], `${name}${path} holds values outside ${JSON.stringify(set)}`);
+    }
+  });
+}

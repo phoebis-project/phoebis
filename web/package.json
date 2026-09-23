@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "build:mock": "VITE_PHOEBIS_MOCK=1 vite build --outDir dist-mock",
     "dev": "vite",
     "e2e": "node e2e/views.mjs",
+    "e2e:mock": "npm run build:mock && node e2e/mock-pass.mjs",
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",
     "sync-mock": "node scripts/sync-mock.mjs",

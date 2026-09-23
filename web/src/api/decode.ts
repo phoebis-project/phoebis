@@ -63,6 +63,8 @@ function decodeServedModel(m: Rec): ServedModel {
   return { canonicalId: str(m.canonical_id, upstreamId), id: str(m.canonical_id, upstreamId), inCatalog: !bool(m.missing), isNew: bool(m.new), longContext: bool(m.long_context), manual: str(m.source) === 'manual', selected: bool(m.selected), upstreamId };
 }
 
+export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const satisfies readonly Account['kind'][];
+
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
@@ -79,7 +81,7 @@ export function decodeAccount(v: unknown): Account {
     extraUsage: extra && bool(extra.is_enabled) ? { disabledReason: strOrNull(extra.disabled_reason), enabled: true, inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     id: str(a.id),
-    kind: str(a.kind) === 'api_key' ? 'api_key' : 'oauth',
+    kind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'oauth',
     label: str(a.label),
     plan: profile ? planLabel(str(profile.rate_limit_tier)) : null,
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
@@ -159,8 +161,11 @@ export function decodeKey(v: unknown): ApiKey {
   };
 }
 
-const ELIGIBILITY: MemberEligibility[] = ['cooldown', 'eligible', 'overage', 'unavailable'];
-const SUB_STRATEGIES: ApiKeySubStrategy[] = ['priority_random', 'round_robin'];
+export const ELIGIBILITY_VALUES = ['cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
+export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
+export const POOL_STRATEGY_VALUES = ['earliest_refresh', 'least_utilized', 'priority_random', 'round_robin'] as const;
+export const SUB_STRATEGY_VALUES = ['priority_random', 'round_robin'] as const satisfies readonly ApiKeySubStrategy[];
 const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
 
 /** Read field by field against the defaults, so a route that answers a partial rule never yields an empty TTL. */
@@ -181,7 +186,7 @@ export function decodePool(v: unknown): Pool {
   return {
     activePins: num(p.active_pins),
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
-    apiKeySubStrategy: SUB_STRATEGIES.find((x) => x === str(p.api_key_sub_strategy)) ?? 'priority_random',
+    apiKeySubStrategy: SUB_STRATEGY_VALUES.find((x) => x === str(p.api_key_sub_strategy)) ?? 'priority_random',
     bodyCaptureHours: num(p.body_capture_hours),
     cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
     cacheTtl: decodeCacheTtl(p.cache_ttl),
@@ -194,21 +199,23 @@ export function decodePool(v: unknown): Pool {
       retryMaxSeconds: num(k.retry_max_seconds), retrySeconds: num(k.retry_seconds), stopWhenNetNegative: bool(k.stop_when_net_negative), warmSubagents: bool(k.warm_subagents, true),
     },
     // A row from before the router reported eligibility reads as not servable rather than as servable.
-    members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
+    members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
     name: str(p.label),
-    overagePolicy: (['allow', 'never', 'prefer_plan'] as const).find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
+    overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
     preferSubscription: bool(p.prefer_subscription),
     preferSubscriptionEffective: bool(p.prefer_subscription_effective),
     requests24h: num(p.requests_24h),
-    status: (['active', 'degraded', 'disabled', 'exhausted'] as const).find((x) => x === str(p.status)) ?? 'active',
-    strategy: (['earliest_refresh', 'least_utilized', 'priority_random', 'round_robin'] as const).find((x) => x === str(p.strategy)) ?? 'least_utilized',
+    status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
+    strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'least_utilized',
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
   };
 }
 
-const OUTCOMES: AttemptOutcome[] = ['auth_failed', 'canceled', 'rate_limited', 'succeeded', 'transport_error', 'upstream_error'];
-const outcomeOf = (v: unknown): AttemptOutcome => OUTCOMES.find((o) => o === str(v)) ?? 'upstream_error';
+export const ATTEMPT_OUTCOME_VALUES = ['auth_failed', 'canceled', 'rate_limited', 'succeeded', 'transport_error', 'upstream_error'] as const satisfies readonly AttemptOutcome[];
+export const REQUEST_KIND_VALUES = ['count_tokens', 'inference', 'probe'] as const;
+export const REQUEST_OUTCOME_VALUES = ['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const;
+const outcomeOf = (v: unknown): AttemptOutcome => ATTEMPT_OUTCOME_VALUES.find((o) => o === str(v)) ?? 'upstream_error';
 const missReason = (v: unknown): CacheMissReason | null => ((CACHE_MISS_REASONS as string[]).includes(str(v)) ? (str(v) as CacheMissReason) : v === null || v === undefined ? null : 'unavailable');
 const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization) }]; });
 const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
@@ -221,8 +228,8 @@ export function decodeRequest(v: unknown): RequestLog {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissedInputTokens: null, cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), clientDrift: strOrNull(r.client_drift), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id),
-    kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
-    outcome: (['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const).find((o) => o === str(r.outcome)) ?? 'failed',
+    kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
+    outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
     poolId: strOrNull(r.pool_id), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),
     status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
@@ -278,7 +285,8 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-const agentState = (v: unknown): Session['keepalive']['state'] => (['busy', 'idle', 'parked'] as const).find((s) => s === str(v)) ?? null;
+export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked'] as const;
+const agentState = (v: unknown): Session['keepalive']['state'] => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
 
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
@@ -286,10 +294,11 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agents: num(s.agents), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id) };
 }
 
-const RECIPE_REASONS = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
+export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
+export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASONS.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: (['armed', 'held', 'probing'] as const).find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
+  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
 }
 
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
@@ -298,22 +307,24 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-const ALERT_KINDS = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
-const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: (['account', 'all', 'any_account', 'key', 'pool'] as const).find((t) => t === str(s.type)) ?? 'all' }; };
+export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
+export const SCOPE_TYPE_VALUES = ['account', 'all', 'any_account', 'key', 'pool'] as const;
+export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
+const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: SCOPE_TYPE_VALUES.find((t) => t === str(s.type)) ?? 'all' }; };
 export function decodeAlertRule(v: unknown): AlertRule {
   const r = rec(v);
-  return { createdAt: isoOr(r.created_at, epoch), enabled: bool(r.enabled), hasSecret: bool(r.has_secret), id: str(r.id), kind: ALERT_KINDS.find((k) => k === str(r.kind)) ?? 'utilization_above', scope: scopeOf(r.scope), threshold: numOrNull(r.threshold), updatedAt: isoOr(r.updated_at, epoch), webhookUrl: str(r.webhook_url), windowId: (['5h', '7d', '7d_oi'] as const).find((w) => w === str(r.window)) ?? null };
+  return { createdAt: isoOr(r.created_at, epoch), enabled: bool(r.enabled), hasSecret: bool(r.has_secret), id: str(r.id), kind: ALERT_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'utilization_above', scope: scopeOf(r.scope), threshold: numOrNull(r.threshold), updatedAt: isoOr(r.updated_at, epoch), webhookUrl: str(r.webhook_url), windowId: WINDOW_ID_VALUES.find((w) => w === str(r.window)) ?? null };
 }
 export const decodeDelivery = (v: unknown): Delivery => ({ at: isoOr(rec(v).at, epoch), attempt: num(rec(v).attempt), error: strOrNull(rec(v).error), state: str(rec(v).state) === 'resolved' ? 'resolved' : 'opened', status: numOrNull(rec(v).status) });
-const LIFECYCLE_EVENTS = ['session_ended', 'session_idle', 'session_parked', 'session_resumed', 'session_started', 'subagent_ended', 'subagent_started'] as const;
+export const LIFECYCLE_EVENT_VALUES = ['session_ended', 'session_idle', 'session_parked', 'session_resumed', 'session_started', 'subagent_ended', 'subagent_started'] as const;
 // An event name a later router adds still reads as a row: the log is worth more whole than exact.
 export function decodeLifecycleDelivery(v: unknown): LifecycleDelivery {
   const d = rec(v);
-  return { at: isoOr(d.at, epoch), attempt: num(d.attempt), detail: (d.detail && typeof d.detail === 'object' ? d.detail : {}) as SessionLifecycleDetail, error: strOrNull(d.error), event: LIFECYCLE_EVENTS.find((e) => e === str(d.event)) ?? 'session_started', id: num(d.id), kind: ALERT_KINDS.find((k) => k === str(d.kind)) ?? 'session_active', ruleId: str(d.rule_id), status: numOrNull(d.status), subject: str(d.subject) };
+  return { at: isoOr(d.at, epoch), attempt: num(d.attempt), detail: (d.detail && typeof d.detail === 'object' ? d.detail : {}) as SessionLifecycleDetail, error: strOrNull(d.error), event: LIFECYCLE_EVENT_VALUES.find((e) => e === str(d.event)) ?? 'session_started', id: num(d.id), kind: ALERT_KIND_VALUES.find((k) => k === str(d.kind)) ?? 'session_active', ruleId: str(d.rule_id), status: numOrNull(d.status), subject: str(d.subject) };
 }
 export function decodeAlertEvent(v: unknown): AlertEvent {
   const e = rec(v);
-  return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KINDS.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };
+  return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KIND_VALUES.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };
 }
 
 const price = (m: Rec): ModelPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), model: str(m.model), outputPerM: num(m.output_per_m) });
@@ -344,9 +355,10 @@ const liveAttempt = (v: unknown): LiveAttempt => { const a = rec(v); return { ac
 const livePhases = (v: unknown) => { const p = rec(v); const at = (k: string) => isoOrNull(p[k]) ?? undefined; return { finishedAt: at('finished_at'), firstContentAt: at('first_content_at'), headAt: at('head_at'), receivedAt: isoOr(p.received_at, epoch), selectedAt: at('selected_at'), streamEndAt: at('stream_end_at'), writtenAt: at('written_at') }; };
 export function decodeLiveRequest(v: unknown): LiveRequest {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id, 'main'), attempts: list(r.attempts).map(liveAttempt), costUsd: num(r.cost_usd), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id), kind: (['count_tokens', 'inference', 'probe'] as const).find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model), outputTps: numOrNull(r.output_tps), phases: livePhases(r.phases), poolId: strOrNull(r.pool_id), preview: strOrNull(r.preview), sessionId: strOrNull(r.session_id), state: str(r.state) === 'in_flight' ? 'in_flight' : 'finished', status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent) };
+  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id, 'main'), attempts: list(r.attempts).map(liveAttempt), costUsd: num(r.cost_usd), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id), kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model), outputTps: numOrNull(r.output_tps), phases: livePhases(r.phases), poolId: strOrNull(r.pool_id), preview: strOrNull(r.preview), sessionId: strOrNull(r.session_id), state: str(r.state) === 'in_flight' ? 'in_flight' : 'finished', status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent) };
 }
-const liveMetric = (v: unknown): LiveMetric => ({ quality: (['derived', 'estimated', 'measured'] as const).find((q) => q === str(rec(v).quality)) ?? 'measured', series: list(rec(v).series).map(numOrNull), value: numOrNull(rec(v).value) });
+export const LIVE_METRIC_QUALITY_VALUES = ['derived', 'estimated', 'measured'] as const;
+const liveMetric = (v: unknown): LiveMetric => ({ quality: LIVE_METRIC_QUALITY_VALUES.find((q) => q === str(rec(v).quality)) ?? 'measured', series: list(rec(v).series).map(numOrNull), value: numOrNull(rec(v).value) });
 export function decodeLiveTick(v: unknown): LiveTick {
   const m = rec(rec(v).metrics);
   return { at: isoOr(rec(v).at, epoch), metrics: { activeStreams: liveMetric(m.active_streams), costPerMinute: liveMetric(m.cost_per_minute), errorRate: liveMetric(m.error_rate), outputTps: liveMetric(m.output_tps), requestsPerSecond: liveMetric(m.requests_per_second), ttfbP50: liveMetric(m.ttfb_p50), ttfbP95: liveMetric(m.ttfb_p95), ttfbP99: liveMetric(m.ttfb_p99) } };

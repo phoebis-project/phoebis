@@ -2,6 +2,7 @@
 /site/
 /target/
 /web/dist/
+/web/dist-mock/
 /web/node_modules/
 /web/smoke/dist/
 /web/test/dist/
