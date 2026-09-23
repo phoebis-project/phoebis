@@ -22,6 +22,12 @@ const child = spawn(process.execPath, [join(here, 'views.mjs')], {
   env: { ...process.env, PHOEBIS_E2E_BASE: `http://127.0.0.1:${server.port}`, PHOEBIS_E2E_CLOCK: CLOCK, PHOEBIS_E2E_MOCK: '1', PHOEBIS_E2E_SECRET: 'admin' },
   stdio: 'inherit',
 });
-const code = await new Promise((resolve) => child.on('exit', (status) => resolve(status ?? 1)));
+const code = await new Promise((resolve) => {
+  child.on('error', (error) => {
+    console.error(`the browser pass did not start: ${error.message}`);
+    resolve(1);
+  });
+  child.on('exit', (status) => resolve(status ?? 1));
+});
 server.close();
 process.exit(code);

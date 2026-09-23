@@ -3,6 +3,7 @@ import type {
   Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
   PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, SessionLifecycleDetail, Settings, WindowId,
 } from './types';
+import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
 import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
@@ -63,7 +64,8 @@ function decodeServedModel(m: Rec): ServedModel {
   return { canonicalId: str(m.canonical_id, upstreamId), id: str(m.canonical_id, upstreamId), inCatalog: !bool(m.missing), isNew: bool(m.new), longContext: bool(m.long_context), manual: str(m.source) === 'manual', selected: bool(m.selected), upstreamId };
 }
 
-export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const satisfies readonly Account['kind'][];
+// The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
+export { ACCOUNT_KIND_VALUES };
 
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);

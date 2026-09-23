@@ -157,7 +157,8 @@ const booted = () => page.evaluate(() => import(document.querySelector('script[t
 /**
  * Two of the page's own frames: every task the last step queued (a render, the effects after it, the timers
  * those start) has run by then however slow the page is, so each step starts from the same page. Playwright
- * polls on the real frame clock, which the paused one leaves alone.
+ * polls on the real frame clock, which the paused one leaves alone, and runs its first check at once rather
+ * than on a frame, so the third check is the second frame.
  */
 const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globalThis.__e2eFrames ?? 0) + 1) % 3 === 0, null, { polling: 'raf' });
 

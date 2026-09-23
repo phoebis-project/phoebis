@@ -1,7 +1,8 @@
 // Response shapes for the router's admin API. The mock client in src/mock
 // produces these; a real client would fetch them.
 
-export type AccountKind = 'api_key' | 'oauth';
+export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const;
+export type AccountKind = (typeof ACCOUNT_KIND_VALUES)[number];
 export type AccountStatus = 'cooldown' | 'disabled' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
 export type WindowId = '5h' | '7d' | '7d_fable';
 
