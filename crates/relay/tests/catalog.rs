@@ -472,3 +472,63 @@ async fn a_catalog_discovered_under_a_superseded_revision_is_dropped() {
     );
     up.shutdown().await;
 }
+
+/// A models list with one padded id, sized to land at exactly `total_len` bytes so a body just under and just
+/// over the discovery bound can be built from the same shape.
+fn padded_models_body(total_len: usize) -> Vec<u8> {
+    let prefix = br#"{"data":[{"id":""#;
+    let suffix = br#"","type":"model"}],"has_more":false}"#;
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(prefix);
+    out.resize(total_len - suffix.len(), b'x');
+    out.extend_from_slice(suffix);
+    out
+}
+
+#[tokio::test]
+async fn chunks_summing_past_the_discovery_bound_are_refused_like_one_oversized_chunk_and_just_under_it_is_kept(
+) {
+    // The models discovery bound (`crates/relay/src/catalog.rs`'s own `MAX_BODY`), duplicated here since the
+    // constant is private to that module.
+    const MAX_BODY: usize = 4 * 1024 * 1024;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: padded_models_body(MAX_BODY - 1024),
+        },
+    }])
+    .await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        &[],
+        default_limits(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    // A body just under the bound, delivered as the many small reads a real socket hands back, is kept whole.
+    let under = h.catalog.discover(&a).await.unwrap();
+    assert_eq!(under.models.len(), 1);
+
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: padded_models_body(MAX_BODY + 4096),
+        },
+    );
+    let error = h.catalog.discover(&a).await.unwrap_err();
+    let DiscoveryError::Malformed(message) = error else {
+        panic!("expected a malformed refusal, got {error:?}");
+    };
+    assert!(
+        message.contains(&format!("exceeds {MAX_BODY} bytes")),
+        "a body over the bound is refused the same way one oversized chunk is: {message}"
+    );
+    up.shutdown().await;
+}

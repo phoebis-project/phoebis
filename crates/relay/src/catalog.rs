@@ -14,11 +14,20 @@ use phoebis_transport::decode::{decoder, encoding};
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest};
 use phoebis_transport::response::{framing, read_head, BodyReader};
+use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A models list is a few hundred short objects; anything past this is not one.
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const LONG_CONTEXT_ABOVE: u64 = 200_000;
+
+/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
+fn at_models_bound(error: TransportError) -> TransportError {
+    match error {
+        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BODY),
+        other => other,
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
@@ -314,13 +323,15 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
     {
         out.extend(
             decoder
-                .feed_bounded(&chunk, MAX_BODY)
+                .feed_bounded(&chunk, MAX_BODY - out.len())
+                .map_err(at_models_bound)
                 .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
         );
     }
     out.extend(
         decoder
-            .finish_bounded(MAX_BODY)
+            .finish_bounded(MAX_BODY - out.len())
+            .map_err(at_models_bound)
             .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
     );
     Ok((head.status, out, reusable))
