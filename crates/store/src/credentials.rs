@@ -57,8 +57,8 @@ pub struct CredentialMetadata {
     pub expires_at: i64,
     pub refresh_expires_at: Option<i64>,
     pub scopes: String,
-    /// The reason of the last credential failure that opened no refresh attempt (a backoff, a quarantine, an
-    /// unpaired slot); cleared by the next committed credential.
+    /// The reason of the last credential failure that opened no refresh attempt (a backoff or a quarantine);
+    /// cleared by the next committed credential.
     pub last_error: Option<String>,
     /// When `last_error` was recorded. Meaningful only alongside `last_error`: it rides on the row's
     /// `updated_at`, which a commit that clears the error also advances, so the pairing never goes stale.
@@ -231,8 +231,8 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    /// Records a credential failure that opened no refresh attempt (a backoff, a quarantine, an unpaired
-    /// slot), so `credential.last_error` has something to show; a no-op once the account has moved past the
+    /// Records a credential failure that opened no refresh attempt (a backoff or a quarantine), so
+    /// `credential.last_error` has something to show; a no-op once the account has moved past the
     /// incarnation the caller observed, since the failure is no longer about the slot standing there now.
     pub fn record_credential_error(
         &self,

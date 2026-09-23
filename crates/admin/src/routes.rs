@@ -1014,8 +1014,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     let quarantined = attempt.as_ref().is_some_and(|attempt| {
         attempt.resolved_at.is_none() || attempt.outcome.as_deref() == Some("uncertain")
     });
-    // A failure that opened no attempt (a backoff, a quarantine, an unpaired slot) still updates the
-    // credential row, so whichever of the two landed last is the one that answers `credential.last_error`.
+    // A failure that opened no attempt (a backoff or a quarantine) still updates the credential row, so
+    // whichever of the two landed last is the one that answers `credential.last_error`.
     let attempt_error = attempt
         .as_ref()
         .filter(|attempt| {

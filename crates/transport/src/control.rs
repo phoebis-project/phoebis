@@ -121,7 +121,9 @@ fn at_body_bound(error: TransportError) -> TransportError {
 
 /// Written here rather than through the shared `write_request`, so `sent` can flip the instant the body
 /// clears `write_all`: a cancellation racing the call as a whole cannot tell that instant from one a moment
-/// earlier, and the same refresh token would otherwise be spent twice.
+/// earlier, and the same refresh token would otherwise be spent twice. This repeats `write_request`'s own
+/// head, body, and flush sequence deliberately, `serialize_head` the one part still shared; the two have to
+/// be kept in step by hand if either one changes.
 async fn write_tracked<W: tokio::io::AsyncWrite + Unpin>(
     w: &mut W,
     req: &RawRequest,
@@ -172,19 +174,44 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_body_is_marked_sent_before_a_flush_that_never_returns() {
-        let req = RawRequest {
+    /// Never completes a write at all, so a timeout during the head or the body write itself can be told
+    /// apart from one during the flush.
+    struct StallOnWrite;
+
+    impl tokio::io::AsyncWrite for StallOnWrite {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn token_request() -> RawRequest {
+        RawRequest {
             method: "POST",
             target: "/v1/oauth/token".into(),
             headers: vec![],
             body: Bytes::from_static(b"{}"),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn the_body_is_marked_sent_before_a_flush_that_never_returns() {
         let sent = AtomicBool::new(false);
         let mut w = StallOnFlush;
         let outcome = tokio::time::timeout(
             Duration::from_millis(50),
-            write_tracked(&mut w, &req, "host", &sent),
+            write_tracked(&mut w, &token_request(), "host", &sent),
         )
         .await;
         assert!(
@@ -194,6 +221,25 @@ mod tests {
         assert!(
             sent.load(Ordering::SeqCst),
             "the body was handed over before the stalled flush, not after it"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_body_is_not_marked_sent_while_the_write_itself_never_returns() {
+        let sent = AtomicBool::new(false);
+        let mut w = StallOnWrite;
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            write_tracked(&mut w, &token_request(), "host", &sent),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the write never resolves, so the call has to time out"
+        );
+        assert!(
+            !sent.load(Ordering::SeqCst),
+            "the flag stays false until the body has fully cleared write_all"
         );
     }
 }
