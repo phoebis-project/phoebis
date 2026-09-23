@@ -8,7 +8,9 @@ import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
+import { SETTINGS_SAMPLE } from '@/mock/samples';
 
+export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
 

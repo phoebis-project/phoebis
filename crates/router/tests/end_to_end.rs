@@ -71,6 +71,11 @@ fn port_base() -> u16 {
 /// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
 /// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
 /// process, one advance per draw and one per port a foreign listener holds.
+///
+/// Two processes whose pids are congruent modulo 100 share a slice, and a draw inside the probe-to-bind
+/// window can collide; the default cargo runner never runs two of these binaries at once, so the window is
+/// left open. A parallel runner would need a per-slice lock file under `target/` held for the process's
+/// lifetime, taken before the first draw.
 fn free_port() -> u16 {
     static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
     let base = port_base();

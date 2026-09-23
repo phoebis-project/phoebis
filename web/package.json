@@ -1,7 +1,7 @@
 {
   "name": "phoebis-web",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
