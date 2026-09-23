@@ -11,6 +11,7 @@ mod routing;
 mod schema;
 
 pub mod crypto;
+pub mod permissions;
 
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
@@ -84,6 +85,11 @@ pub enum StoreError {
     PoolInUse(String),
     #[error("pool {0} not found")]
     PoolNotFound(String),
+    #[error(
+        "the registry's schema version {found} is newer than this build supports ({supported}); \
+         restore the backup taken before the upgrade"
+    )]
+    SchemaTooNew { found: u32, supported: u32 },
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("lifecycle or credential generation is stale")]
@@ -104,6 +110,9 @@ impl StorageKey {
 
     /// Reads a key file holding exactly 32 raw bytes, or exactly 64 ASCII hex characters.
     pub fn from_file(path: &Path) -> Result<Self, StoreError> {
+        for warning in permissions::check_private_file(path, 0o600) {
+            tracing::warn!("{warning}");
+        }
         let raw = std::fs::read(path)?;
         if raw.len() == 32 {
             let mut bytes = [0u8; 32];
@@ -149,10 +158,16 @@ impl Store {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
         };
+        let dir_existed = dir.exists();
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
+        if dir_existed {
+            for warning in permissions::check_private_dir(dir) {
+                tracing::warn!("{warning}");
+            }
+        }
         let process_lock = lock::acquire(dir)?;
 
         if !db_path.exists() {
@@ -164,6 +179,10 @@ impl Store {
                 .write(true)
                 .mode(0o600)
                 .open(db_path)?;
+        } else {
+            for warning in permissions::check_private_file(db_path, 0o600) {
+                tracing::warn!("{warning}");
+            }
         }
 
         let mut conn = Connection::open(db_path)?;
@@ -226,6 +245,12 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
     }
     conn.execute_batch(schema::SCHEMA)?;
     let current = read_version(conn)?;
+    if current > schema::SCHEMA_VERSION {
+        return Err(StoreError::SchemaTooNew {
+            found: current,
+            supported: schema::SCHEMA_VERSION,
+        });
+    }
     for (version, sql) in schema::MIGRATIONS {
         if *version <= current {
             continue;
@@ -261,4 +286,35 @@ pub fn digest_with(key: &[u8; 32], secret: &[u8]) -> [u8; 32] {
         <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts a 32 byte key");
     mac.update(secret);
     mac.finalize().into_bytes().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_version_is_the_last_entry_of_migrations() {
+        let last = schema::MIGRATIONS.last().expect("at least one migration").0;
+        assert_eq!(schema::SCHEMA_VERSION, last);
+    }
+
+    #[test]
+    fn a_registry_stamped_by_a_newer_build_refuses_to_open() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare(&mut conn, false).unwrap();
+        conn.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            params![(schema::SCHEMA_VERSION + 1).to_string()],
+        )
+        .unwrap();
+        let error = prepare(&mut conn, false).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::SchemaTooNew { found, supported }
+                if found == schema::SCHEMA_VERSION + 1 && supported == schema::SCHEMA_VERSION
+            ),
+            "{error:?}"
+        );
+    }
 }

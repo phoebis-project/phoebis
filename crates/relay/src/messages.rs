@@ -35,6 +35,7 @@ use phoebis_transport::TransportError;
 use futures::future::BoxFuture;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::billing::{entrypoint_of, restorable_version, Restore};
 use crate::casing::OriginalHead;
@@ -146,6 +147,9 @@ pub struct Probe {
 }
 
 pub struct Relay {
+    /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
+    /// task publishes after its connection was cut.
+    bodies: TaskTracker,
     bus: Option<Bus>,
     /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
     cache_diagnostics: bool,
@@ -172,6 +176,7 @@ impl Relay {
         limits: Limits,
     ) -> Relay {
         Relay {
+            bodies: TaskTracker::new(),
             bus: None,
             cache_diagnostics: false,
             clock,
@@ -228,6 +233,13 @@ impl Relay {
     /// after the periodic task is joined.
     pub async fn flush_memory(&self) {
         self.memory.flush((self.clock)()).await;
+    }
+
+    /// Closes the body-task tracker and waits for every task already spawned under it, so a shutdown gives a
+    /// body cut mid-stream the chance to publish its completion before the ledger and the bus close.
+    pub async fn drain_bodies(&self) {
+        self.bodies.close();
+        self.bodies.wait().await;
     }
 
     /// Flushes every `every` and whenever the memory's overlay asks for one ahead of the tick, and once an
@@ -1214,7 +1226,7 @@ impl Relay {
             }
         };
         let authority = "api.anthropic.com".to_string();
-        let Some(addr) = (self.resolver)(&authority) else {
+        let Some(addr) = (self.resolver)(&authority).await else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
             return Leg::FailOver;
         };
@@ -2109,17 +2121,20 @@ impl Relay {
             pending_message_id: None,
             on_message_id,
         });
-        let body = relay_body(Relayed {
-            cancel,
-            checkin,
-            decoder,
-            idle_timeout: self.limits.idle_timeout,
-            keep_alive,
-            observer,
-            prefix,
-            publish,
-            reader,
-        });
+        let body = relay_body(
+            Relayed {
+                cancel,
+                checkin,
+                decoder,
+                idle_timeout: self.limits.idle_timeout,
+                keep_alive,
+                observer,
+                prefix,
+                publish,
+                reader,
+            },
+            &self.bodies,
+        );
         with_outcome(built(builder, body), outcome)
     }
 

@@ -152,6 +152,7 @@ impl CatalogService {
             body: Bytes::new(),
         };
         let addr = (self.resolver)(&authority)
+            .await
             .ok_or_else(|| DiscoveryError::Unreachable(format!("no address for {authority}")))?;
         let (status, body) = tokio::time::timeout(self.timeout, async {
             {

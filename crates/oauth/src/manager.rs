@@ -733,7 +733,7 @@ mod tests {
 
     use phoebis_profile::fixtures::{control_response, ControlFixture};
     use phoebis_store::{AccountKind, Identity, StorageKey};
-    use phoebis_transport::control::Resolver;
+    use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
     use fake_upstream::{FakeUpstream, Respond, Rule};
 
@@ -753,7 +753,8 @@ mod tests {
         let mut builder = connector_builder(profile, Plane::Control).unwrap();
         phoebis_transport::trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
         let addr = up.addr();
-        let resolver: Resolver = Arc::new(move |_| Some(addr));
+        let resolver: Resolver =
+            Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
         let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
         let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
         store

@@ -11,6 +11,7 @@ use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
+use tokio::task::JoinSet;
 
 pub use phoebis_relay::ListenLimits;
 
@@ -43,7 +44,9 @@ pub async fn serve(
     let builder = Arc::new(builder);
     let slots = Arc::new(Semaphore::new(limits.max_connections));
     let graceful = GracefulShutdown::new();
+    let mut tasks = JoinSet::new();
     loop {
+        while tasks.try_join_next().is_some() {}
         // A permit is taken before the accept so a full listener leaves connections in the kernel's backlog
         // rather than holding a task and a buffer for each; the permit rides with the connection task.
         let permit = tokio::select! {
@@ -70,7 +73,7 @@ pub async fn serve(
         // hyper hands it to its `on_upgrade` task, not when the socket later closes, so the live crate's own
         // cap is what bounds those sockets from here on. `serve_connection*` is called inside the spawned
         // task, not before it, because the future it returns borrows the builder that produced it.
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let _slot = permit;
             // The auto builder's protocol sniff reads for the HTTP/2 preface ahead of the HTTP/1 dispatcher,
             // and that read carries no timeout of its own (hyperium/hyper#3756, open as of hyper-util
@@ -99,7 +102,20 @@ pub async fn serve(
     }
     // Dropped before the wait so the port is free the moment the drain starts rather than when it ends.
     drop(listener);
-    graceful.shutdown().await;
+    // The graceful wait lets in-flight requests finish; the deadline is the operator's promise that a
+    // shutdown ends within it, so what is still running then is cut rather than left to commit after the
+    // final flush.
+    if tokio::time::timeout(limits.drain_timeout, graceful.shutdown())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            seconds = limits.drain_timeout.as_secs(),
+            "connections still open at the drain deadline were cut"
+        );
+        tasks.abort_all();
+    }
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 

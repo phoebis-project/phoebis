@@ -161,7 +161,9 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     let mut b = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
-    let resolver: phoebis_transport::control::Resolver = Arc::new(move |_: &str| Some(addr));
+    let resolver: phoebis_transport::control::Resolver = Arc::new(move |_: &str| {
+        Box::pin(async move { Some(addr) }) as phoebis_transport::control::ResolveFuture
+    });
     let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut cb, up.ca_pem()).unwrap();
     let control = Arc::new(phoebis_transport::control::ControlClient::new(

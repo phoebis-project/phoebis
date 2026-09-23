@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS refresh_attempts (
 CREATE INDEX IF NOT EXISTS refresh_attempts_pending ON refresh_attempts (account_id) WHERE resolved_at IS NULL OR outcome = 'uncertain';
 "#;
 
-/// Applied in order above the stored `schema_version`, each inside one transaction. Every statement is
-/// additive so a downgrade can still read the older tables.
+/// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
+/// rebuild a table, so an older build refuses a newer registry rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (2, V2),
     (3, V3),
@@ -51,6 +51,10 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (19, V19),
     (20, V20),
 ];
+
+/// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
+/// rather than skip migrations it does not carry and misread the tables that follow.
+pub const SCHEMA_VERSION: u32 = 20;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (

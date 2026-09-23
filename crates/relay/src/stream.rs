@@ -16,6 +16,7 @@ use futures::future::BoxFuture;
 use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::hold::Inspect;
 use crate::messages::{RelayOutcome, Trace};
@@ -306,12 +307,14 @@ pub(crate) struct Relayed<C> {
 }
 
 /// Relays the upstream body as it arrives: one task reads, the response body drains the channel, and the
-/// connection goes back to the pool only after a clean end.
+/// connection goes back to the pool only after a clean end. Spawned under `tracker` rather than bare, so a
+/// shutdown can wait for a task a cut connection left running.
 pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
     relayed: Relayed<C>,
+    tracker: &TaskTracker,
 ) -> Body {
     let (tx, rx) = mpsc::channel::<Result<Bytes, TransportError>>(CHANNEL_DEPTH);
-    tokio::spawn(async move {
+    tracker.spawn(async move {
         let Relayed {
             cancel,
             checkin,

@@ -14,6 +14,7 @@ use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
+use tokio::task::JoinSet;
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
 use crate::messages::{router, Relay};
@@ -22,10 +23,12 @@ use crate::messages::{router, Relay};
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
-/// What bounds a connection before a request exists on it: the wait for its head, and how many the listener
-/// holds at once. Both are compiled in; the router names the values.
+/// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
+/// at once, and how long a graceful shutdown waits before it cuts what is still running. All compiled in; the
+/// router names the values.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
 }
@@ -55,7 +58,9 @@ pub async fn serve(
         .header_read_timeout(limits.header_read_timeout);
     let slots = Arc::new(Semaphore::new(limits.max_connections));
     let graceful = GracefulShutdown::new();
+    let mut tasks = JoinSet::new();
     loop {
+        while tasks.try_join_next().is_some() {}
         // A permit is taken before the accept so a full listener leaves connections in the kernel's backlog
         // rather than holding a task and a buffer for each; the permit rides with the connection task.
         let permit = tokio::select! {
@@ -84,7 +89,7 @@ pub async fn serve(
         };
         // No upgrades: no route on the relayed surface switches protocols.
         let connection = graceful.watch(builder.serve_connection(io, service));
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let _slot = permit;
             if let Err(error) = connection.await {
                 tracing::debug!(%error, "a relayed connection ended early");
@@ -93,7 +98,20 @@ pub async fn serve(
     }
     // Dropped before the wait so the port is free the moment the drain starts rather than when it ends.
     drop(listener);
-    graceful.shutdown().await;
+    // The graceful wait lets in-flight requests finish; the deadline is the operator's promise that a
+    // shutdown ends within it, so what is still running then is cut rather than left to commit after the
+    // final flush.
+    if tokio::time::timeout(limits.drain_timeout, graceful.shutdown())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            seconds = limits.drain_timeout.as_secs(),
+            "connections still open at the drain deadline were cut"
+        );
+        tasks.abort_all();
+    }
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 //! Control-plane client: one TCP connection per request, used once and dropped.
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +16,10 @@ use crate::request::{write_request, RawRequest, WriteProgress};
 use crate::response::{framing, read_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
 
-/// Maps a host name to an address; production resolves DNS, tests map both control hosts to a fixed loopback fake.
-pub type Resolver = Arc<dyn Fn(&str) -> Option<SocketAddr> + Send + Sync>;
+/// Maps a host name to an address; production resolves DNS with a bound, tests map both control hosts to a
+/// fixed loopback fake.
+pub type Resolver = Arc<dyn Fn(&str) -> ResolveFuture + Send + Sync>;
+pub type ResolveFuture = Pin<Box<dyn Future<Output = Option<SocketAddr>> + Send>>;
 
 /// Bounds a control-plane response body: these are small JSON payloads, so anything past this is a malformed
 /// or malicious upstream rather than a legitimate response.
@@ -44,7 +48,7 @@ impl ControlClient {
         host: &str,
         timeout: Duration,
     ) -> Result<(ResponseHead, Bytes), TransportError> {
-        let Some(addr) = (self.resolver)(host) else {
+        let Some(addr) = (self.resolver)(host).await else {
             return Err(TransportError::Unreachable(format!(
                 "no address for {host}"
             )));

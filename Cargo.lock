@@ -602,6 +602,7 @@ dependencies = [
  "fd-lock",
  "hmac",
  "jiff",
+ "libc",
  "rand 0.10.2",
  "rusqlite",
  "serde",
@@ -609,6 +610,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
+ "tracing",
  "url",
  "zeroize",
 ]

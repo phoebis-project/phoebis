@@ -9,7 +9,7 @@ use phoebis_profile::{
 use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
 use phoebis_transport::{
     connector_builder,
-    control::{ControlClient, Resolver},
+    control::{ControlClient, ResolveFuture, Resolver},
     request::serialize_head,
     Plane,
 };
@@ -129,7 +129,8 @@ async fn manager_with(
     let mut b = connector_builder(p, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
-    let resolver: Resolver = Arc::new(move |_| Some(addr));
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
     let control = Arc::new(ControlClient::new(p, b.build(), resolver));
     let store = store_with_account();
     let n = now.clone();
@@ -464,7 +465,7 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
 /// A manager whose resolver never yields an address, so every refresh fails before a byte is written.
 async fn manager_without_upstream(now: Arc<AtomicI64>) -> (CredentialManager, Arc<Store>) {
     let p = claude_code_2_1_269_linux_x64();
-    let resolver: Resolver = Arc::new(|_| None);
+    let resolver: Resolver = Arc::new(|_| Box::pin(async { None }) as ResolveFuture);
     let control = Arc::new(ControlClient::new(
         p,
         connector_builder(p, Plane::Control).unwrap().build(),

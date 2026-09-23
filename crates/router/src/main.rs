@@ -71,6 +71,19 @@ fn main() -> anyhow::Result<()> {
                     "unverified"
                 }
             );
+            for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
+                println!("warning: {warning}");
+            }
+            let data_dir = match config.storage.path.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => parent,
+                _ => std::path::Path::new("."),
+            };
+            for warning in phoebis_store::permissions::check_private_dir(data_dir) {
+                println!("warning: {warning}");
+            }
+            for warning in phoebis_store::permissions::check_private_file(&config.storage.path, 0o600) {
+                println!("warning: {warning}");
+            }
             Ok(())
         }
         Some(Command::Health) => match phoebis_router::health::probe(config.proxy.listen, phoebis_router::health::TIMEOUT) {

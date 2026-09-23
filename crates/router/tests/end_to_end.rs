@@ -25,7 +25,7 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
             let answered = client
                 .post(session_url)
                 .header("content-type", "application/json")
-                .body(r#"{"secret":"admin-secret"}"#)
+                .body(r#"{"secret":"admin-secret-001"}"#)
                 .send()
                 .await;
             match answered {
@@ -274,7 +274,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -517,7 +517,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -731,7 +731,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -999,9 +999,9 @@ fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-    std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret");
-    std::env::set_var("TEST_SHARED_SECRET", "admin-secret");
+    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+    std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
+    std::env::set_var("TEST_SHARED_SECRET", "admin-secret-001");
     let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true";
     let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  plain_http: true";
     let public_plain =
@@ -1045,7 +1045,7 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
     let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
@@ -1217,7 +1217,7 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+    std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
     let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
@@ -1298,7 +1298,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1538,7 +1538,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1764,7 +1764,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1960,7 +1960,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2050,8 +2050,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
-        std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2204,7 +2204,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .arg("e2e/views.mjs")
         .current_dir(&web)
         .env("PHOEBIS_E2E_BASE", format!("http://127.0.0.1:{admin_port}"))
-        .env("PHOEBIS_E2E_SECRET", "admin-secret")
+        .env("PHOEBIS_E2E_SECRET", "admin-secret-001")
         .env("PHOEBIS_SCREENSHOT_DIR", &shots)
         .status()
         .await
@@ -2353,7 +2353,7 @@ usage:
     std::fs::write(&cfg_path, yaml).unwrap();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret");
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

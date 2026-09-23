@@ -223,11 +223,12 @@ pub async fn harness_on(
     }
     let addr = up.addr();
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |authority: &str| {
-        authority
+        let resolved = authority
             .rsplit_once(':')
             .and_then(|(_, p)| p.parse::<u16>().ok())
             .map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p)))
-            .or(Some(addr))
+            .or(Some(addr));
+        Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
     });
     let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     if !up.ca_pem().is_empty() {

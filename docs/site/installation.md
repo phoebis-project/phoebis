@@ -149,11 +149,15 @@ so it is safe to run against a production file while the router is up. It prints
 5. `profile {config.compatibility.profile}`
 6. `routing: max_attempts {n}, cooldown_fallback {n}s, catalog sync every {n}s`
 7. `ledger at {config.stats.ledger_path}`
-8. `retention {n} days, samples {n} days, quota poll every {n}s`
+8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days, quota poll every {n}s`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
    {verified|unverified}`
 
-On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds.
+Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
+expects; the router starts either way and logs the same warnings.
+
+On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever
+is still running.
 
 `health` loads the file the way `check-config` does, so it needs the same environment. It connects to
 `proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
@@ -165,9 +169,11 @@ seconds ([the container](#run-the-container)).
 
 The bootstrap file names environment variables and never holds a secret. `phoebis` resolves them at startup and
 refuses to start when one is unset or empty, with `environment variable {name} is unset or empty` and nothing
-else. The two admin secrets must differ: a viewer secret that equals the admin one would silently turn the
-read-only login into a full one, and `phoebis` refuses to start with `{first} and {second} resolve to the same
-secret`.
+else. A value shorter than 16 characters refuses with `environment variable {name} holds a secret shorter than
+16 characters`, and either of the example file's own placeholders refuses with `environment variable {name}
+still holds the example placeholder`. The two admin secrets must differ: a viewer secret that equals the admin
+one would silently turn the read-only login into a full one, and `phoebis` refuses to start with `{first} and
+{second} resolve to the same secret`.
 
 | Variable | Named by | Holds |
 | --- | --- | --- |
@@ -491,11 +497,12 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
-| Drain window | 30 seconds for requests still in flight on shutdown. |
+| Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
 | Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger channel | 4,096 records; a full channel drops and records a `ledger_gap` event. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
+| Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, a 32 MiB request cap. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |

@@ -51,7 +51,7 @@ mod service {
     use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
     use phoebis_transport::{
         connector_builder,
-        control::{ControlClient, Resolver},
+        control::{ControlClient, ResolveFuture, Resolver},
         Plane,
     };
     use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
@@ -122,7 +122,8 @@ mod service {
         let mut b = connector_builder(p, Plane::Control).unwrap();
         phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
         let addr = up.addr();
-        let resolver: Resolver = Arc::new(move |_| Some(addr));
+        let resolver: Resolver =
+            Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
         let control = Arc::new(ControlClient::new(p, b.build(), resolver));
         let n = now.clone();
         let clock: Clock = Arc::new(move || n.load(Ordering::SeqCst));
@@ -297,7 +298,8 @@ mod service {
         let mut b = connector_builder(p, Plane::Control).unwrap();
         phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
         let addr = up.addr();
-        let resolver: Resolver = Arc::new(move |_| Some(addr));
+        let resolver: Resolver =
+            Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
         let control = Arc::new(ControlClient::new(p, b.build(), resolver));
         let store = store_with_account();
         // A bundle far from expiry, so `acquire` never triggers a refresh of its own against this fake.

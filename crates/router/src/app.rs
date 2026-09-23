@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::ToSocketAddrs;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,9 +16,10 @@ use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay};
 use phoebis_store::{Secret, StorageKey, Store};
-use phoebis_transport::control::{ControlClient, Resolver};
+use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
+use tokio::task::JoinHandle;
 
 use crate::config::{Config, UpstreamConfig};
 use crate::listen;
@@ -61,6 +61,10 @@ const POOL_MAX_IDLE: usize = 8;
 
 /// A models list is one small request; a host that has not answered by then is not going to.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// An unreachable resolver must not hold a request for longer than this per lookup of an upstream or catalog
+/// host.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A pairing session lives ten minutes, so a sweep this often frees an abandoned exchange within a minute
 /// of the deadline it can no longer meet.
@@ -154,8 +158,17 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )
     })?);
     let pricing = Arc::new(
-        Pricing::load(&store, config.stats.pricing_path.as_deref())
-            .context("loading the price table")?,
+        Pricing::load(&store, config.stats.pricing_path.as_deref()).with_context(|| {
+            format!(
+                "loading the price table from {}",
+                config
+                    .stats
+                    .pricing_path
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "the built-in table".to_string())
+            )
+        })?,
     );
     tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %pricing.current().version, "ledger opened");
     // Rows from before the rollup key carried a generation are stamped with each live key's own, once; the
@@ -427,6 +440,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )),
         proxy_stop,
         ListenLimits {
+            drain_timeout: DRAIN_TIMEOUT,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
@@ -436,6 +450,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         admin_app,
         stop_rx.clone(),
         ListenLimits {
+            drain_timeout: DRAIN_TIMEOUT,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
@@ -453,13 +468,38 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ),
         stop_rx,
         ListenLimits {
+            drain_timeout: DRAIN_TIMEOUT,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
         },
         false,
     ));
 
-    shutdown.await;
+    // A listener that ends on its own is read here, once: a `JoinHandle` polled again after it completed
+    // panics, so its result is kept in a slot and the join below skips that handle.
+    let mut ended: [Option<Listened>; 3] = [None, None, None];
+    let ended_early = first_to_end(
+        shutdown,
+        &mut proxy,
+        &mut admin_server,
+        &mut metrics_server,
+        &mut ended,
+    )
+    .await;
+    if let Some(listener) = ended_early {
+        tracing::error!(listener, "a listener ended on its own; shutting down");
+    }
+    let early_error = ended_early.map(|listener| {
+        let index = match listener {
+            "proxy" => 0,
+            "admin" => 1,
+            _ => 2,
+        };
+        let result = ended[index]
+            .as_ref()
+            .expect("first_to_end filled the ended listener's slot");
+        anyhow!("the {listener} listener ended on its own: {result:?}")
+    });
     tracing::info!("shutting down");
     let _ = stop.send(true);
     // Stop, close, drain, listeners: the inputs stop posting starts and the poller ends before the keepalive
@@ -473,13 +513,21 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         // which the drain is about to drop.
         keepalive.shutdown().await;
         alert_inputs.drain().await;
-        tokio::join!(&mut proxy, &mut admin_server, &mut metrics_server)
+        join_remaining(
+            &mut ended,
+            [&mut proxy, &mut admin_server, &mut metrics_server],
+        )
+        .await;
     })
     .await
     {
-        Ok((proxy_result, admin_result, metrics_result)) => drained(proxy_result)
-            .and(drained(admin_result))
-            .and(drained(metrics_result)),
+        Ok(()) => drained(ended[0].take().expect("every slot is filled by now"))
+            .and(drained(
+                ended[1].take().expect("every slot is filled by now"),
+            ))
+            .and(drained(
+                ended[2].take().expect("every slot is filled by now"),
+            )),
         Err(_) => {
             tracing::warn!(
                 seconds = DRAIN_TIMEOUT.as_secs(),
@@ -491,6 +539,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             alert_inputs.abort();
             Ok(())
         }
+    };
+    let served = match early_error {
+        Some(error) => Err(error),
+        None => served,
     };
     // Every delivery queued before the stop lands before the ledger and the bus close.
     alerts.shutdown().await;
@@ -504,6 +556,20 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     sweeper.abort();
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
     drop(keepalive);
+    // The listeners are done; a relayed body runs on its own task and a live socket on its own. A cut
+    // connection drops its body channel's receiver, so the body task ends at its next send and publishes its
+    // completion, which the ledger and the memory below are still alive to take. A body task blocked on an
+    // upstream read waits for the relay's idle timeout, and the margin is what a shutdown gives it.
+    let margin = DRAIN_TIMEOUT + Duration::from_secs(5);
+    if tokio::time::timeout(margin, async {
+        live.shutdown().await;
+        relay.drain_bodies().await;
+    })
+    .await
+    .is_err()
+    {
+        tracing::warn!("body tasks or live sockets were still running past the drain margin");
+    }
     // The periodic flusher is aborted and joined, and a flush it had in flight runs to its end on the
     // blocking pool under the memory's flush lock, so the last flush queues behind it and an older batch
     // never follows a newer one to the store. The last flush lands after the listeners drained, so every
@@ -539,19 +605,49 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
 }
 
 /// One listener's outcome: the task either panicked or the serve future itself failed.
-fn drained(result: Result<std::io::Result<()>, tokio::task::JoinError>) -> anyhow::Result<()> {
+type Listened = Result<std::io::Result<()>, tokio::task::JoinError>;
+
+fn drained(result: Listened) -> anyhow::Result<()> {
     Ok(result??)
+}
+
+/// Waits for the shutdown signal or the first listener to end; an ended listener's result goes into its slot.
+async fn first_to_end(
+    shutdown: impl Future<Output = ()>,
+    proxy: &mut JoinHandle<std::io::Result<()>>,
+    admin: &mut JoinHandle<std::io::Result<()>>,
+    metrics: &mut JoinHandle<std::io::Result<()>>,
+    ended: &mut [Option<Listened>; 3],
+) -> Option<&'static str> {
+    tokio::pin!(shutdown);
+    tokio::select! {
+        _ = &mut shutdown => None,
+        result = proxy => { ended[0] = Some(result); Some("proxy") }
+        result = admin => { ended[1] = Some(result); Some("admin") }
+        result = metrics => { ended[2] = Some(result); Some("metrics") }
+    }
+}
+
+/// Joins the listeners the early-exit select did not consume; the one it did is read from its slot.
+async fn join_remaining(
+    ended: &mut [Option<Listened>; 3],
+    handles: [&mut JoinHandle<std::io::Result<()>>; 3],
+) {
+    for (slot, handle) in ended.iter_mut().zip(handles) {
+        if slot.is_none() {
+            *slot = Some(handle.await);
+        }
+    }
 }
 
 fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
     if let Some(addr) = upstream.resolve_override {
         // Every host goes to the one address, which is how a lab upstream stands in for the real one.
-        return Arc::new(move |_| Some(addr));
+        return Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
     }
-    // Blocking name resolution: the contract is a synchronous closure, and the control plane and the relay
-    // ask for a name once per new connection rather than per request. The port travels with the authority
-    // the caller passes in; a bare host defaults to 443.
-    Arc::new(|authority: &str| {
+    // The control plane and the relay ask for a name once per new connection rather than per request. The
+    // port travels with the authority the caller passes in; a bare host defaults to 443.
+    Arc::new(move |authority: &str| {
         let (host, port) = match split_authority(authority) {
             Some(split) => split,
             // A bracketed v6 literal carries its brackets here too, and no resolver takes them.
@@ -560,7 +656,18 @@ fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
                 HTTPS_PORT,
             ),
         };
-        (host, port).to_socket_addrs().ok()?.next()
+        let (host, port) = (host.to_string(), port);
+        Box::pin(async move {
+            // Bounded: an unreachable resolver must not hold a request for the resolver's own timeout.
+            tokio::time::timeout(
+                RESOLVE_TIMEOUT,
+                tokio::net::lookup_host((host.as_str(), port)),
+            )
+            .await
+            .ok()?
+            .ok()?
+            .next()
+        })
     })
 }
 
@@ -587,13 +694,57 @@ fn init_tracing() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_production_resolver_honours_an_explicit_port_and_defaults_to_443() {
+    #[tokio::test]
+    async fn the_production_resolver_honours_an_explicit_port_and_defaults_to_443() {
         let resolve = resolver_for(&UpstreamConfig::default());
-        assert_eq!(resolve("127.0.0.1:8317").map(|a| a.port()), Some(8317));
-        assert_eq!(resolve("127.0.0.1").map(|a| a.port()), Some(443));
-        assert_eq!(resolve("[::1]:8443").map(|a| a.port()), Some(8443));
-        assert_eq!(resolve("[::1]").map(|a| a.port()), Some(443));
-        assert!(resolve("no-such-host.invalid").is_none());
+        assert_eq!(
+            resolve("127.0.0.1:8317").await.map(|a| a.port()),
+            Some(8317)
+        );
+        assert_eq!(resolve("127.0.0.1").await.map(|a| a.port()), Some(443));
+        assert_eq!(resolve("[::1]:8443").await.map(|a| a.port()), Some(8443));
+        assert_eq!(resolve("[::1]").await.map(|a| a.port()), Some(443));
+        let answer = tokio::time::timeout(
+            RESOLVE_TIMEOUT + Duration::from_secs(1),
+            resolve("no-such-host.invalid"),
+        )
+        .await
+        .expect("the resolver's own bound ends the lookup within RESOLVE_TIMEOUT");
+        assert!(answer.is_none());
+    }
+
+    /// The early-exit select must not poll a `JoinHandle` it already consumed: `join_remaining` reads that
+    /// listener's result from its slot instead.
+    #[tokio::test]
+    async fn a_listener_the_early_select_consumed_is_not_polled_again() {
+        let (tx_admin, rx_admin) = tokio::sync::oneshot::channel::<()>();
+        let (tx_metrics, rx_metrics) = tokio::sync::oneshot::channel::<()>();
+        let mut proxy: JoinHandle<std::io::Result<()>> =
+            tokio::spawn(async { Err(std::io::Error::other("the proxy listener failed")) });
+        let mut admin: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
+            let _ = rx_admin.await;
+            Ok(())
+        });
+        let mut metrics: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
+            let _ = rx_metrics.await;
+            Ok(())
+        });
+        let mut ended: [Option<Listened>; 3] = [None, None, None];
+        let ended_early = first_to_end(
+            std::future::pending(),
+            &mut proxy,
+            &mut admin,
+            &mut metrics,
+            &mut ended,
+        )
+        .await;
+        assert_eq!(ended_early, Some("proxy"));
+        assert!(ended[0].is_some());
+        assert!(ended[1].is_none());
+        assert!(ended[2].is_none());
+        let _ = tx_admin.send(());
+        let _ = tx_metrics.send(());
+        join_remaining(&mut ended, [&mut proxy, &mut admin, &mut metrics]).await;
+        assert!(ended.iter().all(Option::is_some), "{ended:?}");
     }
 }

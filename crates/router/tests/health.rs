@@ -26,7 +26,7 @@ fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
 fn phoebis() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_phoebis"));
     command
-        .env("TEST_HEALTH_ADMIN", "admin-secret")
+        .env("TEST_HEALTH_ADMIN", "admin-secret-001")
         .env_remove("PHOEBIS_CONFIG");
     command
 }

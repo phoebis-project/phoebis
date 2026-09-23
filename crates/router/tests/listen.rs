@@ -31,6 +31,7 @@ async fn listening(
 #[tokio::test]
 async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() {
     let limits = phoebis_router::listen::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(300),
         max_connections: 8,
     };
@@ -47,6 +48,7 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
 #[tokio::test]
 async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
     let limits = phoebis_router::listen::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(500),
         max_connections: 2,
     };

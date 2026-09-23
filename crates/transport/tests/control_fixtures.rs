@@ -6,7 +6,7 @@ use phoebis_profile::{
 use phoebis_transport::request::{parse_head, RawRequest};
 use phoebis_transport::{
     connector_builder,
-    control::{ControlClient, Resolver},
+    control::{ControlClient, ResolveFuture, Resolver},
     Plane, TransportError,
 };
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -37,7 +37,8 @@ async fn control_requests_reach_the_upstream_byte_identical_and_close() {
     let mut b = connector_builder(profile, Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
-    let resolver: Resolver = Arc::new(move |_| Some(addr));
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
     let client = ControlClient::new(profile, b.build(), resolver);
 
     let raw = control_head(ControlFixture::Token);
@@ -90,7 +91,7 @@ fn token_request() -> RawRequest {
 async fn a_request_that_never_leaves_reports_an_unreachable_upstream() {
     let profile = claude_code_2_1_269_linux_x64();
 
-    let unresolved: Resolver = Arc::new(|_| None);
+    let unresolved: Resolver = Arc::new(|_| Box::pin(async { None }) as ResolveFuture);
     let client = ControlClient::new(
         profile,
         connector_builder(profile, Plane::Control).unwrap().build(),
@@ -111,7 +112,8 @@ async fn a_request_that_never_leaves_reports_an_unreachable_upstream() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let closed = listener.local_addr().unwrap();
     drop(listener);
-    let refused: Resolver = Arc::new(move |_| Some(closed));
+    let refused: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(closed) }) as ResolveFuture);
     let client = ControlClient::new(
         profile,
         connector_builder(profile, Plane::Control).unwrap().build(),

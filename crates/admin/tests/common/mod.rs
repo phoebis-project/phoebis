@@ -28,7 +28,7 @@ use phoebis_store::{
 };
 use phoebis_transport::{
     connector_builder,
-    control::{ControlClient, Resolver},
+    control::{ControlClient, ResolveFuture, Resolver},
     pool::Pool,
     trust_extra_ca, Plane,
 };
@@ -648,11 +648,12 @@ async fn app_with_webhook_policy(
     let addr = up.addr();
     // An authority with an explicit port names another loopback fake on that port; everything else is `up`.
     let resolver: Resolver = Arc::new(move |authority: &str| {
-        authority
+        let resolved = authority
             .rsplit_once(':')
             .and_then(|(_, port)| port.parse::<u16>().ok())
             .map(|port| std::net::SocketAddr::from(([127, 0, 0, 1], port)))
-            .or(Some(addr))
+            .or(Some(addr));
+        Box::pin(async move { resolved }) as ResolveFuture
     });
     let mut control_builder = connector_builder(p, Plane::Control).unwrap();
     trust_extra_ca(&mut control_builder, up.ca_pem()).unwrap();

@@ -99,9 +99,9 @@ binary migrates both databases on the volume as it opens them. `docker compose p
 `phoebis health` has answered, and `GET /admin/system` confirms the version.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
-own transaction. The registry's migrations are additive, so an older binary can still read a registry a newer one
-migrated. A ledger migration can rebuild a table instead, so returning to an older binary after an upgrade means
-restoring from the backup, not downgrading the binary in place.
+own transaction. The registry's migrations may drop or rebuild a table, and a binary refuses a registry whose
+schema version is newer than it knows, so returning to an older binary after an upgrade means restoring from the
+backup, for the registry and the ledger alike.
 
 Every configuration block denies unknown keys, so a key the new build does not recognize refuses startup; running
 `check-config` first catches that before the restart does.

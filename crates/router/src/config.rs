@@ -193,6 +193,8 @@ pub enum ConfigError {
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
+    #[error("environment variable {name} still holds the example placeholder")]
+    PlaceholderSecret { name: String },
     #[error("quota.poll_interval_seconds must be at least 900")]
     PollIntervalTooShort,
     #[error("cannot read {path}")]
@@ -204,6 +206,8 @@ pub enum ConfigError {
     RetentionTooShort { field: &'static str },
     #[error("stats.rollup_retention_days must be 0 or at least stats.retention_days ({retention_days}), not {value}")]
     RollupRetentionTooShort { retention_days: u32, value: u32 },
+    #[error("environment variable {name} holds a secret shorter than 16 characters")]
+    SecretTooShort { name: String },
     #[error("sessions.expire_after_seconds must be at least 60")]
     SessionExpiryTooShort,
     #[error("stats.ledger_path and storage.path must name different files, not {path}")]
@@ -462,14 +466,32 @@ fn check_secrets_are_distinct(config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// The example file's own placeholders (`deploy/phoebis.env.example`), so a config copied without editing them
+/// refuses to start rather than run with a secret every reader of the repository already knows.
+const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
+const PLACEHOLDER_VIEWER_SECRET: &str = "replace-with-a-different-long-random-string";
+
 fn from_env(name: &str) -> Result<Secret, ConfigError> {
-    match std::env::var(name) {
-        Ok(value) if !value.is_empty() => Ok(Secret::new(&value)),
+    let value = match std::env::var(name) {
         // The value is never part of the error: a variable set to something unusable still holds a secret.
-        _ => Err(ConfigError::MissingSecret {
+        Ok(value) if !value.is_empty() => value,
+        _ => {
+            return Err(ConfigError::MissingSecret {
+                name: name.to_string(),
+            })
+        }
+    };
+    if value.len() < 16 {
+        return Err(ConfigError::SecretTooShort {
             name: name.to_string(),
-        }),
+        });
     }
+    if value == PLACEHOLDER_ADMIN_SECRET || value == PLACEHOLDER_VIEWER_SECRET {
+        return Err(ConfigError::PlaceholderSecret {
+            name: name.to_string(),
+        });
+    }
+    Ok(Secret::new(&value))
 }
 
 fn default_body_capture_max() -> u32 {
@@ -583,7 +605,7 @@ mod tests {
     #[test]
     fn cache_diagnostics_parses_when_set_and_defaults_to_false() {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         let without = "  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli";
         assert!(
             !load(&file_with_compat(dir.path(), "absent", without))
@@ -604,7 +626,7 @@ mod tests {
     #[test]
     fn the_routing_and_sessions_blocks_default_validate_and_reject_unknown_fields() {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         let config = load(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
@@ -666,7 +688,7 @@ mod tests {
     #[test]
     fn the_session_memory_keys_default_to_the_constants_and_are_bounded() {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret");
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         let config = load(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
@@ -724,5 +746,69 @@ mod tests {
             ),
             (1024, 7)
         );
+    }
+
+    /// `file`'s own template names `TEST_CFG_ADMIN`; this one takes the environment variable name as a
+    /// parameter, so a secret-length or placeholder test never races another test's value under that name.
+    fn file_with_secret_env(
+        dir: &std::path::Path,
+        name: &str,
+        secret_env: &str,
+    ) -> std::path::PathBuf {
+        let key = dir.join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let yaml = format!(
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n  plain_http: true\n\
+             compatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  \
+             usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  \
+             path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+            key.display(),
+            dir.join("router.sqlite").display()
+        );
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_secret_shorter_than_sixteen_characters_refuses_with_secret_too_short() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_SHORT", "twelve-chars");
+        assert!(matches!(
+            load(&file_with_secret_env(dir.path(), "short", "TEST_CFG_SHORT")),
+            Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_SHORT"
+        ));
+    }
+
+    #[test]
+    fn the_examples_two_placeholders_refuse_with_placeholder_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var(
+            "TEST_CFG_PLACEHOLDER_ADMIN",
+            "replace-with-a-long-random-string",
+        );
+        assert!(matches!(
+            load(&file_with_secret_env(dir.path(), "placeholder-admin", "TEST_CFG_PLACEHOLDER_ADMIN")),
+            Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_ADMIN"
+        ));
+        std::env::set_var(
+            "TEST_CFG_PLACEHOLDER_VIEWER",
+            "replace-with-a-different-long-random-string",
+        );
+        assert!(matches!(
+            load(&file_with_secret_env(dir.path(), "placeholder-viewer", "TEST_CFG_PLACEHOLDER_VIEWER")),
+            Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_VIEWER"
+        ));
+    }
+
+    #[test]
+    fn a_sixteen_character_random_secret_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_VALID", "sixteen-char-key");
+        assert!(load(&file_with_secret_env(dir.path(), "valid", "TEST_CFG_VALID")).is_ok());
     }
 }
