@@ -115,11 +115,7 @@ impl Publish {
         for phase in phases {
             self.emit(Bytes::new(), Some(phase));
         }
-        if let Some(id) = self.pending_message_id.take() {
-            if let Some(hook) = self.on_message_id.take() {
-                hook(id).await;
-            }
-        }
+        self.fire_pending_hook().await;
     }
 
     fn emit(&mut self, body: Bytes, phase: Option<Phase>) {
@@ -215,11 +211,7 @@ impl Publish {
                 self.saw_message_id(id);
             }
         }
-        if let Some(id) = self.pending_message_id.take() {
-            if let Some(hook) = self.on_message_id.take() {
-                hook(id).await;
-            }
-        }
+        self.fire_pending_hook().await;
         let outcome = match (end, self.stream_error.take()) {
             (BodyEnd::Complete, None) => None,
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
@@ -253,6 +245,16 @@ impl Publish {
         if self.message_id.is_none() {
             self.pending_message_id = Some(id.clone());
             self.message_id = Some(id);
+        }
+    }
+
+    /// Awaited from `chunk` and `finish` once `phase_of` has had its turn, so a pending id from either path
+    /// fires the hook the same way.
+    async fn fire_pending_hook(&mut self) {
+        if let Some(id) = self.pending_message_id.take() {
+            if let Some(hook) = self.on_message_id.take() {
+                hook(id).await;
+            }
         }
     }
 }
