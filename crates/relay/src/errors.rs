@@ -92,6 +92,13 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             code: "accounts_unavailable",
             message: "the bound account cannot serve requests",
         },
+        // The caller is already gone; the answer exists so the request still gets a row in the ledger.
+        RelayError::BodyIncomplete => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "request_incomplete",
+            message: "the request body ended before it was complete",
+        },
         // Naming the member is what lets a client author see which part of its body the relay has to find;
         // no value of the body is echoed back.
         RelayError::BodyShape(member) => Failure {

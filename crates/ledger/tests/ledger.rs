@@ -3,7 +3,11 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{EventRecord, LedgerConfig, Record};
+use phoebis_bus::{
+    Event as BusEvent, Kind, Origin, Outcome as BusOutcome, RequestComplete, RequestObserved,
+    RequestShape, ResponseFacts,
+};
+use phoebis_ledger::{EventRecord, LedgerConfig, Record, RequestRecord};
 use phoebis_profile::fixtures::BodyFixture;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -631,6 +635,155 @@ async fn a_saturated_channel_drops_records_and_a_ledger_gap_names_the_count() {
             .filter(|e| e.kind == "cooldown_set")
             .count();
     assert_eq!(written as u64 + dropped, total as u64);
+    up.shutdown().await;
+}
+
+fn observed_event(id: &str) -> BusEvent {
+    BusEvent::RequestObserved(RequestObserved {
+        request_id: id.into(),
+        origin: Origin::Client,
+        kind: Kind::Inference,
+        key_id: None,
+        key_generation: 0,
+        pool_id: None,
+        session_id: None,
+        agent_id: None,
+        parent_agent_id: None,
+        owner_id: None,
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        stream: false,
+        headers: vec![],
+        body: bytes::Bytes::new(),
+        body_capture_hours: 0,
+        shape: RequestShape::default(),
+        presented_retired: false,
+        rotation_at: None,
+        received_at: 0,
+    })
+}
+
+fn complete_event(id: &str) -> BusEvent {
+    BusEvent::RequestComplete(RequestComplete {
+        request_id: id.into(),
+        attempt: 0,
+        account_id: None,
+        outcome: BusOutcome::Succeeded,
+        status: 200,
+        usage: None,
+        response: ResponseFacts::default(),
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: None,
+        client_drift: None,
+        client_version: None,
+        response_bytes: None,
+        response_chunks: None,
+        finished_at: 1,
+    })
+}
+
+/// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room
+/// rather than dropping.
+#[tokio::test]
+async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let db = h.db.clone();
+    let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        db.write(|_| {
+            hold_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let total = phoebis_ledger::CHANNEL_DEPTH + 8;
+    let mut sends = Vec::with_capacity(total);
+    for i in 0..total {
+        let ledger = h.ledger.clone();
+        let id = format!("r{i}");
+        sends.push(tokio::spawn(async move {
+            ledger
+                .record_request(Record::Request {
+                    request: RequestRecord {
+                        id,
+                        ..Default::default()
+                    },
+                    attempts: Vec::new(),
+                    bodies: None,
+                })
+                .await;
+        }));
+    }
+    // The channel fills to its depth and the rest wait for room, which needs the writer genuinely blocked
+    // rather than merely slow.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    hold_tx.send(()).unwrap();
+    holder.join().unwrap();
+    for send in sends {
+        tokio::time::timeout(Duration::from_secs(10), send)
+            .await
+            .expect("every send resolves once the writer drains")
+            .unwrap();
+    }
+    assert_eq!(h.ledger.dropped(), 0);
+    for i in 0..total {
+        assert!(
+            h.db.request(&format!("r{i}")).await.unwrap().is_some(),
+            "r{i} landed"
+        );
+    }
+    up.shutdown().await;
+}
+
+/// The bus subscriber's queue filled to its depth behind a writer channel filled to its own, both behind the
+/// same held `land`: `shutdown` still returns and lands every completed request, because the writer keeps
+/// reading while it waits for the assembler to end rather than waiting for it first.
+#[tokio::test]
+async fn a_shutdown_with_both_queues_full_lands_every_completed_request() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let db = h.db.clone();
+    let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        db.write(|_| {
+            hold_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let total = phoebis_ledger::CHANNEL_DEPTH + phoebis_bus::QUEUE_DEPTH + 8;
+    let bus = h.bus.clone();
+    // One task, publishing in order through `publish_fact` (which waits for room rather than dropping, as the
+    // relay does): it blocks on its own once the writer's channel and then the assembler's bus queue fill.
+    let publisher = tokio::spawn(async move {
+        for i in 0..total {
+            let id = format!("q{i}");
+            bus.publish_fact(observed_event(&id)).await;
+            bus.publish_fact(complete_event(&id)).await;
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    hold_tx.send(()).unwrap();
+    let shutdown = tokio::time::timeout(Duration::from_secs(10), h.ledger.clone().shutdown()).await;
+    holder.join().unwrap();
+    shutdown
+        .expect("the writer keeps reading while it waits for the assembler, so shutdown does not deadlock")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), publisher)
+        .await
+        .expect("the publisher resolves once the assembler has drained its queue")
+        .unwrap();
+    assert_eq!(h.ledger.dropped(), 0);
+    for i in 0..total {
+        assert!(
+            h.db.request(&format!("q{i}")).await.unwrap().is_some(),
+            "q{i} landed"
+        );
+    }
     up.shutdown().await;
 }
 

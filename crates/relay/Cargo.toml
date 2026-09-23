@@ -18,6 +18,7 @@ phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 futures = { workspace = true }
 hmac = { workspace = true }
+http-body-util = { workspace = true }
 httparse = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -38,7 +39,6 @@ phoebis-bus = { path = "../bus" }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
-http-body-util = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio-stream = { workspace = true }

@@ -311,6 +311,14 @@ impl Trace {
         }
     }
 
+    /// Waits for the bus's capacity rather than dropping: a fact this request is accounted by must land, or
+    /// the row for it can never be written.
+    async fn publish_fact(&self, event: Event) {
+        if let Some(bus) = &self.bus {
+            bus.publish_fact(event).await;
+        }
+    }
+
     pub(crate) fn publish_chunk(&self, chunk: ResponseChunk) {
         self.publish(Event::ResponseChunk(chunk));
     }
@@ -318,7 +326,7 @@ impl Trace {
     /// Published exactly once per request by the handler, as soon as it knows as much of the identity as the
     /// request will ever yield. A refusal before the key was read publishes with nothing but the id.
     #[allow(clippy::too_many_arguments)]
-    fn observed(
+    async fn observed(
         &self,
         key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
@@ -333,7 +341,7 @@ impl Trace {
         if self.bus.is_none() {
             return;
         }
-        self.publish(Event::RequestObserved(RequestObserved {
+        self.publish_fact(Event::RequestObserved(RequestObserved {
             request_id: self.request_id.clone(),
             origin: self.origin,
             kind: self.kind,
@@ -360,11 +368,12 @@ impl Trace {
             presented_retired,
             rotation_at,
             received_at: self.received_at,
-        }));
+        }))
+        .await;
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn selected(
+    async fn selected(
         &self,
         attempt: u8,
         account: &AccountRow,
@@ -372,7 +381,7 @@ impl Trace {
         started_at: i64,
         cache_ttl_ms: Option<i64>,
     ) {
-        self.publish(Event::AccountSelected(AccountSelected {
+        self.publish_fact(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
             attempt,
             account_id: account.id.clone(),
@@ -384,11 +393,12 @@ impl Trace {
             pin_epoch,
             started_at,
             cache_ttl_ms,
-        }));
+        }))
+        .await;
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn head(
+    async fn head(
         &self,
         attempt: u8,
         head: &ResponseHead,
@@ -398,7 +408,7 @@ impl Trace {
         written_at: i64,
         observed_at: i64,
     ) {
-        self.publish(Event::ResponseHead(BusHead {
+        self.publish_fact(Event::ResponseHead(BusHead {
             request_id: self.request_id.clone(),
             attempt,
             status: head.status,
@@ -408,14 +418,15 @@ impl Trace {
             cooldown,
             written_at,
             observed_at,
-        }));
+        }))
+        .await;
     }
 
     /// The last event of a request. `status` is what the client was answered with, which is the upstream's
     /// only for a forwarded answer; `end` overrides the outcome derived from the `RelayOutcome` for a body that
     /// ended other than cleanly, and `error` names the cause when the override has one.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn complete(
+    pub(crate) async fn complete(
         &self,
         outcome: &RelayOutcome,
         status: u16,
@@ -423,6 +434,7 @@ impl Trace {
         response: ResponseFacts,
         ttfc_ms: Option<i64>,
         response_bytes: Option<u64>,
+        response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
         finished_at: i64,
     ) {
@@ -430,7 +442,7 @@ impl Trace {
             Some((o, code)) => (o, code.or_else(|| outcome.error_code.clone())),
             None => (outcome_of(outcome), outcome.error_code.clone()),
         };
-        self.publish(Event::RequestComplete(RequestComplete {
+        self.publish_fact(Event::RequestComplete(RequestComplete {
             request_id: self.request_id.clone(),
             attempt: outcome.attempt,
             account_id: (!outcome.account_id.is_empty()).then(|| outcome.account_id.clone()),
@@ -444,8 +456,10 @@ impl Trace {
             client_drift: outcome.client_drift.clone(),
             client_version: outcome.client_version.clone(),
             response_bytes,
+            response_chunks,
             finished_at,
-        }));
+        }))
+        .await;
     }
 }
 
@@ -641,71 +655,87 @@ impl Relay {
                 Ok(key) if key.created_at != probe.key_generation => {
                     let refusal = KeyRefusal::Replaced;
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    trace.observed(
-                        None,
-                        None,
-                        &parts.headers,
-                        Bytes::new(),
-                        false,
-                        0,
-                        RequestShape::default(),
-                        false,
-                        None,
-                    );
-                    return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                    trace
+                        .observed(
+                            None,
+                            None,
+                            &parts.headers,
+                            Bytes::new(),
+                            false,
+                            0,
+                            RequestShape::default(),
+                            false,
+                            None,
+                        )
+                        .await;
+                    return self
+                        .refused(&trace, key_refusal(&refusal), None, None, None)
+                        .await;
                 }
                 // A probe authenticates by key id, never by secret, so it never presents a retired one.
                 Ok(key) => (key.clone(), Presented::Live),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    trace.observed(
-                        None,
-                        None,
-                        &parts.headers,
-                        Bytes::new(),
-                        false,
-                        0,
-                        RequestShape::default(),
-                        false,
-                        None,
-                    );
-                    return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                    trace
+                        .observed(
+                            None,
+                            None,
+                            &parts.headers,
+                            Bytes::new(),
+                            false,
+                            0,
+                            RequestShape::default(),
+                            false,
+                            None,
+                        )
+                        .await;
+                    return self
+                        .refused(&trace, key_refusal(&refusal), None, None, None)
+                        .await;
                 }
             },
             None => {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,
                     Err(error) => {
-                        trace.observed(
-                            None,
-                            None,
-                            &parts.headers,
-                            Bytes::new(),
-                            false,
-                            0,
-                            RequestShape::default(),
-                            false,
-                            None,
-                        );
-                        return self.refused(&trace, auth_failure(&error), None, None, None);
+                        trace
+                            .observed(
+                                None,
+                                None,
+                                &parts.headers,
+                                Bytes::new(),
+                                false,
+                                0,
+                                RequestShape::default(),
+                                false,
+                                None,
+                            )
+                            .await;
+                        return self
+                            .refused(&trace, auth_failure(&error), None, None, None)
+                            .await;
                     }
                 };
                 match snapshot.authenticate(presented, received_at) {
                     Ok((key, presented)) => (key.clone(), presented),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
-                        trace.observed(
-                            None,
-                            None,
-                            &parts.headers,
-                            Bytes::new(),
-                            false,
-                            0,
-                            RequestShape::default(),
-                            false,
-                            None,
-                        );
-                        return self.refused(&trace, key_refusal(&refusal), None, None, None);
+                        trace
+                            .observed(
+                                None,
+                                None,
+                                &parts.headers,
+                                Bytes::new(),
+                                false,
+                                0,
+                                RequestShape::default(),
+                                false,
+                                None,
+                            )
+                            .await;
+                        return self
+                            .refused(&trace, key_refusal(&refusal), None, None, None)
+                            .await;
                     }
                 }
             }
@@ -725,31 +755,45 @@ impl Relay {
         {
             Ok(Ok(raw)) => Ok(raw),
             Err(_) => Err(RelayError::BodyTimeout),
-            // Either the caller went past the limit or its own connection broke mid-body; either way there is
-            // no complete request to relay.
-            Ok(Err(_)) => Err(RelayError::BodyTooLarge),
+            Ok(Err(error)) => {
+                // axum wraps the limit and the body's own failure in one type; only the limit is the caller's
+                // request being too large, the rest is the caller leaving before its body was complete.
+                let too_large = error
+                    .into_inner()
+                    .downcast::<http_body_util::LengthLimitError>()
+                    .is_ok();
+                Err(if too_large {
+                    RelayError::BodyTooLarge
+                } else {
+                    RelayError::BodyIncomplete
+                })
+            }
         };
         let raw = match body_read {
             Ok(raw) => raw,
             Err(error) => {
-                trace.observed(
-                    Some(&key),
-                    None,
-                    &parts.headers,
-                    Bytes::new(),
-                    false,
-                    capture_hours,
-                    RequestShape::default(),
-                    presented == Presented::Retired,
-                    key.rotated_at,
-                );
-                return self.refused(
-                    &trace,
-                    relay_failure(&error),
-                    Some(&key),
-                    None,
-                    client_version.as_deref(),
-                );
+                trace
+                    .observed(
+                        Some(&key),
+                        None,
+                        &parts.headers,
+                        Bytes::new(),
+                        false,
+                        capture_hours,
+                        RequestShape::default(),
+                        presented == Presented::Retired,
+                        key.rotated_at,
+                    )
+                    .await;
+                return self
+                    .refused(
+                        &trace,
+                        relay_failure(&error),
+                        Some(&key),
+                        None,
+                        client_version.as_deref(),
+                    )
+                    .await;
             }
         };
         let facts = BodyFacts::read(&raw);
@@ -766,29 +810,8 @@ impl Relay {
             Err(error) => Some(RelayError::Cch(error)),
         };
         if let Some(error) = refusal {
-            trace.observed(
-                Some(&key),
-                None,
-                &parts.headers,
-                raw.clone(),
-                stream,
-                capture_hours,
-                facts.shape.clone(),
-                presented == Presented::Retired,
-                key.rotated_at,
-            );
-            return self.refused(
-                &trace,
-                relay_failure(&error),
-                Some(&key),
-                None,
-                client_version.as_deref(),
-            );
-        }
-        let identity = match identify(&parts.headers, &raw) {
-            Ok(identity) => identity,
-            Err(error) => {
-                trace.observed(
+            trace
+                .observed(
                     Some(&key),
                     None,
                     &parts.headers,
@@ -798,46 +821,81 @@ impl Relay {
                     facts.shape.clone(),
                     presented == Presented::Retired,
                     key.rotated_at,
-                );
-                return self.refused(
+                )
+                .await;
+            return self
+                .refused(
                     &trace,
                     relay_failure(&error),
                     Some(&key),
                     None,
                     client_version.as_deref(),
-                );
+                )
+                .await;
+        }
+        let identity = match identify(&parts.headers, &raw) {
+            Ok(identity) => identity,
+            Err(error) => {
+                trace
+                    .observed(
+                        Some(&key),
+                        None,
+                        &parts.headers,
+                        raw.clone(),
+                        stream,
+                        capture_hours,
+                        facts.shape.clone(),
+                        presented == Presented::Retired,
+                        key.rotated_at,
+                    )
+                    .await;
+                return self
+                    .refused(
+                        &trace,
+                        relay_failure(&error),
+                        Some(&key),
+                        None,
+                        client_version.as_deref(),
+                    )
+                    .await;
             }
         };
-        trace.observed(
-            Some(&key),
-            Some(&identity),
-            &parts.headers,
-            raw.clone(),
-            stream,
-            capture_hours,
-            facts.shape.clone(),
-            presented == Presented::Retired,
-            key.rotated_at,
-        );
+        trace
+            .observed(
+                Some(&key),
+                Some(&identity),
+                &parts.headers,
+                raw.clone(),
+                stream,
+                capture_hours,
+                facts.shape.clone(),
+                presented == Presented::Retired,
+                key.rotated_at,
+            )
+            .await;
         let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
-                return self.refused(
-                    &trace,
-                    MODEL_NOT_ALLOWED,
-                    Some(&key),
-                    Some(&identity),
-                    client_version.as_deref(),
-                )
+                return self
+                    .refused(
+                        &trace,
+                        MODEL_NOT_ALLOWED,
+                        Some(&key),
+                        Some(&identity),
+                        client_version.as_deref(),
+                    )
+                    .await
             }
             Err(ResolveError::ModelUnserved) => {
-                return self.refused(
-                    &trace,
-                    MODEL_UNSERVED,
-                    Some(&key),
-                    Some(&identity),
-                    client_version.as_deref(),
-                )
+                return self
+                    .refused(
+                        &trace,
+                        MODEL_UNSERVED,
+                        Some(&key),
+                        Some(&identity),
+                        client_version.as_deref(),
+                    )
+                    .await
             }
         };
         // Narrows what a probe starts the loop with; a registry write can move the revision before any
@@ -965,13 +1023,15 @@ impl Relay {
             // A backstop: every failover point already checks the budget before it comes back here, and
             // `attempted` grows each pass, so the loop is bounded by the pool even without this.
             if spent >= self.limits.max_attempts {
-                return self.refused(
-                    &trace,
-                    UPSTREAM_UNREACHABLE,
-                    Some(&key),
-                    Some(&identity),
-                    admitted.client_version.as_deref(),
-                );
+                return self
+                    .refused(
+                        &trace,
+                        UPSTREAM_UNREACHABLE,
+                        Some(&key),
+                        Some(&identity),
+                        admitted.client_version.as_deref(),
+                    )
+                    .await;
             }
             let now = (self.clock)();
             let answer = match self
@@ -992,13 +1052,15 @@ impl Relay {
             {
                 Ok(answer) => answer,
                 Err(_) => {
-                    return self.refused(
-                        &trace,
-                        ROUTER_UNAVAILABLE,
-                        Some(&key),
-                        Some(&identity),
-                        admitted.client_version.as_deref(),
-                    )
+                    return self
+                        .refused(
+                            &trace,
+                            ROUTER_UNAVAILABLE,
+                            Some(&key),
+                            Some(&identity),
+                            admitted.client_version.as_deref(),
+                        )
+                        .await
                 }
             };
             let selection = match answer.result {
@@ -1006,22 +1068,26 @@ impl Relay {
                 // The registry moved after admission and no longer admits this request; the answer is the one the
                 // current registry would have given at admission.
                 SelectResult::Refused(ResolveError::ModelNotAllowed) => {
-                    return self.refused(
-                        &trace,
-                        MODEL_NOT_ALLOWED,
-                        Some(&key),
-                        Some(&identity),
-                        admitted.client_version.as_deref(),
-                    )
+                    return self
+                        .refused(
+                            &trace,
+                            MODEL_NOT_ALLOWED,
+                            Some(&key),
+                            Some(&identity),
+                            admitted.client_version.as_deref(),
+                        )
+                        .await
                 }
                 SelectResult::Refused(ResolveError::ModelUnserved) => {
-                    return self.refused(
-                        &trace,
-                        MODEL_UNSERVED,
-                        Some(&key),
-                        Some(&identity),
-                        admitted.client_version.as_deref(),
-                    )
+                    return self
+                        .refused(
+                            &trace,
+                            MODEL_UNSERVED,
+                            Some(&key),
+                            Some(&identity),
+                            admitted.client_version.as_deref(),
+                        )
+                        .await
                 }
                 SelectResult::Exhausted(exhaustion) => {
                     let code = match exhaustion {
@@ -1043,14 +1109,16 @@ impl Relay {
                         None,
                         None,
                     );
-                    return self.answer(
-                        &trace,
-                        exhaustion_response(&exhaustion, now, &trace.request_id),
-                        outcome,
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    );
+                    return self
+                        .answer(
+                            &trace,
+                            exhaustion_response(&exhaustion, now, &trace.request_id),
+                            outcome,
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await;
                 }
             };
             attempted.push(selection.account.id.clone());
@@ -1224,22 +1292,28 @@ impl Relay {
                         None,
                         None,
                     );
-                    return Leg::Respond(self.answer(
-                        admitted.trace,
-                        relay_failure(&error).response(admitted.request_id),
-                        outcome,
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    ));
+                    return Leg::Respond(
+                        self.answer(
+                            admitted.trace,
+                            relay_failure(&error).response(admitted.request_id),
+                            outcome,
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await,
+                    );
                 }
-                return Leg::Respond(self.refused(
-                    admitted.trace,
-                    relay_failure(&error),
-                    Some(admitted.key),
-                    Some(admitted.identity),
-                    admitted.client_version.as_deref(),
-                ));
+                return Leg::Respond(
+                    self.refused(
+                        admitted.trace,
+                        relay_failure(&error),
+                        Some(admitted.key),
+                        Some(admitted.identity),
+                        admitted.client_version.as_deref(),
+                    )
+                    .await,
+                );
             }
         };
         let authority = "api.anthropic.com".to_string();
@@ -1265,13 +1339,16 @@ impl Relay {
                 *spent += 1;
             }
             stripping = false;
-            admitted.trace.selected(
-                *attempt,
-                account,
-                pin_epoch,
-                (self.clock)(),
-                cache_ttl_ms(ttl),
-            );
+            admitted
+                .trace
+                .selected(
+                    *attempt,
+                    account,
+                    pin_epoch,
+                    (self.clock)(),
+                    cache_ttl_ms(ttl),
+                )
+                .await;
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
             // find, and only the builder's own report joins `body_injected` in what a 400 may be matched against.
             // A five-minute body carries no extended beta, whichever leg wrote it: the caller's own
@@ -1386,14 +1463,17 @@ impl Relay {
                         None,
                         cache_ttl_ms(ttl),
                     );
-                    return Leg::Respond(self.answer(
-                        admitted.trace,
-                        ACCOUNT_CANCELLED.response(admitted.request_id),
-                        outcome,
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    ));
+                    return Leg::Respond(
+                        self.answer(
+                            admitted.trace,
+                            ACCOUNT_CANCELLED.response(admitted.request_id),
+                            outcome,
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await,
+                    );
                 }
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));
@@ -1413,14 +1493,17 @@ impl Relay {
                         None,
                         cache_ttl_ms(ttl),
                     );
-                    return Leg::Respond(self.answer(
-                        admitted.trace,
-                        UPSTREAM_UNREACHABLE.response(admitted.request_id),
-                        outcome,
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    ));
+                    return Leg::Respond(
+                        self.answer(
+                            admitted.trace,
+                            UPSTREAM_UNREACHABLE.response(admitted.request_id),
+                            outcome,
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await,
+                    );
                 }
             };
             match next {
@@ -1446,13 +1529,16 @@ impl Relay {
                         }
                         Err(error) => {
                             tracing::error!(account = %account.id, %error, "a strip retry could not rebuild the body it just stripped from");
-                            return Leg::Respond(self.refused(
-                                admitted.trace,
-                                relay_failure(&error),
-                                Some(admitted.key),
-                                Some(admitted.identity),
-                                admitted.client_version.as_deref(),
-                            ));
+                            return Leg::Respond(
+                                self.refused(
+                                    admitted.trace,
+                                    relay_failure(&error),
+                                    Some(admitted.key),
+                                    Some(admitted.identity),
+                                    admitted.client_version.as_deref(),
+                                )
+                                .await,
+                            );
                         }
                     }
                     // The next pass submits the corrected body on this account; the loop top spends no slot
@@ -1514,7 +1600,7 @@ impl Relay {
             )
             .await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at));
+                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
             };
             match drained {
                 Ok(Drained::Complete(buffered)) => {
@@ -1525,30 +1611,36 @@ impl Relay {
                 }
                 Ok(Drained::TooLarge(prefix)) => {
                     tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
-                    return Next::Respond(self.stream(Forward {
-                        caller: ctx.caller,
-                        cancel: ctx.cancel.clone(),
-                        checkin,
-                        head: &head,
-                        keep_alive: reusable,
-                        observer: None,
-                        on_message_id: None,
-                        outcome,
-                        prefix,
-                        reader,
-                        trace: ctx.trace,
-                    }));
+                    return Next::Respond(
+                        self.stream(Forward {
+                            caller: ctx.caller,
+                            cancel: ctx.cancel.clone(),
+                            checkin,
+                            head: &head,
+                            keep_alive: reusable,
+                            observer: None,
+                            on_message_id: None,
+                            outcome,
+                            prefix,
+                            reader,
+                            trace: ctx.trace,
+                        })
+                        .await,
+                    );
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
-                    return Next::Respond(self.answer(
-                        ctx.trace,
-                        UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                        unreachable_outcome(outcome),
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    ));
+                    return Next::Respond(
+                        self.answer(
+                            ctx.trace,
+                            UPSTREAM_UNREACHABLE.response(ctx.request_id),
+                            unreachable_outcome(outcome),
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await,
+                    );
                 }
             }
         } else {
@@ -1572,7 +1664,7 @@ impl Relay {
             let Some(result) =
                 until_cancelled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at));
+                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
             };
             match result {
                 Ok(h) => {
@@ -1583,14 +1675,17 @@ impl Relay {
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
-                    return Next::Respond(self.answer(
-                        ctx.trace,
-                        UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                        unreachable_outcome(outcome),
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    ));
+                    return Next::Respond(
+                        self.answer(
+                            ctx.trace,
+                            UPSTREAM_UNREACHABLE.response(ctx.request_id),
+                            unreachable_outcome(outcome),
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await,
+                    );
                 }
             }
         }
@@ -1631,15 +1726,17 @@ impl Relay {
             Verdict::FailOver { cooldown, .. } => cooldown.as_ref(),
             _ => None,
         };
-        ctx.trace.head(
-            ctx.attempt,
-            &head,
-            committing,
-            attempt_outcome(&verdict, head.status, first_event.as_deref()),
-            cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
-            written_at,
-            head_at,
-        );
+        ctx.trace
+            .head(
+                ctx.attempt,
+                &head,
+                committing,
+                attempt_outcome(&verdict, head.status, first_event.as_deref()),
+                cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
+                written_at,
+                head_at,
+            )
+            .await;
         let generations = (
             ctx.account.incarnation,
             ctx.account.lifecycle_generation,
@@ -1663,26 +1760,32 @@ impl Relay {
                     // itself when the refresh ended in invalid_grant.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        return Next::Respond(self.forward_buffered(
-                            ctx.trace,
-                            &head,
-                            buffered.unwrap_or_default(),
-                            ctx.caller,
-                            outcome,
-                        ));
+                        return Next::Respond(
+                            self.forward_buffered(
+                                ctx.trace,
+                                &head,
+                                buffered.unwrap_or_default(),
+                                ctx.caller,
+                                outcome,
+                            )
+                            .await,
+                        );
                     }
                 }
             }
             // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
             // is forwarded as it came and the account keeps its state and its pin.
             Verdict::Refresh => {
-                return Next::Respond(self.forward_buffered(
-                    ctx.trace,
-                    &head,
-                    buffered.unwrap_or_default(),
-                    ctx.caller,
-                    outcome,
-                ))
+                return Next::Respond(
+                    self.forward_buffered(
+                        ctx.trace,
+                        &head,
+                        buffered.unwrap_or_default(),
+                        ctx.caller,
+                        outcome,
+                    )
+                    .await,
+                )
             }
             // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
             // it the same 400 classifies as `Commit` and is forwarded as any other.
@@ -1792,25 +1895,31 @@ impl Relay {
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
-                return Next::Respond(match buffered {
+                let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)
+                            .await
                     }
-                    None => self.stream(Forward {
-                        caller: ctx.caller,
-                        cancel: ctx.cancel.clone(),
-                        checkin,
-                        head: &head,
-                        keep_alive: reusable,
-                        observer,
-                        on_message_id,
-                        outcome,
-                        prefix,
-                        reader: reader
-                            .expect("a head the table reads no body for still holds its reader"),
-                        trace: ctx.trace,
-                    }),
-                });
+                    None => {
+                        self.stream(Forward {
+                            caller: ctx.caller,
+                            cancel: ctx.cancel.clone(),
+                            checkin,
+                            head: &head,
+                            keep_alive: reusable,
+                            observer,
+                            on_message_id,
+                            outcome,
+                            prefix,
+                            reader: reader.expect(
+                                "a head the table reads no body for still holds its reader",
+                            ),
+                            trace: ctx.trace,
+                        })
+                        .await
+                    }
+                };
+                return Next::Respond(responded);
             }
         };
         // A non-portable request keeps its pin: the failed response goes back to the client on the
@@ -1833,19 +1942,23 @@ impl Relay {
                 drop(reader);
                 return Next::FailOver;
             }
-            return Next::Respond(self.stream(Forward {
-                caller: ctx.caller,
-                cancel: ctx.cancel.clone(),
-                checkin,
-                head: &head,
-                keep_alive: false,
-                observer: None,
-                on_message_id: None,
-                outcome,
-                prefix: held.bytes,
-                reader: reader.expect("a streaming head still holds the reader the hold read from"),
-                trace: ctx.trace,
-            }));
+            return Next::Respond(
+                self.stream(Forward {
+                    caller: ctx.caller,
+                    cancel: ctx.cancel.clone(),
+                    checkin,
+                    head: &head,
+                    keep_alive: false,
+                    observer: None,
+                    on_message_id: None,
+                    outcome,
+                    prefix: held.bytes,
+                    reader: reader
+                        .expect("a streaming head still holds the reader the hold read from"),
+                    trace: ctx.trace,
+                })
+                .await,
+            );
         }
         // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
         // drained above, so the default here is the empty body of a head that carried none. A row
@@ -1854,7 +1967,10 @@ impl Relay {
         if ctx.portable && ctx.spent < self.limits.max_attempts {
             return Next::FailOver;
         }
-        Next::Respond(self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome))
+        Next::Respond(
+            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)
+                .await,
+        )
     }
 
     /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
@@ -1902,7 +2018,7 @@ impl Relay {
         }
     }
 
-    fn refused(
+    async fn refused(
         &self,
         trace: &Trace,
         failure: Failure,
@@ -1933,11 +2049,13 @@ impl Relay {
             ResponseFacts::default(),
             None,
         )
+        .await
     }
 
     /// A locally built answer: the outcome rides on the response for the accounting layer, and the completion
-    /// is published with the status the response carries, which for a local refusal is the refusal's own.
-    fn answer(
+    /// is published with the status the response carries, which for a local refusal is the refusal's own. Built
+    /// entirely in memory, so it carries no relayed chunks.
+    async fn answer(
         &self,
         trace: &Trace,
         response: Response,
@@ -1946,30 +2064,40 @@ impl Relay {
         facts: ResponseFacts,
         response_bytes: Option<u64>,
     ) -> Response {
-        trace.complete(
-            &outcome,
-            response.status().as_u16(),
-            usage,
-            facts,
-            None,
-            response_bytes,
-            None,
-            (self.clock)(),
-        );
+        trace
+            .complete(
+                &outcome,
+                response.status().as_u16(),
+                usage,
+                facts,
+                None,
+                response_bytes,
+                None,
+                None,
+                (self.clock)(),
+            )
+            .await;
         with_outcome(response, outcome)
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
-    fn cancelled(&self, ctx: &Responding<'_>, head: &ResponseHead, written_at: i64) -> Response {
-        ctx.trace.head(
-            ctx.attempt,
-            head,
-            None,
-            AttemptOutcome::Canceled,
-            None,
-            written_at,
-            (self.clock)(),
-        );
+    async fn cancelled(
+        &self,
+        ctx: &Responding<'_>,
+        head: &ResponseHead,
+        written_at: i64,
+    ) -> Response {
+        ctx.trace
+            .head(
+                ctx.attempt,
+                head,
+                None,
+                AttemptOutcome::Canceled,
+                None,
+                written_at,
+                (self.clock)(),
+            )
+            .await;
         let outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
@@ -1993,6 +2121,7 @@ impl Relay {
             ResponseFacts::default(),
             None,
         )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2074,7 +2203,7 @@ impl Relay {
         });
     }
 
-    fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
+    async fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
         &self,
         forward: Forward<'_, C>,
     ) -> Response {
@@ -2095,14 +2224,16 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
-                return self.answer(
-                    trace,
-                    UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                    unreachable_outcome(outcome),
-                    None,
-                    ResponseFacts::default(),
-                    None,
-                );
+                return self
+                    .answer(
+                        trace,
+                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                        unreachable_outcome(outcome),
+                        None,
+                        ResponseFacts::default(),
+                        None,
+                    )
+                    .await;
             }
         };
         let event_stream = head
@@ -2155,7 +2286,7 @@ impl Relay {
         with_outcome(built(builder, body), outcome)
     }
 
-    fn forward_buffered(
+    async fn forward_buffered(
         &self,
         trace: &Trace,
         head: &ResponseHead,
@@ -2167,14 +2298,16 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
-                return self.answer(
-                    trace,
-                    UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                    unreachable_outcome(outcome),
-                    None,
-                    ResponseFacts::default(),
-                    None,
-                );
+                return self
+                    .answer(
+                        trace,
+                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                        unreachable_outcome(outcome),
+                        None,
+                        ResponseFacts::default(),
+                        None,
+                    )
+                    .await;
             }
         };
         let payload = match decoder {
@@ -2183,14 +2316,16 @@ impl Relay {
                 Ok(payload) => payload,
                 Err(error) => {
                     tracing::warn!(%error, "the upstream response cannot be decoded");
-                    return self.answer(
-                        trace,
-                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                        unreachable_outcome(outcome),
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    );
+                    return self
+                        .answer(
+                            trace,
+                            UPSTREAM_UNREACHABLE.response(&outcome.request_id),
+                            unreachable_outcome(outcome),
+                            None,
+                            ResponseFacts::default(),
+                            None,
+                        )
+                        .await;
                 }
             },
         };
@@ -2224,6 +2359,7 @@ impl Relay {
             facts,
             Some(payload.len() as u64),
         )
+        .await
     }
 }
 

@@ -128,6 +128,9 @@ member. A body whose top-level object nests deeper than the relay reads is refus
 A request body that does not finish arriving within the compiled-in wait after authentication is refused `408`
 with the error code `request_timeout` and the message `the request body did not arrive in time`.
 
+A caller that stops sending before its body is complete is refused `400` with the error code
+`request_incomplete` and the message `the request body ended before it was complete`.
+
 ## Your key's usage
 
 `GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens,

@@ -95,6 +95,31 @@ impl Bus {
     pub fn stats(&self) -> Vec<(&'static str, Arc<SubscriberStats>)> {
         self.counters.lock().expect(LOCK_POISONED).clone()
     }
+
+    /// Waits for capacity: the four facts a request is accounted by must all land, or the row for it can
+    /// never be written. A chunk keeps `publish`, since a stream may outrun a consumer and a lost chunk is
+    /// recorded as a truncated capture rather than a lost request.
+    pub async fn publish_fact(&self, event: Event) {
+        let senders: Vec<(&'static str, mpsc::Sender<Event>)> = self
+            .slots
+            .lock()
+            .expect(LOCK_POISONED)
+            .iter()
+            .map(|slot| (slot.name, slot.events.clone()))
+            .collect();
+        let mut closed = Vec::new();
+        for (name, sender) in senders {
+            if sender.send(event.clone()).await.is_err() {
+                closed.push(name);
+            }
+        }
+        if !closed.is_empty() {
+            self.slots
+                .lock()
+                .expect(LOCK_POISONED)
+                .retain(|slot| !closed.contains(&slot.name));
+        }
+    }
 }
 
 /// A subscriber's task, with its panic caught and counted rather than left to the runtime: the relay shares
@@ -194,6 +219,35 @@ mod tests {
             "the reader got every chunk, after every observation"
         );
         assert_eq!(bus.stats().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_fact_waits_for_a_full_queue_and_a_chunk_is_dropped_at_it() {
+        let bus = Bus::new();
+        let mut reader = bus.subscribe("reader");
+        for i in 0..QUEUE_DEPTH {
+            bus.publish(observed(&format!("r{i}")));
+        }
+        let publishing = bus.publish_fact(observed("r_fact"));
+        tokio::pin!(publishing);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut publishing)
+                .await
+                .is_err(),
+            "publish_fact waits for capacity rather than dropping"
+        );
+        reader.events.recv().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), &mut publishing)
+            .await
+            .expect("the freed slot lets publish_fact resolve");
+        assert_eq!(
+            reader.stats.dropped.load(Ordering::SeqCst),
+            0,
+            "a fact is never dropped, only delayed"
+        );
+        // The queue is full again with the fact that just landed: a chunk keeps `publish`'s drop-and-count.
+        bus.publish(Event::ResponseChunk(chunk("s0", 0)));
+        assert_eq!(reader.stats.dropped.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

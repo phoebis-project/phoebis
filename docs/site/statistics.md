@@ -1,15 +1,28 @@
 # Statistics and alerts
 
-Every relayed request lands in the ledger, a second SQLite file beside the registry, and the console, the
+Every request that finished lands in the ledger, a second SQLite file beside the registry, and the console, the
 analytics routes, the metrics listener, and the alert engine read from it or from the same events. This page
 describes what is recorded, how long it is kept, what each view shows, and how an alert rule is written and
 delivered.
 
 ## The ledger
 
-Every relayed request lands in the ledger: one row for the client request and one row for each upstream attempt
-it took. Once a request finishes, it is folded into the hour's rollup, which is what the analytics routes report,
-so a long range costs one row per hour rather than one per request.
+Every request that finished lands in the ledger: one row for the client request and one row for each upstream
+attempt it took. The relay waits for the ledger's queue when it must, so a row is never lost to a busy moment;
+captured bodies are the one best-effort part, since a stream may outrun its recorder, and a capture whose chunks
+were lost is stored as truncated with a `ledger_gap` event naming the request. Once a request finishes, it is
+folded into the hour's rollup, which is what the analytics routes report, so a long range costs one row per hour
+rather than one per request.
+
+A `ledger_gap` event names one of these reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `attempt_missing` | The bus dropped an account's selection, so the trail is short an attempt row. |
+| `capture_budget` | Past the 64 MiB capture budget; the largest capture, oldest among equals, gave up its bodies. |
+| `chunk_dropped` | The completion counted more published chunks than arrived; the tail was dropped at the bus. |
+| `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
+| `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
 call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes

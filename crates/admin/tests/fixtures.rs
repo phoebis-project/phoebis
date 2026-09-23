@@ -435,6 +435,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             client_drift: None,
             client_version: None,
             response_bytes: None,
+            response_chunks: None,
             finished_at: now,
         }));
     let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-5":{"input_cost_per_token":2e-06,"output_cost_per_token":1e-05,"cache_read_input_token_cost":2e-07,"cache_creation_input_token_cost":2.5e-06,"cache_creation_input_token_cost_above_1hr":4e-06}}"#.to_vec() } }]).await;
@@ -705,6 +706,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         client_drift: None,
         client_version: Some("2.1.269".into()),
         response_bytes: Some(5),
+        response_chunks: None,
         finished_at: now + 900,
     }));
     let deltas = deltas_until(&mut ws, "finished").await;

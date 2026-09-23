@@ -311,6 +311,9 @@ pub struct RequestComplete {
     pub client_drift: Option<String>,
     pub client_version: Option<String>,
     pub response_bytes: Option<u64>,
+    /// How many `ResponseChunk` events the relay published for this request; `None` for a local answer with
+    /// no relayed body.
+    pub response_chunks: Option<u32>,
     pub finished_at: i64,
 }
 

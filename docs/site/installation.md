@@ -476,10 +476,11 @@ once an hour ([sessions](#sessions)).
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used
 as given, the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with
-`synchronous = NORMAL`, so a crash loses at most the last transactions before a checkpoint. The ledger is best
-effort by design: records reach it over a bounded channel, a full channel drops them, and a `ledger_gap` event
-records how many were lost. Captured bodies live in this file, which makes it as sensitive as the registry even
-though it holds no credential, so give it the same care.
+`synchronous = NORMAL`, so a crash loses at most the last transactions before a checkpoint. A request's facts
+are never dropped: a request record waits for room in the ledger's channel, so a ledger writer that stalls
+holds the request path rather than losing request facts; only captured bodies stay best-effort, since a stream
+may outrun its recorder, and a `ledger_gap` event records what was lost. Captured bodies live in this file,
+which makes it as sensitive as the registry even though it holds no credential, so give it the same care.
 
 No script in this repository backs these files up; [Operations](operations.md) says how.
 
@@ -503,7 +504,8 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
 | Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
-| Ledger channel | 4,096 records; a full channel drops and records a `ledger_gap` event. |
+| Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
+| Ledger channel | 4,096 records; a request waits for room, an event or sample past it drops as a `ledger_gap`. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events, a 32 MiB request cap. |

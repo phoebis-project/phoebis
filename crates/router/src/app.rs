@@ -38,6 +38,11 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
+// A completion is never dropped now, so an in-flight entry silent this long belongs to a stream the relay
+// itself ended at its idle timeout: the assembler's TTL must outwait it, or a still-open stream would be aged
+// out from under a request that has not finished.
+const _: () = assert!(phoebis_ledger::IN_FLIGHT_TTL_MS as u128 > IDLE_TIMEOUT.as_millis());
+
 /// A stream that has not reached its first committing event by then is forwarded as it stands, because the
 /// caller is waiting and a longer hold buys no better verdict.
 const HOLD_TIMEOUT: Duration = Duration::from_secs(30);

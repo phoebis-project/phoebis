@@ -231,16 +231,19 @@ impl Publish {
             .first_content_at
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
-        self.trace.complete(
-            &self.outcome,
-            self.status,
-            usage,
-            self.response.clone(),
-            ttfc_ms,
-            Some(self.bytes),
-            outcome,
-            (self.clock)(),
-        );
+        self.trace
+            .complete(
+                &self.outcome,
+                self.status,
+                usage,
+                self.response.clone(),
+                ttfc_ms,
+                Some(self.bytes),
+                Some(self.index),
+                outcome,
+                (self.clock)(),
+            )
+            .await;
     }
 
     /// The id is handed off once, on first sight: `message_start` names it for a stream, the whole document for a

@@ -810,6 +810,7 @@ mod tests {
             client_drift: None,
             client_version: None,
             response_bytes: Some(10),
+            response_chunks: None,
             finished_at: 1_500,
         })
     }

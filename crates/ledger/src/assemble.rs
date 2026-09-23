@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
 use phoebis_bus::{
     user_agent_of, AccountSelected, Event, Outcome, RequestComplete, RequestObserved,
     ResponseChunk, ResponseHead,
@@ -20,10 +21,18 @@ use crate::record::{
     QuotaSampleRecord, RequestRecord,
 };
 
-/// Well past the relay's own ten-minute idle wait: an entry nothing has touched for this long belongs to a
-/// request whose completion the bus dropped. Measured from the last event or chunk, not from observation, so
-/// a stream that keeps sending is never cut off by its own length.
+/// A completion is never dropped, so an entry silent this long belongs to a stream the relay itself ended at
+/// its idle timeout; the router asserts this exceeds that timeout.
 pub const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
+
+/// Four times the proxy's own connection cap, so the cap is reached only by a flood the listener never admits
+/// and an eviction stays the last resort rather than a policy. An entry without bodies is small, so this
+/// bounds memory at a few tens of megabytes.
+pub const MAX_IN_FLIGHT: usize = 16_384;
+
+/// Charged at observation for a capturing key's request body and per response chunk kept; past it the largest
+/// capture's bodies are dropped so every request still lands its row.
+pub const MAX_CAPTURE_BYTES: usize = 64 << 20;
 
 // Boxing the request would put an allocation on the path every request takes, to shrink a value that is
 // built once per completion and moved once into the writer's bounded channel.
@@ -49,17 +58,29 @@ pub(crate) struct InFlight {
     pub response_body: Option<Vec<u8>>,
     /// Every chunk's length whether or not it was kept, so a cut capture can say how much it dropped.
     pub response_len_seen: u64,
-    /// The chunk index expected next; a chunk past it means one was dropped at the bus.
+    /// The chunk index expected next; a chunk past it means one was dropped at the bus, and the completion's
+    /// own count catches the case where the dropped chunk was the last one and nothing later reveals it.
     pub next_index: u32,
-    /// Set once a chunk was skipped: the capture is incomplete and is not stored.
+    /// Set once an interior chunk was skipped: the capture is truncated from that point on.
     pub gapped: bool,
     /// The last moment anything about this request arrived.
     pub seen_at: i64,
+    /// The request body's length, kept when the body itself is cleared because the key does not capture or
+    /// the capture budget dropped it.
+    pub request_len: u64,
+    /// Insertion order, used only to break a tie between entries an eviction could otherwise pick between at
+    /// random: a real clock rarely ties, but a flood arriving in the same millisecond must still evict the
+    /// same entry every time.
+    pub seq: u64,
 }
 
 pub struct Assembler {
     clock: Clock,
     in_flight: HashMap<String, InFlight>,
+    next_seq: u64,
+    /// The request and response bytes currently held for capturing entries; charged at observation and per
+    /// chunk kept, checked against `MAX_CAPTURE_BYTES` after each charge.
+    captured_bytes: usize,
 }
 
 impl Assembler {
@@ -67,6 +88,8 @@ impl Assembler {
         Assembler {
             clock,
             in_flight: HashMap::new(),
+            next_seq: 0,
+            captured_bytes: 0,
         }
     }
 
@@ -74,11 +97,72 @@ impl Assembler {
         self.in_flight.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn retained_request_bytes(&self) -> u64 {
+        self.in_flight
+            .values()
+            .map(|e| e.observed.body.len() as u64)
+            .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_capture_bytes(&self) -> usize {
+        self.captured_bytes
+    }
+
+    /// Frees the largest capturing entry's bodies until the charge fits the budget, the oldest among equals:
+    /// the row still lands for every request, only the bytes this eviction names go.
+    fn enforce_capture_budget(&mut self, now: i64) -> Option<Record> {
+        if self.captured_bytes <= MAX_CAPTURE_BYTES {
+            return None;
+        }
+        let (victim, freed) = self
+            .in_flight
+            .iter()
+            .filter(|(_, e)| e.observed.body_capture_hours > 0)
+            .map(|(id, e)| {
+                let size = e.observed.body.len() + e.response_body.as_ref().map_or(0, Vec::len);
+                (id.clone(), size, e.seq)
+            })
+            .max_by_key(|(_, size, seq)| (*size, std::cmp::Reverse(*seq)))
+            .map(|(id, size, _)| (id, size))?;
+        if let Some(entry) = self.in_flight.get_mut(&victim) {
+            entry.observed.body = Bytes::new();
+            entry.response_body = None;
+        }
+        self.captured_bytes = self.captured_bytes.saturating_sub(freed);
+        Some(gap(&victim, "capture_budget", now))
+    }
+
     pub fn observe(&mut self, event: Event) -> Vec<Record> {
         let now = (self.clock)();
         match event {
-            Event::RequestObserved(observed) => {
-                let response_body = (observed.body_capture_hours > 0).then(Vec::new);
+            Event::RequestObserved(mut observed) => {
+                let request_len = observed.body.len() as u64;
+                let capturing = observed.body_capture_hours > 0;
+                // Nothing will read it: a captured body is the one reason to hold a request's bytes past its
+                // observation.
+                if !capturing {
+                    observed.body = Bytes::new();
+                }
+                let seq = self.next_seq;
+                self.next_seq += 1;
+                let mut records = Vec::new();
+                if self.in_flight.len() >= MAX_IN_FLIGHT {
+                    if let Some(victim) = self
+                        .in_flight
+                        .iter()
+                        .min_by_key(|(_, e)| (e.seen_at, e.seq))
+                        .map(|(id, _)| id.clone())
+                    {
+                        self.in_flight.remove(&victim);
+                        records.push(gap(&victim, "in_flight_cap", now));
+                    }
+                }
+                if capturing {
+                    self.captured_bytes += request_len as usize;
+                }
+                let response_body = capturing.then(Vec::new);
                 self.in_flight.insert(
                     observed.request_id.clone(),
                     InFlight {
@@ -89,9 +173,14 @@ impl Assembler {
                         next_index: 0,
                         gapped: false,
                         seen_at: now,
+                        request_len,
+                        seq,
                     },
                 );
-                Vec::new()
+                if capturing {
+                    records.extend(self.enforce_capture_budget(now));
+                }
+                records
             }
             Event::AccountSelected(selected) => {
                 let Some(entry) = self.in_flight.get_mut(&selected.request_id) else {
@@ -140,8 +229,9 @@ impl Assembler {
         }
     }
 
-    /// Every chunk is activity and carries its index; the first skipped index ends the capture and is reported
-    /// once.
+    /// Every chunk is activity and carries its index; the first skipped index truncates the capture from
+    /// there on and is reported once. What was captured before the gap is kept, not cleared: a truncated
+    /// capture is stored truncated rather than dropped.
     pub fn chunk(&mut self, chunk: &ResponseChunk) -> Vec<Record> {
         let now = (self.clock)();
         let Some(entry) = self.in_flight.get_mut(&chunk.request_id) else {
@@ -151,14 +241,21 @@ impl Assembler {
         let mut records = Vec::new();
         if chunk.index != entry.next_index && !entry.gapped {
             entry.gapped = true;
-            entry.response_body = None;
             records.push(gap(&chunk.request_id, "chunk_skipped", now));
         }
         entry.next_index = chunk.index.saturating_add(1);
         entry.response_len_seen += chunk.body.len() as u64;
-        if let Some(body) = entry.response_body.as_mut() {
-            let room = MAX_CAPTURED_BODY.saturating_sub(body.len());
-            body.extend_from_slice(&chunk.body[..chunk.body.len().min(room)]);
+        let mut kept = 0;
+        if !entry.gapped {
+            if let Some(body) = entry.response_body.as_mut() {
+                let room = MAX_CAPTURED_BODY.saturating_sub(body.len());
+                kept = chunk.body.len().min(room);
+                body.extend_from_slice(&chunk.body[..kept]);
+            }
+        }
+        if kept > 0 {
+            self.captured_bytes += kept;
+            records.extend(self.enforce_capture_budget(now));
         }
         records
     }
@@ -260,7 +357,9 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         mut attempts,
         response_body,
         response_len_seen,
+        next_index,
         gapped,
+        request_len,
         ..
     } = entry;
     let mut records = Vec::new();
@@ -333,18 +432,26 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
-    // A capture with a skipped chunk is not a body the operator can read; it is dropped with the gap on record.
-    let bodies = response_body
-        .filter(|_| !gapped)
-        .map(|assembled| BodyRecord {
-            request_id: observed.request_id.clone(),
-            request_body: observed.body.to_vec(),
-            response_body: (!assembled.is_empty()).then_some(assembled),
-            // The request is never cut: it is the bus's whole `Bytes`, read once at observation.
-            request_len_seen: observed.body.len() as u64,
-            response_len_seen,
-            expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
-        });
+    // Completeness is the terminal chunk count alone: `response_bytes` counts what the caller received
+    // (compressed on a pass-through) while the chunks it is compared against are decoded, so the two cannot
+    // be compared for length across every encoding the relay forwards.
+    let short = complete
+        .response_chunks
+        .is_some_and(|published| next_index < published);
+    if short && !gapped {
+        records.push(gap(&observed.request_id, "chunk_dropped", now));
+    }
+    // A gapped or short capture is stored truncated rather than dropped: the bytes seen before the gap are
+    // still worth reading, and the row says so via `response_truncated`.
+    let bodies = response_body.map(|assembled| BodyRecord {
+        request_id: observed.request_id.clone(),
+        request_body: observed.body.to_vec(),
+        response_body: (!assembled.is_empty()).then_some(assembled),
+        // The request is never cut: it is the bus's whole `Bytes`, read once at observation.
+        request_len_seen: request_len,
+        response_len_seen,
+        expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
+    });
     let request = RequestRecord {
         id: observed.request_id.clone(),
         received_at: observed.received_at,
@@ -367,7 +474,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         } else {
             complete.attempt as u32
         },
-        request_bytes: Some(observed.body.len() as u64),
+        request_bytes: Some(request_len),
         response_bytes: complete.response_bytes,
         ttfb_ms: complete.ttfb_ms,
         ttfc_ms: complete.ttfc_ms,
@@ -379,11 +486,13 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         kept_warm: false,
         bodies_captured: bodies.is_some(),
         request_truncated: false,
-        response_truncated: bodies.as_ref().is_some_and(|b| {
-            b.response_body
-                .as_ref()
-                .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
-        }),
+        response_truncated: gapped
+            || short
+            || bodies.as_ref().is_some_and(|b| {
+                b.response_body
+                    .as_ref()
+                    .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
+            }),
         user_agent: user_agent_of(&observed.headers),
         effort: observed.shape.effort.clone(),
         thinking_type: observed.shape.thinking_type.clone(),
@@ -418,8 +527,28 @@ mod tests {
         Arc::new(|| 5_000)
     }
 
+    fn clock_at(ms: i64) -> Clock {
+        Arc::new(move || ms)
+    }
+
     fn observed(id: &str, key: Option<&str>) -> Event {
         observed_capturing(id, key, 0)
+    }
+
+    /// A non-capturing observation carrying a request body of the given length, for a test that checks the
+    /// body's length is counted without being retained.
+    fn observed_with_body(id: &str, capture_hours: u32, body: Vec<u8>) -> Event {
+        let Event::RequestObserved(mut observed) = observed_capturing(id, Some("k"), capture_hours)
+        else {
+            unreachable!()
+        };
+        observed.body = Bytes::from(body);
+        Event::RequestObserved(observed)
+    }
+
+    /// A capturing observation carrying the given request body, for a test that drives the capture budget.
+    fn observed_capturing_with_body(id: &str, body: Vec<u8>) -> Event {
+        observed_with_body(id, 1, body)
     }
     fn observed_capturing(id: &str, key: Option<&str>, capture_hours: u32) -> Event {
         Event::RequestObserved(RequestObserved {
@@ -453,6 +582,16 @@ mod tests {
             body: Bytes::from_static(b"x"),
             phase: None,
         })
+    }
+    /// A chunk of the given body, for a test where the bytes captured matter rather than just the index.
+    fn chunk_bytes(id: &str, index: u32, body: &[u8]) -> ResponseChunk {
+        ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: Bytes::from(body.to_vec()),
+            phase: None,
+        }
     }
     fn chunk_sized(id: &str, index: u32, len: usize) -> Event {
         Event::ResponseChunk(ResponseChunk {
@@ -535,8 +674,68 @@ mod tests {
             client_drift: Some("version".into()),
             client_version: Some("2.1.300".into()),
             response_bytes: Some(20),
+            response_chunks: None,
             finished_at: 1_500,
         })
+    }
+
+    /// A completion carrying only the two fields a capture-completeness test cares about; named apart from
+    /// `complete` so the two do not collide.
+    fn completion(
+        id: &str,
+        response_chunks: Option<u32>,
+        response_bytes: Option<u64>,
+    ) -> RequestComplete {
+        RequestComplete {
+            request_id: id.into(),
+            attempt: 0,
+            account_id: None,
+            outcome: Outcome::Succeeded,
+            status: 200,
+            usage: None,
+            response: ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: None,
+            client_drift: None,
+            client_version: None,
+            response_bytes,
+            response_chunks,
+            finished_at: 1_500,
+        }
+    }
+
+    /// The one `Record::Request` among `records`, split into its row and its bodies.
+    fn request_and_bodies(records: &[Record]) -> (&RequestRecord, Option<&BodyRecord>) {
+        records
+            .iter()
+            .find_map(|r| match r {
+                Record::Request {
+                    request, bodies, ..
+                } => Some((request, bodies.as_ref())),
+                _ => None,
+            })
+            .expect("a request record")
+    }
+
+    fn request_of(records: &[Record]) -> &RequestRecord {
+        request_and_bodies(records).0
+    }
+
+    /// The `(request_id, reason)` a `ledger_gap` event names, for a test that does not care about the rest of
+    /// the detail.
+    fn gap_detail(record: &Record) -> Option<(String, String)> {
+        let Record::Event(event) = record else {
+            return None;
+        };
+        if event.kind != "ledger_gap" {
+            return None;
+        }
+        let detail: serde_json::Value = serde_json::from_str(event.detail.as_deref()?).ok()?;
+        Some((
+            detail["request_id"].as_str()?.to_string(),
+            detail["reason"].as_str()?.to_string(),
+        ))
     }
 
     #[test]
@@ -943,7 +1142,7 @@ mod tests {
             (None, "rate_limited"),
             "b's usage lands on no row rather than on a's failed attempt"
         );
-        // A chunk index skipped inside one request: the capture is dropped and a gap says so, once.
+        // A chunk index skipped inside one request: the capture is truncated and a gap says so, once.
         a.observe(observed_capturing("r10", Some("k"), 24));
         a.observe(selected("r10", 1, "a", 1_010));
         a.observe(head("r10", 1, 200, AttemptOutcome::Succeeded, 1_060));
@@ -962,8 +1161,13 @@ mod tests {
             panic!()
         };
         assert!(
-            !request.bodies_captured && bodies.is_none(),
-            "a partial capture is not stored"
+            request.bodies_captured && request.response_truncated,
+            "a truncated capture is stored, not dropped"
+        );
+        assert_eq!(
+            bodies.unwrap().response_body.as_deref(),
+            Some(&b"x"[..]),
+            "only the bytes seen before the gap are kept"
         );
     }
 
@@ -1038,5 +1242,89 @@ mod tests {
         let user_agent = request.user_agent.expect("a user agent was observed");
         assert_eq!(user_agent.len(), USER_AGENT_MAX_BYTES);
         assert!(user_agent.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn a_capture_whose_last_chunk_never_arrived_is_stored_truncated_with_a_gap() {
+        let mut a = Assembler::new(clock_at(1_000));
+        a.observe(observed_capturing("r1", Some("k"), 1));
+        a.chunk(&chunk_bytes("r1", 0, b"A"));
+        // The second chunk was dropped at the bus; the completion says two were published.
+        let records = a.observe(Event::RequestComplete(completion("r1", Some(2), Some(2))));
+        let (request, bodies) = request_and_bodies(&records);
+        assert!(request.response_truncated);
+        assert_eq!(bodies.unwrap().response_body.as_deref(), Some(&b"A"[..]));
+        assert_eq!(
+            records.iter().find_map(gap_detail),
+            Some(("r1".to_string(), "chunk_dropped".to_string()))
+        );
+    }
+
+    #[test]
+    fn the_entry_cap_evicts_the_oldest_with_a_gap() {
+        let mut a = Assembler::new(clock_at(1_000));
+        let mut gaps = Vec::new();
+        for i in 0..=MAX_IN_FLIGHT {
+            gaps.extend(a.observe(observed(&format!("r{i}"), Some("k"))));
+        }
+        assert_eq!(a.in_flight(), MAX_IN_FLIGHT);
+        assert_eq!(
+            gaps.iter().filter_map(gap_detail).collect::<Vec<_>>(),
+            vec![("r0".to_string(), "in_flight_cap".to_string())],
+            "the first observed is the only one evicted"
+        );
+    }
+
+    #[test]
+    fn the_capture_budget_is_charged_at_observation_and_drops_the_largest_capture() {
+        let mut a = Assembler::new(clock_at(1_000));
+        // Three capturing requests of 24 MiB each: the third observation passes the 64 MiB budget, so the
+        // first (the largest, oldest among equals) gives its bodies back.
+        let mut last = Vec::new();
+        for id in ["r1", "r2", "r3"] {
+            last = a.observe(observed_capturing_with_body(id, vec![b'x'; 24 << 20]));
+        }
+        assert_eq!(
+            last.iter().find_map(gap_detail),
+            Some(("r1".to_string(), "capture_budget".to_string()))
+        );
+        assert_eq!(a.retained_capture_bytes(), 48 << 20);
+        let r1 =
+            request_of(&a.observe(Event::RequestComplete(completion("r1", None, None)))).clone();
+        let r2 =
+            request_of(&a.observe(Event::RequestComplete(completion("r2", None, None)))).clone();
+        let r3 =
+            request_of(&a.observe(Event::RequestComplete(completion("r3", None, None)))).clone();
+        assert!(
+            !r1.bodies_captured,
+            "the evicted capture still lands its row, without a body"
+        );
+        assert!(r2.bodies_captured);
+        assert!(r3.bodies_captured);
+    }
+
+    #[test]
+    fn a_pass_through_response_larger_on_the_wire_than_decoded_is_stored_complete() {
+        let mut a = Assembler::new(clock_at(1_000));
+        a.observe(observed_capturing("r1", Some("k"), 1));
+        a.chunk(&chunk_bytes("r1", 0, b"0123456789"));
+        // One chunk published, one delivered; the caller took 40 compressed bytes for these 10.
+        let records = a.observe(Event::RequestComplete(completion("r1", Some(1), Some(40))));
+        let (request, bodies) = request_and_bodies(&records);
+        assert!(!request.response_truncated);
+        assert_eq!(
+            bodies.unwrap().response_body.as_deref(),
+            Some(&b"0123456789"[..])
+        );
+        assert!(!records.iter().any(|r| gap_detail(r).is_some()));
+    }
+
+    #[test]
+    fn a_key_that_captures_nothing_keeps_no_request_body_and_still_counts_its_bytes() {
+        let mut a = Assembler::new(clock_at(1_000));
+        a.observe(observed_with_body("r1", 0, vec![b'x'; 10_000]));
+        assert_eq!(a.retained_request_bytes(), 0);
+        let records = a.observe(Event::RequestComplete(completion("r1", None, None)));
+        assert_eq!(request_of(&records).request_bytes, Some(10_000));
     }
 }

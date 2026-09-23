@@ -96,7 +96,8 @@ impl Ledger {
         self.stats.dropped.load(Ordering::Relaxed)
     }
 
-    /// Never waits: the relay's body task and the assembler both call this, and neither may stall on disk.
+    /// Never waits: the relay's body task and the assembler both call this for an event or a sample, and
+    /// neither may stall on disk.
     pub fn record(&self, record: Record) {
         match self.tx.try_send(record) {
             Ok(()) => {}
@@ -105,6 +106,16 @@ impl Ledger {
                 self.stats.dropped.fetch_add(1, Ordering::Relaxed);
                 self.metrics.observe_drop(table_of(&record));
             }
+        }
+    }
+
+    /// Waits for room in the writer's channel: a request's row must land, or a completed request leaves no
+    /// trace at all. A record offered after the channel closed is counted as dropped, as `record` counts one
+    /// offered to a full or closed channel.
+    pub async fn record_request(&self, record: Record) {
+        if let Err(mpsc::error::SendError(record)) = self.tx.send(record).await {
+            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            self.metrics.observe_drop(table_of(&record));
         }
     }
 
@@ -194,6 +205,17 @@ async fn stop_requested(stopped: &mut watch::Receiver<bool>) {
     let _ = stopped.wait_for(|stop| *stop).await;
 }
 
+/// Resolves once the assembler in `handle` has ended, and never when there is none to wait for.
+async fn ended(handle: &mut Option<tokio::task::JoinHandle<()>>) {
+    match handle.as_mut() {
+        Some(assembler) => {
+            let _ = assembler.await;
+            *handle = None;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// The bus side: every event, chunks included, into the assembler in publish order, completed records into
 /// the channel. On stop it drains what the bus already queued before it exits, so a completion published
 /// just before shutdown reaches the writer. One receiver, so one `None` ends it.
@@ -209,11 +231,7 @@ async fn assemble(
     loop {
         tokio::select! {
             event = subscriber.events.recv() => match event {
-                Some(event) => {
-                    for record in assembler.observe(event) {
-                        ledger.record(record);
-                    }
-                }
+                Some(event) => land_all(&ledger, assembler.observe(event)).await,
                 None => break,
             },
             _ = expire.tick() => {
@@ -221,10 +239,21 @@ async fn assemble(
             }
             _ = stop_requested(&mut stopped) => {
                 while let Ok(event) = subscriber.events.try_recv() {
-                    for record in assembler.observe(event) { ledger.record(record); }
+                    land_all(&ledger, assembler.observe(event)).await;
                 }
                 break;
             }
+        }
+    }
+}
+
+/// A request record waits for the writer's channel, since the row it names can never be written again once
+/// the request that produced it is gone; an event or a sample keeps the drop-and-count `record` always used.
+async fn land_all(ledger: &Ledger, records: Vec<Record>) {
+    for record in records {
+        match record {
+            Record::Request { .. } => ledger.record_request(record).await,
+            other => ledger.record(other),
         }
     }
 }
@@ -243,6 +272,9 @@ async fn writer(
     done: oneshot::Sender<()>,
 ) {
     let mut assembler = Some(assembler);
+    // The assembler's handle once the stop was seen: the writer keeps reading while it waits for the
+    // assembler to end, since the assembler may be waiting on this very channel for room.
+    let mut ending: Option<tokio::task::JoinHandle<()>> = None;
     let mut purge = tokio::time::interval(config.purge_interval);
     purge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     purge.tick().await;
@@ -252,10 +284,14 @@ async fn writer(
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
             record = rx.recv() => match record { Some(record) => record, None => break },
-            // The flag stays set once flipped, so the arm is guarded to the one round that closes the channel.
+            // The flag stays set once flipped, so the arm is guarded to the one round that moves the handle.
             _ = stop_requested(&mut stopped), if assembler.is_some() => {
-                // The assembler drains the bus queues first; whatever it enqueues is still ahead of the close.
-                if let Some(assembler) = assembler.take() { let _ = assembler.await; }
+                ending = assembler.take();
+                continue;
+            }
+            // The assembler drained the bus and sent its last record, which is in the channel by now: close
+            // it, and the arm above lands what is left.
+            _ = ended(&mut ending) => {
                 rx.close();
                 continue;
             }

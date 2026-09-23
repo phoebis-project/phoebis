@@ -54,6 +54,8 @@ pub use sse::{SseEvent, SseParser};
 pub enum RelayError {
     #[error("the bound account's identity cannot be written into the request body")]
     AccountUuid,
+    #[error("the request body ended before it was complete")]
+    BodyIncomplete,
     #[error("request body has no {} member to edit", .0.path())]
     BodyShape(BodyMember),
     #[error("the request body did not arrive in time")]

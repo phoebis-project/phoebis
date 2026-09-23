@@ -340,6 +340,7 @@ pub fn complete(
         client_drift: drift.map(String::from),
         client_version: version.map(String::from),
         response_bytes: None,
+        response_chunks: None,
         finished_at: NOW,
     })
 }

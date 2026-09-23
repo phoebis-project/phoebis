@@ -696,8 +696,11 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
     up.shutdown().await;
 }
 
+/// Chunks keep the drop-and-count behaviour a subscriber that never reads cannot hold up; the completion is a
+/// fact rather than a chunk, so it waits for the room the same subscriber has to give back before the stream
+/// the client reads can close.
 #[tokio::test]
-async fn a_subscriber_that_never_reads_fills_its_queue_and_delays_nothing() {
+async fn a_subscriber_that_never_reads_drops_chunks_but_the_completion_waits_for_room() {
     let events: Vec<SseEvent> = std::iter::once(ev("message_start", r#"{"type":"message_start","message":{"usage":{"input_tokens":1}}}"#))
         .chain((0..4_096).map(|i| ev("content_block_delta", &format!(r#"{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{i}"}}}}"#))))
         .chain(std::iter::once(ev("message_stop", r#"{"type":"message_stop"}"#)))
@@ -714,11 +717,29 @@ async fn a_subscriber_that_never_reads_fills_its_queue_and_delays_nothing() {
     }])
     .await;
     let bus = Bus::new();
-    let sleeper = bus.subscribe("sleeper");
+    let mut sleeper = bus.subscribe("sleeper");
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
-    let started = std::time::Instant::now();
-    let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let mut request = tokio::spawn(async move {
+        let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
+        resp.into_body().collect().await.unwrap().to_bytes()
+    });
+    // Past the stream's own length, so every chunk has had its chance to fill the sleeper's queue and drop.
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    assert!(
+        sleeper.stats.dropped.load(Ordering::SeqCst) > 0,
+        "the queue filled and dropped"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut request)
+            .await
+            .is_err(),
+        "the completion waits for a subscriber that has given back no room"
+    );
+    while sleeper.events.try_recv().is_ok() {}
+    let body = tokio::time::timeout(Duration::from_secs(5), request)
+        .await
+        .expect("the completion lands once the sleeper's queue has room")
+        .unwrap();
     let expected: String = events
         .iter()
         .map(|e| format!("event: {}\ndata: {}\n\n", e.event, e.data))
@@ -727,14 +748,6 @@ async fn a_subscriber_that_never_reads_fills_its_queue_and_delays_nothing() {
         body.as_ref(),
         expected.as_bytes(),
         "the client got every byte"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "a full subscriber queue did not hold the stream"
-    );
-    assert!(
-        sleeper.stats.dropped.load(Ordering::SeqCst) > 0,
-        "the queue filled and dropped"
     );
     up.shutdown().await;
 }

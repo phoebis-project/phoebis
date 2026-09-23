@@ -392,6 +392,7 @@ impl Rig {
             client_drift: None,
             client_version: None,
             response_bytes: None,
+            response_chunks: None,
             finished_at: self.now(),
         })
     }
