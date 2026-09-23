@@ -114,12 +114,15 @@ function stateSummary(agents: KeepaliveRecipe[]): string {
 }
 
 export function SessionsPage() {
+  // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone:
+  // a session still sending requests would otherwise drop off once its first-read activity crossed the expiry.
+  const tick = useNow(15_000);
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
-  const overview = useAsync(() => api.getKeepaliveOverview(), []);
+  const overview = useAsync(() => api.getKeepaliveOverview(), [tick]);
   const pools = useAsync(() => api.listPools(), []);
-  const recipes = useAsync(() => api.listKeepaliveRecipes(), []);
-  const sessions = useAsync(() => api.listSessions(), []);
+  const recipes = useAsync(() => api.listKeepaliveRecipes(), [tick]);
+  const sessions = useAsync(() => api.listSessions(), [tick]);
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(5_000);
   const navigate = useNavigate();
@@ -143,7 +146,9 @@ export function SessionsPage() {
     [sessionData, recipeData, accounts.data, keys.data, pools.data, expireAfterSeconds, now],
   );
   const o = overview.data;
-  const sessionsNote = o ? `${fmtInt(o.sessionsWithCompanion)} with a companion, ${fmtInt(o.sessions)} with a recipe` : null;
+  // The overview's `sessions` counts every row, recipe or not, so the recipe count is taken over the rows shown.
+  const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
+  const sessionsNote = o && withRecipe !== null ? `${fmtInt(o.sessionsWithCompanion)} with a companion, ${fmtInt(withRecipe)} with a recipe` : null;
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -440,7 +445,7 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(session.sessionId)}`) },
+              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(session.sessionId)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(session.sessionId)}`) },
               ...(canMutate && !session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}

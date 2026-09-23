@@ -105,6 +105,8 @@ export function AnalyticsPage() {
   const headOffset = SECTION_OFFSET + filtersHeight;
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionParam = searchParams.get('session');
+  // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too.
+  const sessionKey = sessionParam === null ? null : searchParams.get('key');
   const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
   const [sessionText, setSessionText] = useState(sessionParam ?? '');
   const ink = useChartInk();
@@ -122,6 +124,7 @@ export function AnalyticsPage() {
     setSessionText(id);
     if (sessionParam === null || sessionParam === id) return;
     const next = new URLSearchParams(searchParams);
+    next.delete('key');
     next.delete('session');
     setSearchParams(next, { replace: true });
   };
@@ -159,12 +162,13 @@ export function AnalyticsPage() {
         : loadSessionRequests(
             (cursor) =>
               api
-                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: clientPattern.trim() || undefined })
-                // The search matches an id across several fields, so the page keeps only the exact session.
-                .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId) })),
+                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: clientPattern.trim() || undefined })
+                // The search matches an id across several fields, so the page keeps only the exact session; the
+                // route reads one key list, so a lifetime beside a key filter is applied here as well.
+                .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId && (sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey)) })),
             SESSION_PAGE_LIMIT,
           ),
-    [clientPattern, filters, fromIso, includeProbes, sessionId, toIso],
+    [clientPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
@@ -986,6 +990,14 @@ function CostByGroup({ points, groupBy, groupSlot, loading, tick }: { groupBy: G
   );
 }
 
+const NO_SAMPLE_HINT = 'no utilization sampled in range';
+
+/** An hour with no sample carries no peak, so the maximum is over the sampled hours alone and null without one. */
+function peakOf(values: (number | null)[]): number | null {
+  const sampled = values.filter((v): v is number => v !== null);
+  return sampled.length ? Math.max(...sampled) : null;
+}
+
 function AccountsSection({ rollups, loading, span, bucketMs, tick }: { bucketMs: number; loading: boolean; rollups: AccountRollup[] | null; span: { fromMs: number; toMs: number }; tick: (v: number) => string }) {
   const ink = useChartInk();
   const accounts = useMemo(() => [...new Set((rollups ?? []).map((r) => r.accountId))].sort(), [rollups]);
@@ -993,12 +1005,11 @@ function AccountsSection({ rollups, loading, span, bucketMs, tick }: { bucketMs:
     () =>
       accounts.map((id) => {
         const rows = (rollups ?? []).filter((r) => r.accountId === id);
-        const hasFable = rows.some((r) => r.peak['7d_fable'] !== null);
         return {
           id,
-          peak5: Math.max(0, ...rows.map((r) => r.peak['5h'])),
-          peak7: Math.max(0, ...rows.map((r) => r.peak['7d'])),
-          peakF: hasFable ? Math.max(0, ...rows.map((r) => r.peak['7d_fable'] ?? 0)) : null,
+          peak5: peakOf(rows.map((r) => r.peak['5h'])),
+          peak7: peakOf(rows.map((r) => r.peak['7d'])),
+          peakF: peakOf(rows.map((r) => r.peak['7d_fable'])),
           overage: rows.reduce((s, r) => s + r.overageSeconds, 0),
           cooldown: rows.reduce((s, r) => s + r.cooldownSeconds, 0),
           created: rows.reduce((s, r) => s + r.pins.created, 0),
@@ -1020,8 +1031,9 @@ function AccountsSection({ rollups, loading, span, bucketMs, tick }: { bucketMs:
     }
     for (const r of rollups ?? []) {
       const row = byAt.get(Math.floor(Date.parse(r.hour) / bucketMs) * bucketMs);
-      if (!row) continue;
-      row[r.accountId] = Math.max(row[r.accountId] ?? 0, r.peak['5h'] * 100);
+      const peak = r.peak['5h'];
+      if (!row || peak === null) continue;
+      row[r.accountId] = Math.max(row[r.accountId] ?? 0, peak * 100);
     }
     return rows;
   }, [rollups, accounts, span, bucketMs]);
@@ -1046,8 +1058,8 @@ function AccountsSection({ rollups, loading, span, bucketMs, tick }: { bucketMs:
           key: r.id,
           label: r.id,
           cells: [
-            fmtPct(r.peak5),
-            fmtPct(r.peak7),
+            r.peak5 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak5),
+            r.peak7 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak7),
             r.peakF === null ? <span className="muted" title="no Fable window">n/a</span> : fmtPct(r.peakF),
             r.overage ? fmtDuration(r.overage * 1000) : <span className="muted">none</span>,
             r.cooldown ? fmtDuration(r.cooldown * 1000) : <span className="muted">none</span>,

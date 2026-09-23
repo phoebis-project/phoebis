@@ -14,7 +14,7 @@ export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   unavailable: 'Unavailable',
 };
 
-/** Only the `*_changed` reasons carry an estimate of the input that fell after the divergence. */
+/** The `*_changed` reasons are the diagnosed divergences, each naming the part of the prompt the prefix broke at. */
 export const isDivergence = (reason: CacheMissReason) => reason.endsWith('_changed');
 
 export const WASTED_PROBE_REASONS: WastedProbeReason[] = ['idle_limit', 'released', 'replaced', 'session_ended'];

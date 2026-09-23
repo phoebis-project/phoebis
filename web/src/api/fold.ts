@@ -36,7 +36,8 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'effort') return r.shape.effort ?? 'none';
-  if (by === 'key') return r.keyId ?? '-';
+  // A key id created again is another holder, so the group is the lifetime, which a `keys=` selector names too.
+  if (by === 'key') return `${r.keyId ?? '-'}@${r.keyGeneration}`;
   if (by === 'kind') return r.kind;
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
@@ -56,18 +57,40 @@ export interface FoldOptions {
   agentPatterns?: string[];
 }
 
+/** The newest generation of each key id among the rows, the one the breakdown labels with the bare id. */
+function latestGenerations(rows: RequestLog[]): Map<string, number> {
+  const latest = new Map<string, number>();
+  for (const r of rows) if (r.keyId !== null) latest.set(r.keyId, Math.max(latest.get(r.keyId) ?? r.keyGeneration, r.keyGeneration));
+  return latest;
+}
+
+/**
+ * The breakdown route's labels: `unattributed` for a row no key or client was read for, and under `key` the id
+ * alone for its newest generation and `<id> (deleted)` for an earlier one. The rows stand in for the router's
+ * registry here, so the newest generation among them reads as the live one.
+ */
+function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<string, number>): string {
+  if (by !== 'key') return key === '-' ? 'unattributed' : key;
+  if (r.keyId === null) return 'unattributed';
+  return latest.get(r.keyId) === r.keyGeneration ? r.keyId : `${r.keyId} (deleted)`;
+}
+
 /** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */
 const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.ttftMs !== null && r.durationMs - r.ttftMs > 0 && r.usage.output > 0 ? r.usage.output / ((r.durationMs - r.ttftMs) / 1000) : null);
 
-/** Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session. */
-export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}): AnalyticsGroup[] {
+/**
+ * Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session.
+ * `latest` is taken over every row of the range, so a bucket holding an earlier key holder alone still labels it
+ * deleted.
+ */
+export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: FoldOptions = {}, latest = latestGenerations(rows)): AnalyticsGroup[] {
   const groups = new Map<string, AnalyticsGroup>();
   const lists = new Map<string, RequestLog[]>();
   const patterns = options.agentPatterns ?? [];
   const kept = patterns.length ? rows.filter((r) => patterns.some((p) => matchesPattern(p, r.userAgent ?? '-'))) : rows;
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
-    const g = groups.get(key) ?? empty(key, key === '-' ? 'unattributed' : key);
+    const g = groups.get(key) ?? empty(key, labelOf(r, key, by, latest));
     groups.set(key, g);
     const list = lists.get(key) ?? [];
     list.push(r);
@@ -112,6 +135,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
 
 export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}): AnalyticsPoint[] {
   const end = Date.parse(to);
+  const latest = latestGenerations(rows);
   const points: AnalyticsPoint[] = [];
   // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too.
   for (let at = Math.floor(Date.parse(from) / bucketMs) * bucketMs; at < end; at += bucketMs) {
@@ -119,7 +143,7 @@ export function foldRequests(rows: RequestLog[], bucketMs: number, from: string,
       const t = Date.parse(r.at);
       return t >= at && t < at + bucketMs;
     });
-    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by, options) });
+    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by, options, latest) });
   }
   return points;
 }

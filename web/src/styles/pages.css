@@ -1445,6 +1445,8 @@
 
 .filters__cols {
   position: relative;
+  display: flex;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -1561,14 +1563,19 @@
   border-left-color: var(--good);
 }
 
+.attempt--canceled {
+  border-left-color: var(--hairline-strong);
+}
+
 .attempt--rate_limited {
   border-left-color: var(--warning);
 }
 
-.attempt--overloaded {
+.attempt--transport_error {
   border-left-color: var(--serious);
 }
 
+.attempt--auth_failed,
 .attempt--upstream_error {
   border-left-color: var(--critical);
 }

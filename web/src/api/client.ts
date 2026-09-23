@@ -32,8 +32,7 @@ import type {
   PriceImportPreview,
   QuotaHistory,
   QuotaSnapshot,
-  RequestEvent,
-  RequestLog,
+  RequestDetail,
   RequestPage,
   RequestQuery,
   ServedModel,
@@ -123,7 +122,8 @@ export interface Api {
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getOverview(): Promise<Overview>;
   getQuotaHistory(accountId: string): Promise<QuotaHistory[]>;
-  getRequest(id: string): Promise<RequestLog | null>;
+  /** Null for a request the ledger no longer holds. */
+  getRequest(id: string): Promise<RequestDetail | null>;
   /** Null when no session cookie is valid, which is what puts the login screen up. */
   getSession(): Promise<SessionInfo | null>;
   getSettings(): Promise<Settings>;
@@ -139,7 +139,6 @@ export interface Api {
   listLifecycleDeliveries(kind?: AlertKind): Promise<LifecycleDelivery[]>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
-  listRequestEvents(id: string): Promise<RequestEvent[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
   listSessions(): Promise<Session[]>;
   login(secret: string): Promise<SessionInfo>;

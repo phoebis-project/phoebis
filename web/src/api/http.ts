@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestQuery, ServedModel, SessionInfo } from './types';
+import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, ServedModel, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -38,13 +38,16 @@ export const setHooks = (next: Hooks) => {
 export const reportFailure = (failure: Failure) => hooks.onFailure(failure);
 
 export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
+  // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
+  // the next login succeeds, where it would report a failure the operator has already read.
+  const login = method === 'POST' && path === '/admin/session';
   let response: Response;
   try {
     response = await fetch(path, { body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin', headers: body === undefined ? {} : { 'content-type': 'application/json' }, method });
   } catch (e) {
     // A router that never answered: the page below draws its error state, and the hook says which route.
     const message = e instanceof Error ? e.message : String(e);
-    reportFailure({ message, path, status: 0 });
+    if (!login) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null);
   }
   if (response.status === 204) return undefined as T;
@@ -58,12 +61,13 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   if (!response.ok) {
     const answered = parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string' ? (parsed as { error: string }).error : null;
     const message = answered ?? `${method} ${path} answered ${response.status}`;
-    // The login route's own 401 is the wrong secret, not a lost session.
-    if (response.status === 401 && !(method === 'POST' && path === '/admin/session')) hooks.onUnauthorized();
-    else if (response.status === 403) hooks.onForbidden(message);
-    // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
-    // it draws as a state of its own; everything else is a failure the operator has to be told about.
-    else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
+    if (!login) {
+      if (response.status === 401) hooks.onUnauthorized();
+      else if (response.status === 403) hooks.onForbidden(message);
+      // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
+      // it draws as a state of its own; everything else is a failure the operator has to be told about.
+      else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
+    }
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
   }
   return (raw ? text : parsed) as T;
@@ -118,9 +122,10 @@ export class HttpApi implements Api {
   getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
   getOverview = async () => d.decodeDashboard(await call('GET', '/admin/dashboard'));
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));
-  getRequest = async (id: string) => {
+  getRequest = async (id: string): Promise<RequestDetail | null> => {
     try {
-      return d.decodeRequest((await call<{ request: unknown }>('GET', `/admin/requests/${enc(id)}`)).request);
+      const body = await call<{ events: unknown[]; request: unknown }>('GET', `/admin/requests/${enc(id)}`);
+      return { events: body.events.map(d.decodeRequestEvent), request: d.decodeRequest(body.request) };
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -157,7 +162,6 @@ export class HttpApi implements Api {
       }),
     );
   };
-  listRequestEvents = async (id: string) => (await call<{ events: unknown[] }>('GET', `/admin/requests/${enc(id)}`)).events.map(d.decodeRequestEvent);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
       await call('GET', `/admin/requests${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, user_agent: q.userAgent })}`),
@@ -190,18 +194,29 @@ export class HttpApi implements Api {
     let socket: WebSocket | null = null;
     let closed = false;
     let retry = 1_000;
+    let warned = false;
     const open = () => {
       if (closed) return;
       socket = new WebSocket(`${scheme}://${location.host}/admin/live`);
       socket.onmessage = (m) => {
-        const v = JSON.parse(String(m.data)) as { kind: string; snapshot?: unknown; delta?: unknown };
-        if (v.kind === 'snapshot') {
-          retry = 1_000;
-          handler({ kind: 'snapshot', snapshot: d.decodeLiveSnapshot(v.snapshot) });
-        } else {
-          const delta = d.decodeLiveDelta(v.delta);
-          if (delta) handler({ delta, kind: 'delta' });
+        let event: LiveEvent | null;
+        // A frame the decoder cannot read is the server's to explain; the subscription lives on, since the next
+        // frame may be fine.
+        try {
+          const v = JSON.parse(String(m.data)) as { kind: string; snapshot?: unknown; delta?: unknown };
+          if (v.kind === 'snapshot') {
+            event = { kind: 'snapshot', snapshot: d.decodeLiveSnapshot(v.snapshot) };
+          } else {
+            const delta = d.decodeLiveDelta(v.delta);
+            event = delta ? { delta, kind: 'delta' } : null;
+          }
+        } catch (e) {
+          if (!warned) console.warn('skipped a live frame the console could not read', e);
+          warned = true;
+          return;
         }
+        if (event?.kind === 'snapshot') retry = 1_000;
+        if (event) handler(event);
       };
       // A dropped socket (the feed disconnects a slow client) reconnects to a fresh snapshot with a growing wait.
       socket.onclose = () => {

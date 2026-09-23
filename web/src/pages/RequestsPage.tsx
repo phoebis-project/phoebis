@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, PinMigrationReason, PinReleaseReason, RequestEvent, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import type { Attempt, CapturedBodies, PinMigrationReason, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconX } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
@@ -100,19 +100,24 @@ export function RequestsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [stack, setStack] = useState<(string | undefined)[]>([]);
+  // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
+  // Refresh moves the end to now.
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
 
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, cursor, from: new Date(now - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(now).toISOString(), userAgent: client };
-    // now changes every tick; refetching each tick would flash the list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor]);
+    return { accountIds, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), userAgent: client };
+  }, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => {
     setCursor(undefined);
     setStack([]);
+  };
+  const refresh = () => {
+    resetPaging();
+    setLoadedAt(Date.now());
   };
   useEffect(resetPaging, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
@@ -184,6 +189,9 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
+            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(new Date(loadedAt).toISOString())}; Refresh reads up to now`}>
+              Refresh
+            </Button>
             <Button size="sm" icon={<IconColumns size={14} />} onClick={() => setColsOpen((v) => !v)} aria-expanded={colsOpen}>
               Columns ({visible.size})
             </Button>
@@ -338,17 +346,19 @@ export function RequestsPage() {
 
 function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
   const { canMutate } = useAppSettings();
-  const fetched = useAsync(() => (request ? Promise.resolve(request) : api.getRequest(requestId)), [requestId, request]);
-  const r = request ?? fetched.data ?? null;
+  // One read answers the row and its events; the list's own row draws the summary while it runs.
+  const detail = useAsync(() => api.getRequest(requestId), [requestId]);
+  // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
+  // for this id is read.
+  const fetched = detail.data?.request.id === requestId ? detail.data : null;
+  const r = request ?? fetched?.request ?? null;
   const bodies = useAsync<CapturedBodies | null>(() => (r?.capturedBodies && canMutate ? api.getCapturedBodies(r.id) : Promise.resolve(null)), [r?.id, canMutate]);
   // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
-  const events = useAsync<{ events: RequestEvent[]; requestId: string } | null>(() => (r ? api.listRequestEvents(r.id).then((list) => ({ events: list, requestId: r.id })) : Promise.resolve(null)), [r?.id]);
-  // A load that is pending or has failed leaves the answer to the request before it in hand, the guard the
-  // captured bodies apply above; and the route lists the session's events by time alone, so a move or a
-  // release belongs to this request only when it is the same pin's, keyed by key, session, and canonical model.
-  const migrations = r === null || events.data?.requestId !== r.id ? [] : events.data.events.filter((e) => (e.kind === 'pin_migrated' || e.kind === 'pin_expired') && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
+  // The route lists the session's events by time alone, so a move or a release belongs to this request only when
+  // it is the same pin's, keyed by key, session, and canonical model.
+  const migrations = r === null || fetched === null ? [] : fetched.events.filter((e) => (e.kind === 'pin_migrated' || e.kind === 'pin_expired') && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -371,7 +381,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
         </button>
       </header>
       {!r ? (
-        fetched.loading ? (
+        detail.loading ? (
           <Skeleton height={200} />
         ) : (
           <EmptyState title="Request not found" body="It may have aged out of the ledger." />
@@ -435,7 +445,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                         return (
                           <li key={id}>
                             <span className="muted">{label}</span>
-                            <span className={`num ${w ? '' : 'muted'}`}>{w ? `${fmtPct(w.utilization)} used` : 'n/a'}</span>
+                            <span className={`num ${w && w.utilization !== null ? '' : 'muted'}`}>{w ? (w.utilization === null ? 'utilization not reported' : `${fmtPct(w.utilization)} used`) : 'n/a'}</span>
                             <span className="muted" title={w ? fmtAbsolute(w.resetsAt) : undefined}>
                               {w ? `resets ${fmtRelative(w.resetsAt, now)}` : 'not reported'}
                             </span>
@@ -564,7 +574,7 @@ function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   const detail = () => {
     if (reason === null) return 'no response to read';
     if (reason === 'none') return `${fmtCompact(usage.cacheRead)} read, ${fmtCompact(usage.cacheWrite5m + usage.cacheWrite1h)} written`;
-    if (isDivergence(reason)) return `${fmtCompact(attempt.cacheMissedInputTokens ?? 0)} tokens after the divergence`;
+    if (isDivergence(reason)) return `diverged at ${reason.slice(0, -'_changed'.length)}`;
     return '';
   };
   return (

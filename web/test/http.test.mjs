@@ -35,6 +35,23 @@ test('a 401 outside the login runs the unauthorized hook and the login 401 does 
   assert.equal(forbidden, 1);
 });
 
+test("the login route's refusals reach the login screen alone, never the shell's toast", async () => {
+  let failures = 0;
+  let forbidden = 0;
+  let unauthorized = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => { forbidden += 1; }, onUnauthorized: () => { unauthorized += 1; } });
+  for (const status of [400, 401, 403, 429, 500]) {
+    stub(() => answer(status, { error: 'refused' }));
+    await assert.rejects(call('POST', '/admin/session', { secret: 'x' }), (e) => e instanceof ApiError && e.status === status);
+  }
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(call('POST', '/admin/session', { secret: 'x' }), (e) => e instanceof ApiError && e.status === 0);
+  assert.deepEqual([failures, forbidden, unauthorized], [0, 0, 0]);
+  stub(() => answer(429, { error: 'too many failed logins, try again in a minute' }));
+  await assert.rejects(call('GET', '/admin/keys'));
+  assert.equal(failures, 1, 'the same refusal on any other route still reaches the toast');
+});
+
 test('the HttpApi encodes ids into paths and lists into comma-separated query values', async () => {
   const calls = stub((url) => (url.startsWith('/admin/requests') ? answer(200, { next_cursor: null, requests: [] }) : answer(204)));
   const api = new HttpApi();
@@ -129,6 +146,47 @@ test('the live feed reconnects behind a live session and stops once it is gone',
   assert.equal(sockets.length, opened, 'an upgrade refused behind an expired session is not retried for ever');
   assert.equal(unauthorized, 1, 'the page reaches the login screen the way every other read does');
   expired();
+});
+
+test('a live frame the decoder cannot read is skipped, warned about once, and the subscription stays open', () => {
+  const sockets = [];
+  globalThis.WebSocket = class {
+    constructor(url) {
+      this.url = url;
+      sockets.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+  };
+  globalThis.location = { host: 'router.test', protocol: 'http:' };
+  const warned = [];
+  const warn = console.warn;
+  console.warn = (...args) => warned.push(args);
+  try {
+    const events = [];
+    const stop = new HttpApi().subscribeLive((e) => events.push(e));
+    assert.doesNotThrow(() => sockets[0].onmessage({ data: 'not json' }));
+    assert.doesNotThrow(() => sockets[0].onmessage({ data: 'null' }), 'a frame that parses to nothing the decoder can read');
+    sockets[0].onmessage({ data: JSON.stringify({ kind: 'snapshot', snapshot: { cursor: 3, in_flight: [], recent: [] } }) });
+    assert.deepEqual(events.map((e) => e.kind), ['snapshot'], 'the next frame still reaches the page');
+    assert.equal(warned.length, 1);
+    assert.deepEqual([sockets.length, sockets[0].closed], [1, undefined], 'the socket is neither closed nor replaced');
+    stop();
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('the request detail reads the row and its events from one GET, and a purged row reads as not found', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/request.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const api = new HttpApi();
+  const detail = await api.getRequest('r-failover');
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/requests/r-failover']]);
+  assert.deepEqual([detail.request.id, detail.events.map((e) => e.kind)], [body.request.id, body.events.map((e) => e.kind)]);
+  stub(() => answer(404, { error: 'no such request' }));
+  assert.equal(await api.getRequest('gone'), null);
 });
 
 test('a pool save is one PATCH that carries the members with the settings', async () => {

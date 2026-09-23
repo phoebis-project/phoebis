@@ -112,6 +112,10 @@ let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Synced', 'admin', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 {
+  // The story's two pools hold 10 and 2 pins, all of the pinned sessions sit on business or personal, and the
+  // sessions route answers 17 rows, so a hero counting rows or a note counting every row's upstream reads otherwise.
+  const hero = m.container.querySelector('.sess-summary__hero');
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' upstreams", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 upstreams', missing: [hero?.textContent ?? 'absent'] });
   const t = m.text();
   results.push({ name: '/ donut center says remaining, not average', ok: !t.includes('average') && (m.container.querySelectorAll('.donut__label').length >= 2), missing: [] });
   const fableAbsent = m.container.querySelectorAll('.account-mini .wbar--absent[title="no Fable window"]').length;
@@ -153,6 +157,12 @@ m = await mount('/observe');
   plainRow?.click();
   await m.settle(300);
   results.push({ name: '/observe a request the feed sent no output for says so', ok: m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
+  const failedAfterHead = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
+  results.push({ name: '/observe a finished 200 with an error code draws the failure dot', ok: failedAfterHead !== undefined, missing: ['no 200 row with ldot--bad'] });
+  failedAfterHead?.click();
+  await m.settle(300);
+  const detailText = m.container.querySelector('.observe__detail')?.textContent ?? '';
+  results.push({ name: '/observe the detail pane names the error of a stream that failed after its head', ok: failedAfterHead !== undefined && detailText.includes('Erroroverloaded_error'), missing: [detailText.slice(0, 160)] });
   const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
   streamsBtn?.click();
   await m.settle(300);
@@ -1242,7 +1252,7 @@ if (failoverRow) {
     const unmoved = requests.find((r) => r.id !== spentId && !requestEvents.has(r.id) && r.keyId === spentRow.keyId && r.sessionId === spentRow.sessionId && r.canonicalModel === spentRow.canonicalModel);
     results.push({ name: 'fixture: an unmoved request on the same pin as the moved one', ok: unmoved !== undefined, missing: [] });
     if (unmoved) {
-      failNextCall('listRequestEvents', `/admin/requests/${unmoved.id}`, 'the ledger is unavailable');
+      failNextCall('getRequest', `/admin/requests/${unmoved.id}`, 'the ledger is unavailable');
       await m.navigate(`/requests/${unmoved.id}`);
       await m.settle(400);
       results.push({ name: '/requests a failed events load never draws the move of the request before it', ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ['the previous move is still drawn'] : [] });
@@ -1275,6 +1285,13 @@ if (failoverRow) {
     const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
     results.push({ name: '/requests Fable row reads a utilization and a reset', ok: rows.some((r) => /^Fable \d+% used resets /.test(r)), missing: rows.slice(0, 3) });
   }
+  const unsampled = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.utilization === null && w.resetsAt !== null)));
+  results.push({ name: 'fixture has a window reported with a reset and no utilization', ok: Boolean(unsampled), missing: [] });
+  if (unsampled) {
+    await m.navigate(`/requests/${unsampled.id}`);
+    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
+    results.push({ name: '/requests a window with no utilization reads not reported rather than 0% used', ok: rows.some((r) => /^(5h|7d|Fable) utilization not reported resets /.test(r)) && !rows.some((r) => /^(5h|7d|Fable) 0% used/.test(r)), missing: rows.slice(0, 4) });
+  }
   if (noFable) {
     await m.navigate(`/requests/${noFable.id}`);
     const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
@@ -1284,11 +1301,6 @@ if (failoverRow) {
 {
   const cacheRows = () => [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache').map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' ').trim());
   {
-    const prefixOf = (r) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
-    const oversized = requests.filter((r) => r.attempts.some((a) => a.cacheMissedInputTokens !== null && a.cacheMissedInputTokens > prefixOf(r)));
-    results.push({ name: 'fixture never reports more missed input than the turn carried', ok: oversized.length === 0, missing: oversized.slice(0, 3).map((r) => r.id) });
-    const strays = requests.filter((r) => r.attempts.some((a) => a.cacheMissedInputTokens !== null && !a.cacheMissReason?.endsWith('_changed')));
-    results.push({ name: 'fixture carries a token estimate only for a divergence', ok: strays.length === 0, missing: strays.slice(0, 3).map((r) => r.id) });
     const failed = requests.filter((r) => r.attempts.some((a) => a.upstreamStatus !== 200 && a.cacheMissReason !== null));
     results.push({ name: 'fixture diagnoses nothing on an attempt that drew no response', ok: failed.length === 0, missing: failed.slice(0, 3).map((r) => r.id) });
   }
@@ -1297,7 +1309,7 @@ if (failoverRow) {
   if (changedRow) {
     await m.navigate(`/requests/${changedRow.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row names the divergence and the tokens after it', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited) [\d.,]+[KMB]? tokens after the divergence$/.test(r)), missing: rows });
+    results.push({ name: '/requests cache row names the divergence and where it fell, with no token count', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited) diverged at (model|system|tools|messages)$/.test(r)), missing: rows });
   }
   const noneRow = requests.find((r) => r.attempts.length === 1 && r.attempts[0].cacheMissReason === 'none' && r.usage.cacheRead > 0);
   results.push({ name: 'fixture has an attempt that found no divergence', ok: Boolean(noneRow), missing: [] });
@@ -1640,6 +1652,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const tile = [...m.container.querySelectorAll('.stat--compact')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Sessions');
     results.push({ name: '/sessions the tile counts sessions with a companion', ok: /\d+ with a companion/.test(tile?.textContent ?? ''), missing: [tile?.textContent ?? 'absent'] });
+    // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
+    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });

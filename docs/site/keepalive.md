@@ -206,7 +206,8 @@ last 24 hours by outcome, sessions whose cache expired between turns, net saving
 probe cost per pool against its cap. Its table lists one row per session (key, session, model, upstream, last
 used, requests, last request, agents, companion, cache warming, next probe), and opening a row expands into the
 recipe each of its agents carries. A session's menu offers Release, and, once it has ledgered traffic, "View in
-analytics" and "View in observe."
+analytics" and "View in observe"; the analytics view opens on the requests of the key holder the row belongs to. The
+view reads its sessions again every 15 seconds, so a session that keeps sending requests stays on it.
 
 ![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
 requests](assets/analytics-light.png#only-light)

@@ -1,7 +1,7 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { ApiError } from '@/api/http';
 import type {
-  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestLog, RequestPage, RequestQuery,
+  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery,
   Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
 import type { NumericKeepaliveKey } from '@/lib/forms';
@@ -135,9 +135,16 @@ const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   return a.cooldowns.length ? 'cooldown' : 'ready';
 };
 
-function matchesQuery(r: RequestLog, q: RequestQuery): boolean {
+/**
+ * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier
+ * holder's rows answer only to their own selector.
+ */
+const selectsKey = (selector: string, r: RequestLog, live: Map<string, number>) =>
+  r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
+
+function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>): boolean {
   // A request the router never attributed matches no filter on that field.
-  if (q.keyIds?.length && (r.keyId === null || !q.keyIds.includes(r.keyId))) return false;
+  if (q.keyIds?.length && !q.keyIds.some((k) => selectsKey(k, r, live))) return false;
   if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
   if (q.accountIds?.length && (r.accountId === null || !q.accountIds.includes(r.accountId))) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
@@ -390,6 +397,8 @@ export class MockApi implements Api {
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
     return latency({
+      // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
+      activePins: this.pools.reduce((n, p) => n + p.activePins, 0),
       cost24h: cost,
       errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : 0,
       hourly: [...hourlyMap.values()],
@@ -404,8 +413,9 @@ export class MockApi implements Api {
     return latency(QUOTA_HISTORY.filter((h) => h.accountId === accountId));
   }
 
-  getRequest(id: string) {
-    return latency(requestById.get(id) ?? null);
+  getRequest(id: string): Promise<RequestDetail | null> {
+    const request = requestById.get(id);
+    return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request } : null);
   }
 
   getSession(): Promise<SessionInfo | null> {
@@ -468,12 +478,9 @@ export class MockApi implements Api {
     return latency(QUOTA_SNAPSHOTS);
   }
 
-  listRequestEvents(id: string) {
-    return latency(REQUEST_EVENTS.get(id) ?? []);
-  }
-
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
-    const matched = REQUESTS.filter((r) => matchesQuery(r, query)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+    const matched = REQUESTS.filter((r) => matchesQuery(r, query, live)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);

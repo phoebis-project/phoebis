@@ -67,8 +67,9 @@ function applyDelta(store: Store, d: LiveDelta): Store {
       break;
     case 'finished': {
       // The attempts come with the delta: a connection that failed before a head, and a stream that failed
-      // after one, both settle an outcome here, and the row must not keep the one it was drawn with.
-      updated = { ...cur, state: 'finished', attempts: d.attempts, status: d.status, costUsd: d.costUsd, errorCode: d.errorCode, phases: d.phases, usage: d.usage };
+      // after one, both settle an outcome here, and the row must not keep the one it was drawn with. The feed
+      // drops a finished request's preview, so the row does too rather than show output a reconnect would lose.
+      updated = { ...cur, state: 'finished', attempts: d.attempts, status: d.status, costUsd: d.costUsd, errorCode: d.errorCode, phases: d.phases, preview: null, usage: d.usage };
       const inFlight = new Map(store.inFlight);
       inFlight.delete(d.id);
       const cutoff = Date.parse(d.at) - RING_SPAN_S * 1000;
@@ -514,7 +515,9 @@ function MetricStrip({ tick }: { tick: LiveTick | null }) {
 
 /* Table */
 
-const statusDot = (r: LiveRequest) => (r.state === 'in_flight' ? 'ldot--inflight' : r.status === 200 ? 'ldot--ok' : r.status === 429 ? 'ldot--warn' : 'ldot--bad');
+// A stream can commit its 200 head and fail after it, so a finished 200 reads as a success only without an error.
+const statusDot = (r: LiveRequest) => (r.state === 'in_flight' ? 'ldot--inflight' : r.status === 200 && r.errorCode === null ? 'ldot--ok' : r.status === 429 ? 'ldot--warn' : 'ldot--bad');
+const statusTone = (r: LiveRequest) => (r.status === 200 && r.errorCode === null ? 'good' : r.status === 429 ? 'warning' : r.status === 529 ? 'serious' : 'critical');
 
 const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string) => void; r: LiveRequest; selected: boolean }) {
   return (
@@ -535,7 +538,7 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
       <td>{r.accountId ?? <span className="muted">selecting</span>}</td>
       <td>{r.kind}</td>
       <td>{r.transport === 'sse' ? 'SSE' : 'JSON'}</td>
-      <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={r.status === 200 ? 'good' : r.status === 429 ? 'warning' : r.status === 529 ? 'serious' : 'critical'}>{r.status}</Badge>}</td>
+      <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={statusTone(r)} title={r.errorCode ?? undefined}>{r.status}</Badge>}</td>
       <td>
         <AttemptTrail attempts={r.attempts} />
       </td>
@@ -663,6 +666,8 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
         </button>
       </div>
 
+      <KeyValue rows={[{ label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) }]} />
+
       <section>
         <h3 className="section-title">Phases</h3>
         <Waterfall phases={r.phases} endMs={endMs} inFlight={r.state === 'in_flight'} />
@@ -687,7 +692,7 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
                     {a.windows.map((w) => (
                       <li key={w.id}>
                         <span className="mono muted">{w.id}</span>
-                        <span>{fmtPct(w.utilization)} used</span>
+                        {w.utilization === null ? <span className="muted">utilization not reported</span> : <span>{fmtPct(w.utilization)} used</span>}
                         <span className="muted">resets {fmtAbsolute(w.resetsAt)}</span>
                       </li>
                     ))}

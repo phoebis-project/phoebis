@@ -63,7 +63,7 @@ export function DashboardPage() {
           <RecentTable rows={requests.data?.requests ?? null} error={requests.error} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
-          <SessionsSummary pins={sessions.data} />
+          <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
         </Card>
       </div>
     </div>
@@ -220,19 +220,23 @@ export function StatusBadge({ status, attempts = 1 }: { attempts?: number; statu
   );
 }
 
-function SessionsSummary({ pins }: { pins: Session[] | null }) {
-  if (!pins) return <Skeleton height={80} />;
+/**
+ * The hero is the router's own pin count: the session rows also hold sessions the ledger or the keepalive engine
+ * alone knows and earlier key holders' ones, so only the rows still pinned name the upstreams.
+ */
+function SessionsSummary({ activePins, sessions }: { activePins: number | null; sessions: Session[] | null }) {
+  if (!sessions || activePins === null) return <Skeleton height={80} />;
   const byState = { busy: 0, idle: 0, parked: 0 };
   let agents = 0;
-  for (const p of pins) {
+  for (const p of sessions) {
     if (p.keepalive.state) byState[p.keepalive.state] += 1;
     agents += p.agents;
   }
   return (
     <div className="sess-summary">
       <div className="sess-summary__hero">
-        <span className="stat__value">{pins.length}</span>
-        <span className="stat__note">active pins across {new Set(pins.map((p) => p.accountId)).size} upstreams</span>
+        <span className="stat__value">{activePins}</span>
+        <span className="stat__note">active pins across {new Set(sessions.filter((p) => p.pinned).map((p) => p.accountId)).size} upstreams</span>
       </div>
       <dl className="sess-summary__grid">
         <div>

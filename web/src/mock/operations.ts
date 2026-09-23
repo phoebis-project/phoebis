@@ -1,7 +1,7 @@
 import type { AlertEvent, AlertRule, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
 import { PRICES } from './catalog';
 import { keyById } from './pools';
-import { REQUESTS, SESSION_IDS } from './requests';
+import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { ALERT_EVENT_SAMPLE, ALERT_RULE_SAMPLE, DELIVERY_SAMPLE, KEEPALIVE_OVERVIEW_SAMPLE, LIFECYCLE_DELIVERY_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo } from './time';
@@ -195,7 +195,7 @@ SESSIONS.push({
   createdAt: null,
   historical: true,
   keepalive: { nextProbeAt: null, state: null },
-  keyGeneration: firstDesktop.keyGeneration - 14 * DAY,
+  keyGeneration: DELETED_HOLDER_GENERATION,
   lastUsedAt: null,
   pinned: false,
 });
@@ -209,7 +209,8 @@ const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.u
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
-  sessions: WARMED.length,
+  // Every session row, as the route counts them; the page counts the ones holding a recipe itself.
+  sessions: SESSIONS.length,
   agents: {
     busy: WARMED.filter((p) => p.keepalive.state === 'busy').reduce((n, p) => n + p.agents, 0),
     idle: WARMED.filter((p) => p.keepalive.state === 'idle').reduce((n, p) => n + p.agents, 0),

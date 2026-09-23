@@ -267,7 +267,8 @@ export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succ
 export interface AttemptWindow {
   id: WindowId;
   resetsAt: string | null;
-  utilization: number;
+  /** Null when the headers carried the window's reset and no utilization. */
+  utilization: number | null;
 }
 
 /**
@@ -291,8 +292,6 @@ export interface AttemptResponse {
 
 export interface Attempt {
   accountId: string;
-  /** Estimated input that fell after the divergence point; set only for the `*_changed` reasons. */
-  cacheMissedInputTokens: number | null;
   /** Null when the attempt drew no response body to read diagnostics from. */
   cacheMissReason: CacheMissReason | null;
   cooldownSet: { reason: string; until: string } | null;
@@ -347,6 +346,8 @@ export interface RequestLog {
   durationMs: number | null;
   errorCode: string | null;
   id: string;
+  /** The `created_at` of the key the request was read under, 0 for none; a key id created again is another holder. */
+  keyGeneration: number;
   keyId: string | null;
   kind: RequestKind;
   model: string;
@@ -397,6 +398,12 @@ export interface RequestEvent {
   kind: string;
   model: string | null;
   sessionId: string | null;
+}
+
+/** `GET /admin/requests/{id}`: the row and the events of its window, from one read. */
+export interface RequestDetail {
+  events: RequestEvent[];
+  request: RequestLog;
 }
 
 export interface RequestQuery {
@@ -497,7 +504,8 @@ export interface AccountRollup {
   cooldownSeconds: number;
   hour: string;
   overageSeconds: number;
-  peak: { '5h': number; '7d': number; '7d_fable': number | null };
+  /** Null for a window the hour holds no utilization sample of. */
+  peak: { '5h': number | null; '7d': number | null; '7d_fable': number | null };
   pins: { created: number; migratedIn: number; migratedOut: number };
 }
 
@@ -773,6 +781,8 @@ export interface SyncResult {
 }
 
 export interface Overview {
+  /** The router's live pins, which the session rows overcount: those also hold ledger-only and historical sessions. */
+  activePins: number;
   cost24h: number;
   errorRate24h: number | null;
   hourly: { at: string; cost: number; errors: number; requests: number; tokens: number }[];

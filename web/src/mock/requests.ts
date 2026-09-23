@@ -12,6 +12,9 @@ import { DAY, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 const rng = createRng(7_331);
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
+
+/** A holder of `desktop` created long before the live one and deleted before it, so the two never overlap. */
+export const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
 const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
 
 /** One client per key, the way a machine runs one build of Claude Code and a runner runs its own script. */
@@ -154,12 +157,9 @@ const missRng = createRng(1_517);
  * What the cache diagnostics beta reported for each attempt of one request.
  * Diagnostics ride on a response body, so an attempt that failed upstream
  * carries none, and the token-count endpoint returns no usage block to compare
- * against. The estimate of the input that fell after a divergence is the part
- * of the prefix the response had to write afresh, shaded down a little because
- * the beta calls it an estimate; anything larger would exceed the turn it is
- * reported on.
+ * against.
  */
-function diagnosed(attempts: Attempt[], kind: RequestKind, usage: Usage): Attempt[] {
+function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
     // An API-key upstream in this fixture answers without the beta, so the client never sees a comparison.
@@ -174,8 +174,7 @@ function diagnosed(attempts: Attempt[], kind: RequestKind, usage: Usage): Attemp
       { value: 'model_changed', weight: 2 },
       { value: 'unavailable', weight: 2 },
     ]);
-    const rewritten = usage.input + usage.cacheWrite5m + usage.cacheWrite1h;
-    return { ...a, cacheMissReason, cacheMissedInputTokens: cacheMissReason.endsWith('_changed') ? Math.round(rewritten * missRng.float(0.85, 1)) : null };
+    return { ...a, cacheMissReason };
   });
 }
 
@@ -202,10 +201,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     const rateLimitHit = upstreamStatus === 429;
     attempts.push({
       accountId,
-      cacheMissedInputTokens: null,
       cacheMissReason: null,
       cooldownSet: rateLimitHit
-        ? { reason: `429 on ${windows.find((w) => w.utilization >= 0.95)?.id ?? '5h'} window`, until: iso(cursor + rng.int(20, 75) * MINUTE) }
+        ? { reason: `429 on ${windows.find((w) => (w.utilization ?? 0) >= 0.95)?.id ?? '5h'} window`, until: iso(cursor + rng.int(20, 75) * MINUTE) }
         : null,
       durationMs,
       index: i,
@@ -240,8 +238,7 @@ function buildRequests(): RequestLog[] {
     const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted);
     const head = tried[tried.length - 1];
     const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
-    // Needs the usage, so it runs once the response has been drawn rather than inside buildAttempts.
-    const diagnosis = diagnosed(tried, kind, usage);
+    const diagnosis = diagnosed(tried, kind);
     const refused = refusalOwed && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200;
     if (refused) refusalOwed = false;
     const attempts = refused
@@ -258,6 +255,7 @@ function buildRequests(): RequestLog[] {
       ...REQUEST_SAMPLE,
       id: `req_${rng.uuid().slice(0, 12)}`,
       at: iso(atMs),
+      keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
       poolId: lane.poolId,
       accountId: head.accountId,
@@ -296,7 +294,28 @@ function buildRequests(): RequestLog[] {
       responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
   }
-  return rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  // The earlier holder of `desktop` spent the first half of the day on the session the live key now holds, so
+  // a session view grouped by key has two lifetimes of one id to keep apart. A probe replays the live key's
+  // recipe alone, so none of those rows is one.
+  for (const r of rows) {
+    if (r.keyId === 'desktop' && r.sessionId === SESSION_IDS[0] && r.kind !== 'probe' && Date.parse(r.at) < NOW - 12 * HOUR) r.keyGeneration = DELETED_HOLDER_GENERATION;
+  }
+  // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
+  // carries the error, which is the row Observe and the drawer must not draw as a success.
+  const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
+  if (failedAfterHead) {
+    failedAfterHead.errorCode = 'overloaded_error';
+    failedAfterHead.outcome = 'failed';
+    failedAfterHead.attempts = failedAfterHead.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
+  }
+  // A header sample can carry a window's reset without its utilization; the oldest row that reported the 7-day
+  // window stands in for one, so the drawer has a window to read as not reported.
+  const unsampled = [...rows].reverse().find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d')));
+  if (unsampled) {
+    unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
+  }
+  return rows;
 }
 
 export const REQUESTS: RequestLog[] = buildRequests();
@@ -486,8 +505,6 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
   return { cacheMissReasons, expiredBetweenTurns: Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0) };
 }
 
-/** A holder of `desktop` created long before the live one and deleted before it, so the two never overlap. */
-const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
 const DELETED_HOLDER_DAY = new Date(NOW - 9 * DAY).toDateString();
 
 function historicalRollups(): HourlyRollup[] {

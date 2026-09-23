@@ -43,7 +43,7 @@ const SYNC = {
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('team') },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   pricing_import: { decode: (b) => d.decodePriceImport(b), mock: (api) => api.previewPriceImport('https://example.invalid/prices.json') },
-  request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const events = await api.listRequestEvents(r.id); if (events.length) return { events, request: await api.getRequest(r.id) }; } throw new Error('no mock request carries an event'); } },
+  request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
   // them through raw), the same class of value OPAQUE covers for `.detail`.
   request_bodies: { decode: (b) => d.decodeBodies(b), mock: async (api) => { const page = await api.listRequests(); return api.getCapturedBodies(page.requests.find((r) => r.capturedBodies).id); }, opaque: (path) => path === '.request' || path === '.response' },

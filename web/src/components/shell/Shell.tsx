@@ -31,7 +31,7 @@ export const PAGE_TITLES: Record<string, string> = {
   '/observe': 'Observe',
   '/pools': 'Pools',
   '/quota': 'Quota',
-  '/requests': 'Request logs',
+  '/requests': 'Requests',
   '/sessions': 'Sessions',
   '/settings': 'Settings',
   '/upstreams': 'Upstreams',

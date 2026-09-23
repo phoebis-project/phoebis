@@ -134,14 +134,15 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 
 Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
 them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most
-recent requests and the active sessions.
+recent requests and a sessions card that leads with the router's live pins and the upstreams they sit on.
 
 ### Observe
 
 The metric strip reports eight measures: requests per second, active streams, the error rate, TTFB at p50, p95,
 and p99, output tokens per second, and the estimated cost per minute. Below it, a live table lists requests as
 they run, with filters, a pause control, and a range control for switching to a past window; selecting a request
-opens a detail pane with its phase waterfall, and a Streams grid shows every stream still open.
+opens a detail pane with its error code and phase waterfall, and a Streams grid shows every stream still open. A stream
+that fails after its 200 head keeps that status, so a finished request with an error code never reads as a success.
 
 ![The Observe view: the metric strip, the live table, and the phase waterfall](assets/observe-light.png#only-light)
 ![The Observe view: the metric strip, the live table, and the phase waterfall](assets/observe-dark.png#only-dark)
@@ -155,20 +156,21 @@ two-week weekly view and a three-day 5-hour view.
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)
 
-### Request logs
+### Requests
 
 The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status, attempts,
 TTFB, tokens, and cost. One row is one client request however many attempts it took, and the attempt trail reads
 as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. Filters narrow
 the table, the client filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?`
 for one, a backslash quoting either, and a value with no wildcard matching in full), and selecting a row opens a
-drawer with the request's detail. When the session moved during the request,
-the drawer says from which upstream to which and why: rate limited, upstream marked, overage, window spent, or
-utilization. When its pin was released without a move, the drawer says from which upstream and every reason the router
-found: account cooled, window spent, upstream paused, pin idle past the affinity window, and the rest.
+drawer with the request's detail. The table holds the requests up to the moment you opened it, so paging does not shift
+as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from which
+upstream to which and why: rate limited, upstream marked, overage, window spent, or utilization. When its pin was
+released without a move, the drawer says from which upstream and every reason the router found: account cooled, window
+spent, upstream paused, pin idle past the affinity window, and the rest.
 
-![The Request logs view: the filterable table and the request drawer](assets/requests-light.png#only-light)
-![The Request logs view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)
+![The Requests view: the filterable table and the request drawer](assets/requests-light.png#only-light)
+![The Requests view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)
 
 ### Analytics
 

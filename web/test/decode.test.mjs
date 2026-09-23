@@ -249,6 +249,31 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5');
 });
 
+test('a request row carries the generation of the key it was read under', () => {
+  const body = fixture('requests');
+  const live = body.requests.find((r) => r.id === 'r-captured').key_generation;
+  const earlier = body.requests.find((r) => r.id === 'r-earlier-holder').key_generation;
+  assert.ok(Number.isInteger(live) && Number.isInteger(earlier) && live > earlier, 'the fixture holds two generations of desktop');
+  const rows = d.decodeRequestPage(body).requests;
+  assert.deepEqual(rows.map((r) => [r.id, r.keyGeneration]), body.requests.map((r) => [r.id, r.key_generation]));
+  assert.equal(d.decodeRequest(fixture('request').request).keyGeneration, fixture('request').request.key_generation, 'the detail route answers the same row');
+});
+
+test('an attempt window with a reset and no utilization reads as not reported, not as zero', () => {
+  const windows = [{ id: '5h', resets_at: 1_000, utilization: null }, { id: '7d', resets_at: 2_000, utilization: 0.5 }];
+  const [row] = d.decodeRequestPage({ next_cursor: null, requests: [{ attempts: [{ index: 1, windows }] }] }).requests;
+  assert.deepEqual(row.attempts[0].windows.map((w) => [w.id, w.utilization]), [['5h', null], ['7d', 0.5]]);
+  const live = d.decodeLiveRequest({ attempts: [{ index: 1, windows }] });
+  assert.deepEqual(live.attempts[0].windows.map((w) => w.utilization), [null, 0.5], 'the live feed reads its windows through the same decoder');
+});
+
+test('an account hour with no utilization sample carries no peak rather than a zero one', () => {
+  const [hour] = d.decodeAccountRollups(fixture('analytics_accounts'));
+  const wire = fixture('analytics_accounts').accounts[0].hours[0];
+  assert.deepEqual([wire.utilization_5h_max, wire.utilization_7d_max], [0.4, null], 'the fixture samples the 5-hour window alone');
+  assert.deepEqual([hour.peak['5h'], hour.peak['7d'], hour.peak['7d_fable']], [0.4, null, null]);
+});
+
 test('a captured body carries the bytes the route counted, never the bytes the drawer would measure', () => {
   const whole = d.decodeBodies(fixture('request_bodies'));
   assert.equal(whole.request.model, 'claude-sonnet-5');
@@ -302,7 +327,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
   assert.equal(busy.webFetch, 1 + captured.usage.webFetch);
   const byKey = d.foldGroups(page.requests, 'key');
-  assert.deepEqual(byKey.map((g) => g.key), ['desktop'], 'a log row carries no generation, so a reused id is one group here');
+  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted)'], 'a reused id is one group per holder, as the breakdown answers it');
   // No captured breakdown groups on effort, so the fold is where the dimension is proven.
   assert.deepEqual(d.foldGroups(page.requests, 'effort').map((g) => g.key), ['high']);
   assert.deepEqual(d.foldGroups([{ ...captured, shape: { ...captured.shape, effort: null } }], 'effort').map((g) => g.key), ['none'], 'a request that asked for no effort files under none, as the rollups file it');
@@ -358,9 +383,24 @@ test('a folded bucket carries one group per key the page groups on', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
   const rows = [captured, { ...failed, keyId: 'laptop' }];
   const [bucket] = d.foldRequests(rows, 3_600_000, failed.at, captured.at, 'key');
-  assert.deepEqual(bucket.groups.map((g) => g.key).sort(), ['desktop', 'laptop']);
+  assert.deepEqual(bucket.groups.map((g) => g.label).sort(), ['desktop', 'laptop']);
   assert.deepEqual(d.foldRequests(rows, 3_600_000, failed.at, captured.at)[0].groups.map((g) => g.key), ['all'], 'the ungrouped default is unchanged');
   assert.equal(d.foldRequests(rows, 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T01:00:00.000Z').length, 1, 'a range ending on a bucket start adds no empty trailing bucket');
+});
+
+test('a session fold keeps two holders of one key id apart and labels the earlier one deleted', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const live = rows.find((r) => r.id === 'r-captured');
+  const earlier = rows.find((r) => r.id === 'r-earlier-holder');
+  const groups = d.foldGroups(rows, 'key');
+  assert.deepEqual(
+    groups.map((g) => [g.key, g.label, g.requests]),
+    [[`desktop@${live.keyGeneration}`, 'desktop', 3], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted)', 1]],
+    'the key a group carries is the lifetime the requests route selects by',
+  );
+  assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
+  const points = d.foldRequests([{ ...earlier, at: '1970-01-01T00:10:00.000Z' }, { ...live, at: '1970-01-01T01:10:00.000Z' }], 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T02:00:00.000Z', 'key');
+  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
 });
 
 test('a session view folds every page the cursor names', () => {
@@ -377,6 +417,12 @@ test('a session view folds every page the cursor names', () => {
     assert.equal(partial, true, 'the page bound marks the result partial');
     assert.equal(requests.length, 8);
   });
+});
+
+test('the dashboard reads the live pin count the route answers beside the rollups', () => {
+  assert.equal(fixture('dashboard').sessions.active_pins, 0);
+  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 0);
+  assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 
 test('the dashboard, sessions, recipes, and overview decode', () => {
