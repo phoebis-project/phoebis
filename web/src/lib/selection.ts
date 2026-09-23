@@ -5,8 +5,8 @@ import { windowOf } from '@/lib/quota';
 export const STRATEGY_RULE: Record<PoolStrategy, string> = {
   earliest_refresh: 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one whose 7-day window resets soonest; ties are random.',
   least_utilized: 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.',
-  priority_random: 'Within the first tier that has an eligible upstream (tiers split by kind when prefer_subscription is on), any of them at random.',
-  round_robin: 'Within the first tier that has an eligible upstream (tiers split by kind when prefer_subscription is on), each in turn; a restart starts the round again.',
+  priority_random: 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), any of them at random.',
+  round_robin: 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.',
 };
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random', round_robin: 'Round robin' };
 export const SUB_STRATEGY_LABEL: Record<ApiKeySubStrategy, string> = { priority_random: 'Priority, then random', round_robin: 'Round robin' };

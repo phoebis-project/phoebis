@@ -64,7 +64,7 @@ const poolRefusal = (input: PoolInput): string | null => {
   for (const [key, field, min, max] of KEEPALIVE_RANGES) {
     const value = k[key];
     if (value < min || value > max) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
-    if (key === 'retrySeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
+    if (key === 'retryMaxSeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
   }
   if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
   if (k.enabled && affinity < 300) {
@@ -234,7 +234,7 @@ export class MockApi implements Api {
 
   private account(accountId: string): Account {
     const a = this.accounts.find((x) => x.id === accountId);
-    if (!a) throw new ApiError(404, `Unknown account ${accountId}`, null);
+    if (!a) throw new ApiError(404, 'account not found', null);
     return a;
   }
 
@@ -605,7 +605,7 @@ export class MockApi implements Api {
   async resolveAlertEvent(id: string): Promise<AlertEvent> {
     this.mutation();
     const event = this.events.find((e) => e.id === id);
-    if (!event) return Promise.reject(new ApiError(404, `Unknown event ${id}`, null));
+    if (!event) return Promise.reject(new ApiError(404, 'alert event not found', null));
     const next: AlertEvent = { ...event, resolvedAt: iso(NOW), state: 'resolved' };
     this.events = this.events.map((e) => (e.id === id ? next : e));
     return latency(next, 250);
@@ -628,7 +628,7 @@ export class MockApi implements Api {
   async rotateKey(id: string): Promise<CreatedApiKey> {
     this.mutation();
     const key = this.keys.find((k) => k.id === id);
-    if (!key) return Promise.reject(new ApiError(404, `Unknown key ${id}`, null));
+    if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
     const next: ApiKey = { ...key, prefix: secret.slice(0, 8), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
@@ -672,14 +672,14 @@ export class MockApi implements Api {
   async testAlertRule(id: string): Promise<AlertDeliveryTest> {
     this.mutation();
     const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, null));
+    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
     return latency({ error: null, status: 200 }, 400);
   }
 
   async updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
     this.mutation();
     const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, null));
+    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
     // An open event resolves under the rule's kind, so the route holds the kind still while one is open.
     const open = this.events.filter((e) => e.ruleId === id && e.state === 'open').length;
     if (input.kind !== rule.kind && open > 0) throw new ApiError(409, `the condition cannot change while ${open} ${open === 1 ? 'event is' : 'events are'} open for this rule`, null);

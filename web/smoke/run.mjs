@@ -561,7 +561,7 @@ await m.navigate('/upstreams/spare');
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream (tiers split by kind when prefer_subscription is on), each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -1409,6 +1409,13 @@ m.unmount();
     ok: before.includes('laptop') && t.includes('Could not load the analytics for these filters') && t.includes('the ledger is unavailable') && failed.length === 0,
     missing: [`before ${before.join(',')}`, `after ${failed.join(',')}`, t.slice(0, 160)],
   });
+  const skeletons = page.container.querySelectorAll('.skeleton').length;
+  const trafficMeta = page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? null;
+  results.push({
+    name: '/analytics a failed read draws the error state alone, with no skeleton, empty note or figure beside it',
+    ok: t.includes('Could not load the analytics for these filters') && skeletons === 0 && !t.includes('No traffic in this range.') && trafficMeta === null,
+    missing: [`skeletons ${skeletons}`, `empty note ${t.includes('No traffic in this range.')}`, `traffic meta ${trafficMeta}`],
+  });
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
   await page.settle(900);
   results.push({ name: '/analytics Try again reads the new filters again', ok: !page.text().includes('Could not load the analytics for these filters') && JSON.stringify(keyRows()) === JSON.stringify(['desktop']), missing: keyRows() });
@@ -1538,17 +1545,45 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       await m.settle(150);
     };
     const picked = every[0] ?? '';
+    const subtitle = () => upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    const ignored = 'Totals for the selected range and upstreams; the key, pool, model, client and session filters and the probes toggle do not apply here';
     await toggle('Upstream', picked);
     const narrowed = upstreamRows();
-    const plain = upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    const plain = subtitle();
     await toggle('Key', 'desktop');
-    const noted = upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    const noted = subtitle();
     await toggle('Key', 'desktop');
     await toggle('Upstream', picked);
     results.push({
       name: '/analytics the upstreams section takes the upstream selection and names the filters it ignores',
-      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and upstreams' && noted === 'Totals for the selected range and upstreams; the key, pool, model and client filters do not apply here' && JSON.stringify(upstreamRows()) === JSON.stringify(every),
+      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and upstreams' && noted === ignored && JSON.stringify(upstreamRows()) === JSON.stringify(every),
       missing: [`every ${every.join(',')}`, `narrowed ${narrowed.join(',')}`, plain, noted],
+    });
+    // A session view reads the request log for every other section, while this one keeps the range's rollups,
+    // which carry no session and no probe count, so a session alone or the probes toggle alone draws the clause.
+    const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const commitSession = async (value) => {
+      const input = [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
+      setInput.call(input, value);
+      input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      await m.settle(900);
+    };
+    const probes = async () => {
+      m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+      await m.settle(700);
+    };
+    await commitSession(requests.find((r) => r.sessionId !== null).sessionId);
+    const bySession = subtitle();
+    const sessionRows = upstreamRows();
+    await commitSession('');
+    await probes();
+    const byProbes = subtitle();
+    await probes();
+    results.push({
+      name: '/analytics the upstreams section says the session filter and the probes toggle do not reach it',
+      ok: bySession === ignored && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === ignored && subtitle() === 'Totals for the selected range and upstreams',
+      missing: [`session ${bySession}`, `rows ${sessionRows.join(',')}`, `probes ${byProbes}`, `after ${subtitle()}`],
     });
   }
   {

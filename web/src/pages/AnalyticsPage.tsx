@@ -232,7 +232,7 @@ export function AnalyticsPage() {
   // A session fold has no cost split and no warming facts; those figures read unavailable rather than zero.
   const split = knownSplit(totals.cost);
   const { keptWarm, savings } = totals;
-  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || clientPattern.trim() !== '';
+  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || clientPattern.trim() !== '' || sessionId !== null || includeProbes;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
@@ -243,8 +243,11 @@ export function AnalyticsPage() {
   }, [options, groups, groupBy, ink]);
 
   const tick = (v: number) => (bucketMs >= 6 * HOUR ? fmtDayShort(v) : fmtHourTick(v));
-  const loading = stale || (sessionId === null ? series.data === null || breakdown.data === null : log.data === null);
-  const empty = !loading && groups.length === 0;
+  // A failed read shows its error alone: a skeleton beside it would say a load is still running, and an empty
+  // fold would read as zero traffic, so the sections it feeds stay out until a read succeeds.
+  const shown = failure === null;
+  const loading = shown && (stale || (sessionId === null ? series.data === null || breakdown.data === null : log.data === null));
+  const empty = shown && !loading && groups.length === 0;
   const groupLabel = GROUP_LABEL[groupBy];
 
   return (
@@ -357,7 +360,7 @@ export function AnalyticsPage() {
       {empty && <div className="empty">No traffic in this range.</div>}
 
       {/* Traffic */}
-      <Section id="traffic" offset={headOffset} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
+      <Section id="traffic" shown={shown} offset={headOffset} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
         <div className="grid-2">
           <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
             <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
@@ -400,7 +403,7 @@ export function AnalyticsPage() {
       </Section>
 
       {/* Latency */}
-      <Section id="latency" offset={headOffset} title="Latency" meta="Percentiles read from merged per-hour histograms">
+      <Section id="latency" shown={shown} offset={headOffset} title="Latency" meta="Percentiles read from merged per-hour histograms">
         <div className="stack">
           {LATENCY_METRICS.map((m) => (
             <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} tick={tick} />
@@ -434,7 +437,7 @@ export function AnalyticsPage() {
       </Section>
 
       {/* Cache */}
-      <Section id="cache" offset={headOffset} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
+      <Section id="cache" shown={shown} offset={headOffset} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
         <div className="grid-2">
           <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
             <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
@@ -507,7 +510,7 @@ export function AnalyticsPage() {
       </Section>
 
       {/* Cost */}
-      <Section id="cost" offset={headOffset} title="Cost" meta={loading ? undefined : `${fmtUsd(totals.costUsd)} in range`}>
+      <Section id="cost" shown={shown} offset={headOffset} title="Cost" meta={loading ? undefined : `${fmtUsd(totals.costUsd)} in range`}>
         <div className="tiles-row">
           <Tile label="Estimated cost" value={loading ? null : fmtUsd(totals.costUsd)} note="at the effective price list" />
           <Tile label="Cost per request" value={loading ? null : fmtUsd(totals.requests ? totals.costUsd / totals.requests : 0)} note={`${fmtInt(totals.requests)} requests`} />
@@ -545,7 +548,7 @@ export function AnalyticsPage() {
       </Section>
 
       {/* Cache warming */}
-      <Section id="cache-warming" offset={headOffset} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
+      <Section id="cache-warming" shown={shown} offset={headOffset} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
         <div className="tiles-row">
           <Tile label="Gross saved" value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd)} note="cache writes avoided by kept-warm reads" />
           <Tile label="Probe cost" value={loading ? null : savings === null ? '-' : fmtUsd(savings.probeCostUsd)} note={savings === null ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
@@ -700,7 +703,8 @@ function SectionBar({ offset, top }: { offset: number; top: number }) {
   );
 }
 
-function Section({ id, title, meta, offset, children }: { children: ReactNode; id: string; meta?: string; offset: number; title: string }) {
+function Section({ id, title, meta, offset, shown = true, children }: { children: ReactNode; id: string; meta?: string; offset: number; shown?: boolean; title: string }) {
+  if (!shown) return null;
   return (
     <section className="analytics-section" id={id} style={{ scrollMarginTop: offset }}>
       <header className="analytics-section__head">
@@ -1171,7 +1175,7 @@ function AccountsSection({
       </ChartCard>
       <BreakdownTable
         title="Upstreams in range"
-        subtitle={`Totals for the selected range and upstreams${otherFilters ? '; the key, pool, model and client filters do not apply here' : ''}`}
+        subtitle={`Totals for the selected range and upstreams${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
         loading={loading}
         groupLabel="Upstream"

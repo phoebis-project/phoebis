@@ -179,6 +179,15 @@ test('a refusal never carries an error code, which the router sets for an unavai
   for (const call of missing) await assert.rejects(call, (e) => e instanceof d.ApiError && e.status === 404 && e.code === null);
 });
 
+test('an unknown id is refused with the route\'s own 404 text, which the console shows as the toast body', async () => {
+  const api = await as('admin');
+  await assert.rejects(() => api.renameAccount('nobody', 'x'), refusedAs(404, 'account not found'));
+  await assert.rejects(() => api.resolveAlertEvent('nothing'), refusedAs(404, 'alert event not found'));
+  await assert.rejects(() => api.rotateKey('nothing'), refusedAs(404, 'key not found'));
+  await assert.rejects(() => api.testAlertRule('nothing'), refusedAs(404, 'alert rule not found'));
+  await assert.rejects(() => api.updateAlertRule('nothing', newRule), refusedAs(404, 'alert rule not found'));
+});
+
 test('the quota snapshots never answer a status the decoder cannot produce', async () => {
   const api = await as('admin');
   for (let read = 0; read < 2; read += 1) {

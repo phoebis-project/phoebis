@@ -148,6 +148,15 @@ test('the mock refuses the affinity and the keepalive values the route refuses',
   assert.deepEqual([saved.selectBelowUtilization, saved.keepalive.enabled], [0.4, false]);
 });
 
+test('a retry ceiling out of its range answers the range text, which the route checks before the ceiling-under-base rule', async () => {
+  const api = await admin();
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  await assert.rejects(
+    api.updatePool('all', { ...poolInputOf(all), keepalive: { ...all.keepalive, retryMaxSeconds: 0, retrySeconds: 30 } }),
+    (e) => e.status === 400 && e.message === 'keepalive.retry_max_seconds must be between 1 and 604800, not 0',
+  );
+});
+
 test('the mock stores a key edit\'s enabled flag and expiry and folds them into the status', async () => {
   const api = await admin();
   const batch = (await api.listKeys()).find((k) => k.id === 'batch');

@@ -62,7 +62,8 @@ The kind order (subscription accounts with plan quota, then those in overage, th
 `api_key_sub_strategy` orders the API-key group only under `earliest_refresh` and `least_utilized`, once that
 group is the first with an eligible upstream, because an API key has no usage sample for those two to order by;
 under `priority_random` and `round_robin` the API-key group takes the pool's own strategy. Each strategy's rule, as
-the console states it on the pool card:
+the console states it on the pool card (the pool dialog's "Prioritize subscription upstreams" toggle sets
+`prefer_subscription`):
 
 **`earliest_refresh`**: Subscription upstreams with plan quota first, then those in overage, then API keys;
 within a tier, the one whose 7-day window resets soonest; ties are random.
@@ -71,10 +72,10 @@ within a tier, the one whose 7-day window resets soonest; ties are random.
 within a tier, the one with the lowest 5-hour utilization; ties are random.
 
 **`priority_random`**: Within the first tier that has an eligible upstream (tiers split by kind when
-prefer_subscription is on), any of them at random.
+"Prioritize subscription upstreams" is on), any of them at random.
 
 **`round_robin`**: Within the first tier that has an eligible upstream (tiers split by kind when
-prefer_subscription is on), each in turn; a restart starts the round again.
+"Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.
 
 ### Cache TTL
 
