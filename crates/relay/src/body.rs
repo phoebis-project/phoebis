@@ -76,6 +76,9 @@ pub const EXTENDED_TTL_BETA: &str = Injected::ExtendedTtlBeta.wire_name();
 pub enum BodyMember {
     MetadataUserId,
     Model,
+    /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
+    /// members admission and the body edit act on.
+    Repeated(&'static str),
 }
 
 impl BodyMember {
@@ -83,6 +86,7 @@ impl BodyMember {
         match self {
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
+            BodyMember::Repeated(name) => name,
         }
     }
 }

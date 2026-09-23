@@ -120,6 +120,11 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 - the key's pool does not exist
 - the key's pool is disabled
 
+A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, is
+refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the
+member. A body whose top-level object nests deeper than the relay reads is refused `400` with the error code
+`invalid_body`.
+
 ## Your key's usage
 
 `GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens,

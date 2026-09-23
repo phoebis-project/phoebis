@@ -75,6 +75,15 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     }
 }
 
+/// `Failure.message` is `&'static str`, so the three spellings `BodyMember::Repeated` names are constants
+/// rather than a formatted string.
+const REPEATED_METADATA: &str =
+    "the request body carries the top-level member \"metadata\" more than once";
+const REPEATED_MODEL: &str =
+    "the request body carries the top-level member \"model\" more than once";
+const REPEATED_STREAM: &str =
+    "the request body carries the top-level member \"stream\" more than once";
+
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
         RelayError::AccountUuid => Failure {
@@ -94,6 +103,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                     "the request body has no metadata.user_id the account can be bound to"
                 }
                 BodyMember::Model => "the request body has no top-level model to resolve",
+                BodyMember::Repeated(name) => match *name {
+                    "metadata" => REPEATED_METADATA,
+                    "model" => REPEATED_MODEL,
+                    "stream" => REPEATED_STREAM,
+                    _ => unreachable!(
+                        "repeated_top_level_member is only ever called with model, metadata or stream"
+                    ),
+                },
             },
         },
         RelayError::BodyTooLarge => Failure {
@@ -101,6 +118,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "request_too_large",
             code: "request_too_large",
             message: "the request body is too large",
+        },
+        // An unfinished scan proves nothing about the members past where it stopped, so it is refused rather
+        // than admitted on what was read so far.
+        RelayError::BodyTooDeep => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "invalid_body",
+            message: "the request body nests deeper than the relay reads",
         },
         RelayError::Cch(_) | RelayError::NotAnObject => Failure {
             status: StatusCode::BAD_REQUEST,

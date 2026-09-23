@@ -60,8 +60,8 @@ use crate::stream::{
     MAX_BUFFERED_BODY,
 };
 use crate::{
-    edit_body, is_portable, presented_key, BodyEdits, CacheTtl, CacheTtlPolicy, DriftGuard,
-    Markerless, NativeEdit, RelayError, VersionCheck, EXTENDED_TTL_BETA,
+    edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
+    DriftGuard, Markerless, NativeEdit, RelayError, VersionCheck, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -725,6 +725,37 @@ impl Relay {
         };
         let facts = BodyFacts::read(&raw);
         let stream = wants_stream(&raw);
+        // Admission and the body edit both act on the first spelling of a member; a second one would reach
+        // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
+        // than repaired: the caller's body is not edited on its way through. A scan that could not finish
+        // proves nothing about the members past where it stopped, so it refuses as well.
+        let repeated = phoebis_cch::repeated_top_level_member(&raw, &["model", "metadata", "stream"]);
+        let refusal = match repeated {
+            Ok(None) => None,
+            Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
+            Err(phoebis_cch::CchError::TooDeep(_)) => Some(RelayError::BodyTooDeep),
+            Err(error) => Some(RelayError::Cch(error)),
+        };
+        if let Some(error) = refusal {
+            trace.observed(
+                Some(&key),
+                None,
+                &parts.headers,
+                raw.clone(),
+                stream,
+                capture_hours,
+                facts.shape.clone(),
+                presented == Presented::Retired,
+                key.rotated_at,
+            );
+            return self.refused(
+                &trace,
+                relay_failure(&error),
+                Some(&key),
+                None,
+                client_version.as_deref(),
+            );
+        }
         let identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {

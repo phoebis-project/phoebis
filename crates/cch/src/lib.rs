@@ -111,6 +111,54 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
     }
 }
 
+/// The first of `names` whose decoded key appears more than once among the top-level object's members. Keys
+/// are decoded before they are compared, so an escaped spelling of a name counts as that name: a parser
+/// upstream would read it that way, and the span helpers above match raw bytes on purpose (they edit what
+/// they find and never a decoded copy).
+pub fn repeated_top_level_member(
+    body: &[u8],
+    names: &[&'static str],
+) -> Result<Option<&'static str>, CchError> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    s.ws();
+    if !s.eat(b'{') {
+        return Err(CchError::Json(s.pos));
+    }
+    let mut seen: Vec<&'static str> = Vec::new();
+    loop {
+        s.ws();
+        if s.eat(b'}') {
+            return Ok(None);
+        }
+        let (ks, ke) = s.string()?;
+        let key: String = serde_json::from_slice(&body[ks..ke]).map_err(|_| CchError::Json(ks))?;
+        if let Some(name) = names.iter().copied().find(|n| *n == key) {
+            if seen.contains(&name) {
+                return Ok(Some(name));
+            }
+            seen.push(name);
+        }
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.value(false)?;
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if s.eat(b'}') {
+            return Ok(None);
+        }
+        return Err(CchError::Json(s.pos));
+    }
+}
+
 /// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
 /// strings. The relay uses this for its body edits so only one JSON scanner exists in the workspace.
 pub fn string_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> {
@@ -897,6 +945,48 @@ mod tests {
                 br#"{"type":"ephemeral","ttl":"1h"}"#.as_slice(),
             ],
             "the marker inside the tool result is found ahead of the block's own; one two levels down is skipped"
+        );
+    }
+
+    #[test]
+    fn a_raw_repeat_of_a_top_level_member_is_found() {
+        let body = br#"{"model":"a","messages":[],"model":"b"}"#;
+        assert_eq!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            Some("model")
+        );
+    }
+
+    #[test]
+    fn an_escaped_repeat_of_a_top_level_member_is_found_by_its_decoded_key() {
+        let body = "{\"model\":\"a\",\"messages\":[],\"\\u006dodel\":\"b\"}".as_bytes();
+        assert_eq!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            Some("model")
+        );
+    }
+
+    #[test]
+    fn a_repeat_inside_a_nested_object_is_not_a_top_level_repeat() {
+        let body = br#"{"model":"a","metadata":{"model":"x","model":"y"},"messages":[]}"#;
+        assert_eq!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_body_whose_top_level_is_an_array_is_refused() {
+        let body = br#"[{"model":"a"}]"#;
+        assert!(repeated_top_level_member(body, &["metadata", "model", "stream"]).is_err());
+    }
+
+    #[test]
+    fn a_single_occurrence_of_each_named_member_is_not_a_repeat() {
+        let body = br#"{"metadata":{"user_id":"u"},"model":"a","stream":true,"messages":[]}"#;
+        assert_eq!(
+            repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
+            None
         );
     }
 }

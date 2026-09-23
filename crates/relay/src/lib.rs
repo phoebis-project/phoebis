@@ -56,6 +56,8 @@ pub enum RelayError {
     AccountUuid,
     #[error("request body has no {} member to edit", .0.path())]
     BodyShape(BodyMember),
+    #[error("the request body nests deeper than the relay reads")]
+    BodyTooDeep,
     #[error("request body is larger than the configured limit")]
     BodyTooLarge,
     #[error("billing header: {0}")]

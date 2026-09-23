@@ -195,6 +195,20 @@ pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec
     .await
 }
 
+/// A harness whose pool is restricted to one model, for the tests that check a routing refusal against a
+/// specific model without a second account or model to route around.
+pub async fn harness_restricted_to(up: &FakeUpstream, model: &'static str) -> Harness {
+    harness(
+        up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec {
+            allowed_models: Some(vec![model]),
+            ..PoolSpec::default()
+        },
+    )
+    .await
+}
+
 /// Every account serves `models`; the key is `KEY` in pool `main`; the clock starts at `NOW` and is shared
 /// with the router task so a test can move time.
 pub async fn harness_with(
