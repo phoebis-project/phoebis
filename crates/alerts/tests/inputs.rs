@@ -748,6 +748,60 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     );
 }
 
+#[tokio::test]
+async fn at_start_a_refresh_failure_whose_account_is_gone_clears_and_one_still_failing_stays_open()
+{
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("refresh", Kind::RefreshFailed, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    rig.store
+        .resolve_refresh_attempt(
+            attempt,
+            1,
+            phoebis_store::AttemptOutcome::Failed("invalid_grant".into()),
+        )
+        .unwrap();
+    for (id, subject) in [("gone", "direct"), ("failing", "business")] {
+        assert!(rig
+            .store
+            .insert_alert_event(&AlertEventRow {
+                id: id.into(),
+                rule_id: "refresh".into(),
+                kind: "refresh_failed".into(),
+                subject: subject.into(),
+                state: "open".into(),
+                opened_at: NOW - 1_000,
+                resolved_at: None,
+                detail_json: None,
+            })
+            .unwrap());
+    }
+    rig.store.delete_account("direct", "test").unwrap();
+    let _poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("gone").unwrap().unwrap().state,
+        "resolved",
+        "the account the failure was about is gone, so nothing is left to fail"
+    );
+    assert_eq!(
+        rig.store.alert_event("failing").unwrap().unwrap().state,
+        "open",
+        "the account's last attempt failed, and nothing has committed since"
+    );
+}
+
 /// A sub-agent's turn: the same key and session as its parent's, with a parent above it.
 fn sub_agent(id: &str, session: &str) -> Event {
     match observed(id, "desktop", "main", session, 0) {
