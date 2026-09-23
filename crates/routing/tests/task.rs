@@ -1002,6 +1002,52 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
 }
 
 #[tokio::test]
+async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+    handle
+        .select(request(&handle, Some("s"), 1_000))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.first().cloned()
+    })
+    .await;
+    // The mark names the live pin, epoch and all, so only the incarnation keeps it from ending the session.
+    let pin = pin_of(&handle).await;
+    let mark = |incarnation| Report::PinInvalidated {
+        account_id: "a".into(),
+        pin: pin.clone(),
+        incarnation,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+    };
+    handle.report(mark(1));
+    assert_eq!(
+        handle.pins().await.unwrap().len(),
+        1,
+        "the mark was about the holder the id had before"
+    );
+    stays_for(NOT_WRITTEN, || {
+        !store.load_routing().unwrap().pins.is_empty()
+    })
+    .await;
+    handle.report(mark(2));
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "the same mark from the current holder ends the pin"
+    );
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.is_empty().then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_holders_state() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));

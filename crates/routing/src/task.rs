@@ -964,15 +964,12 @@ impl Task {
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> bool {
-        if self.moved_past(account_id, incarnation) {
-            return true;
-        }
         let snapshot = self
             .snapshot
             .read()
             .expect("snapshot lock poisoned")
             .clone();
-        let Some(account) = snapshot.account(account_id) else {
+        let Some(account) = holder(&snapshot, account_id, incarnation) else {
             return true;
         };
         if account.lifecycle_generation != lifecycle_generation {
@@ -989,21 +986,13 @@ impl Task {
         false
     }
 
-    /// Whether the id no longer names the holder a report was formed about: the account is gone, or was
-    /// deleted and created again, which resets both generations to the values the old holder started at.
     fn moved_past(&self, account_id: &str, incarnation: u64) -> bool {
         let snapshot = self
             .snapshot
             .read()
             .expect("snapshot lock poisoned")
             .clone();
-        let moved = snapshot
-            .account(account_id)
-            .is_none_or(|account| account.incarnation != incarnation);
-        if moved {
-            tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
-        }
-        moved
+        holder(&snapshot, account_id, incarnation).is_none()
     }
 
     async fn reload(&mut self) -> Result<(), String> {
@@ -1223,6 +1212,23 @@ impl Task {
             let _ = self.writer.send(writes);
         }
     }
+}
+
+/// The snapshot's account under the id while it is still the holder a report was formed about, `None` once the
+/// account is gone or was deleted and created again, which resets both generations to the values the old holder
+/// started at.
+fn holder<'a>(
+    snapshot: &'a RegistrySnapshot,
+    account_id: &str,
+    incarnation: u64,
+) -> Option<&'a phoebis_store::AccountRow> {
+    let account = snapshot
+        .account(account_id)
+        .filter(|account| account.incarnation == incarnation);
+    if account.is_none() {
+        tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
+    }
+    account
 }
 
 /// The sampler's bookkeeping per account id. An account is sampled again once its last sample is a TTL old,
