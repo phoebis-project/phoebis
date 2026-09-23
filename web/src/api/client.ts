@@ -110,9 +110,12 @@ export interface Api {
   createAlertRule(input: AlertRuleInput): Promise<AlertRule>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;
   createPool(input: PoolInput): Promise<Pool>;
+  /** Removes the upstream from every pool and deletes it; its request history stays in the ledger. */
+  deleteAccount(accountId: string): Promise<void>;
   deleteAlertRule(id: string): Promise<void>;
   deleteKey(id: string): Promise<void>;
   deletePool(id: string): Promise<void>;
+  /** Deletes the credential; the upstream keeps its pool memberships and can be paired again. */
   disconnectAccount(accountId: string): Promise<void>;
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;

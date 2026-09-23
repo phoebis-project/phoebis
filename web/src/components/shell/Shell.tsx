@@ -84,7 +84,7 @@ export function Shell() {
           </button>
           <h1 className="topbar__title">{title}</h1>
           <div className="topbar__right">
-            <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies'}>
+            <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies, live previews, webhook URLs beyond their host, and question text'}>
               {role}
             </Badge>
             <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>

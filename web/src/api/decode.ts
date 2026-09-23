@@ -72,27 +72,30 @@ export function decodeAccount(v: unknown): Account {
   const cooldowns = list(a.cooldowns).map(rec);
   const windows = foldWindows(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
+  const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   return {
+    catalogError: strOrNull(a.catalog_error),
     catalogSyncedAt: isoOrNull(a.catalog_synced_at),
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
-    credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
+    credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
-    extraUsage: extra && bool(extra.is_enabled) ? { disabledReason: strOrNull(extra.disabled_reason), enabled: true, inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,
+    // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
+    extraUsage: extra ? { disabledReason: strOrNull(extra.disabled_reason), enabled: bool(extra.is_enabled), inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     id: str(a.id),
     kind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'oauth',
     label: str(a.label),
+    overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: profile ? planLabel(str(profile.rate_limit_tier)) : null,
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     routingEnabled: bool(a.enabled, true),
     servedModels: list(a.served_models).map(rec).map(decodeServedModel),
     status: accountStatus(a, cooldowns),
-    // The route answers the profile's three labels and nothing else, so the rest stays null rather than being invented.
-    subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier), since: null, status: null, trialEndsAt: null } : null,
+    subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier) } : null,
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }
@@ -342,6 +345,10 @@ export function decodeSettings(v: unknown): Settings {
   const k = rec(s.keepalive);
   const r = rec(s.retention);
   const l = rec(s.listeners);
+  const q = rec(s.quota);
+  const route = rec(s.routing);
+  const store = rec(s.storage);
+  const u = rec(s.usage);
   return {
     about: { profile: str(rec(s.about).profile), publicUrl: strOrNull(rec(s.about).public_url), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true), viewerConfigured: bool(rec(s.access).viewer_configured) },
@@ -351,8 +358,12 @@ export function decodeSettings(v: unknown): Settings {
     lastSyncAt: isoOrNull(s.last_sync_at),
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     pricing: decodePricing(s.pricing),
+    quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
+    routing: { catalogSyncIntervalSeconds: num(route.catalog_sync_interval_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
+    storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
+    usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },
   };
 }
 

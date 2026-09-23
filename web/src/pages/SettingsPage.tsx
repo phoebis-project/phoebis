@@ -198,7 +198,7 @@ export function SettingsPage() {
           <div>
             <b>Viewer secret</b>
             <p className="muted">
-              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured request and response bodies. Cannot create, edit, or delete.
+              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured bodies, live previews, webhook URLs beyond their host, and question text. Cannot create, edit, or delete.
             </p>
           </div>
           <SecretBadge configured={s?.access.viewerConfigured ?? false} />
@@ -328,8 +328,63 @@ export function SettingsPage() {
           <KeyValue
             rows={[
               { label: 'Cache diagnostics', value: s.compatibility.cacheDiagnostics ? 'on' : 'off', title: bootstrapNote('compatibility.cache_diagnostics') },
+              { label: 'Outbound gzip', value: s.compatibility.outboundGzip ? 'on' : 'off', title: bootstrapNote('compatibility.outbound_gzip') },
               { label: 'Profile', value: s.compatibility.profile, mono: true },
               { label: 'Usage entrypoint', value: s.compatibility.usageEntrypoint, mono: true },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+      </Card>
+
+      <Card title="Quota" subtitle="What the bootstrap file's quota block sets; a restart applies a change.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Poll interval (seconds)', value: fmtInt(s.quota.pollIntervalSeconds), mono: true, title: bootstrapNote('quota.poll_interval_seconds') },
+              { label: 'Sample retention (days)', value: fmtInt(s.quota.sampleRetentionDays), mono: true, title: bootstrapNote('quota.sample_retention_days') },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+      </Card>
+
+      <Card title="Routing" subtitle="What the bootstrap file's routing block sets; a restart applies a change.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Catalog sync interval (seconds)', value: fmtInt(s.routing.catalogSyncIntervalSeconds), mono: true, title: bootstrapNote('routing.catalog_sync_interval_seconds') },
+              { label: 'Cooldown fallback (seconds)', value: fmtInt(s.routing.cooldownFallbackSeconds), mono: true, title: bootstrapNote('routing.cooldown_fallback_seconds') },
+              { label: 'Max attempts', value: fmtInt(s.routing.maxAttempts), mono: true, title: bootstrapNote('routing.max_attempts') },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+      </Card>
+
+      <Card title="Storage" subtitle="The files the bootstrap file points the router at; a restart applies a change.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
+              { label: 'Pricing path', value: s.storage.pricingPath ?? 'not configured', mono: s.storage.pricingPath !== null, title: bootstrapNote('stats.pricing_path') },
+              { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
+            ]}
+          />
+        ) : (
+          <Skeleton height={60} />
+        )}
+      </Card>
+
+      <Card title="Usage" subtitle="What the bootstrap file's usage block sets; a restart applies a change.">
+        {s ? (
+          <KeyValue
+            rows={[
+              { label: 'Cache TTL (seconds)', value: fmtInt(s.usage.cacheTtlSeconds), mono: true, title: bootstrapNote('usage.cache_ttl_seconds') },
+              { label: 'Refresh concurrency', value: fmtInt(s.usage.refreshConcurrency), mono: true, title: bootstrapNote('usage.refresh_concurrency') },
             ]}
           />
         ) : (

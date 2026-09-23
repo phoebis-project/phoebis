@@ -156,3 +156,11 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   assert.deepEqual(body.members, [{ account_id: 'business', priority: 0 }, { account_id: 'direct', priority: 1 }]);
   assert.equal(body.select_below_utilization, 0.4);
 });
+
+test('deleting an upstream calls the account route, and a disconnect keeps to the credentials route', async () => {
+  const calls = stub(() => answer(204));
+  const api = new HttpApi();
+  assert.equal(await api.deleteAccount('work seat'), undefined);
+  await api.disconnectAccount('work seat');
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['DELETE', '/admin/accounts/work%20seat'], ['DELETE', '/admin/accounts/work%20seat/credentials']]);
+});

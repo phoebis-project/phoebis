@@ -3,7 +3,7 @@ import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 import { CLAUDE_MODELS } from './catalog';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, hoursAgo, iso } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, hoursAgo, iso } from './time';
 
 const claudeModels = (opts: { discovered?: string[]; syncedAgoHours: number; vanished?: string[] }): ServedModel[] =>
   CLAUDE_MODELS.map((id) => {
@@ -48,14 +48,16 @@ export const ACCOUNTS: Account[] = [
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
     servedModels: claudeModels({ syncedAgoHours: 6, discovered: ['claude-opus-5'] }),
+    catalogError: null,
     catalogSyncedAt: hoursAgo(6),
     credential: {
       accessTokenExpiresAt: ahead(6 * HOUR + 22 * MINUTE),
       lastError: null,
       lastRefreshAt: ago(1 * HOUR + 38 * MINUTE),
+      quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'max_20x', since: daysAgo(412), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'max_20x' },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     cooldowns: [],
   },
@@ -78,9 +80,10 @@ export const ACCOUNTS: Account[] = [
       accessTokenExpiresAt: ahead(3 * HOUR + 2 * MINUTE),
       lastError: null,
       lastRefreshAt: ago(4 * HOUR + 58 * MINUTE),
+      quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'pro_5x', since: daysAgo(203), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'pro_5x' },
     requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
     cooldowns: [
       {
@@ -106,14 +109,17 @@ export const ACCOUNTS: Account[] = [
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     servedModels: claudeModels({ syncedAgoHours: 6, vanished: [] }).concat([manualModel('claude-sonnet-4-5-20250929')]),
+    catalogError: 'the models request answered 503',
     catalogSyncedAt: hoursAgo(6),
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,
       lastRefreshAt: ago(2 * HOUR + 10 * MINUTE),
+      quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'max_5x', since: daysAgo(96), status: 'active', trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'max_5x' },
     requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
     cooldowns: [],
   },
@@ -132,7 +138,7 @@ export const ACCOUNTS: Account[] = [
     extraUsage: null,
     servedModels: claudeModels({ syncedAgoHours: 6 }),
     catalogSyncedAt: hoursAgo(6),
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },
+    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 41, last7d: 233, lifetime: 3_104 },
     cooldowns: [],
@@ -156,10 +162,33 @@ export const ACCOUNTS: Account[] = [
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
       lastError: 'refresh_token rejected: invalid_grant',
       lastRefreshAt: ago(2 * DAY + 3 * HOUR),
+      quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_team', rateLimitTier: 'team', since: daysAgo(280), status: 'trialing', trialEndsAt: ahead(9 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_team', rateLimitTier: 'team' },
     requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
+    cooldowns: [],
+  },
+  // Added and never paired: no identity and no profile, so a page has to go by the kind to call it OAuth.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'spare',
+    kind: 'oauth',
+    label: 'spare',
+    email: null,
+    plan: null,
+    status: 'unpaired',
+    routingEnabled: true,
+    pools: [],
+    windows: [],
+    fableWindow: null,
+    extraUsage: null,
+    servedModels: [],
+    catalogError: null,
+    catalogSyncedAt: null,
+    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    subscription: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
 ];
@@ -167,6 +196,7 @@ export const ACCOUNTS: Account[] = [
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
 export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
+  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this upstream; pair it to load quota', fetchedAt: null, status: 'error' };
   if (a.id === 'team') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,

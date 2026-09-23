@@ -4,7 +4,7 @@ import { keyById } from './pools';
 import { REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { ALERT_EVENT_SAMPLE, ALERT_RULE_SAMPLE, DELIVERY_SAMPLE, KEEPALIVE_OVERVIEW_SAMPLE, LIFECYCLE_DELIVERY_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, ago, ahead, daysAgo } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo } from './time';
 
 const rng = createRng(2_024);
 
@@ -398,6 +398,7 @@ export const ALERT_EVENTS: AlertEvent[] = [
       agent: 'main',
       key: 'desktop',
       question: 'The ledger migration can rewrite rows in place or build a new table and swap it. In place is one step but locks writes for about 40 seconds; the swap needs twice the disk. Which do you want?',
+      question_expires_at: NOW + 72 * HOUR - 18 * MINUTE,
       session: SESSION_IDS[0],
     },
     state: 'open',
@@ -430,12 +431,32 @@ export const ALERT_EVENTS: AlertEvent[] = [
       agent: 'c21e',
       key: 'laptop',
       question: 'Two tests fail on the new cooldown clock. Should I relax the assertions or keep them and fix the clock?',
+      question_expires_at: NOW + 72 * HOUR - 9 * HOUR,
       session: SESSION_IDS[6],
     },
     state: 'resolved',
     openedAt: ago(9 * HOUR),
     resolvedAt: ago(8 * HOUR + 41 * MINUTE),
     deliveries: [{ ...DELIVERY_SAMPLE, at: ago(9 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
+  },
+  // The store still holds the text; its body's capture window closed, so the route blanks it for every role.
+  {
+    ...ALERT_EVENT_SAMPLE,
+    id: 'evt_14',
+    ruleId: 'rule_question',
+    kind: 'ask_user_question',
+    subject: `laptop, session ${SESSION_IDS[6].slice(0, 8)}`,
+    detail: {
+      agent: 'main',
+      key: 'laptop',
+      question: 'The retention job overlaps the backup window. Move it to 04:00 or shorten the backup?',
+      question_expires_at: NOW - 2 * HOUR,
+      session: SESSION_IDS[6],
+    },
+    state: 'resolved',
+    openedAt: ago(3 * DAY + 2 * HOUR),
+    resolvedAt: ago(3 * DAY + 1 * HOUR),
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(3 * DAY + 2 * HOUR), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
   {
     ...ALERT_EVENT_SAMPLE,
@@ -717,6 +738,10 @@ export const SETTINGS: Settings = {
   lastSyncAt: ago(40 * 1000),
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped table' },
+  quota: { pollIntervalSeconds: 3_600, sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
+  routing: { catalogSyncIntervalSeconds: 86_400, cooldownFallbackSeconds: 60, maxAttempts: 3 },
   sessions: { expireAfterSeconds: 86_400 },
+  storage: { ledgerPath: './data/ledger.sqlite', path: './data/router.sqlite', pricingPath: './pricing.yaml' },
+  usage: { cacheTtlSeconds: 60, refreshConcurrency: 2 },
 };

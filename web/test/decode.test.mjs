@@ -12,7 +12,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.kind, 'oauth');
   assert.equal(a.plan, 'Max 5x');
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
-  assert.deepEqual([a.subscription.since, a.subscription.status, a.subscription.trialEndsAt], [null, null, null], 'the route answers none of these, so the card leaves them out rather than reading active');
+  assert.deepEqual(Object.keys(a.subscription).sort(), ['billingType', 'organizationType', 'rateLimitTier'], "the route answers the profile's three labels and nothing more, so the card draws nothing beside them");
   assert.deepEqual(fixture('account').windows.map((w) => w.id), ['7d', 'fable', 'five_hour'], 'the route passes each sampler spelling through, in the ledger order');
   assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d'], 'the poll spelling folds onto the UI id and the order is the drawn one');
   assert.equal(a.fableWindow.id, '7d_fable');
@@ -24,6 +24,25 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.ok(a.servedModels.some((m) => m.id === 'claude-sonnet-5' && m.selected));
   assert.equal(a.status, 'ready');
   assert.equal(a.email, 'test@example.invalid');
+});
+
+test('an account decodes its catalog error, its quarantine flag, and the router\'s overage evidence', () => {
+  const body = fixture('account');
+  const quiet = d.decodeAccount(body);
+  assert.deepEqual([quiet.catalogError, quiet.credential.quarantined, quiet.overage], [body.catalog_error, false, null]);
+  const loud = d.decodeAccount({ ...body, catalog_error: 'the models request answered 503', credential: { ...body.credential, quarantined: true }, overage: { in_use: true, observed_at: 3_000, reset: 9_000, since: 1_000 } });
+  assert.equal(loud.catalogError, 'the models request answered 503');
+  assert.equal(loud.credential.quarantined, true);
+  assert.deepEqual(loud.overage, { inUse: true, observedAt: d.iso(3_000), reset: d.iso(9_000), since: d.iso(1_000) });
+  assert.deepEqual(d.decodeAccount({ ...body, overage: { in_use: false, observed_at: 3_000, reset: null, since: null } }).overage, { inUse: false, observedAt: d.iso(3_000), reset: null, since: null }, 'a sample reports no start, so the line under the badge has nothing to count from');
+  assert.equal(d.decodeAccount({ ...body, credential: null }).credential.quarantined, false, 'a slot with no credential has no attempt to be unsure about');
+});
+
+test('extra usage the provider switched off keeps the reason it gave', () => {
+  const body = fixture('account');
+  const off = d.decodeAccount({ ...body, extra_usage: { ...body.extra_usage, disabled_reason: 'card declined', in_use: false, is_enabled: false } }).extraUsage;
+  assert.deepEqual([off.enabled, off.inUse, off.disabledReason], [false, false, 'card declined'], 'the reason exists for exactly the account whose extra usage is off');
+  assert.equal(d.decodeAccount({ ...body, extra_usage: null }).extraUsage, null);
 });
 
 test('an account carries extra headers only when the route answers an object of strings', () => {
@@ -388,6 +407,16 @@ test('a settings answer with no compatibility block reads the defaults the route
   assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
 });
 
+test('settings decode the quota, routing, storage, and usage blocks the route answers', () => {
+  const wire = fixture('settings');
+  const s = d.decodeSettings(wire);
+  assert.deepEqual(s.quota, { pollIntervalSeconds: wire.quota.poll_interval_seconds, sampleRetentionDays: wire.quota.sample_retention_days });
+  assert.deepEqual(s.routing, { catalogSyncIntervalSeconds: wire.routing.catalog_sync_interval_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts });
+  assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
+  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
+  assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
+});
+
 test('settings, pricing, the import preview, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
   assert.equal(s.access.viewerConfigured, true);
@@ -461,6 +490,18 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.equal(life.detail.session, 'e2e-ui');
   assert.equal(life.kind, 'session_active');
   assert.equal(life.ruleId, fixture('alert_lifecycle').deliveries[0].rule_id, 'a lifecycle delivery names the rule that posted it, which no event row holds');
+});
+
+test('a question reads as redacted, expired, or missing from the wire detail and the page clock in milliseconds', () => {
+  const [wire] = fixture('alert_events').events;
+  const detail = { agent: null, key: 'desktop', question: null, question_expires_at: 1_000_000, session: 'sess-1' };
+  const asked = d.decodeAlertEvent({ ...wire, detail, kind: 'ask_user_question' }).detail;
+  assert.equal(asked.question_expires_at, 1_000_000, 'the deadline passes through as the number the route stores');
+  assert.deepEqual(d.questionLine(asked, 1_000_000), { muted: true, text: 'question expired with its captured body' }, 'the route blanks the text at the deadline itself');
+  assert.deepEqual(d.questionLine(asked, 999_999), { muted: true, text: 'question not captured' });
+  assert.deepEqual(d.questionLine({ ...asked, question_expires_at: null }, 2_000_000), { muted: true, text: 'question not captured' });
+  assert.deepEqual(d.questionLine({ ...asked, question_redacted: true }, 2_000_000), { muted: true, text: 'question is for administrators' }, 'a viewer is told who may read it, not that the capture failed');
+  assert.deepEqual(d.questionLine({ ...asked, question: 'Which branch?' }, 2_000_000), { muted: false, text: 'asked: Which branch?' });
 });
 
 test('a lifecycle delivery whose event name this build does not know still decodes', () => {

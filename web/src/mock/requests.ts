@@ -637,7 +637,8 @@ function accountRollups(): AccountRollup[] {
     sampleIndex.set(`${hist.accountId}|${hist.windowId}`, byHour);
   }
   for (const account of ACCOUNTS) {
-    if (account.kind !== 'oauth') continue;
+    // An upstream never paired has never been sampled, so it has no hours to report.
+    if (account.kind !== 'oauth' || account.status === 'unpaired') continue;
     let drift5 = h.float(0.2, 0.7);
     let drift7 = h.float(0.3, 0.8);
     let driftF = h.float(0.05, 0.4);

@@ -155,3 +155,15 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
   assert.equal(lapsed.status, 'expired');
   assert.equal((await api.updateKey('batch', { ...edit, enabled: true, expiresAt: null })).expiresAt, null);
 });
+
+test('the mock deletes an upstream with its pool memberships, and a disconnect keeps the identity', async () => {
+  const api = new d.MockApi();
+  assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'mail')), 'the story puts mail in a pool');
+  await api.deleteAccount('mail');
+  assert.equal((await api.listAccounts()).some((a) => a.id === 'mail'), false);
+  assert.deepEqual((await api.listPools()).filter((p) => p.members.some((m) => m.accountId === 'mail')).map((p) => p.id), [], 'the route removes every membership with the account');
+  await assert.rejects(api.deleteAccount('mail'), (e) => e.status === 404);
+  await api.disconnectAccount('business');
+  const business = (await api.listAccounts()).find((a) => a.id === 'business');
+  assert.deepEqual([business.email, business.status, business.credential.refreshTokenExpiresAt, business.pools.length > 0], ['business@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
+});

@@ -4,6 +4,7 @@ import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, Alert
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
+import { questionLine } from '@/lib/alerts';
 import { fmtAbsolute, fmtPct, fmtRelative, shortId, urlHost } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { WINDOW_LABEL } from '@/lib/windows';
@@ -439,7 +440,7 @@ function EventRow({ event, now, canMutate, onResolve }: { canMutate: boolean; ev
       <td>{KIND_LABEL[event.kind]}</td>
       <td>
         {event.subject}
-        {event.detail && <EventDetail kind={event.kind} detail={event.detail} />}
+        {event.detail && <EventDetail kind={event.kind} detail={event.detail} now={now} />}
       </td>
       <td title={fmtAbsolute(event.openedAt)}>{fmtRelative(event.openedAt, now)}</td>
       <td title={event.resolvedAt ? fmtAbsolute(event.resolvedAt) : undefined}>{event.resolvedAt ? fmtRelative(event.resolvedAt, now) : <span className="muted">-</span>}</td>
@@ -505,7 +506,7 @@ function LifecycleRow({ delivery, now }: { delivery: LifecycleDelivery; now: num
 // A detail is the free-form object the signal built, so the event's kind says which keys it holds. The kinds
 // below read as a sentence; every other kind is listed as it arrived, and so is a detail missing the keys its kind
 // promises, so a shape a later build changes stays readable.
-function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKind }) {
+function EventDetail({ kind, detail, now }: { detail: AlertEventDetail; kind: AlertKind; now: number }) {
   if (detail === null) return null;
   if (kind === 'client_drift' && typeof detail.client_version === 'string') {
     const drift = detail as unknown as ClientDriftDetail;
@@ -517,13 +518,14 @@ function EventDetail({ kind, detail }: { detail: AlertEventDetail; kind: AlertKi
   }
   if (kind === 'ask_user_question' && typeof detail.session === 'string') {
     const asked = detail as unknown as AskUserQuestionDetail;
+    const line = questionLine(asked, now);
     return (
       <>
         <span className="sub mono" title={asked.session}>
           key {asked.key}, session {shortId(asked.session, 8)}
           {asked.agent && `, agent ${asked.agent}`}
         </span>
-        {asked.question ? <span className="sub">asked: {asked.question}</span> : <span className="sub muted">question not captured</span>}
+        <span className={line.muted ? 'sub muted' : 'sub'}>{line.text}</span>
       </>
     );
   }
@@ -577,6 +579,7 @@ function RuleDialog({
   const [windowId, setWindowId] = useState<RuleWindow>('7d');
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
+  const [clearSecret, setClearSecret] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -592,6 +595,7 @@ function RuleDialog({
     setUrl(existing?.webhookUrl ?? '');
     // Never prefilled: the router answers whether a rule is signed, never with what.
     setSecret('');
+    setClearSecret(false);
     setEnabled(existing?.enabled ?? true);
     setBusy(false);
   }, [open, existing]);
@@ -605,13 +609,20 @@ function RuleDialog({
   // Each kind allows its own scopes, so a pick left over from another kind falls back.
   const effectiveScope = scopeOptions.some((o) => o.value === scope) ? scope : (scopeOptions[0]?.value ?? 'all');
 
+  const secretHint = existing?.hasSecret
+    ? ' Leave empty to keep the stored secret; a new value replaces it; the box below removes it.'
+    : existing
+      ? ' Leave empty to keep the stored secret; a new value replaces it.'
+      : '';
+
   const submit = async () => {
     setBusy(true);
     const input: AlertRuleInput = {
       enabled,
       kind,
       scope: parseScope(effectiveScope),
-      secret: secret === '' ? (existing ? undefined : '') : secret,
+      // The route reads an absent secret as keep and an empty one as clear, so an edit sends the empty one only for the box.
+      secret: clearSecret ? '' : secret === '' ? (existing ? undefined : '') : secret,
       threshold: kind === 'utilization_above' ? threshold / 100 : kind === 'session_idle' ? Math.round(idleMinutes) : null,
       webhookUrl: url.trim(),
       windowId: kind === 'utilization_above' ? windowId : null,
@@ -692,10 +703,16 @@ function RuleDialog({
       </Field>
       <Field
         label="Signing secret"
-        hint={`Optional. Sent as X-Router-Signature, an HMAC-SHA256 of the body.${existing ? ' Leave empty to keep the stored secret; a new value replaces it.' : ''}`}
+        hint={`Optional. Sent as X-Router-Signature, an HMAC-SHA256 of the body.${secretHint}`}
       >
-        <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} />
+        <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={clearSecret} />
       </Field>
+      {existing?.hasSecret && (
+        <label className="row">
+          <input type="checkbox" checked={clearSecret} onChange={(e) => setClearSecret(e.target.checked)} />
+          <span className="field__label">Remove the stored secret</span>
+        </label>
+      )}
       <div className="field--inline field">
         <span className="field__text">
           <span className="field__label">Enabled</span>

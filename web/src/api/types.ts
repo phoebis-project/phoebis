@@ -3,7 +3,7 @@
 
 export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const;
 export type AccountKind = (typeof ACCOUNT_KIND_VALUES)[number];
-export type AccountStatus = 'cooldown' | 'disabled' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
+export type AccountStatus = 'cooldown' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
 export type WindowId = '5h' | '7d' | '7d_fable';
 
 export interface RateLimitWindow {
@@ -53,6 +53,8 @@ export interface Credential {
   accessTokenExpiresAt: string | null;
   lastError: string | null;
   lastRefreshAt: string | null;
+  /** The newest refresh attempt is unresolved or lost its answer, and the store opens no other attempt until it resolves. */
+  quarantined: boolean;
   refreshTokenExpiresAt: string | null;
 }
 
@@ -60,10 +62,6 @@ export interface Subscription {
   billingType: string;
   organizationType: string;
   rateLimitTier: string;
-  /** Null unless the wire carried it; the identity card leaves a null field out rather than guessing one. */
-  since: string | null;
-  status: 'active' | 'past_due' | 'trialing' | null;
-  trialEndsAt: string | null;
 }
 
 export interface PoolMembership {
@@ -72,6 +70,8 @@ export interface PoolMembership {
 }
 
 export interface Account {
+  /** Why the last catalog discovery failed, kept until one succeeds. */
+  catalogError: string | null;
   catalogSyncedAt: string | null;
   cooldowns: Cooldown[];
   credential: Credential;
@@ -82,6 +82,8 @@ export interface Account {
   id: string;
   kind: AccountKind;
   label: string;
+  /** The router's own reading of whether requests bill as overage; `since` is null when a usage sample, not a response, reported it. */
+  overage: { inUse: boolean; observedAt: string; reset: string | null; since: string | null } | null;
   plan: string | null;
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
@@ -601,6 +603,11 @@ export interface AskUserQuestionDetail {
   agent: string | null;
   key: string;
   question: string | null;
+  /**
+   * Unix milliseconds when the captured body the text was copied from expires, and the text with it; absent when
+   * the body was never captured. The route blanks the question for every role from this instant on.
+   */
+  question_expires_at?: number | null;
   /** True with a null question when a viewer reads the event: the text sits behind the admin secret. */
   question_redacted?: boolean;
   session: string;
@@ -734,9 +741,14 @@ export interface Settings {
   listeners: { admin: string; metrics: string; proxy: string };
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
+  quota: { pollIntervalSeconds: number; sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
+  routing: { catalogSyncIntervalSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
+  /** `pricingPath` is null when no override file is configured. */
+  storage: { ledgerPath: string; path: string; pricingPath: string | null };
+  usage: { cacheTtlSeconds: number; refreshConcurrency: number };
 }
 
 export type Role = 'admin' | 'viewer';

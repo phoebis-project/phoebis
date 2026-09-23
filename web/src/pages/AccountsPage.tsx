@@ -9,7 +9,7 @@ import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { IconPencil, IconPlus, IconRefresh, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE } from '@/lib/quota';
 
@@ -46,9 +46,11 @@ export function AccountsPage() {
   }, [accounts.data, query, status, sort, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
+  // A deleted upstream's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
+  // /upstreams does rather than to a detail that never loads.
   useEffect(() => {
-    if (accounts.data && !accountId && accounts.data.length) navigate(`/upstreams/${accounts.data[0].id}`, { replace: true });
-  }, [accounts.data, accountId, navigate]);
+    if (accounts.data && !selected && accounts.data.length) navigate(`/upstreams/${accounts.data[0].id}`, { replace: true });
+  }, [accounts.data, selected, navigate]);
 
   return (
     <div className="accounts">
@@ -157,6 +159,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
 
 function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { account: Account; catalog: CatalogModel[]; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const { canMutate } = useAppSettings();
+  const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
@@ -172,6 +175,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
   const paused = !account.routingEnabled;
   const cooldown = account.cooldowns[0] ?? null;
   const extra = account.extraUsage;
+  const overage = account.overage;
   const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {
     setBusy(true);
     try {
@@ -224,6 +228,11 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
             <Badge tone={STATUS_TONE[account.status]} dot>
               {STATUS_LABEL[account.status]}
             </Badge>
+            {account.credential.quarantined && (
+              <Badge tone="critical" title="the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it">
+                quarantined
+              </Badge>
+            )}
             {cooldown && (
               <Badge tone="warning" title={fmtAbsolute(cooldown.until)}>
                 cooldown ends {fmtRelative(cooldown.until, now)}
@@ -232,6 +241,12 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
             {extra?.inUse && <Badge tone="serious">Overage active</Badge>}
             {!account.routingEnabled && account.status !== 'paused' && <Badge tone="neutral">Routing paused</Badge>}
           </div>
+          {/* A usage sample reports overage without a start, and a line counting from nothing would say nothing. */}
+          {overage?.inUse && overage.since && (
+            <p className="detail__sub" title={fmtAbsolute(overage.since)}>
+              Overage since {fmtRelative(overage.since, now)}
+            </p>
+          )}
         </div>
         {canMutate && (
           <div className="detail__actions">
@@ -303,10 +318,36 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
               variant="danger"
               disabled={busy}
               onClick={() =>
-                act('Disconnect upstream', `Removes ${account.label} from every pool and deletes its credential. Request history stays in the ledger.`, 'Disconnect', () => api.disconnectAccount(account.id), 'Disconnected', true)
+                act(
+                  'Disconnect upstream',
+                  `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
+                  'Disconnect',
+                  () => api.disconnectAccount(account.id),
+                  'Disconnected',
+                  true,
+                )
               }
             >
               Disconnect
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() =>
+                act(
+                  'Delete upstream',
+                  `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
+                  'Delete',
+                  async () => {
+                    await api.deleteAccount(account.id);
+                    navigate('/upstreams');
+                  },
+                  'Deleted',
+                  true,
+                )
+              }
+            >
+              Delete upstream
             </Button>
           </div>
         )}
@@ -334,14 +375,14 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
           <KeyValue
             className="kv--spread"
             rows={
-              isOauth && account.subscription
+              // The kind decides the card, not the profile: an OAuth upstream has none until it is paired.
+              isOauth
                 ? [
-                    { label: 'Plan', value: account.plan ?? '-' },
-                    { label: 'Rate-limit tier', value: account.subscription.rateLimitTier, mono: true },
-                    { label: 'Organization', value: account.subscription.organizationType },
-                    { label: 'Billing type', value: account.subscription.billingType },
-                    ...(account.subscription.since ? [{ label: 'Subscription since', value: fmtDate(account.subscription.since), title: fmtAbsolute(account.subscription.since) }] : []),
-                    ...(account.subscription.trialEndsAt ? [{ label: 'Trial end', value: fmtDate(account.subscription.trialEndsAt), title: fmtAbsolute(account.subscription.trialEndsAt) }] : []),
+                    { label: 'Type', value: 'OAuth login' },
+                    { label: 'Plan', value: account.subscription ? (account.plan ?? '-') : 'unknown until paired' },
+                    { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
+                    { label: 'Organization', value: account.subscription?.organizationType ?? '-' },
+                    { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]
                 : [
                     { label: 'Type', value: 'API key' },
@@ -358,22 +399,26 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
           ) : (
             <WindowTriple account={account} now={now} />
           )}
-          {extra?.enabled && (
+          {extra && (extra.enabled || extra.disabledReason) && (
             <div className="extra-usage">
-              <div className="wbar__head">
-                <span className="wbar__label">
-                  Extra usage this month
-                  {extra.inUse && (
-                    <Badge tone="serious" title="Requests are currently billed as overage">
-                      in use
-                    </Badge>
-                  )}
-                </span>
-                <span className="num">
-                  {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
-                </span>
-              </div>
-              <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />
+              {extra.enabled && (
+                <>
+                  <div className="wbar__head">
+                    <span className="wbar__label">
+                      Extra usage this month
+                      {extra.inUse && (
+                        <Badge tone="serious" title="Requests are currently billed as overage">
+                          in use
+                        </Badge>
+                      )}
+                    </span>
+                    <span className="num">
+                      {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
+                    </span>
+                  </div>
+                  <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />
+                </>
+              )}
               {extra.disabledReason && (
                 <div className="callout callout--warning extra-usage__flag">
                   <IconWarning size={14} />
@@ -397,6 +442,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
           subtitle={
             <span title={fmtAbsolute(account.catalogSyncedAt)}>
               Catalog synced {account.catalogSyncedAt ? fmtRelative(account.catalogSyncedAt, now) : 'never'}
+              {account.catalogError && `, last error: ${account.catalogError}`}
             </span>
           }
           actions={canMutate && (
@@ -451,7 +497,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
                     ]
                   : [
                       { label: 'Secret', value: 'stored encrypted at rest', mono: false },
-                      { label: 'Last error', value: <span className="muted">none</span> },
+                      { label: 'Last error', value: account.credential.lastError ?? <span className="muted">none</span>, mono: Boolean(account.credential.lastError) },
                     ]
               }
             />
@@ -483,14 +529,30 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
 function ServedModels({ account, catalog, canMutate, onSaved }: { account: Account; canMutate: boolean; catalog: CatalogModel[]; onSaved: () => void }) {
   const [models, setModels] = useState<ServedModel[]>(account.servedModels);
   const [extra, setExtra] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setModels(account.servedModels);
   }, [account.id, account.servedModels]);
 
+  // Each write replaces the whole list, so two in flight could land out of order, or one's rollback undo the other's
+  // edit; writes run one at a time.
   const persist = async (next: ServedModel[]) => {
+    if (saving) return;
+    const before = models;
+    setSaving(true);
+    setError(null);
     setModels(next);
-    await api.updateServedModels(account.id, next);
-    onSaved();
+    try {
+      await api.updateServedModels(account.id, next);
+      onSaved();
+    } catch (e) {
+      // The list the router holds is the one the checkboxes must show; a refused write puts it back and says why.
+      setModels(before);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
   };
   const toggle = (id: string) => persist(models.map((m) => (m.id === id ? { ...m, selected: !m.selected } : m)));
 
@@ -511,7 +573,7 @@ function ServedModels({ account, catalog, canMutate, onSaved }: { account: Accou
         {ordered.map((m) => (
           <li key={m.id}>
             <label>
-              <input type="checkbox" checked={m.selected} onChange={() => toggle(m.id)} disabled={!canMutate} />
+              <input type="checkbox" checked={m.selected} onChange={() => void toggle(m.id)} disabled={!canMutate || saving} />
               <span className="mono">{m.id}</span>
               {m.isNew && !m.selected && (
                 <Badge tone="accent" title="Discovered by a catalog sync after the upstream was added">
@@ -529,6 +591,11 @@ function ServedModels({ account, catalog, canMutate, onSaved }: { account: Accou
           </li>
         ))}
       </ul>
+      {error && (
+        <p className="served__error" role="alert">
+          {error}
+        </p>
+      )}
       {canMutate && (
         <form
           className="served__add"
@@ -536,12 +603,12 @@ function ServedModels({ account, catalog, canMutate, onSaved }: { account: Accou
             e.preventDefault();
             const id = extra.trim();
             if (!id || models.some((m) => m.id === id)) return;
-            persist([...models, { canonicalId: id, id, inCatalog: false, isNew: false, longContext: false, manual: true, selected: true, upstreamId: id }]);
+            void persist([...models, { canonicalId: id, id, inCatalog: false, isNew: false, longContext: false, manual: true, selected: true, upstreamId: id }]);
             setExtra('');
           }}
         >
           <Input placeholder="Add model id" value={extra} onChange={(e) => setExtra(e.target.value)} className="mono" />
-          <Button type="submit" size="md" disabled={!extra.trim()}>
+          <Button type="submit" size="md" disabled={!extra.trim() || saving}>
             Add
           </Button>
         </form>

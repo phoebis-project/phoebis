@@ -312,9 +312,11 @@ async function compatibilityCard(theme) {
     const card = (title) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
     // Both cards print the running profile, so that row is what the two are compared through: `.kv__row` is
     // `display: contents` and has no box of its own, and the rest of the rows carry different kinds of value.
+    // The cards hold different row counts, so the rows are compared by their pitch rather than their total height.
     const measure = (el) => {
       const style = getComputedStyle(el);
       const kv = el.querySelector('.kv');
+      const rows = el.querySelectorAll('.kv__row').length;
       const profile = [...el.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Profile');
       const dt = profile?.querySelector('dt');
       const dd = profile?.querySelector('dd');
@@ -325,7 +327,7 @@ async function compatibilityCard(theme) {
         padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
         profileHeight: dd ? dd.getBoundingClientRect().height : null,
         profileText: (dd?.textContent ?? '').trim(),
-        rowsHeight: kv ? kv.getBoundingClientRect().height : null,
+        rowPitch: kv && rows ? (kv.getBoundingClientRect().height + parseFloat(getComputedStyle(kv).rowGap)) / rows : null,
         titleFont: getComputedStyle(el.querySelector('.card__title')).fontSize,
         valueFont: dd ? getComputedStyle(dd).fontSize : null,
       };
@@ -349,8 +351,97 @@ async function compatibilityCard(theme) {
   else if (!read.diagnostics.title.includes('compatibility.cache_diagnostics')) say(`the cache diagnostics row names ${JSON.stringify(read.diagnostics.title)} as where it is set`);
   measurements.push(`${theme} /settings compatibility card ${JSON.stringify(read.compatibility)}`);
   measurements.push(`${theme} /settings about card ${JSON.stringify(read.about)}`);
-  const differs = ['background', 'border', 'labelFont', 'padding', 'profileHeight', 'profileText', 'rowsHeight', 'titleFont', 'valueFont'].filter((key) => String(read.compatibility[key]) !== String(read.about[key]));
+  const differs = ['background', 'border', 'labelFont', 'padding', 'profileHeight', 'profileText', 'rowPitch', 'titleFont', 'valueFont'].filter((key) => String(read.compatibility[key]) !== String(read.about[key]));
   if (differs.length) say(`the compatibility card's ${differs.join(', ')} differs from the About card's`);
+}
+
+/**
+ * The quota, routing, storage, and usage cards against the compatibility card above them: the same kind of
+ * read-only rows from the same bootstrap file, so a card whose box, type, or row pitch differs is the defect to
+ * catch, and so is a row that does not name the key that sets it.
+ */
+async function bootstrapCards(theme) {
+  const say = (what) => failures.push(`${theme} /settings: ${what}`);
+  const read = await page.evaluate(() => {
+    const card = (title) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+    const measure = (el) => {
+      const style = getComputedStyle(el);
+      const kv = el.querySelector('.kv');
+      const rows = [...el.querySelectorAll('.kv__row')];
+      // A mono value is what the compatibility card's profile row and every number or path row here share.
+      const dd = rows.map((r) => r.querySelector('dd')).find((d) => d?.classList.contains('mono'));
+      const dt = rows[0]?.querySelector('dt');
+      const subtitle = el.querySelector('.card__subtitle');
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
+        labelFont: dt ? `${getComputedStyle(dt).fontSize} ${getComputedStyle(dt).color}` : null,
+        noted: rows.filter((r) => (r.querySelector('dd')?.getAttribute('title') ?? '').endsWith('in the bootstrap file')).length,
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+        rowPitch: kv && rows.length ? (kv.getBoundingClientRect().height + parseFloat(getComputedStyle(kv).rowGap)) / rows.length : null,
+        rows: rows.length,
+        subtitleFont: subtitle ? `${getComputedStyle(subtitle).fontSize} ${getComputedStyle(subtitle).color}` : null,
+        titleFont: getComputedStyle(el.querySelector('.card__title')).fontSize,
+        valueFont: dd ? `${getComputedStyle(dd).fontSize} ${getComputedStyle(dd).fontFamily}` : null,
+        valueHeight: dd ? dd.getBoundingClientRect().height : null,
+      };
+    };
+    return Object.fromEntries(['Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].map((title) => [title, card(title) ? measure(card(title)) : null]));
+  });
+  if (!read.Compatibility) {
+    say('no card titled "Compatibility" to measure the bootstrap cards against');
+    return;
+  }
+  measurements.push(`${theme} /settings compatibility card rows ${JSON.stringify(read.Compatibility)}`);
+  for (const title of ['Quota', 'Routing', 'Storage', 'Usage']) {
+    const got = read[title];
+    if (!got) {
+      say(`no card titled ${JSON.stringify(title)}`);
+      continue;
+    }
+    measurements.push(`${theme} /settings ${title.toLowerCase()} card ${JSON.stringify(got)}`);
+    if (got.rows === 0 || got.noted !== got.rows) say(`the ${title} card has ${got.rows - got.noted} of ${got.rows} rows that name no bootstrap key`);
+    const differs = ['background', 'border', 'labelFont', 'padding', 'rowPitch', 'subtitleFont', 'titleFont', 'valueFont', 'valueHeight'].filter((key) => String(got[key]) !== String(read.Compatibility[key]));
+    if (differs.length) say(`the ${title} card's ${differs.join(', ')} differs from the compatibility card's`);
+  }
+}
+
+/**
+ * The Upstreams head's Delete upstream button against the Disconnect button beside it: the same danger variant in
+ * the same action row, so a box, an ink, or a line that differs between the two is the defect to catch.
+ */
+async function deleteUpstreamButton(theme) {
+  const say = (what) => failures.push(`${theme} /upstreams: ${what}`);
+  const pair = await page.evaluate(() => {
+    const actions = document.querySelector('.detail__head .detail__actions');
+    const button = (text) => [...(actions?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+    const read = (b) => {
+      const style = getComputedStyle(b);
+      const box = b.getBoundingClientRect();
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}`,
+        color: style.color,
+        font: `${style.fontSize} ${style.fontWeight}`,
+        height: box.height,
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+        radius: style.borderTopLeftRadius,
+        top: box.top,
+      };
+    };
+    const disconnect = button('Disconnect');
+    const remove = button('Delete upstream');
+    return disconnect && remove ? { disconnect: read(disconnect), last: actions.lastElementChild === remove, remove: read(remove) } : null;
+  });
+  if (!pair) {
+    say('the Disconnect and Delete upstream buttons are not both drawn to compare');
+    return;
+  }
+  measurements.push(`${theme} /upstreams disconnect ${JSON.stringify(pair.disconnect)}`);
+  measurements.push(`${theme} /upstreams delete upstream ${JSON.stringify(pair.remove)}`);
+  if (!pair.last) say('Delete upstream is not the last action in the head');
+  const differs = ['background', 'border', 'color', 'font', 'height', 'padding', 'radius', 'top'].filter((key) => String(pair.remove[key]) !== String(pair.disconnect[key]));
+  if (differs.length) say(`the Delete upstream button's ${differs.join(', ')} differs from the Disconnect button's`);
 }
 
 /** The box a labelled input draws in the open dialog: the control itself, never the label around it. */
@@ -583,7 +674,11 @@ try {
         await poolSelectBelow(theme);
       }
       if (view.path === '/analytics') await wastedProbeRows(theme);
-      if (view.path === '/settings') await compatibilityCard(theme);
+      if (view.path === '/settings') {
+        await compatibilityCard(theme);
+        await bootstrapCards(theme);
+      }
+      if (view.path === '/upstreams') await deleteUpstreamButton(theme);
       if (view.path === '/alerts') await alertRuleDialog(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.

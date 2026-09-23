@@ -30,7 +30,6 @@ export function soonestReset(account: Account, now: number): WindowId | null {
 
 export const STATUS_LABEL: Record<Account['status'], string> = {
   cooldown: 'Cooling down',
-  disabled: 'Disabled',
   funding_required: 'Needs funding',
   paused: 'Paused',
   reauth_required: 'Needs re-auth',
@@ -42,7 +41,6 @@ export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' |
 
 export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
   cooldown: 'warning',
-  disabled: 'neutral',
   funding_required: 'critical',
   paused: 'neutral',
   reauth_required: 'critical',

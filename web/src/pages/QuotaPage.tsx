@@ -3,7 +3,7 @@ import { api } from '@/api';
 import type { Account, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer } from '@/components/ui/icons';
+import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtPct, fmtRelative, fmtShortTime } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -15,6 +15,7 @@ type Sort = 'default' | 'soonest';
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const snapshots = useAsync(() => api.listQuotaSnapshots(), []);
+  const settings = useAsync(() => api.getSettings(), []);
   const now = useNow();
   const [tab, setTab] = useState<Tab>('all');
   const [sort, setSort] = useState<Sort>('default');
@@ -43,6 +44,8 @@ export function QuotaPage() {
     accounts.reload();
     snapshots.reload();
   };
+  // The route hands back a cached snapshot inside this TTL, which is why a refresh can change nothing.
+  const refreshHint = settings.data ? `a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is served as is` : undefined;
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
@@ -67,7 +70,7 @@ export function QuotaPage() {
             )}
           </p>
         </div>
-        <Pill onClick={() => void refreshAll()} disabled={refreshing} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
+        <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
           Refresh all
         </Pill>
       </div>
@@ -94,7 +97,7 @@ export function QuotaPage() {
         <div className="quota-grid">
           {!accounts.data
             ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-            : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} onRefreshed={reload} />)}
+            : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
         </div>
       )}
 
@@ -124,7 +127,7 @@ function QuotaCardSkeleton() {
   );
 }
 
-function QuotaCard({ account, snapshot, now, refreshing, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshing: boolean; snapshot?: QuotaSnapshot }) {
+function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
   const status = snapshot?.status ?? 'success';
   const soonest = soonestReset(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
@@ -202,12 +205,19 @@ function QuotaCard({ account, snapshot, now, refreshing, onRefreshed }: { accoun
         </div>
       )}
 
+      {status !== 'loading' && extra?.disabledReason && (
+        <div className="callout callout--warning qcard__flag">
+          <IconWarning size={14} />
+          <div>{extra.disabledReason}</div>
+        </div>
+      )}
+
       {status !== 'loading' && (
         <footer className="qcard__foot">
           <span className="muted" title={snapshot?.fetchedAt ? fmtAbsolute(snapshot.fetchedAt) : undefined}>
             {snapshot?.fetchedAt ? `checked ${fmtRelative(snapshot.fetchedAt, now)}` : ''}
           </span>
-          <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
+          <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
             Refresh
           </Pill>
         </footer>

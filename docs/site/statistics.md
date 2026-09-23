@@ -191,7 +191,10 @@ that set it, and a later announcement books the next stretch.
 ### Settings
 
 Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
-keepalive, listeners, the downstream client block, and an about panel.
+keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
+bootstrap file's quota, routing, storage, and usage blocks: the quota poll interval and sample retention, the
+attempt limit, cooldown fallback, and catalog sync interval, the ledger, storage, and pricing paths, and the usage
+cache TTL and refresh concurrency.
 
 ## Alerts
 

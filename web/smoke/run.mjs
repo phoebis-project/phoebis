@@ -208,7 +208,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant', 'Loading quota']);
+expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant', 'Loading quota']);
 {
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
@@ -238,12 +238,17 @@ expect('/quota', m.text(), ['6 credentials', '5 loaded', '1 needs attention', 'R
 {
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh all')?.click();
   await m.settle(1_200);
-  results.push({ name: '/quota Refresh all reloads every card', ok: m.text().includes('5 loaded'), missing: [m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'] });
+  results.push({ name: '/quota Refresh all reloads every card', ok: m.text().includes('6 loaded'), missing: [m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'] });
 }
 {
   // The mock registry holds six, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '6 credentials', missing: [count] });
+  // The route serves a cached snapshot inside the TTL, so the button says how young a snapshot it hands back as is.
+  const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
+  results.push({ name: '/quota Refresh names the snapshot age the router serves as is', ok: hints.length > 1 && hints.every((t) => t === 'a snapshot younger than 60 seconds is served as is'), missing: [...new Set(hints)] });
+  const personal = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'personal');
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: personal?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [personal?.textContent?.slice(0, 160) ?? 'no personal card'] });
 }
 m.unmount();
 
@@ -267,15 +272,18 @@ results.push({
   missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'Max 20x', 'max_20x', 'Subscription since', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Extra usage this month', 'Add upstream']);
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max 20x', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
 {
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect'].every((l) => headButtons.includes(l)), missing: headButtons });
-  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Clear cooldown', 'Clear funding flag', 'Disconnect'].includes(t ?? ''));
+  results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete upstream'].every((l) => headButtons.includes(l)), missing: headButtons });
+  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Clear cooldown', 'Clear funding flag', 'Disconnect', 'Delete upstream'].includes(t ?? ''));
   results.push({ name: '/upstreams no action buttons below header', ok: below.length === 0, missing: below });
-  const danger = head?.querySelector('.btn--danger');
-  results.push({ name: '/upstreams Disconnect is danger and last', ok: danger?.textContent?.trim() === 'Disconnect' && head?.querySelector('.detail__actions')?.lastElementChild === danger, missing: [] });
+  const dangers = [...(head?.querySelectorAll('.btn--danger') ?? [])].map((b) => b.textContent?.trim());
+  results.push({ name: '/upstreams Disconnect and Delete upstream are danger, and Delete upstream is last', ok: dangers.join('|') === 'Disconnect|Delete upstream' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete upstream', missing: dangers });
+  const statuses = [...(m.container.querySelector('select[aria-label="Status filter"]')?.options ?? [])].map((o) => o.value);
+  results.push({ name: '/upstreams the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
+  results.push({ name: '/upstreams the identity card draws no field the route never answers', ok: !m.text().includes('Subscription since') && !m.text().includes('Trial end'), missing: [] });
   const pair = m.container.querySelector('.detail__pair');
   results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
   const fable = m.container.querySelector('.detail .wbars--3');
@@ -284,6 +292,14 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   results.push({ name: '/upstreams served models shows new tag', ok: newTag, missing: [] });
   const unchecked = [...m.container.querySelectorAll('.served__list input[type=checkbox]')].filter((c) => !c.checked).length;
   results.push({ name: '/upstreams new model is unchecked', ok: unchecked === 1, missing: [String(unchecked)] });
+}
+{
+  [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/upstreams Disconnect says what the route deletes and what stays', confirm?.textContent ?? '', ["Deletes business's credential. Pool memberships and request history stay; re-pairing stores the credential again."]);
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
 }
 {
   const head = m.container.querySelector('.detail__head');
@@ -389,7 +405,7 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   }
 }
 await m.navigate('/accounts/team');
-expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'Trial end', 'n/a']);
+expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a']);
 {
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/upstreams/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
@@ -401,7 +417,15 @@ expect('/upstreams/mail', m.text(), ['Cooling down', 'Clear cooldown', 'rate_lim
   results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
 await m.navigate('/upstreams/personal');
-expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-sonnet-4-5-20250929', 'Clear funding flag', 'Payment method declined']);
+expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-sonnet-4-5-20250929', 'Clear funding flag', 'Payment method declined', ', last error: the models request answered 503', 'Overage since 3h']);
+{
+  const quarantined = [...m.container.querySelectorAll('.detail__badges .badge')].find((b) => b.textContent?.trim() === 'quarantined');
+  results.push({
+    name: '/upstreams/personal a quarantined credential carries its badge and the way out',
+    ok: quarantined?.classList.contains('badge--critical') === true && quarantined.getAttribute('title') === "the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it",
+    missing: [quarantined ? `${quarantined.className} ${quarantined.getAttribute('title')}` : 'no quarantined badge'],
+  });
+}
 {
   // A funding-flagged upstream never reads 'paused', so the header has to take the pause state off routing instead.
   const headButton = (name) => [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
@@ -419,6 +443,57 @@ expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-son
     name: '/upstreams a flagged upstream pauses and resumes from the header',
     ok: offersResume && headButton('Pause') !== undefined,
     missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
+  });
+}
+await m.navigate('/upstreams/business');
+{
+  const boxes = () => [...m.container.querySelectorAll('.served__list input[type=checkbox]')];
+  const before = boxes().map((c) => c.checked);
+  failNextCall('updateServedModels', '/admin/accounts/business/models', 'two spellings of claude-opus-5');
+  boxes()[0]?.click();
+  await m.settle(600);
+  const after = boxes().map((c) => c.checked);
+  const error = m.container.querySelector('.served__error')?.textContent ?? '';
+  results.push({
+    name: '/upstreams a refused served-model edit puts the list back and says why under it',
+    ok: before.length > 1 && JSON.stringify(after) === JSON.stringify(before) && error.includes('two spellings of claude-opus-5'),
+    missing: [JSON.stringify(before), JSON.stringify(after), error || 'no inline error'],
+  });
+  boxes()[0]?.click();
+  await m.settle(20);
+  const held = boxes().every((c) => c.disabled);
+  boxes()[1]?.click();
+  await m.settle(800);
+  const saved = boxes().map((c) => c.checked);
+  results.push({
+    name: '/upstreams a served-model write in flight holds the next one until it lands',
+    ok: held && saved[0] !== before[0] && saved[1] === before[1] && boxes().every((c) => !c.disabled) && m.container.querySelector('.served__error') === null,
+    missing: [`held ${held}`, JSON.stringify(before), JSON.stringify(saved)],
+  });
+  // One mock instance backs every mount, so the list goes back to the story for the checks after this one.
+  boxes()[0]?.click();
+  await m.settle(800);
+}
+await m.navigate('/upstreams/spare');
+{
+  const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  results.push({
+    name: '/upstreams/spare an unpaired OAuth upstream reads as OAuth, never as an API key',
+    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
+    missing: rows,
+  });
+  [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete upstream')?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/upstreams Delete upstream names the consequence before it runs', confirm?.textContent ?? '', ['Delete upstream', 'Removes spare from every pool it is in and deletes it; request history stays in the ledger.']);
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
+  await m.settle(1200);
+  const listed = [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim());
+  results.push({
+    name: '/upstreams Delete upstream removes the row and leaves for another upstream',
+    ok: m.text().includes('Deleted') && listed.length > 0 && !listed.includes('spare') && m.container.querySelector('.detail__title')?.textContent?.trim() !== 'spare' && m.container.querySelector('.account-row.is-active') !== null,
+    missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast', ...listed],
   });
 }
 m.unmount();
@@ -1963,6 +2038,7 @@ m.unmount();
 
 
 m = await mount('/alerts');
+expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
 expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
@@ -2078,6 +2154,27 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   const drift = eventRows().find((r) => r.textContent.includes('client 2.1.274'));
   results.push({ name: '/alerts a resolved event reads resolved and loses its button', ok: Boolean(drift) && drift.textContent.includes('resolved') && !drift.querySelector('button'), missing: [drift?.textContent?.slice(0, 80) ?? 'row missing'] });
 }
+{
+  const signedRow = () => [...[...m.container.querySelectorAll('table')][0].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('hooks.example.com/phoebis/refresh'));
+  signedRow()?.querySelector('.menu__trigger')?.click();
+  await m.settle(150);
+  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  expect('/alerts the edit hint names all three secret outcomes', dlg?.textContent ?? '', ['Leave empty to keep the stored secret; a new value replaces it; the box below removes it.']);
+  const box = [...(dlg?.querySelectorAll('label.row') ?? [])].find((l) => l.textContent?.includes('Remove the stored secret'))?.querySelector('input[type=checkbox]');
+  box?.click();
+  await m.settle(100);
+  const secret = dlg?.querySelector('input[type=password]');
+  const disabled = secret?.disabled === true;
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Save rule')?.click();
+  await m.settle(600);
+  results.push({
+    name: '/alerts removing the stored secret disables the field and saves the rule unsigned',
+    ok: box !== undefined && disabled && (signedRow()?.textContent ?? '').includes('Unsigned'),
+    missing: [box ? '' : 'no checkbox', `field disabled ${disabled}`, signedRow()?.textContent?.slice(0, 120) ?? 'row missing'],
+  });
+}
 m.unmount();
 
 // A failed read draws the error state where the rules are, and the shell's toast names the route.
@@ -2123,8 +2220,25 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured request and response bodies', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, webhook URLs beyond their host, and question text', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
+{
+  // Each row names its bootstrap key the way the compatibility card does, since the route reads these and never writes them.
+  const card = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const rows = (title) => [...(card(title)?.querySelectorAll('.kv__row') ?? [])].map((r) => [`${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`, r.querySelector('dd')?.getAttribute('title') ?? '']);
+  const want = {
+    Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Outbound gzip=off', 'compatibility.outbound_gzip'], ['Profile=claude-code-2.1.269-linux-x64', ''], ['Usage entrypoint=cli', '']],
+    Quota: [['Poll interval (seconds)=3,600', 'quota.poll_interval_seconds'], ['Sample retention (days)=30', 'quota.sample_retention_days']],
+    Routing: [['Catalog sync interval (seconds)=86,400', 'routing.catalog_sync_interval_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Max attempts=3', 'routing.max_attempts']],
+    Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
+    Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
+  };
+  for (const [title, expected] of Object.entries(want)) {
+    const got = rows(title);
+    const ok = got.length === expected.length && expected.every(([row, key], i) => got[i][0] === row && (key === '' ? got[i][1] === '' : got[i][1] === `Set by ${key} in the bootstrap file`));
+    results.push({ name: `/settings the ${title} card reads the route's block with its bootstrap keys`, ok, missing: got.map((g) => g.join(' | ')) });
+  }
+}
 // The label and its value run together in textContent, which is what pins the URL to the About row.
 expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);
 {
@@ -2343,7 +2457,7 @@ for (const [path, absent, present] of [
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
   ['/sessions', ['Release'], ['Cache warming']],
   ['/settings', ['Add model', 'Import'], ['Keepalive', 'Pricing']],
-  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Disconnect', 'Pause', 'Re-pair', 'Re-sync', 'Resume', 'Verify'], ['Identity']],
+  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Re-sync', 'Resume', 'Verify'], ['Identity']],
 ]) {
   await m.navigate(path);
   const t = m.text();
@@ -2393,11 +2507,18 @@ await m.navigate('/alerts');
     ok: m.text().includes('hooks.example.com') && !m.text().includes('/phoebis/question') && !m.text().includes('https://hooks.example.com'),
     missing: [[...m.container.querySelectorAll('td.mono')].map((td) => td.textContent).slice(0, 3).join(' | ')],
   });
-  // The route blanks a question's text for a viewer, and the page has to say so rather than draw an empty line.
+  // The route blanks a question's text for a viewer, and the page has to say who may read it rather than
+  // report a capture that never failed.
   results.push({
     name: 'viewer: /alerts draws the redaction the route applies to a question',
-    ok: m.text().includes('question not captured') && !m.text().includes('The ledger migration'),
+    ok: m.text().includes('question is for administrators') && !m.text().includes('question not captured') && !m.text().includes('The ledger migration'),
     missing: [],
+  });
+  const badge = m.container.querySelector('.topbar__right .badge');
+  results.push({
+    name: 'viewer: the role badge names every redaction the viewer secret carries',
+    ok: badge?.getAttribute('title') === 'Viewer secret: read everything except captured bodies, live previews, webhook URLs beyond their host, and question text',
+    missing: [badge?.getAttribute('title') ?? 'no role badge'],
   });
 }
 await m.navigate('/settings');

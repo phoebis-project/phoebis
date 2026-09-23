@@ -100,6 +100,7 @@ export class HttpApi implements Api {
     return { key: d.decodeKey(r), secret: String(r.secret) };
   };
   createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }));
+  deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
   deleteAlertRule = (id: string) => call<void>('DELETE', `/admin/alerts/rules/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);

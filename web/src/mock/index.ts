@@ -117,11 +117,15 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
 }
 
 /**
- * What the events route hands a viewer: the question text came out of a captured body, which a viewer may not read
- * there either, so the route blanks it and says it did.
+ * What the events route hands a caller: the question text came out of a captured body, so past that body's deadline
+ * it is gone for every role, and before it a viewer, who may not read the body either, gets it blanked with a flag.
  */
-const redactForViewer = (e: AlertEvent): AlertEvent =>
-  e.detail !== null && 'question' in e.detail ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
+function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
+  if (e.detail === null || !('question' in e.detail)) return e;
+  const expiresAt = e.detail.question_expires_at;
+  if (typeof expiresAt === 'number' && Date.now() >= expiresAt) return { ...e, detail: { ...e.detail, question: null } };
+  return viewer ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
+}
 
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
@@ -243,7 +247,7 @@ export class MockApi implements Api {
       ...ACCOUNT_SAMPLE,
       catalogSyncedAt: null,
       cooldowns: [],
-      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },
+      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
       email: null,
       extraUsage: null,
       fableWindow: null,
@@ -310,6 +314,13 @@ export class MockApi implements Api {
     return latency(pool, 300);
   }
 
+  async deleteAccount(accountId: string) {
+    this.account(accountId);
+    this.accounts = this.accounts.filter((a) => a.id !== accountId);
+    this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
+    return latency(undefined, 250);
+  }
+
   deleteAlertRule(id: string) {
     this.rules = this.rules.filter((r) => r.id !== id);
     return latency(undefined, 200);
@@ -329,7 +340,8 @@ export class MockApi implements Api {
 
   async disconnectAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null }, email: null, status: 'unpaired' });
+    // The route drops the credential and leaves the identity, so the row still says whose it was.
+    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
     return latency(undefined, 250);
   }
 
@@ -422,7 +434,8 @@ export class MockApi implements Api {
 
   listAlertEvents(state?: 'open' | 'resolved') {
     const stored = emptyStore() ? [] : this.events;
-    const events = previewsViewer() ? stored.map(redactForViewer) : stored;
+    const viewer = previewsViewer();
+    const events = stored.map((e) => questionFor(e, viewer));
     return latency(state ? events.filter((e) => e.state === state) : events);
   }
 
