@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use phoebis_alerts::{question_subject, BusArm, Kind, Poller, ScopeType, Tracked};
-use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
+use phoebis_alerts::{
+    question_subject, spawn_inputs, AlertInputs, BusArm, Kind, Poller, ScopeType, Tracked,
+};
+use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
 use phoebis_routing::{Report, UtilizationSample};
 use phoebis_store::{AccountState, AlertEventRow};
 use common::*;
@@ -982,6 +984,163 @@ async fn a_tick_with_no_open_event_issues_no_clear_and_one_with_open_events_clea
         rig.alerts.clears(),
         2,
         "resolved rows are not open, so the next tick clears nothing"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_pools_cost_cap_clears_its_open_alert() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("cap", Kind::KeepaliveCostCap, ScopeType::Pool, Some("main")),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut spent = BTreeMap::new();
+    spent.insert("main".to_string(), 2.0);
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, spent.clone()),
+        Tracked::default(),
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    let open = |rig: &Rig| {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "keepalive_cost_cap")
+            .count()
+    };
+    assert_eq!(open(&rig), 1, "a pool at its cap opens the event");
+    let mut pool = rig.store.pool("main").unwrap().unwrap();
+    pool.keepalive_json = r#"{"enabled":true}"#.into();
+    rig.store.update_pool(&pool, "test").unwrap();
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        0,
+        "removing the cap clears the open event at the next tick"
+    );
+    // A restart: fresh inputs over the same store, cap reopened then removed again, still clear on the first
+    // tick rather than only after a day rolls over.
+    pool.keepalive_json = r#"{"enabled":true,"probe_cost_cap_usd_per_day":1.0}"#.into();
+    rig.store.update_pool(&pool, "test").unwrap();
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, spent.clone()),
+        Tracked::default(),
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(open(&rig), 1);
+    pool.keepalive_json = r#"{"enabled":true}"#.into();
+    rig.store.update_pool(&pool, "test").unwrap();
+    let mut poller = Poller::new(rig.alerts.clone(), &inputs(&rig, spent), Tracked::default());
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open(&rig),
+        0,
+        "the first tick of a fresh poller over the same store clears it too"
+    );
+}
+
+/// The enrichment worker's own inputs, over a bus of their own: the ledger subscribes to `rig.bus` too, and
+/// would otherwise record a body for these synthetic requests before the test ever means to supply one.
+fn private_inputs(rig: &Rig) -> (Bus, AlertInputs) {
+    let bus = Bus::new();
+    let alert_inputs = AlertInputs {
+        body_capture_max_hours: 168,
+        bus: bus.clone(),
+        lifecycle: None,
+        router: rig.router.clone(),
+        session_expiry: Duration::from_secs(3_600),
+        spent_today: std::sync::Arc::new(BTreeMap::new),
+        tick: Duration::from_secs(3_600),
+    };
+    (bus, alert_inputs)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_drain_waits_for_an_enrichment_worker() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let (bus, alert_inputs) = private_inputs(&rig);
+    let mut handles = spawn_inputs(rig.alerts.clone(), alert_inputs);
+    bus.publish(observed("r1", "desktop", "main", "s1", 24));
+    bus.publish(chunk("r1", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+    bus.publish(complete("r1", Outcome::Succeeded, 200, None, None));
+    // Let the subscriber spawn the worker before the stop takes effect, so this drain waits for one already
+    // running rather than a spawn the stop refused; the body is never written, so it polls to exhaustion on
+    // its own before drain's own wait would time out.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    handles.stop();
+    let waited = tokio::time::timeout(Duration::from_secs(15), handles.drain()).await;
+    assert!(waited.is_ok(), "drain returned within the outer timeout");
+    // `workers.wait()` only resolves once the worker's own task, question included, has fully run: drain
+    // waited for it rather than abandoning it, so the event it opens is already there the moment drain returns.
+    assert_eq!(
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "ask_user_question")
+            .count(),
+        1,
+        "the worker that finished inside the bound still opened its question"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_held_past_the_bound_is_cancelled_and_joined() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("ask", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut arm = BusArm::new(rig.alerts.clone(), &inputs(&rig, BTreeMap::new()));
+    // The body is never written to the ledger, so the worker this spawns is still on its own first poll when
+    // the asserts below run: the same shape `drain` finds past its bound, driven directly rather than through
+    // its two timeouts, which race the worker's own ten-attempt budget too closely to time deterministically.
+    arm.observe(observed("r1", "desktop", "main", "s1", 24));
+    arm.observe(chunk("r1", b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"));
+    arm.observe(complete("r1", Outcome::Succeeded, 200, None, None));
+    let workers = arm.workers();
+    let cancel = arm.cancel();
+    workers.close();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), workers.wait())
+            .await
+            .is_err(),
+        "the worker is still polling, so closing the tracker alone does not end it"
+    );
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(2), workers.wait())
+        .await
+        .expect("the cancelled worker joins promptly");
+    assert!(
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "ask_user_question"),
+        "the cancelled worker opened nothing"
     );
 }
 

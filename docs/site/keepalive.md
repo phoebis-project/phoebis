@@ -86,7 +86,7 @@ The pool's `keepalive` object carries fourteen fields, each with its own default
 | `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes instead of seconds. |
 | `net_negative_grace_probes` | `2` | 0 to 100 | Probes still granted once the net turns negative. |
 | `probe_cost_cap_usd_per_day` | unset | unset or a positive number | Daily probe spend cap per pool. |
-| `retry_max_seconds` | `300` | at least `retry_seconds` | Ceiling the retry backoff doubles up to. |
+| `retry_max_seconds` | `300` | 1 to 604800 (a week), at least `retry_seconds` | Ceiling the retry backoff doubles to. |
 | `retry_seconds` | `30` | 1 to 3600 | Base backoff after a failed probe, doubling each retry. |
 | `stop_when_net_negative` | `true` | | Pauses the recipe once probes cost more than they saved. |
 | `warm_subagents` | `true` | | Off retains only the main conversation's recipe; a subagent is never probed. |

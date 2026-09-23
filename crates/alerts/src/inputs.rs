@@ -15,6 +15,8 @@ use phoebis_bus::{
 use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountState, AlertEventRow};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::engine::Alerts;
 use crate::question::{
@@ -293,6 +295,9 @@ struct InFlight {
 /// test drives it event by event without a bus.
 pub struct BusArm {
     alerts: Arc<Alerts>,
+    /// Cancels an enrichment worker still polling past the drain bound; closed workers past this point return
+    /// without opening anything.
+    cancel: CancellationToken,
     in_flight: HashMap<String, InFlight>,
     /// How long a session may go unseen before the arm forgets it. The poller retires that session's open
     /// question at the same age, so nothing the entry is kept for outlives it.
@@ -302,6 +307,9 @@ pub struct BusArm {
     /// that after a restart, but it starts no session the close is about to end.
     stopping: Arc<AtomicBool>,
     tracked: Tracked,
+    /// The enrichment workers spawned to read a captured body's question text, so a drain past its bound can
+    /// cancel and join them rather than let one outlive the shutdown.
+    workers: TaskTracker,
 }
 
 const SUBJECT_SEPARATOR: &str = ", session ";
@@ -356,6 +364,7 @@ impl BusArm {
         }
         BusArm {
             alerts,
+            cancel: CancellationToken::new(),
             in_flight: HashMap::new(),
             session_expiry_ms: inputs.session_expiry.as_millis() as i64,
             stopping: Arc::new(AtomicBool::new(false)),
@@ -367,6 +376,7 @@ impl BusArm {
                     terminals: HashMap::new(),
                 }),
             })),
+            workers: TaskTracker::new(),
         }
     }
 
@@ -380,6 +390,16 @@ impl BusArm {
     /// drives the arm by hand can put it into the state the drain runs in.
     pub fn stopping(&self) -> Arc<AtomicBool> {
         self.stopping.clone()
+    }
+
+    /// The token that cancels an enrichment worker, shared with the handles `spawn_inputs` returns.
+    pub fn cancel(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    /// The tracker an enrichment worker joins, shared with the handles `spawn_inputs` returns.
+    pub fn workers(&self) -> TaskTracker {
+        self.workers.clone()
     }
 
     /// How many key-and-session pairs the arm still holds, which is how a test watches the sweep.
@@ -611,31 +631,48 @@ impl BusArm {
                             subject: question_subject(&key, &session),
                             detail: json!({ "agent": e.agent, "key": key, "question": null, "session": session }),
                         };
-                        if e.capture {
+                        // A worker starts only before the teardown begins: the drain is about to end every
+                        // session, and a question found after that would open an event nobody is left to
+                        // answer for. Such a question is left for the next process to find, as one still in
+                        // flight at a restart already is.
+                        if e.capture && !self.stopping.load(Ordering::SeqCst) {
                             // The ledger lands the body a batch after the completion; a short poll reads it. The
                             // session may move on meanwhile, in which case the question was answered before this
                             // signal could open it and it must not open a stale event.
                             let alerts = self.alerts.clone();
                             let id = c.request_id.clone();
                             let tracked = self.tracked.clone();
+                            let cancel = self.cancel.clone();
                             let (pair, admitted) = ((key.clone(), session.clone()), e.generation);
-                            tokio::spawn(async move {
+                            self.workers.spawn(async move {
                                 let mut signal = base;
+                                let mut found = false;
                                 for _ in 0..10 {
                                     let db = alerts.parts().ledger.db().clone();
                                     let request = id.clone();
-                                    if let Ok(Some(b)) = db.bodies(&request).await {
-                                        signal.detail["question"] = json!(b
-                                            .response_body
-                                            .as_deref()
-                                            .and_then(question_text));
-                                        // The text is a copy of that body, so it may not outlive it: the
-                                        // key's capture window can be far shorter than the global ceiling
-                                        // the purge would otherwise hold the question to.
-                                        signal.detail["question_expires_at"] = json!(b.expires_at);
+                                    tokio::select! {
+                                        _ = cancel.cancelled() => return,
+                                        result = db.bodies(&request) => {
+                                            if let Ok(Some(b)) = result {
+                                                signal.detail["question"] = json!(b
+                                                    .response_body
+                                                    .as_deref()
+                                                    .and_then(question_text));
+                                                // The text is a copy of that body, so it may not outlive it: the
+                                                // key's capture window can be far shorter than the global ceiling
+                                                // the purge would otherwise hold the question to.
+                                                signal.detail["question_expires_at"] = json!(b.expires_at);
+                                                found = true;
+                                            }
+                                        }
+                                    }
+                                    if found {
                                         break;
                                     }
-                                    tokio::time::sleep(Duration::from_millis(500)).await;
+                                    tokio::select! {
+                                        _ = cancel.cancelled() => return,
+                                        _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                                    }
                                 }
                                 let now = (alerts.parts().clock)();
                                 // The claim and the signal are one critical section: with the lock released
@@ -654,6 +691,8 @@ impl BusArm {
                                 state.question_open = true;
                                 alerts.signal(&signal);
                             });
+                        } else if e.capture {
+                            // The worker that would have polled for this body never starts.
                         } else {
                             let mut tracked = self.tracked.lock();
                             let state = tracked.sessions.get_mut(&(key.clone(), session.clone()));
@@ -1066,7 +1105,19 @@ impl Poller {
                 let cap = serde_json::from_str::<serde_json::Value>(&pool.keepalive_json)
                     .ok()
                     .and_then(|v| v["probe_cost_cap_usd_per_day"].as_f64());
-                let Some(cap) = cap else { continue };
+                let cap = match cap {
+                    Some(cap) => cap,
+                    // A cap that was cleared resolves its own open event at the next tick, the same as
+                    // crossing midnight does, rather than leaving it open until a day rolls over.
+                    None => {
+                        if open.iter().any(|e| {
+                            e.kind == Kind::KeepaliveCostCap.as_str() && e.subject == pool.id
+                        }) {
+                            self.alerts.clear(Kind::KeepaliveCostCap, &pool.id);
+                        }
+                        continue;
+                    }
+                };
                 let used = spent.get(&pool.id).copied().unwrap_or(0.0);
                 if used >= cap {
                     self.alerts.signal(&Signal {
@@ -1158,13 +1209,16 @@ impl Poller {
 pub struct AlertInputHandles {
     alerts: Arc<Alerts>,
     bus: tokio::task::JoinHandle<()>,
+    cancel: CancellationToken,
     lifecycle: Option<tokio::task::JoinHandle<()>>,
     poller: tokio::task::JoinHandle<()>,
     stopping: Arc<AtomicBool>,
     tracked: Tracked,
+    workers: TaskTracker,
 }
 
-/// How long the drain waits for the companion's consumer and then posts the ends of what it still tracks.
+/// How long the drain waits for the companion's consumer, and separately for the enrichment workers, before it
+/// gives up and posts the ends of what it still tracks.
 const DRAIN_BOUND: Duration = Duration::from_secs(5);
 
 impl AlertInputHandles {
@@ -1178,9 +1232,12 @@ impl AlertInputHandles {
     }
 
     /// Waits for the lifecycle consumer to post what the engine's close enqueued (its sender is gone, so the
-    /// task ends on its own once the queue is empty), then ends every session still tracked. Bounded so a
-    /// consumer stuck on a store write cannot hold the shutdown. The handle is polled through a borrow, so a
-    /// caller that drops this future keeps the handle and can still abort it.
+    /// task ends on its own once the queue is empty), then for the enrichment workers still reading a captured
+    /// body, cancelling whichever is still polling past its own bound, and only then ends every session still
+    /// tracked: a worker's question belongs to the session it was reading for, and ending the session first
+    /// would post its close before a question that worker still opens. Bounded so a consumer stuck on a store
+    /// write, or a worker stuck on one, cannot hold the shutdown open indefinitely. The handle is polled
+    /// through a borrow, so a caller that drops this future keeps the handle and can still abort it.
     pub async fn drain(&mut self) {
         if let Some(lifecycle) = self.lifecycle.as_mut() {
             match tokio::time::timeout(DRAIN_BOUND, &mut *lifecycle).await {
@@ -1193,21 +1250,33 @@ impl AlertInputHandles {
                 Err(_) => lifecycle.abort(),
             }
         }
-        // After the companion's own ends, so a session it ended is out of the map by now and takes one end
-        // rather than two.
+        self.workers.close();
+        if tokio::time::timeout(DRAIN_BOUND, self.workers.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!("an alert enrichment worker was still reading a body past the drain bound; cancelling it");
+            self.cancel.cancel();
+            let _ = tokio::time::timeout(DRAIN_BOUND, self.workers.wait()).await;
+        }
+        // After the companion's own ends and the workers have had their say, so a session either of them ended
+        // is out of the map by now and takes one end rather than two.
         let ordered = self.tracked.ordered();
         let emits = end_tracked(&mut self.tracked.lock());
         emit_all(&self.alerts, emits);
         drop(ordered);
     }
 
-    /// Aborts all three tasks, for a teardown past its drain or one that ran out of time inside it.
+    /// Aborts all three tasks, for a teardown past its drain or one that ran out of time inside it, and cancels
+    /// and closes whatever enrichment workers are left.
     pub fn abort(&mut self) {
         self.stop();
         self.bus.abort();
         if let Some(lifecycle) = &self.lifecycle {
             lifecycle.abort();
         }
+        self.cancel.cancel();
+        self.workers.close();
     }
 }
 
@@ -1219,6 +1288,8 @@ pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputH
     let mut arm = BusArm::new(alerts.clone(), &inputs);
     let tracked = arm.tracked();
     let stopping = arm.stopping();
+    let cancel = arm.cancel();
+    let workers = arm.workers();
     let bus = spawn_subscriber(subscriber, move |mut subscriber| async move {
         while let Some(event) = subscriber.events.recv().await {
             arm.observe(event);
@@ -1246,9 +1317,11 @@ pub fn spawn_inputs(alerts: Arc<Alerts>, mut inputs: AlertInputs) -> AlertInputH
     AlertInputHandles {
         alerts,
         bus,
+        cancel,
         lifecycle,
         poller,
         stopping,
         tracked,
+        workers,
     }
 }

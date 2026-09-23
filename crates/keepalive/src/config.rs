@@ -203,6 +203,13 @@ impl KeepalivePolicy {
             range,
         )?;
         bound("retry_seconds", self.retry_seconds, 1, 3_600, range)?;
+        bound(
+            "retry_max_seconds",
+            self.retry_max_seconds,
+            1,
+            604_800,
+            range,
+        )?;
         if self.retry_max_seconds < self.retry_seconds {
             return Err(PolicyError::RetryMaxBelowRetry);
         }

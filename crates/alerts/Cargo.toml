@@ -28,3 +28,5 @@ phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
+# The drain tests run on a paused clock, which needs the feature on.
+tokio = { workspace = true, features = ["test-util"] }

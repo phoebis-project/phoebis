@@ -450,6 +450,17 @@ impl Store {
         Ok(purged)
     }
 
+    /// Deletes the event row out from under a caller mid-resolve, so a test can drive the write's own refusal
+    /// path rather than a row that was never there. Compiled only under the `debug-hooks` feature, which a
+    /// dependent's dev-dependency turns on.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_corrupt_alert_event(&self, id: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.execute("DELETE FROM alert_events WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     /// Every BLOB and TEXT column of the named table as bytes, for tests that assert plaintext is absent.
     /// The name picks a literal statement rather than being interpolated, so a caller cannot steer the query.
     #[cfg(any(test, feature = "debug-hooks"))]

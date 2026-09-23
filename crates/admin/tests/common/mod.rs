@@ -47,6 +47,10 @@ use tower::ServiceExt;
 /// The account uuid every control fixture names.
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 
+/// Runs on every read of the alerts engine's own clock, for a test that has to land a store mutation inside
+/// `Alerts::resolve`'s otherwise-synchronous read-then-write window: nothing else in that path yields.
+pub type ClockHook = Arc<dyn Fn() + Send + Sync>;
+
 /// The key stored on the API-key account, which the verify test expects to see on the wire.
 pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 
@@ -168,7 +172,14 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
 /// The full harness with the alert webhook destination check on, as every running router has it. The other
 /// builders leave it off so a rule may name the fake receiver, which is on loopback.
 pub async fn admin_parts_full_refusing_local_webhooks() -> Full {
-    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false).await)
+    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false, None).await)
+}
+
+/// The full harness with a hook on the alerts engine's own clock, for a test that must interleave a store
+/// mutation with `Alerts::resolve`'s internal read-then-write; every other builder's alerts engine reads the
+/// plain clock.
+pub async fn admin_parts_full_with_alert_clock_hook(hook: ClockHook) -> Full {
+    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, true, Some(hook)).await)
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
@@ -286,6 +297,7 @@ pub async fn admin_app_plain_with_origin(origin: &str) -> (Router, FakeUpstream)
         true,
         None,
         true,
+        None,
     )
     .await;
     (parts.app, parts.up)
@@ -569,7 +581,16 @@ async fn app_with(
 ) -> Parts {
     // Every builder but the plain-with-origin one ties this to whether an origin is pinned.
     let plain_http = origin.is_none();
-    app_with_webhook_policy(identity, upstream_uuid, origin, plain_http, store, true).await
+    app_with_webhook_policy(
+        identity,
+        upstream_uuid,
+        origin,
+        plain_http,
+        store,
+        true,
+        None,
+    )
+    .await
 }
 
 async fn app_with_webhook_policy(
@@ -579,6 +600,7 @@ async fn app_with_webhook_policy(
     plain_http: bool,
     store: Option<Arc<Store>>,
     allow_local_webhooks: bool,
+    alert_clock_hook: Option<ClockHook>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -750,10 +772,22 @@ async fn app_with_webhook_policy(
         session_expiry: Duration::from_secs(86_400),
     });
     let webhook = FakeWebhook::new();
+    // A hooked clock for the alerts engine alone: sharing the hook with `clock` would fire it on every other
+    // service's reads too, which is far more than the one test that needs it wants to reason about.
+    let alert_clock: Clock = match alert_clock_hook {
+        Some(hook) => {
+            let c = clock_cell.clone();
+            Arc::new(move || {
+                hook();
+                c.load(Ordering::SeqCst)
+            })
+        }
+        None => clock.clone(),
+    };
     // The instant sleeper: a delivery walks its three attempts in milliseconds rather than the real backoff.
     let alerts = Alerts::with_sleeper(
         AlertParts {
-            clock: clock.clone(),
+            clock: alert_clock,
             ledger: ledger.clone(),
             metrics: metrics.clone(),
             router_name: "phoebis-test".into(),

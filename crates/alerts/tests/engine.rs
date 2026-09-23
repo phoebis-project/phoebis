@@ -528,3 +528,112 @@ fn an_ask_user_question_is_found_across_split_frames_and_its_text_in_a_body() {
     );
     assert_eq!(question_text(b"not json"), None);
 }
+
+#[tokio::test]
+async fn a_resolve_past_the_questions_expiry_posts_no_question_text() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("question", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let expires_at = NOW + 5_000;
+    rig.alerts.signal(&Signal {
+        kind: Kind::AskUserQuestion,
+        account_id: None,
+        key_id: None,
+        pool_id: None,
+        subject: "s-1".into(),
+        detail: serde_json::json!({ "question": "which file?", "question_expires_at": expires_at }),
+    });
+    settled(&rig).await;
+    let opened = rig.webhook.posts();
+    assert_eq!(
+        opened[0].body["detail"]["question"], "which file?",
+        "the open carried the text in time"
+    );
+    let event = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    rig.clock
+        .store(expires_at + 1_000, std::sync::atomic::Ordering::SeqCst);
+    assert!(rig.alerts.resolve(&event.id).unwrap());
+    settled(&rig).await;
+    let resolve = rig.webhook.posts().last().unwrap().body.clone();
+    assert_eq!(
+        resolve["detail"]["question"],
+        serde_json::Value::Null,
+        "{resolve}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_that_crosses_the_expiry_posts_no_question_text_either() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
+
+    let expires_at = NOW + 5_000;
+    // The retry's own clock read has no seam of its own; the hook jumps time forward the moment it sees the
+    // first attempt's post land, which is the one thing that tells the retry apart from the first try.
+    let clock_slot: Arc<OnceLock<Arc<std::sync::atomic::AtomicI64>>> = Arc::new(OnceLock::new());
+    let webhook_slot: Arc<OnceLock<Arc<FakeWebhook>>> = Arc::new(OnceLock::new());
+    let jumped = Arc::new(AtomicBool::new(false));
+    let hook: ClockHook = {
+        let clock_slot = clock_slot.clone();
+        let webhook_slot = webhook_slot.clone();
+        let jumped = jumped.clone();
+        Arc::new(move || {
+            let (Some(clock), Some(webhook)) = (clock_slot.get(), webhook_slot.get()) else {
+                return;
+            };
+            if !jumped.load(Ordering::SeqCst) && !webhook.posts().is_empty() {
+                jumped.store(true, Ordering::SeqCst);
+                clock.store(expires_at + 1_000, Ordering::SeqCst);
+            }
+        })
+    };
+    let rig = rig_with_hook(
+        Arc::new(phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap()),
+        hook,
+    )
+    .await;
+    clock_slot.set(rig.clock.clone()).ok();
+    webhook_slot.set(rig.webhook.clone()).ok();
+    rig.store
+        .upsert_alert_rule(
+            &rule("question", Kind::AskUserQuestion, ScopeType::All, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    rig.webhook.answer(Err("connect timeout".into()));
+    rig.webhook.answer(Ok(200));
+    rig.alerts.signal(&Signal {
+        kind: Kind::AskUserQuestion,
+        account_id: None,
+        key_id: None,
+        pool_id: None,
+        subject: "s-1".into(),
+        detail: serde_json::json!({ "question": "which file?", "question_expires_at": expires_at }),
+    });
+    settled(&rig).await;
+    let posts = rig.webhook.posts();
+    assert_eq!(posts.len(), 2, "one failed attempt, one retry");
+    assert_eq!(
+        posts[0].body["detail"]["question"], "which file?",
+        "the first attempt was still inside the deadline"
+    );
+    assert_eq!(
+        posts[1].body["detail"]["question"],
+        serde_json::Value::Null,
+        "the retry crossed the deadline"
+    );
+}

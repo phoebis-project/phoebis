@@ -487,7 +487,15 @@ pub(crate) async fn resolve_event(
     }
     match state.alerts.resolve(&id) {
         Ok(true) => {}
-        Ok(false) => return failure(StatusCode::CONFLICT, "the event is already resolved"),
+        // The row the check above found open is gone by now, or someone else resolved it in between: a fresh
+        // read says which, rather than assuming the more common case.
+        Ok(false) => {
+            return match state.store.alert_event(&id) {
+                Ok(Some(_)) => failure(StatusCode::CONFLICT, "the event is already resolved"),
+                Ok(None) => failure(StatusCode::NOT_FOUND, "alert event not found"),
+                Err(e) => store_failure(e),
+            }
+        }
         Err(e) => return store_failure(e),
     }
     match state.store.alert_event(&id) {

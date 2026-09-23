@@ -90,13 +90,25 @@ pub const BACKOFF: [Duration; 3] = [
     Duration::from_secs(16),
 ];
 
-/// The spec's body: rule, kind, subject, state, opened_at, resolved_at, detail, router.
-pub fn body(rule: &Rule, event: &AlertEventRow, state: &str, router: &str) -> Vec<u8> {
-    let detail: serde_json::Value = event
+/// The spec's body: rule, kind, subject, state, opened_at, resolved_at, detail, router. `now` is the moment of
+/// this attempt, not the event's own clock read: a retry can cross the question's deadline between attempts.
+pub fn body(rule: &Rule, event: &AlertEventRow, state: &str, router: &str, now: i64) -> Vec<u8> {
+    let mut detail: serde_json::Value = event
         .detail_json
         .as_deref()
         .and_then(|d| serde_json::from_str(d).ok())
         .unwrap_or(serde_json::Value::Null);
+    if let Some(map) = detail.as_object_mut() {
+        // The text is a copy of a captured body and may not outlive it; the admin API applies this rule at
+        // read time and the wire applies it here, per attempt, since a retry can cross the deadline.
+        let expired = map
+            .get("question_expires_at")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|at| now >= at);
+        if expired && map.contains_key("question") {
+            map.insert("question".into(), serde_json::Value::Null);
+        }
+    }
     // Keys in name order, so a receiver that re-serializes to verify the signature sees the same bytes.
     serde_json::to_vec(&serde_json::json!({
         "detail": detail,
@@ -162,7 +174,6 @@ pub async fn deliver(
     lifecycle: Option<LifecycleEvent>,
     sleeper: &Sleeper,
 ) -> DeliveryResult {
-    let raw = body(rule, event, state, &parts.router_name);
     let mut last = DeliveryResult {
         status: None,
         error: Some("not attempted".into()),
@@ -171,17 +182,17 @@ pub async fn deliver(
         if attempt > 1 {
             sleeper(BACKOFF[attempt as usize - 2]).await;
         }
+        let now = (parts.clock)();
+        let raw = body(rule, event, state, &parts.router_name, now);
         let (status, error) = match sign(parts, rule, &raw) {
-            Ok(signature) => {
-                match parts
-                    .webhook
-                    .post(rule.webhook_url.clone(), raw.clone(), signature)
-                    .await
-                {
-                    Ok(s) => (Some(s), None),
-                    Err(e) => (None, Some(e)),
-                }
-            }
+            Ok(signature) => match parts
+                .webhook
+                .post(rule.webhook_url.clone(), raw, signature)
+                .await
+            {
+                Ok(s) => (Some(s), None),
+                Err(e) => (None, Some(e)),
+            },
             Err(e) => (None, Some(e)),
         };
         let landed = status.is_some_and(delivered);
@@ -198,7 +209,7 @@ pub async fn deliver(
             detail_json: lifecycle.and_then(|_| event.detail_json.clone()),
             state: state.into(),
             attempt,
-            at: (parts.clock)(),
+            at: now,
             status,
             error: error.clone(),
         };

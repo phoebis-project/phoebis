@@ -335,7 +335,7 @@ fn the_body_is_the_spec_shape_and_the_signature_is_hmac_sha256_hex() {
         resolved_at: None,
         detail_json: Some(r#"{"account":"business"}"#.into()),
     };
-    let raw = body(&rule, &event, "opened", "phoebis");
+    let raw = body(&rule, &event, "opened", "phoebis", 0);
     let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(
         v.as_object().unwrap().keys().cloned().collect::<Vec<_>>(),

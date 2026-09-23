@@ -250,7 +250,7 @@ impl Alerts {
             .into_iter()
             .filter(|e| e.kind == kind.as_str() && e.subject == subject)
         {
-            ok = self.finish(event, now) && ok;
+            ok = self.finish(event, now).is_ok() && ok;
         }
         ok
     }
@@ -259,7 +259,7 @@ impl Alerts {
     pub fn clear_rule(self: &Arc<Self>, rule_id: &str, subject: &str) -> bool {
         self.clears.fetch_add(1, Ordering::Relaxed);
         match self.parts.store.open_alert_event(rule_id, subject) {
-            Ok(Some(event)) => self.finish(event, (self.parts.clock)()),
+            Ok(Some(event)) => self.finish(event, (self.parts.clock)()).is_ok(),
             Ok(None) => true,
             Err(e) => {
                 tracing::warn!(%e, rule = %rule_id, "an open alert event could not be read");
@@ -269,7 +269,7 @@ impl Alerts {
     }
 
     /// The operator's resolve (client_drift): the event resolves whatever the input says. `Ok(false)` is an
-    /// event that was not there to resolve, or one the store refused.
+    /// event that was not there to resolve; `Err` is the store's refusal, and the event stays open.
     pub fn resolve(self: &Arc<Self>, event_id: &str) -> Result<bool, StoreError> {
         let Some(event) = self.parts.store.alert_event(event_id)? else {
             return Ok(false);
@@ -277,25 +277,25 @@ impl Alerts {
         if event.state != "open" {
             return Ok(false);
         }
-        Ok(self.finish(event, (self.parts.clock)()))
+        self.finish(event, (self.parts.clock)())
     }
 
-    /// Whether the store did its part: an event already resolved is nothing left to do and counts as done, a
-    /// store that refused the write is the one case a caller may retry.
-    fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) -> bool {
+    /// `Ok(false)` is nothing left to do (already resolved, or gone from under the caller); `Err` is a write the
+    /// store refused, which a caller may retry.
+    fn finish(self: &Arc<Self>, mut event: AlertEventRow, now: i64) -> Result<bool, StoreError> {
         let transitions = self.transitions.lock().expect(TRANSITIONS_POISONED);
         match self.parts.store.resolve_alert_event(&event.id, now) {
             Ok(true) => {}
-            Ok(false) => return true,
+            Ok(false) => return Ok(false),
             Err(e) => {
                 tracing::warn!(%e, event = %event.id, "an alert event could not be resolved");
-                return false;
+                return Err(e);
             }
         }
         event.state = "resolved".into();
         event.resolved_at = Some(now);
         let Some(rule) = self.rules().into_iter().find(|r| r.id == event.rule_id) else {
-            return true;
+            return Ok(true);
         };
         let signal = Signal {
             kind: rule.kind,
@@ -309,7 +309,7 @@ impl Alerts {
         self.record(&rule, &event, "alert_resolved", &signal, &event.id);
         self.post(rule, event, "resolved", None);
         drop(transitions);
-        true
+        Ok(true)
     }
 
     fn record(
@@ -432,7 +432,7 @@ impl Alerts {
             resolved_at: None,
             detail_json: None,
         };
-        let raw = body(&rule, &event, "test", &self.parts.router_name);
+        let raw = body(&rule, &event, "test", &self.parts.router_name, now);
         let signed = match sign(&self.parts, &rule, &raw) {
             Ok(signed) => signed,
             Err(error) => {

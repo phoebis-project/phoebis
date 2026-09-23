@@ -213,7 +213,8 @@ one.
 
 **Waiting for user input** fires when a response relayed to a client carries an AskUserQuestion tool call, so the
 agent is blocked on an answer; it resolves on the session's next request, the first sign the user replied, or
-when the session expires.
+when the session expires. Once the captured body it was read from has passed its own retention, the question
+text is withheld from the webhook the same way it is from the API and the console.
 
 **Client drift** fires when a self-check fails for a client request: the client stamped a billing hash, or a
 `cc_version` suffix, this build cannot reproduce; re-pinning the router to that client build and resolving the event by
@@ -223,7 +224,7 @@ hand clears it.
 clears the funding flag.
 
 **Probe cost cap reached** fires when a pool's daily probe cost cap is reached; probes pause until the next UTC
-day, which resolves it.
+day, which resolves it, as removing the cap resolves it at the next poll.
 
 **Pool exhausted** fires when a request finds no eligible upstream in the pool and resolves on the next request
 the pool serves.

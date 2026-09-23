@@ -295,6 +295,26 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
 }
 
 #[test]
+fn a_retry_ceiling_past_a_week_is_refused() {
+    let policy = |f: fn(&mut KeepalivePolicy)| {
+        let mut p = KeepalivePolicy::default();
+        f(&mut p);
+        p
+    };
+    assert!(matches!(
+        policy(|p| p.retry_max_seconds = 9_223_372_036_854_776).validate_fields(),
+        Err(PolicyError::OutOfRange {
+            field: "retry_max_seconds",
+            ..
+        })
+    ));
+    assert_eq!(
+        policy(|p| p.retry_max_seconds = 604_800).validate_fields(),
+        Ok(())
+    );
+}
+
+#[test]
 fn a_stored_policy_that_does_not_parse_reads_as_off() {
     assert_eq!(KeepalivePolicy::from_json("{}"), KeepalivePolicy::default());
     assert_eq!(

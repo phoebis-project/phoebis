@@ -851,3 +851,78 @@ async fn session_idle_takes_a_threshold_in_whole_minutes_and_the_other_kinds_tak
         );
     }
 }
+
+#[tokio::test]
+async fn a_resolve_whose_row_vanishes_mid_write_never_answers_already_resolved() {
+    use phoebis_alerts::{Kind, Signal};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
+
+    // `Alerts::resolve` confirms the row is open, then reads the clock as the argument to its write: the one
+    // seam in that otherwise fully synchronous path where a test can land a mutation between the two.
+    let store_slot: Arc<OnceLock<Arc<phoebis_store::Store>>> = Arc::new(OnceLock::new());
+    let target: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+    let armed = Arc::new(AtomicBool::new(false));
+    let hook: common::ClockHook = {
+        let store_slot = store_slot.clone();
+        let target = target.clone();
+        let armed = armed.clone();
+        Arc::new(move || {
+            let (Some(store), Some(id)) = (store_slot.get(), target.get()) else {
+                return;
+            };
+            if armed.swap(false, Ordering::SeqCst) {
+                store.debug_corrupt_alert_event(id).unwrap();
+            }
+        })
+    };
+    let parts = common::admin_parts_full_with_alert_clock_hook(hook).await;
+    store_slot.set(parts.store.clone()).ok();
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/alerts/rules",
+        r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/hook"}"#,
+        Some(&cookie),
+    )
+    .await;
+    parts.alerts.signal(&Signal {
+        kind: Kind::ClientDrift,
+        account_id: None,
+        key_id: Some("desktop".into()),
+        pool_id: None,
+        subject: "client 2.1.274".into(),
+        detail: serde_json::json!({ "client_version": "2.1.274", "key": "desktop", "trigger": "hash" }),
+    });
+    parts.alerts.wait_idle().await;
+    let events = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
+    let id = events["events"][0]["id"].as_str().unwrap().to_string();
+    target.set(id.clone()).ok();
+    armed.store(true, Ordering::SeqCst);
+    let resolved = post(
+        &parts.app,
+        &format!("/admin/alerts/events/{id}/resolve"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        resolved.status(),
+        404,
+        "never the generic already-resolved answer"
+    );
+    let body = json(resolved).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("not found"),
+        "{body}"
+    );
+    assert_eq!(
+        parts
+            .store
+            .alert_events(Some("resolved"), 10)
+            .unwrap()
+            .len(),
+        0,
+        "nothing was marked resolved"
+    );
+}
