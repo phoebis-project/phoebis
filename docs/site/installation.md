@@ -508,6 +508,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Body read timeout | 600 seconds for a request body to arrive after authentication, the same as the stream idle wait. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
+| Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
 | Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |

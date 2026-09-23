@@ -214,20 +214,31 @@ pub(crate) async fn bodies(
         serde_json::from_slice::<Value>(bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))
     };
-    match state.ledger.db().bodies(&id).await {
-        // The byte counts are read off the raw vectors before rendering: a re-encoded JSON string adds quotes
-        // and escapes, and a JavaScript `.length` on it counts UTF-16 units, so neither measures what was cut.
-        Ok(Some(b)) => Json(json!({
-            "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text),
-            "request_bytes_stored": b.request_body.len(), "request_bytes_seen": b.request_len_seen,
-            "response_bytes_stored": b.response_body.as_ref().map_or(0, Vec::len), "response_bytes_seen": b.response_len_seen,
-            "request_truncated": (b.request_body.len() as u64) < b.request_len_seen,
-            "response_truncated": b.response_body.as_ref().is_some_and(|body| (body.len() as u64) < b.response_len_seen),
-            "expires_at": b.expires_at,
-        })).into_response(),
-        Ok(None) => failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
-        Err(e) => ledger_failure(e),
-    }
+    let db = state.ledger.db();
+    let b = match db.bodies(&id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
+        Err(e) => return ledger_failure(e),
+    };
+    // The request row's flags know what the stored lengths cannot: a chunk the bus dropped is missing from both
+    // the capture and its seen count, so only the assembler, which saw the chunk count fall short, can tell.
+    let (request_cut, response_cut) = match db.request(&id).await {
+        Ok(row) => row.map_or((false, false), |(r, _)| {
+            (r.request_truncated, r.response_truncated)
+        }),
+        Err(e) => return ledger_failure(e),
+    };
+    // The byte counts are read off the raw vectors before rendering: a re-encoded JSON string adds quotes and
+    // escapes, and a JavaScript `.length` on it counts UTF-16 units, so neither measures what was cut.
+    Json(json!({
+        "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text),
+        "request_bytes_stored": b.request_body.len(), "request_bytes_seen": b.request_len_seen,
+        "response_bytes_stored": b.response_body.as_ref().map_or(0, Vec::len), "response_bytes_seen": b.response_len_seen,
+        "request_truncated": request_cut || (b.request_body.len() as u64) < b.request_len_seen,
+        "response_truncated": response_cut || b.response_body.as_ref().is_some_and(|body| (body.len() as u64) < b.response_len_seen),
+        "expires_at": b.expires_at,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

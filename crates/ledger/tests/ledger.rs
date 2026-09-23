@@ -812,6 +812,60 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
     up.shutdown().await;
 }
 
+/// A cooldown announced with the deadline the classifier saturates an absurd `Retry-After` to reaches the writer
+/// ahead of the next request's row, and the row still lands. The runtime is let go without waiting on its blocking
+/// pool, since a fold that never ends would otherwise hold this test open rather than fail it.
+#[test]
+fn a_request_recorded_after_a_saturated_cooldown_announcement_still_lands() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let landed = runtime.block_on(async {
+        let up = FakeUpstream::start(vec![]).await;
+        let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+        h.ledger.record(Record::Event(EventRecord {
+            at: 0,
+            kind: "cooldown_set".into(),
+            account_id: Some("a".into()),
+            detail: Some(
+                serde_json::json!({ "scope": "account", "until": i64::MAX, "reason": "rate_limited" })
+                    .to_string(),
+            ),
+            ..Default::default()
+        }));
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            h.ledger.record_request(Record::Request {
+                request: RequestRecord {
+                    id: "after".into(),
+                    ..Default::default()
+                },
+                attempts: Vec::new(),
+                bodies: None,
+            }),
+        )
+        .await
+        .expect("the writer's channel has room");
+        let landed = tokio::time::timeout(Duration::from_secs(10), async {
+            while h.db.request("after").await.unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .is_ok();
+        if landed {
+            up.shutdown().await;
+        }
+        landed
+    });
+    runtime.shutdown_background();
+    assert!(
+        landed,
+        "the request row landed behind the cooldown announcement"
+    );
+}
+
 /// The bus subscriber's queue filled to its depth behind a writer channel filled to its own, both behind the
 /// same held `land`: `shutdown` still returns and lands every completed request, because the writer keeps
 /// reading while it waits for the assembler to end rather than waiting for it first.

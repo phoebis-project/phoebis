@@ -131,15 +131,15 @@ impl Assembler {
         Some(gap(&victim, "capture_budget", now))
     }
 
-    /// Removes the entry the entry cap names, releasing its share of the capture budget first: the budget's
-    /// own accounting has no other hook into an eviction this cap decides on its own.
-    fn evict_for_entry_cap(&mut self, victim: &str) {
-        let Some(entry) = self.in_flight.remove(victim) else {
-            return;
-        };
+    /// Removes an entry and releases its share of the capture budget with it. Every way an entry leaves (its
+    /// completion, its expiry, the entry cap) goes through here, since the budget has no other hook into a
+    /// removal and a charge left behind would count against every capture after it until a restart.
+    fn remove(&mut self, id: &str) -> Option<InFlight> {
+        let entry = self.in_flight.remove(id)?;
         if entry.observed.body_capture_hours > 0 {
             self.captured_bytes = self.captured_bytes.saturating_sub(capture_size(&entry));
         }
+        Some(entry)
     }
 
     pub fn observe(&mut self, event: Event) -> Vec<Record> {
@@ -163,7 +163,7 @@ impl Assembler {
                         .min_by_key(|(_, e)| (e.seen_at, e.seq))
                         .map(|(id, _)| id.clone())
                     {
-                        self.evict_for_entry_cap(&victim);
+                        self.remove(&victim);
                         records.push(gap(&victim, "in_flight_cap", now));
                     }
                 }
@@ -230,7 +230,7 @@ impl Assembler {
                 Vec::new()
             }
             Event::ResponseChunk(chunk) => self.chunk(&chunk),
-            Event::RequestComplete(complete) => match self.in_flight.remove(&complete.request_id) {
+            Event::RequestComplete(complete) => match self.remove(&complete.request_id) {
                 Some(entry) => finish(entry, &complete, now),
                 None => Vec::new(),
             },
@@ -269,10 +269,16 @@ impl Assembler {
     }
 
     pub fn expire(&mut self, now: i64) -> usize {
-        let before = self.in_flight.len();
-        self.in_flight
-            .retain(|_, entry| now - entry.seen_at < IN_FLIGHT_TTL_MS);
-        let dropped = before - self.in_flight.len();
+        let stale: Vec<String> = self
+            .in_flight
+            .iter()
+            .filter(|(_, entry)| now - entry.seen_at >= IN_FLIGHT_TTL_MS)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &stale {
+            self.remove(id);
+        }
+        let dropped = stale.len();
         if dropped > 0 {
             tracing::warn!(
                 dropped,
@@ -284,8 +290,8 @@ impl Assembler {
 }
 
 /// What an entry currently charges to the capture budget: its retained request body plus whatever of its
-/// response has been captured so far. The one place both eviction paths read this from, so bytes released by
-/// either always leave the same accounting behind.
+/// response has been captured so far. The one place the budget eviction and a removal read this from, so bytes
+/// released by either always leave the same accounting behind.
 fn capture_size(entry: &InFlight) -> usize {
     entry.observed.body.len() + entry.response_body.as_ref().map_or(0, Vec::len)
 }
@@ -1322,6 +1328,36 @@ mod tests {
             "the budget was never approached, only the unrelated entry cap"
         );
         assert_eq!(a.retained_capture_bytes(), before);
+    }
+
+    #[test]
+    fn a_completed_capture_gives_its_charge_back_to_the_budget() {
+        let mut a = Assembler::new(clock_at(1_000));
+        for id in ["r1", "r2"] {
+            a.observe(observed_capturing_with_body(id, vec![b'x'; 10]));
+            a.chunk(&chunk_bytes(id, 0, b"answer"));
+            assert_eq!(
+                a.retained_capture_bytes(),
+                16,
+                "{id} is charged while in flight"
+            );
+            let records = a.observe(Event::RequestComplete(completion(id, Some(1), None)));
+            assert!(request_of(&records).bodies_captured);
+            assert_eq!(
+                a.retained_capture_bytes(),
+                0,
+                "{id} left the assembler with its bodies, so nothing of it stays charged"
+            );
+        }
+    }
+
+    #[test]
+    fn an_expired_capture_gives_its_charge_back_to_the_budget() {
+        let mut a = Assembler::new(clock_at(1_000));
+        a.observe(observed_capturing_with_body("r1", vec![b'x'; 10]));
+        a.chunk(&chunk_bytes("r1", 0, b"answer"));
+        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS), 1);
+        assert_eq!(a.retained_capture_bytes(), 0);
     }
 
     #[test]

@@ -18,6 +18,11 @@ pub const UNATTRIBUTED: &str = "-";
 /// The value a request with no `output_config.effort` files under.
 pub const NO_EFFORT: &str = "none";
 
+/// How far past its announcement a cooldown is booked. The deadline is the upstream's to set, and the
+/// classifier saturates an absurd `Retry-After` to `i64::MAX`, so booking every hour up to it would hold the
+/// writer's transaction for good.
+const COOLDOWN_BOOKING_HORIZON_MS: i64 = 7 * 24 * 3_600 * 1_000;
+
 pub fn hour_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(3_600) * 3_600
 }
@@ -615,12 +620,14 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             };
             // Only what this announcement adds past the end already counted, and past now, is new time in
             // cooldown; it is booked hour by hour so a clear can take back exactly the part each hour never
-            // saw.
+            // saw. The span keeps the booked end rather than the deadline, so a later announcement books on
+            // from there and a clear takes back only what was booked.
+            let booked = until.min(event.at.saturating_add(COOLDOWN_BOOKING_HORIZON_MS));
             let from = accounted.unwrap_or(event.at).max(event.at);
             let mut cursor = from;
-            while cursor < until {
+            while cursor < booked {
                 let bucket = hour_of(cursor);
-                let end = until.min((bucket + 3_600) * 1_000);
+                let end = booked.min((bucket + 3_600) * 1_000);
                 let seconds = ((end - cursor) / 1_000) as u64;
                 if seconds > 0 {
                     fold_account(
@@ -635,7 +642,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                 }
                 cursor = end;
             }
-            write_span(tx, account, scope, accounted.unwrap_or(until).max(until))
+            write_span(tx, account, scope, accounted.unwrap_or(booked).max(booked))
         }
         ("cooldown_cleared", Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
@@ -1399,6 +1406,80 @@ mod tests {
             ),
             (3_600, 1_800, 0),
             "the interval folds per hour on a ledger that predates the table it is kept in"
+        );
+    }
+
+    /// Folds `events` on a thread of its own and hands back each hour's cooldown seconds and the span left
+    /// accounted for account "a": a fold that never ends fails the caller at the deadline instead of hanging it.
+    fn folded_in_bounded_time(events: Vec<EventRecord>) -> (BTreeMap<i64, u64>, Option<i64>) {
+        let (done, folded) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let db = crate::LedgerDb::open_in_memory().unwrap();
+            let span = db
+                .write(|c| {
+                    let tx = c.transaction()?;
+                    for event in &events {
+                        fold_event(&tx, event)?;
+                    }
+                    let span = read_span(&tx, "a", "account")?;
+                    tx.commit()?;
+                    Ok(span)
+                })
+                .unwrap();
+            let by_hour = db
+                .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.hour, r.cooldown_seconds))
+                .collect();
+            let _ = done.send((by_hour, span));
+        });
+        folded
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the fold ends in bounded time")
+    }
+
+    const WEEK: i64 = 7 * 24 * HOUR;
+
+    /// `i64::MAX` is the deadline the classifier saturates an absurd `Retry-After` to.
+    #[test]
+    fn a_saturated_cooldown_deadline_books_seven_days_and_accounts_the_span_to_their_end() {
+        let (by_hour, span) = folded_in_bounded_time(vec![cooldown_set_event(0, i64::MAX)]);
+        assert_eq!(
+            (by_hour.len(), by_hour.values().all(|s| *s == 3_600)),
+            (168, true),
+            "one full row per hour of the seven days booked"
+        );
+        assert_eq!(
+            span,
+            Some(WEEK),
+            "the span ends where the booking did, not at the announced deadline"
+        );
+    }
+
+    #[test]
+    fn a_second_announcement_past_the_horizon_books_the_next_stretch() {
+        let (by_hour, span) = folded_in_bounded_time(vec![
+            cooldown_set_event(0, i64::MAX),
+            cooldown_set_event(24 * HOUR, i64::MAX),
+        ]);
+        assert_eq!(
+            (by_hour.len(), by_hour.values().sum::<u64>(), span),
+            (192, 8 * 24 * 3_600, Some(WEEK + 24 * HOUR)),
+            "the announcement a day later books the day past the first one's horizon"
+        );
+    }
+
+    #[test]
+    fn a_clear_after_a_saturated_deadline_takes_back_every_booked_hour_it_never_held() {
+        let (by_hour, span) = folded_in_bounded_time(vec![
+            cooldown_set_event(0, i64::MAX),
+            cooldown_cleared_event(HOUR),
+        ]);
+        assert_eq!(
+            (by_hour.values().sum::<u64>(), span),
+            (3_600, None),
+            "only the hour the cooldown held is left"
         );
     }
 

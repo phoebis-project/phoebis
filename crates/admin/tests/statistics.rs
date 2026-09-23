@@ -895,6 +895,94 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
     );
 }
 
+/// A capturing request straight onto the bus: `delivered` of its response chunks reach the ledger while its
+/// completion says `published` went out, so the rest were dropped at the bus.
+fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: u32) {
+    use phoebis_bus::{
+        Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
+        ResponseChunk, ResponseFacts,
+    };
+    bus.publish(Event::RequestObserved(RequestObserved {
+        request_id: id.into(),
+        origin: Origin::Client,
+        kind: Kind::Inference,
+        key_id: Some("desktop".into()),
+        key_generation: 0,
+        pool_id: Some("main".into()),
+        session_id: Some("s1".into()),
+        agent_id: Some("main".into()),
+        parent_agent_id: None,
+        owner_id: None,
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        stream: true,
+        headers: vec![],
+        body: bytes::Bytes::from_static(b"{}"),
+        body_capture_hours: 24,
+        shape: RequestShape::default(),
+        presented_retired: false,
+        rotation_at: None,
+        received_at: common::NOW,
+    }));
+    for index in 0..delivered {
+        bus.publish(Event::ResponseChunk(ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index,
+            body: bytes::Bytes::from_static(b"partial"),
+            phase: None,
+        }));
+    }
+    bus.publish(Event::RequestComplete(RequestComplete {
+        request_id: id.into(),
+        attempt: 0,
+        account_id: None,
+        outcome: Outcome::Succeeded,
+        status: 200,
+        usage: None,
+        response: ResponseFacts::default(),
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: None,
+        client_drift: None,
+        client_version: None,
+        response_bytes: None,
+        response_chunks: Some(published),
+        finished_at: common::NOW + 900,
+    }));
+}
+
+#[tokio::test]
+async fn a_capture_the_bus_cut_short_reads_truncated_on_the_bodies_route() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    publish_capture(&parts.bus, "r-last-dropped", 1, 2);
+    publish_capture(&parts.bus, "r-none-arrived", 0, 1);
+    for id in ["r-last-dropped", "r-none-arrived"] {
+        let bodies = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            wait_json(
+                &parts.app,
+                &format!("/admin/requests/{id}/bodies"),
+                &cookie,
+                |v| v.get("response_truncated").is_some(),
+            ),
+        )
+        .await
+        .expect("the capture landed");
+        // Neither the stored bytes nor the seen count include a chunk the bus dropped, so only the request
+        // row knows the capture is short.
+        assert_eq!(
+            (
+                bodies["request_truncated"].as_bool(),
+                bodies["response_truncated"].as_bool()
+            ),
+            (Some(false), Some(true)),
+            "{id}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_request_log_reads_a_key_selector_by_lifetime() {
     let parts = common::admin_parts_full().await;

@@ -182,7 +182,8 @@ merged per-hour histograms; Cache reports the hit ratio, tokens that expired bet
 from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range;
 Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible
 time, and pin churn per upstream. Cooldown time books to the hour it elapses in as the interval runs, and a cooldown
-cleared early gives back only the hours it never held.
+cleared early gives back only the hours it never held. A cooldown is booked up to seven days ahead of the announcement
+that set it, and a later announcement books the next stretch.
 
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)

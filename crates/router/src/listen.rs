@@ -1,13 +1,15 @@
 //! The admin and metrics listeners' accept loop: the same header read timeout and connection cap the proxy
 //! listener uses, over a plain tower service rather than the relay's header-recording one.
 
+use std::future::Future;
+use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use hyper::server::conn::http1;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto::Builder;
-use hyper_util::server::graceful::GracefulShutdown;
+use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
@@ -29,21 +31,27 @@ pub async fn serve(
     limits: ListenLimits,
     upgrades: bool,
 ) -> std::io::Result<()> {
-    // No route on either listener switches protocols on its own, and `http1_only` closes the auto builder's
-    // HTTP/2 preface sniff, which otherwise runs ahead of the timeout set below (see the guard in the accept
-    // loop); it has no effect on the upgrade path, which the loop's own guard covers instead.
-    let mut builder = Builder::new(TokioExecutor::new()).http1_only();
+    // The admin listener's live WebSocket goes through hyper's own HTTP/1 builder: the auto builder's upgrade
+    // path runs its HTTP/2 preface sniff whatever `http1_only` says, and that read has no timeout of its own
+    // (hyperium/hyper#3756, open as of hyper-util 0.1.20), so a client that sent one byte of the preface would
+    // keep its slot for good. The metrics listener never upgrades, and under `http1_only` the auto builder's
+    // plain path skips the sniff. Either way hyper's header read timeout runs from the connection's first
+    // poll, before a byte arrives.
+    let mut upgrading = http1::Builder::new();
     // hyper's own 30 second default is silently off until a timer is set; the timeout is named here so the
     // listener's bound does not depend on a default that a timer-less builder discards.
-    builder
+    upgrading
+        .timer(TokioTimer::new())
+        .header_read_timeout(limits.header_read_timeout);
+    let mut plain = auto::Builder::new(TokioExecutor::new()).http1_only();
+    plain
         .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(limits.header_read_timeout);
-    // Shared rather than borrowed per connection: the auto builder's `serve_connection*` methods return a
-    // future carrying the builder's own lifetime, which a spawned task can only outlive by owning it.
-    let builder = Arc::new(builder);
+    // Shared rather than borrowed per connection: the auto builder's `serve_connection` returns a future
+    // carrying the builder's own lifetime, which a spawned task can only outlive by owning it.
+    let plain = Arc::new(plain);
     let slots = Arc::new(Semaphore::new(limits.max_connections));
-    let graceful = GracefulShutdown::new();
     let mut tasks = JoinSet::new();
     loop {
         while tasks.try_join_next().is_some() {}
@@ -65,47 +73,38 @@ pub async fn serve(
             _ = stopped(&mut stop) => break,
         };
         let _ = stream.set_nodelay(true);
+        let io = TokioIo::new(stream);
         let service = TowerToHyperService::new(app.clone());
-        let builder = Arc::clone(&builder);
-        let watcher = graceful.watcher();
-        let header_read_timeout = limits.header_read_timeout;
+        let upgrading = upgrading.clone();
+        let plain = Arc::clone(&plain);
+        let drain = stop.clone();
         // The permit is released once the connection future itself ends: for an upgraded socket that is when
         // hyper hands it to its `on_upgrade` task, not when the socket later closes, so the live crate's own
-        // cap is what bounds those sockets from here on. `serve_connection*` is called inside the spawned
-        // task, not before it, because the future it returns borrows the builder that produced it.
+        // cap is what bounds those sockets from here on. The auto builder's `serve_connection` is called
+        // inside the spawned task, not before it, because the future it returns borrows the builder.
         tasks.spawn(async move {
             let _slot = permit;
-            // The auto builder's protocol sniff reads for the HTTP/2 preface ahead of the HTTP/1 dispatcher,
-            // and that read carries no timeout of its own (hyperium/hyper#3756, open as of hyper-util
-            // 0.1.20): a connection that never sends a byte would otherwise wait here forever, past the
-            // `header_read_timeout` configured above. Requiring readiness under the same deadline first
-            // closes that gap without touching a connection that is already sending its head.
-            if tokio::time::timeout(header_read_timeout, stream.readable())
-                .await
-                .is_err()
-            {
-                tracing::debug!("a connection sent no bytes within the header read timeout");
-                return;
-            }
-            let io = TokioIo::new(stream);
-            let result = if upgrades {
-                watcher
-                    .watch(builder.serve_connection_with_upgrades(io, service))
+            let ended: Result<(), Box<dyn std::error::Error + Send + Sync>> = if upgrades {
+                let conn = upgrading.serve_connection(io, service).with_upgrades();
+                until_drained(conn, http1::UpgradeableConnection::graceful_shutdown, drain)
                     .await
+                    .map_err(Into::into)
             } else {
-                watcher.watch(builder.serve_connection(io, service)).await
+                let conn = plain.serve_connection(io, service);
+                until_drained(conn, auto::Connection::graceful_shutdown, drain).await
             };
-            if let Err(error) = result {
+            if let Err(error) = ended {
                 tracing::debug!(%error, "a connection ended early");
             }
         });
     }
     // Dropped before the wait so the port is free the moment the drain starts rather than when it ends.
     drop(listener);
-    // The graceful wait lets in-flight requests finish; the deadline is the operator's promise that a
-    // shutdown ends within it, so what is still running then is cut rather than left to commit after the
-    // final flush.
-    if tokio::time::timeout(limits.drain_timeout, graceful.shutdown())
+    // Each connection watches the same stop and is finishing what it holds; the deadline is the operator's
+    // promise that a shutdown ends within it, so what is still running then is cut rather than left to commit
+    // after the final flush.
+    let drained = async { while tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(limits.drain_timeout, drained)
         .await
         .is_err()
     {
@@ -117,6 +116,26 @@ pub async fn serve(
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+/// Runs a connection to its end, asking it to finish gracefully once `stop` flips. hyper-util's graceful
+/// watcher would do this, but 0.1.20 implements its `GracefulConnection` for hyper's plain HTTP/1 connection
+/// and the auto builder's, not for the upgradeable HTTP/1 one, so both listeners take this one watch instead.
+async fn until_drained<C, E>(
+    conn: C,
+    graceful_shutdown: impl FnOnce(Pin<&mut C>),
+    mut stop: watch::Receiver<bool>,
+) -> Result<(), E>
+where
+    C: Future<Output = Result<(), E>>,
+{
+    let mut conn = pin!(conn);
+    tokio::select! {
+        ended = conn.as_mut() => return ended,
+        _ = stopped(&mut stop) => {}
+    }
+    graceful_shutdown(conn.as_mut());
+    conn.await
 }
 
 /// Resolves once the stop flag is set. The borrowed guard `wait_for` yields is not `Send`, so it is dropped
