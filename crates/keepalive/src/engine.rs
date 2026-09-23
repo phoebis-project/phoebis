@@ -606,7 +606,7 @@ impl Inner {
     /// The cheap half of what a tick needs to decide before it asks the router: whether any live agent still
     /// holds a recipe. An idle session, or one whose companion has sent nothing real yet, retains nothing for
     /// the gate to read, so the tick that finds none needs no fresher view than the one it already has.
-    pub(crate) fn anything_due(&self) -> bool {
+    pub(crate) fn anything_retained(&self) -> bool {
         self.sessions.iter().any(|(key, session)| {
             session
                 .agents
@@ -1320,7 +1320,7 @@ impl Engine {
         // The three asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let something_due = {
+        let something_retained = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
@@ -1328,9 +1328,9 @@ impl Engine {
             inner.expire(now, expiry);
             inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
             inner.roll_day(now);
-            inner.anything_due()
+            inner.anything_retained()
         };
-        if !something_due {
+        if !something_retained {
             return;
         }
         let view = self.router_view(now).await;
