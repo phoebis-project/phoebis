@@ -883,3 +883,209 @@ async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() 
     );
     up.shutdown().await;
 }
+
+/// The message-id hook fires from the body task, off the request path that admitted the key: at a cap of one
+/// it has to restore the key itself before it writes, or an eviction and a save while the answer is still
+/// streaming leaves the write to build a bare entry over the saved one.
+#[tokio::test]
+async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::SseGated {
+            status: 200,
+            // No `request-id`: `record_request_id` is skipped, so the commit-time restore installs the entry
+            // clean and nothing marks it dirty until the hook does, leaving the narrow window the hook's own
+            // restore has to close on its own.
+            headers: vec![],
+            events: vec![
+                SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_01","type":"message","usage":{"input_tokens":1,"output_tokens":1}}}"#.into(),
+                },
+                SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+        },
+    }])
+    .await;
+    let h = harness_with_memory_cap(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        1,
+    )
+    .await;
+    let held = tokio::spawn({
+        let app = h.app.clone();
+        async move { app.oneshot(cli_request("s-1", None, None)).await.unwrap() }
+    });
+    wait_for(std::time::Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
+        .unwrap()
+        .to_string();
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        },
+    );
+    // The one slot goes to another session while the first is still upstream, and the flush saves what the
+    // eviction left behind: a single evictor, so the pending overlay (bounded by the same cap) holds exactly
+    // this one record rather than shedding it under a pile-up of its own.
+    h.app
+        .clone()
+        .oneshot(cli_request("s-2", None, None))
+        .await
+        .unwrap();
+    h.relay.flush_memory().await;
+    // Several more sessions are gated on the same rule and released together with the held answer: their
+    // commits race the hook's own restore for the cap, so the eviction it has to survive can still land
+    // between the restore and the write, whichever of them the scheduler runs last.
+    up.set_rule_after(
+        2,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0002".into())],
+            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
+        })),
+    );
+    let others: Vec<_> = ["s-3", "s-4", "s-5", "s-6"]
+        .into_iter()
+        .map(|session| {
+            tokio::spawn({
+                let app = h.app.clone();
+                async move { app.oneshot(cli_request(session, None, None)).await.unwrap() }
+            })
+        })
+        .collect();
+    wait_for(std::time::Duration::from_secs(5), || {
+        (up.requests().len() == 6).then_some(())
+    })
+    .await;
+    up.release();
+    let resp = held.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    for other in others {
+        other.await.unwrap().into_body().collect().await.unwrap();
+    }
+    h.relay.flush_memory().await;
+    h.app
+        .clone()
+        .oneshot(tool_loop_request("s-1"))
+        .await
+        .unwrap();
+    let last = up.requests().last().unwrap().body.clone();
+    assert_eq!(
+        field(&billing_line(&last), "cc_prompt_id"),
+        Some(prompt.as_str()),
+        "the hook restored before it wrote, so the saved turn was not overwritten by a bare entry"
+    );
+    up.shutdown().await;
+}
+
+/// A failover leg reads `previous()` off the map with no restore of its own: at a cap of one, a key evicted and
+/// saved while the first leg is still held has to come back before the leg that follows can carry `cc_prev_req`.
+#[tokio::test]
+async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
+    const A: &str = "sk-ant-oat01-AAAA";
+    const B: &str = "sk-ant-oat01-BBBB";
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_0001".into())],
+            body: br#"{"id":"msg_01","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#
+                .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness_with_memory_cap(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        1,
+    )
+    .await;
+    // `a` is out of the pool for the first turn, so it lands on `b` and establishes b's own saved record;
+    // readmitted before the second turn so the failover from `a` retries against that earlier data.
+    h.store
+        .set_pool_members("main", &[("b".to_string(), 0)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    h.app
+        .clone()
+        .oneshot(cli_request("s-1", None, None))
+        .await
+        .unwrap();
+    h.relay.flush_memory().await;
+    h.store
+        .set_pool_members(
+            "main",
+            &[("a".to_string(), 0), ("b".to_string(), 1)],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    // The first turn pinned the session to `b`; releasing it lets the second turn's selection start over from
+    // priority, so it tries `a` first and only reaches `b` (with its own earlier record intact) on a failover.
+    h.router.release_session("desktop", "s-1").await.unwrap();
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
+    );
+    let first_leg = tokio::spawn({
+        let app = h.app.clone();
+        async move { app.oneshot(cli_request("s-1", None, None)).await.unwrap() }
+    });
+    wait_for(std::time::Duration::from_secs(5), || {
+        (up.requests().len() == 2).then_some(())
+    })
+    .await;
+    // The one slot goes to another session while the first leg is held at `a`; admission evicts `s-1` before
+    // this session's own dispatch, which lands on `a` too and gates on the same rule.
+    let second_session = tokio::spawn({
+        let app = h.app.clone();
+        async move { app.oneshot(cli_request("s-2", None, None)).await.unwrap() }
+    });
+    wait_for(std::time::Duration::from_secs(5), || {
+        (up.requests().len() == 3).then_some(())
+    })
+    .await;
+    h.relay.flush_memory().await;
+    up.release();
+    let (first_resp, second_resp) = tokio::join!(first_leg, second_session);
+    let first_resp = first_resp.unwrap();
+    let second_resp = second_resp.unwrap();
+    assert_eq!(
+        first_resp.status(),
+        200,
+        "the failover leg to b lands the answer"
+    );
+    first_resp.into_body().collect().await.unwrap();
+    second_resp.into_body().collect().await.unwrap();
+    // The last request to `b` naming `s-1` is the failover leg; the first is turn one's own original commit.
+    let recorded = up
+        .requests()
+        .into_iter()
+        .rfind(|r| {
+            r.credential() == Some(B) && header(r, "x-claude-code-session-id") == Some("s-1")
+        })
+        .expect("b answered the failover leg for s-1");
+    assert_eq!(
+        field(&billing_line(&recorded.body), "cc_prev_req"),
+        Some("req_up_0001"),
+        "the failover leg read the saved record back before it built its body"
+    );
+    up.shutdown().await;
+}

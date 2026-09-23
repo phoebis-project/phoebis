@@ -32,6 +32,7 @@ use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
+use futures::future::BoxFuture;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 
@@ -818,17 +819,16 @@ impl Relay {
             .as_ref()
             .filter(|_| trace.kind == Kind::Inference)
         {
-            // The parent first, and only then the key itself: a subagent whose first request after a restart
-            // arrives before its parent's next one inherits the parent's prompt id, and that lookup reads the
-            // map alone, so without the parent's own row read back a fresh id would be minted beside it.
-            if let Some(parent) = identity.parent_agent_id.as_deref() {
-                let parent_key = MemoryKey {
-                    agent_id: parent.to_string(),
-                    ..key.clone()
-                };
-                self.memory.restore(&parent_key, received_at).await;
+            let resident = self.memory.restore(key, received_at).await;
+            // The parent's row matters only when the child is new: `prompt_id` consults the parent for an
+            // agent's first request alone, so a resident child never pays a parent read.
+            if !resident {
+                if let Some(parent) = identity.parent_agent_id.as_deref() {
+                    self.memory
+                        .restore(&key.with_agent(parent), received_at)
+                        .await;
+                }
             }
-            self.memory.restore(key, received_at).await;
         }
         // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
         // has no line to fill.
@@ -840,14 +840,9 @@ impl Relay {
                     cli_version: version.to_string(),
                     entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
                     prompt_units: facts.prompt_units,
-                    prompt_id: identity.session_id.as_deref().map(|session| {
+                    prompt_id: memory_key.as_ref().map(|key| {
                         self.memory.prompt_id(
-                            &MemoryKey {
-                                key_id: key.id.clone(),
-                                key_generation: key.created_at,
-                                session_id: session.into(),
-                                agent_id: identity.agent_id.clone(),
-                            },
+                            key,
                             identity.parent_agent_id.as_deref(),
                             facts.fresh_user_turn,
                             facts.prompt_id.as_deref(),
@@ -1055,6 +1050,11 @@ impl Relay {
         };
         let memory_key = admitted.memory_key.as_ref();
         let canonical_model = &admitted.identity.canonical_model;
+        // A failover leg may follow a long first one; the key may have been evicted and saved meanwhile, and
+        // `build` reads the map alone.
+        if let Some(key) = memory_key {
+            self.memory.restore(key, (self.clock)()).await;
+        }
         // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
         let build = |skip: &BTreeSet<Injected>| -> Built {
             let mut edited = admitted.raw.to_vec();
@@ -1646,16 +1646,27 @@ impl Relay {
                 }
                 // Built once and moved into whichever branch below commits: a JSON answer and a streamed one
                 // both reach the caller through `stream()`, so both parse for a message id the same way.
-                let on_message_id: Option<Box<dyn FnOnce(String) + Send>> =
-                    ctx.memory_key.map(|key| {
-                        let memory = self.memory.clone();
-                        let key = key.clone();
-                        let account_id = ctx.account.id.clone();
-                        let model = ctx.identity.canonical_model.clone();
-                        Box::new(move |id: String| {
-                            memory.record_message_id(&key, &account_id, &model, &id, arrived)
-                        }) as Box<dyn FnOnce(String) + Send>
-                    });
+                let on_message_id: Option<
+                    Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>,
+                > = ctx.memory_key.map(|key| {
+                    let memory = self.memory.clone();
+                    let key = key.clone();
+                    let account_id = ctx.account.id.clone();
+                    let model = ctx.identity.canonical_model.clone();
+                    let clock = self.clock.clone();
+                    Box::new(move |id: String| {
+                        // Awaited on the body task before the next piece goes out, so the caller's next
+                        // request finds the id in memory and a shutdown flush carries it; the restore is
+                        // a store read only on a miss. Stamped at fire time, so a slow body never moves
+                        // `last_seen` back to the head's clock.
+                        Box::pin(async move {
+                            let now = (clock)();
+                            memory.restore(&key, now).await;
+                            memory.record_message_id(&key, &account_id, &model, &id, now);
+                        }) as BoxFuture<'static, ()>
+                    })
+                        as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
+                });
                 if let Some(pin) = ctx.pin {
                     self.router.report(Report::PinRenewed {
                         pin: pin.clone(),
@@ -2058,6 +2069,7 @@ impl Relay {
             stream_error: None,
             status: head.status,
             message_id: None,
+            pending_message_id: None,
             on_message_id,
         });
         let body = relay_body(Relayed {
@@ -2164,7 +2176,7 @@ struct Forward<'a, C> {
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
-    on_message_id: Option<Box<dyn FnOnce(String) + Send>>,
+    on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,

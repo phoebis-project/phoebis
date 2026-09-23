@@ -4,8 +4,10 @@ use common::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{Limits, CACHE_DIAGNOSIS_BETA};
+use phoebis_relay::{Limits, MemoryKey, CACHE_DIAGNOSIS_BETA};
+use phoebis_store::MemoryStore;
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -175,6 +177,95 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
     assert_eq!(r4.status(), 200);
     assert_diagnosed_turn(&up.requests()[4], Some("msg_b01"));
 
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_immediate_next_request_carries_the_id_the_last_answer_named() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: Some(true),
+            ..Default::default()
+        },
+    )
+    .await;
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    // No flush in between: the next request has to find the id the hook already wrote, which the awaited
+    // hand-off guarantees once the first answer's body is fully drained.
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
+    assert_eq!(
+        diagnostics_previous(&up.requests()[1].body).as_deref(),
+        Some("msg_01")
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: Some(true),
+            ..Default::default()
+        },
+    )
+    .await;
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    h.relay.flush_memory().await;
+    // The key's own generation is the store's insertion stamp, not the harness clock: `insert_api_key` stamps
+    // it from the wall clock.
+    let generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
+    let key = MemoryKey {
+        key_id: "desktop".into(),
+        key_generation: generation,
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+    };
+    // A spawned write can land after the flush unless the hand-off is awaited ahead of it; the drain above is
+    // what makes the flush see it.
+    let record = h
+        .store
+        .load(&key)
+        .unwrap()
+        .expect("the flush wrote the session's row");
+    let payload: serde_json::Value = serde_json::from_str(&record.payload).unwrap();
+    assert_eq!(
+        payload["accounts"]["acct"]["message_ids"]["claude-sonnet-4-5"],
+        "msg_01"
+    );
     up.shutdown().await;
 }
 

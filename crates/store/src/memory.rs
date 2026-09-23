@@ -16,6 +16,17 @@ pub struct MemoryKey {
     pub agent_id: String,
 }
 
+impl MemoryKey {
+    /// The same key under another agent: the parent a subagent inherits from shares the key, the session,
+    /// and the generation.
+    pub fn with_agent(&self, agent: &str) -> MemoryKey {
+        MemoryKey {
+            agent_id: agent.to_string(),
+            ..self.clone()
+        }
+    }
+}
+
 /// One entry as tier 2 holds it: the shape version, the JSON document, and when the entry was last seen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryRecord {

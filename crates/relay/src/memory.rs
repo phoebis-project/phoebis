@@ -2,7 +2,7 @@
 //! agent, held in process as the truth, written behind to the store's tier-2 table and read back from it on a
 //! miss, and the per-account latch that remembers which injected field an upstream 400 has already refused.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use phoebis_store::AccountRow;
@@ -153,10 +153,12 @@ struct Inner {
     entries: HashMap<MemoryKey, Entry>,
     latches: HashMap<String, Latch>,
     last_purge: i64,
-    /// The keys whose store read is in flight. Neither the cap nor the idle bound may take such a key out of
-    /// the map: the read started when the key was absent, and an eviction between its start and its guard is
-    /// exactly what would let it install its older copy over a newer one that was written and saved meanwhile.
-    loading: HashSet<MemoryKey>,
+    /// The keys whose store read is in flight, each under a lock the loader holds for the read's duration so a
+    /// second caller waits for the first rather than loading beside it. Neither the cap nor the idle bound may
+    /// take such a key out of the map: the read started when the key was absent, and an eviction between its
+    /// start and its guard is exactly what would let it install its older copy over a newer one that was
+    /// written and saved meanwhile.
+    loading: HashMap<MemoryKey, Arc<tokio::sync::Mutex<()>>>,
     /// Whether the last save failed. Gates the flush request alone: while true, an overlay at the cap is
     /// already shedding on its own and asking again would only spend a flush that has nothing new to save.
     store_failing: bool,
@@ -199,7 +201,7 @@ impl SessionMemory {
                 entries: HashMap::new(),
                 latches: HashMap::new(),
                 last_purge: 0,
-                loading: HashSet::new(),
+                loading: HashMap::new(),
                 store_failing: false,
                 sequence: 0,
                 dirty: HashMap::new(),
@@ -258,15 +260,9 @@ impl SessionMemory {
         let inherited = is_new
             .then(|| {
                 parent_agent.and_then(|agent| {
-                    let parent_key = MemoryKey {
-                        key_id: key.key_id.clone(),
-                        key_generation: key.key_generation,
-                        session_id: key.session_id.clone(),
-                        agent_id: agent.to_string(),
-                    };
                     inner
                         .entries
-                        .get(&parent_key)
+                        .get(&key.with_agent(agent))
                         .and_then(|e| e.prompt_id.clone())
                 })
             })
@@ -279,7 +275,8 @@ impl SessionMemory {
             prompt_id: None,
             accounts: HashMap::new(),
         });
-        entry.last_seen = now;
+        // A hook stamped at the head can land after a later write; the newer time stands.
+        entry.last_seen = entry.last_seen.max(now);
         if let Some(id) = carried {
             // What the wire says wins: a full-shape turn sends its own id, and a mint recorded beside it
             // would be the one a reduced-shape subagent of that turn inherited.
@@ -426,30 +423,63 @@ impl SessionMemory {
     /// runs on the blocking pool with the map unlocked, so a slow disk stalls this request alone; an entry
     /// that arrived meanwhile wins over the row. A row last seen before the retention is a miss and is left
     /// for the hourly purge.
-    pub async fn restore(&self, key: &MemoryKey, now: i64) {
-        let Some(store) = &self.store else { return };
+    pub async fn restore(&self, key: &MemoryKey, now: i64) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
         self.purge(now);
-        {
-            let mut inner = self.inner.lock().unwrap();
-            if inner.entries.contains_key(key)
-                || revive_pending(&mut inner, key, now, self.cap, self.retention_ms)
-            {
-                return;
-            }
-            // Marked for the whole read: nothing may evict or purge the key while its older copy is on its
-            // way back, or a write that landed and was saved meanwhile would be overwritten by it below.
-            inner.loading.insert(key.clone());
-        }
+        let (in_flight, mine) = loop {
+            let waiter = {
+                let mut inner = self.inner.lock().unwrap();
+                if inner.entries.contains_key(key)
+                    || revive_pending(&mut inner, key, now, self.cap, self.retention_ms)
+                {
+                    return true;
+                }
+                match inner.loading.get(key) {
+                    Some(lock) => lock.clone(),
+                    None => {
+                        let lock = Arc::new(tokio::sync::Mutex::new(()));
+                        let held = lock.clone().try_lock_owned().expect("a fresh lock");
+                        inner.loading.insert(key.clone(), lock.clone());
+                        break (held, lock);
+                    }
+                }
+            };
+            // Another caller is loading this key: wait for it, then look again rather than load beside it.
+            drop(waiter.lock().await);
+        };
+        // Removed on every exit, the client's abort included: a mark left behind would exempt the key from
+        // eviction and purge for the process lifetime. The guard is the one remover, and it removes the mark
+        // it placed and no other: a later loader may hold the key by the time this one unwinds.
+        let mark = LoadingMark {
+            memory: self,
+            key,
+            mine,
+            armed: true,
+        };
         let loaded = self.load_entry(store.clone(), key, now).await;
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(entry) = loaded {
-            if !inner.entries.contains_key(key) && !inner.pending.contains_key(key) {
-                evict_if_full(&mut inner, self.cap);
-                inner.entries.insert(key.clone(), entry);
+        let resident = {
+            let mut inner = self.inner.lock().unwrap();
+            // Unmarked before the eviction below runs, so the install never pays the filtered scan for its
+            // own key; the lock is held, so nothing else can act on the key in between.
+            mark.remove(&mut inner);
+            match loaded {
+                Some(entry)
+                    if !inner.entries.contains_key(key) && !inner.pending.contains_key(key) =>
+                {
+                    evict_if_full(&mut inner, self.cap);
+                    inner.entries.insert(key.clone(), entry);
+                    // Dirty from the install: an eviction before the write that follows then stashes the
+                    // entry rather than dropping it, at the cost of one unchanged record in the next flush.
+                    self.mark_dirty(&mut inner, key);
+                    true
+                }
+                _ => inner.entries.contains_key(key),
             }
-        }
-        inner.loading.remove(key);
-        self.ask_for_a_flush(&inner);
+        };
+        drop(in_flight);
+        resident
     }
 
     /// The store's record for `key` as an entry: `None` for a miss, a row this build cannot read, a row past
@@ -630,6 +660,44 @@ impl SessionMemory {
     }
 }
 
+/// Removes a key's loading mark, on drop when a `restore` future is dropped mid-read and under the caller's
+/// lock on the normal path. It removes only the mark it placed: another loader may have marked the key since.
+struct LoadingMark<'a> {
+    memory: &'a SessionMemory,
+    key: &'a MemoryKey,
+    mine: Arc<tokio::sync::Mutex<()>>,
+    armed: bool,
+}
+
+impl LoadingMark<'_> {
+    /// The normal exit, under a lock the caller already holds (the drop path would take it again).
+    fn remove(mut self, inner: &mut Inner) {
+        self.armed = false;
+        Self::remove_if_mine(inner, self.key, &self.mine);
+    }
+
+    fn remove_if_mine(inner: &mut Inner, key: &MemoryKey, mine: &Arc<tokio::sync::Mutex<()>>) {
+        if inner
+            .loading
+            .get(key)
+            .is_some_and(|current| Arc::ptr_eq(current, mine))
+        {
+            inner.loading.remove(key);
+        }
+    }
+}
+
+impl Drop for LoadingMark<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut inner = self.memory.inner.lock().unwrap();
+        Self::remove_if_mine(&mut inner, self.key, &self.mine);
+        self.memory.ask_for_a_flush(&inner);
+    }
+}
+
 /// Whether a row last seen at `last_seen` has fallen behind `now` by more than `retention_ms`: the one
 /// retention comparison every read-through, snapshot, and revive path judges a record by.
 fn expired(last_seen: i64, now: i64, retention_ms: i64) -> bool {
@@ -653,7 +721,8 @@ fn account_entry<'a>(
         prompt_id: None,
         accounts: HashMap::new(),
     });
-    entry.last_seen = now;
+    // A hook stamped at the head can land after a later write; the newer time stands.
+    entry.last_seen = entry.last_seen.max(now);
     entry
         .accounts
         .entry(account_id.to_string())
@@ -702,14 +771,23 @@ fn evict_if_full(inner: &mut Inner, cap: usize) {
     if inner.entries.len() < cap {
         return;
     }
-    let loading = &inner.loading;
-    let Some(oldest) = inner
+    let plain = inner
         .entries
         .iter()
-        .filter(|(k, _)| !loading.contains(*k))
         .min_by_key(|(_, e)| e.last_seen)
-        .map(|(k, _)| k.clone())
-    else {
+        .map(|(k, _)| k.clone());
+    // The filtered scan hashes every resident key, so it runs only when the plain minimum is a key whose
+    // read is in flight, which is rare.
+    let oldest = match plain {
+        Some(k) if inner.loading.contains_key(&k) => inner
+            .entries
+            .iter()
+            .filter(|(k, _)| !inner.loading.contains_key(*k))
+            .min_by_key(|(_, e)| e.last_seen)
+            .map(|(k, _)| k.clone()),
+        other => other,
+    };
+    let Some(oldest) = oldest else {
         return;
     };
     let entry = inner
@@ -730,7 +808,7 @@ fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
     let idle: Vec<MemoryKey> = inner
         .entries
         .iter()
-        .filter(|(k, e)| now - e.last_seen >= idle_ms && !inner.loading.contains(*k))
+        .filter(|(k, e)| now - e.last_seen >= idle_ms && !inner.loading.contains_key(*k))
         .map(|(k, _)| k.clone())
         .collect();
     for key in idle {
@@ -1606,5 +1684,176 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_restored_entry_survives_an_eviction_before_the_write_that_follows() {
+        let store = Arc::new(MapStore::default());
+        let a = key("a");
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(a.clone(), seeded("req_a", Some("p-a"), 500));
+        let mem =
+            Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        assert!(mem.restore(&a, 1_000).await, "the row was read back");
+        mem.prompt_id(&key("b"), None, true, None, 2_000); // the one slot goes to b
+        mem.record_request_id(&a, "acct", "req_a2", 3_000);
+        mem.flush(3_000).await;
+        let rows = store.rows.lock().unwrap();
+        let v1: RecordV1 = serde_json::from_str(&rows.get(&a).unwrap().payload).unwrap();
+        assert_eq!(
+            v1.prompt_id.as_deref(),
+            Some("p-a"),
+            "the restored turn was stashed, not dropped"
+        );
+        assert_eq!(
+            v1.accounts.get("acct").and_then(|a| a.request_id.clone()),
+            Some("req_a2".into())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_restore_leaves_no_loading_mark_behind() {
+        let store = Arc::new(MapStore::default());
+        let a = key("a");
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(a.clone(), seeded("req_a", None, 500));
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        let gate = Arc::new(Barrier::new(2));
+        *store.hold_load.lock().unwrap() = Some(gate.clone());
+        let held = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
+        held.abort(); // the client went away while the read was in flight
+        tokio::task::spawn_blocking(move || gate.wait())
+            .await
+            .unwrap();
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            mem.inner.lock().unwrap().loading.is_empty().then_some(())
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_restores_of_one_key_read_the_store_once() {
+        let store = Arc::new(MapStore::default());
+        let a = key("a");
+        store
+            .rows
+            .lock()
+            .unwrap()
+            .insert(a.clone(), seeded("req_a", None, 500));
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        let gate = Arc::new(Barrier::new(2));
+        *store.hold_load.lock().unwrap() = Some(gate.clone());
+        let first = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
+        let second = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!second.is_finished(), "the second waits for the first");
+        tokio::task::spawn_blocking(move || gate.wait())
+            .await
+            .unwrap();
+        assert!(first.await.unwrap());
+        assert!(second.await.unwrap());
+        assert_eq!(store.loads_started.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_finished_loader_leaves_a_replacement_loaders_mark_in_place() {
+        let store = Arc::new(MapStore::default()); // no row for `a`, so every load is a miss
+        let a = key("a");
+        let mem =
+            Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        let first_gate = Arc::new(Barrier::new(2));
+        *store.hold_load.lock().unwrap() = Some(first_gate.clone());
+        let first = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
+        let second = tokio::spawn({
+            let (mem, a) = (mem.clone(), a.clone());
+            async move { mem.restore(&a, 1_000).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let second_gate = Arc::new(Barrier::new(2));
+        *store.hold_load.lock().unwrap() = Some(second_gate.clone());
+        tokio::task::spawn_blocking(move || first_gate.wait())
+            .await
+            .unwrap();
+        assert!(!first.await.unwrap(), "a miss");
+        // The second loader marked the key on the miss and is held inside its own read; the first loader's
+        // guard has dropped by now and must have left that mark alone.
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            store.hold_load.lock().unwrap().is_none().then_some(())
+        })
+        .await;
+        assert!(
+            mem.inner.lock().unwrap().loading.contains_key(&a),
+            "the second load keeps its mark"
+        );
+        tokio::task::spawn_blocking(move || second_gate.wait())
+            .await
+            .unwrap();
+        assert!(!second.await.unwrap());
+        assert!(mem.inner.lock().unwrap().loading.is_empty());
+        assert_eq!(store.loads_started.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn last_seen_never_moves_backwards() {
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
+        let a = key("a");
+        mem.record_request_id(&a, "acct", "req", 2_000);
+        mem.record_message_id(&a, "acct", "claude-sonnet-4-5", "msg", 1_000);
+        assert_eq!(
+            mem.inner.lock().unwrap().entries.get(&a).unwrap().last_seen,
+            2_000
+        );
+    }
+
+    #[test]
+    fn an_eviction_skips_the_oldest_key_only_while_its_read_is_in_flight() {
+        let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
+        let (a, b, c) = (key("a"), key("b"), key("c"));
+        mem.prompt_id(&a, None, false, None, 1_000);
+        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.inner
+            .lock()
+            .unwrap()
+            .loading
+            .insert(a.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        mem.prompt_id(&c, None, false, None, 3_000);
+        let inner = mem.inner.lock().unwrap();
+        assert!(inner.entries.contains_key(&a), "the loading key stayed");
+        assert!(
+            !inner.entries.contains_key(&b),
+            "the next oldest left instead"
+        );
     }
 }
