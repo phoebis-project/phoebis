@@ -42,6 +42,8 @@ pub struct OverageEvidence {
     pub reset: Option<i64>,
     pub observed_at: i64,
     pub source: EvidenceSource,
+    /// The holder of the account id the reading is about.
+    pub incarnation: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,11 +60,13 @@ pub struct UtilizationSample {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StateWrite {
-    /// The relay's verdict on an account, fenced by the generations the attempt that formed it went out
-    /// with. It travels with the rest of the routing writes so shutdown drains it like any other.
+    /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
+    /// formed it went out with. It travels with the rest of the routing writes so shutdown drains it like any
+    /// other.
     AccountState {
         account_id: String,
         state: AccountState,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     },
@@ -120,6 +124,7 @@ impl RoutingState {
                             } else {
                                 EvidenceSource::Head
                             },
+                            incarnation: o.incarnation,
                         },
                     )
                 })
@@ -353,6 +358,10 @@ impl RoutingState {
         self.samples.get(account_id)
     }
 
+    pub(crate) fn forget_sample(&mut self, account_id: &str) {
+        self.samples.remove(account_id);
+    }
+
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
     pub fn samples(&self) -> Vec<(String, UtilizationSample)> {
         let mut out: Vec<_> = self
@@ -419,13 +428,20 @@ impl RoutingState {
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, and everything
     /// held against an account the registry no longer has. An id is reusable, so state the deleted account
     /// left behind would otherwise be inherited by whatever is created under that id next: a two-day cooldown
-    /// would keep a brand new account out of every pool it joins.
+    /// would keep a brand new account out of every pool it joins. A delete and a create under one id can both
+    /// land before one reload, so a row is held against the account only while the snapshot's holder carries
+    /// the incarnation it names. A pin names its key's creation time too, and one whose key or account was
+    /// replaced reads `deleted`: its holder is gone, whatever took the id.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
-        let gone = |account_id: &str| snapshot.account(account_id).is_none();
+        let gone = |account_id: &str, incarnation: u64| {
+            snapshot
+                .account(account_id)
+                .is_none_or(|a| a.incarnation != incarnation)
+        };
         let cooldowns: Vec<_> = self
             .cooldowns
             .iter()
-            .filter(|((account_id, _), c)| c.until <= now || gone(account_id))
+            .filter(|((account_id, _), c)| c.until <= now || gone(account_id, c.incarnation))
             .map(|(k, _)| k.clone())
             .collect();
         for key in &cooldowns {
@@ -435,7 +451,10 @@ impl RoutingState {
             .pins
             .iter()
             .filter_map(|(k, p)| {
-                if gone(&p.account_id) {
+                let key_replaced = snapshot
+                    .key(&p.key_id)
+                    .is_some_and(|key| key.created_at != p.key_generation);
+                if gone(&p.account_id, p.incarnation) || key_replaced {
                     return Some((k.clone(), "deleted"));
                 }
                 let ttl = snapshot
@@ -460,12 +479,16 @@ impl RoutingState {
         for (key, _) in &pins {
             self.pins.remove(key);
         }
-        // None of the three needs a deletion written: the overage row cascades with the account, and samples
-        // and round-robin cursors are held in memory only.
-        self.overage.retain(|account_id, _| !gone(account_id));
-        self.samples.retain(|account_id, _| !gone(account_id));
+        // None of the three needs a deletion written: the overage row cascades with the account and the next
+        // holder's first reading replaces one left under another incarnation, and samples and round-robin
+        // cursors are held in memory only. Both of those are keyed by id alone, so the reload drops the sample
+        // of a holder the id has moved past.
+        let absent = |account_id: &str| snapshot.account(account_id).is_none();
+        self.overage
+            .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
+        self.samples.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {
-            snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !gone(id))
+            snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
         Purged { cooldowns, pins }
     }

@@ -210,29 +210,13 @@ impl CredentialManager {
     /// refresh and storing its result, so whether the upstream rotated the refresh token is unknowable and
     /// only re-pairing can settle it. Returns the quarantined account ids.
     ///
-    /// An attempt whose generations no longer describe the stored bundle is closed instead of acted on. It
-    /// was about credentials that a later pairing or rotation has already replaced, and quarantining the
-    /// replacement over it would leave an account nobody can make ready again.
+    /// An attempt whose incarnation or generations no longer describe the stored account and bundle is
+    /// closed instead of acted on. It was about a holder the id no longer has, or credentials that a later
+    /// pairing or rotation has already replaced, and quarantining the replacement over it would leave an
+    /// account nobody can make ready again.
     pub fn recover_on_start(&self) -> Result<Vec<String>, StoreError> {
         let mut recovered: Vec<String> = Vec::new();
         for attempt in self.inner.store.pending_refresh_attempts()? {
-            let superseded = match self.inner.store.credentials(&attempt.account_id) {
-                Ok(stored) => {
-                    stored.map(|bundle| (bundle.lifecycle_generation, bundle.generation))
-                        != Some((attempt.lifecycle_generation, attempt.credential_generation))
-                }
-                // A row that cannot be read cannot be compared, and an attempt that may still describe the
-                // stored bundle is exactly what this quarantines. One unreadable account must not take the
-                // whole start down with it, and its own refresh is unusable anyway.
-                Err(error) => {
-                    tracing::warn!(
-                        account = %attempt.account_id,
-                        %error,
-                        "a credential row could not be read at start, so its account is quarantined",
-                    );
-                    false
-                }
-            };
             // The row standing under this id now, whose incarnation settles whether the attempt is even
             // about it. An id with no row left has orphaned attempts, which the store settles regardless.
             let incarnation = self
@@ -240,6 +224,24 @@ impl CredentialManager {
                 .store
                 .account(&attempt.account_id)?
                 .map_or(0, |account| account.incarnation);
+            let superseded = attempt.incarnation != incarnation
+                || match self.inner.store.credentials(&attempt.account_id) {
+                    Ok(stored) => {
+                        stored.map(|bundle| (bundle.lifecycle_generation, bundle.generation))
+                            != Some((attempt.lifecycle_generation, attempt.credential_generation))
+                    }
+                    // A row that cannot be read cannot be compared, and an attempt that may still describe
+                    // the stored bundle is exactly what this quarantines. One unreadable account must not
+                    // take the whole start down with it, and its own refresh is unusable anyway.
+                    Err(error) => {
+                        tracing::warn!(
+                            account = %attempt.account_id,
+                            %error,
+                            "a credential row could not be read at start, so its account is quarantined",
+                        );
+                        false
+                    }
+                };
             if superseded {
                 self.inner.store.resolve_refresh_attempt(
                     attempt.id,
@@ -395,6 +397,7 @@ impl Inner {
 
         let attempt = match self.store.open_refresh_attempt(
             account_id,
+            account.incarnation,
             account.lifecycle_generation,
             bundle.generation,
         ) {
@@ -628,13 +631,14 @@ impl Inner {
     }
 
     /// Asks for re-pairing, unless the slot moved on: a verdict about credentials that a disconnect threw
-    /// away, or that a re-pairing replaced without one, must not lock out what took their place. A re-pair
-    /// keeps the lifecycle generation, so the bundle generation this refresh was started against is the half
-    /// of the fence that catches it.
+    /// away, or that a re-pairing replaced without one, must not lock out what took their place, and neither
+    /// may one about a holder the id no longer has. A re-pair keeps the lifecycle generation, so the bundle
+    /// generation this refresh was started against is the half of the fence that catches it.
     fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) {
         let _ = self.store.set_state_if_generations(
             &account.id,
             AccountState::ReauthRequired,
+            account.incarnation,
             account.lifecycle_generation,
             credential_generation,
         );

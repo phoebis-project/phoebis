@@ -323,16 +323,19 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     handle.report(Report::AccountState {
         account_id: "a".into(),
         state: AccountState::ReauthRequired,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     handle.shutdown().await.unwrap();
     let load = store.load_routing().unwrap();
@@ -369,6 +372,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
         state: AccountState::ReauthRequired,
         lifecycle_generation: 1,
         credential_generation: generation,
+        incarnation: 1,
     });
     // The verdict named the key the store has since replaced, so the writer fences it out.
     stays_for(NOT_WRITTEN, || {
@@ -380,6 +384,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
         state: AccountState::ReauthRequired,
         lifecycle_generation: 1,
         credential_generation: generation + 1,
+        incarnation: 1,
     });
     wait_for(WRITTEN, || {
         (store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
@@ -426,10 +431,12 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
                 reason: "rate_limit".into(),
                 window: "five_hour".into(),
                 source_request_id: None,
+                incarnation: 1,
             },
             pin: None,
             lifecycle_generation: 1,
             credential_generation: 1,
+            incarnation: 1,
         });
         wait_for(WRITTEN, || {
             store
@@ -450,6 +457,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: None,
+            incarnation: 1,
         })
         .unwrap();
     let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
@@ -678,7 +686,7 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
         raw_keys: vec![],
         error: None,
     };
-    let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true));
+    let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true), 1);
     assert_eq!(
         (sample.five_hour, sample.seven_day, sample.observed_at),
         (Some(1.0), Some(0.4), 5_000)
@@ -702,11 +710,11 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
         ..snapshot(0.0, 0.0, true)
     };
     assert_eq!(
-        sample_from_usage(&both).1.unwrap().reset,
+        sample_from_usage(&both, 1).1.unwrap().reset,
         Some(90_000),
         "the reset is the latest among the exhausted windows, not the earliest of all"
     );
-    let (distinct, _) = sample_from_usage(&both);
+    let (distinct, _) = sample_from_usage(&both, 1);
     assert_eq!(
         (distinct.five_hour_reset, distinct.seven_day_reset),
         (Some(9_000), Some(90_000)),
@@ -725,19 +733,19 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
         }),
         ..snapshot(10.0, 20.0, true)
     };
-    let (fable, _) = sample_from_usage(&fable);
+    let (fable, _) = sample_from_usage(&fable, 1);
     assert_eq!(
         (fable.fable, fable.fable_reset),
         (Some(0.75), Some(80_000)),
         "and the fable window is a fraction like the shared ones, with its own reset"
     );
     assert!(
-        sample_from_usage(&snapshot(100.0, 40.0, false))
+        sample_from_usage(&snapshot(100.0, 40.0, false), 1)
             .1
             .is_some_and(|o| !o.in_use),
         "without extra usage a full window is not overage"
     );
-    assert!(sample_from_usage(&snapshot(12.5, 40.0, true))
+    assert!(sample_from_usage(&snapshot(12.5, 40.0, true), 1)
         .1
         .is_some_and(|o| !o.in_use));
 }
@@ -774,10 +782,12 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
             reason: "permission".into(),
             window: "none".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: Some(pin_of(&handle).await),
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     stays_for(NOT_WRITTEN, || {
         store.load_routing().unwrap().cooldowns.is_empty()
@@ -803,10 +813,12 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
             reason: "permission".into(),
             window: "none".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 2,
+        incarnation: 1,
     });
     wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
 }
@@ -842,10 +854,12 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
             reason: "rate_limit".into(),
             window: "seven_day".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
     let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
@@ -883,6 +897,254 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
         "the id was reused, and the days of cooldown its last holder earned did not come with it"
     );
     assert!(handle.cooldowns().await.unwrap().is_empty());
+}
+
+/// The account the recreated-account test inserts, holding a secret at generation 1: under a used id it takes
+/// the next incarnation while both generations read 1 again.
+fn insert_account_a(store: &Store) {
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    store
+        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], None, 1, "test")
+        .unwrap();
+    store
+        .set_pool_members("p", &[("a".to_string(), 0)], "test")
+        .unwrap();
+}
+
+/// The seeded key again under its id, which stamps it a later creation time.
+fn insert_key_k(store: &Store) {
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "k".into(),
+                label: "k".into(),
+                notes: None,
+                pool_id: "p".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                allowed_models: None,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: store.api_key_digest("phoebis-reissued").to_vec(),
+                prefix: key_prefix("phoebis-reissued"),
+                created_at: 0,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+            },
+            "test",
+        )
+        .unwrap();
+}
+
+fn cooldown_row(account: &str) -> CooldownRow {
+    CooldownRow {
+        account_id: account.into(),
+        scope: "account".into(),
+        until: 1_000 + 48 * HOUR,
+        set_at: 0,
+        reason: "rate_limit".into(),
+        window: "seven_day".into(),
+        source_request_id: None,
+        incarnation: 1,
+    }
+}
+
+#[tokio::test]
+async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+    handle.report(Report::AccountState {
+        account_id: "a".into(),
+        state: AccountState::FundingRequired,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    handle.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: cooldown_row("a"),
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    // The report and the ask share one sender, so both reports are applied before this answers.
+    assert!(handle.cooldowns().await.unwrap().is_empty());
+    // Shutdown drains the writer, so a verdict that was going to land has landed by now.
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "both generations read 1 again, and the verdict was still about the holder that is gone"
+    );
+    assert!(store.load_routing().unwrap().cooldowns.is_empty());
+}
+
+#[tokio::test]
+async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_holders_state() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s"), 1_000))
+        .await
+        .unwrap();
+    let first_epoch = match &first.result {
+        SelectResult::Selected(s) => s.pin.as_ref().expect("a session pin").epoch,
+        other => panic!("{other:?}"),
+    };
+    wait_for(WRITTEN, || {
+        store.load_routing().unwrap().pins.first().cloned()
+    })
+    .await;
+    handle.report(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "rate_limit",
+        "five_hour",
+    ));
+    handle.report(Report::Overage {
+        account_id: "a".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(1_100),
+            reset: None,
+            observed_at: 1_100,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    handle.report(observed(
+        "a",
+        UtilizationSample {
+            five_hour: Some(1.0),
+            ..sample(1_100)
+        },
+    ));
+    assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
+    assert_eq!(handle.overages().await.unwrap().len(), 1);
+    assert_eq!(handle.samples().await.unwrap().len(), 1);
+
+    // A key delete and a key create under the same id, and an account delete and recreate under the same id,
+    // all committed before the one reload.
+    store.delete_api_key("k", "test").unwrap();
+    insert_key_k(&store);
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "the pin named a key generation that is gone"
+    );
+    assert!(handle.cooldowns().await.unwrap().is_empty());
+    assert!(handle.overages().await.unwrap().is_empty());
+    assert!(handle.samples().await.unwrap().is_empty());
+    assert!(
+        first.cancel.is_cancelled(),
+        "a stream on the previous holder ends with it"
+    );
+    let answer = handle
+        .select(request(&handle, Some("s"), 2_000))
+        .await
+        .unwrap();
+    let fresh = matches!(answer.result, SelectResult::Selected(ref s)
+        if s.pin.as_ref().is_some_and(|p| p.epoch != first_epoch));
+    assert!(
+        fresh,
+        "the new holder's first session request minted a fresh epoch"
+    );
+}
+
+#[tokio::test]
+async fn a_key_created_again_under_its_id_before_one_reload_inherits_no_pin() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(request(&handle, Some("s"), 1_000))
+        .await
+        .unwrap();
+    assert_eq!(handle.pins().await.unwrap().len(), 1);
+    let mut events = handle.subscribe_events();
+    store.delete_api_key("k", "test").unwrap();
+    insert_key_k(&store);
+    handle.reload().await.unwrap();
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "the account is the same one, but the session belonged to the key that is gone"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s" && reasons == vec!["deleted"])
+    );
+}
+
+#[tokio::test]
+async fn a_fetch_started_under_a_previous_incarnation_changes_nothing() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+    // The answers of a usage fetch that left under the first holder and landed after the reload.
+    handle.report(Report::Sample {
+        account_id: "a".into(),
+        sample: UtilizationSample {
+            five_hour: Some(1.0),
+            ..sample(1_500)
+        },
+        incarnation: 1,
+    });
+    handle.report(Report::Overage {
+        account_id: "a".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: None,
+            reset: None,
+            observed_at: 1_500,
+            source: phoebis_routing::EvidenceSource::Sample,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    assert!(
+        handle.samples().await.unwrap().is_empty(),
+        "the old holder's sample was refused"
+    );
+    assert!(
+        handle.overages().await.unwrap().is_empty(),
+        "and so was its overage reading"
+    );
+    handle.shutdown().await.unwrap();
+    assert!(
+        store.load_routing().unwrap().overage.is_empty(),
+        "and nothing reached the store"
+    );
 }
 
 async fn next_event(
@@ -937,10 +1199,12 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: Some("req_1".into()),
+            incarnation: 1,
         },
         pin: Some(pin),
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, scope, until, source_request_id: Some(r), .. } if account_id == a && scope == "account" && until == 1_000 + HOUR && r == "req_1")
@@ -961,18 +1225,22 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         reset: None,
         observed_at: at,
         source: phoebis_routing::EvidenceSource::Head,
+        incarnation: 1,
     };
     handle.report(Report::Overage {
         account_id: b.clone(),
         evidence: evidence(true, 1_200),
+        incarnation: 1,
     });
     handle.report(Report::Overage {
         account_id: b.clone(),
         evidence: evidence(true, 1_300),
+        incarnation: 1,
     });
     handle.report(Report::Overage {
         account_id: b.clone(),
         evidence: evidence(false, 1_400),
+        incarnation: 1,
     });
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::OverageStarted { account_id, .. } if account_id == b)
@@ -1041,6 +1309,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
             fable_reset: None,
             observed_at: 1_500,
         },
+        incarnation: 1,
     });
     // The report and the ask share one sender, so the task has applied the sample before it answers this.
     let samples = handle.samples().await.unwrap();
@@ -1086,10 +1355,12 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
     handle.report(Report::Sample {
         account_id: a.clone(),
         sample: spent(1.0, 1_500),
+        incarnation: 1,
     });
     handle.report(Report::Sample {
         account_id: b.into(),
         sample: spent(0.2, 1_500),
+        incarnation: 1,
     });
     let second = handle
         .select(request(&handle, Some("s1"), 2_000))
@@ -1145,10 +1416,12 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
     handle.report(Report::Sample {
         account_id: a.clone(),
         sample: spent(1_500),
+        incarnation: 1,
     });
     handle.report(Report::Sample {
         account_id: b.into(),
         sample: spent(1_500),
+        incarnation: 1,
     });
     let second = handle
         .select(request(&handle, Some("s1"), 2_000))
@@ -1177,10 +1450,12 @@ fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) ->
             reason: reason.into(),
             window: window.into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     }
 }
 
@@ -1201,6 +1476,7 @@ fn observed(account: &str, sample: UtilizationSample) -> Report {
     Report::Sample {
         account_id: account.into(),
         sample,
+        incarnation: 1,
     }
 }
 

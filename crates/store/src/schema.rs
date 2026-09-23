@@ -49,6 +49,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (17, V17),
     (18, V18),
     (19, V19),
+    (20, V20),
 ];
 
 const V2: &str = r#"
@@ -259,4 +260,16 @@ CREATE TABLE IF NOT EXISTS session_memory (
   PRIMARY KEY (key_id, key_generation, session_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS session_memory_seen ON session_memory (last_seen);
+"#;
+
+// An id is reusable, so routing state and refresh attempts name the holder they were recorded for: a pin its
+// key generation and account incarnation, a cooldown, an overage reading and an attempt the incarnation. A row
+// from before the columns names no live holder (0 matches nothing) and leaves at the first reload, which is the
+// safe reading for state whose holder cannot be told.
+const V20: &str = r#"
+ALTER TABLE pins ADD COLUMN key_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cooldowns ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE overage_state ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE refresh_attempts ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 "#;

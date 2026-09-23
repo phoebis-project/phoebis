@@ -880,10 +880,17 @@ impl Poller {
                 .into_iter()
                 .filter(|e| e.kind == Kind::RefreshFailed.as_str())
             {
+                // Only the id's current holder can answer: a previous holder's commit refreshed nothing now.
                 let committed = store
-                    .last_refresh_attempt(&event.subject)
+                    .account(&event.subject)
                     .ok()
                     .flatten()
+                    .and_then(|account| {
+                        store
+                            .last_refresh_attempt(&account.id, account.incarnation)
+                            .ok()
+                            .flatten()
+                    })
                     .is_some_and(|a| a.outcome.as_deref() == Some("committed"));
                 if committed {
                     alerts.clear(Kind::RefreshFailed, &event.subject);

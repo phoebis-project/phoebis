@@ -1611,7 +1611,11 @@ impl Relay {
             written_at,
             head_at,
         );
-        let generations = (ctx.account.lifecycle_generation, ctx.credential_generation);
+        let generations = (
+            ctx.account.incarnation,
+            ctx.account.lifecycle_generation,
+            ctx.credential_generation,
+        );
 
         let (cooldown, mark) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
@@ -2035,7 +2039,9 @@ impl Relay {
                 reset,
                 observed_at,
                 source: EvidenceSource::Head,
+                incarnation: account.incarnation,
             },
+            incarnation: account.incarnation,
         });
     }
 
@@ -2310,8 +2316,9 @@ enum Leg {
     Respond(Response),
 }
 
-/// `generations` is the attempt's (lifecycle, credential) pair, which fences the mark: a verdict about a
-/// credential that was replaced while the request was in flight lands nowhere.
+/// `generations` is the attempt's (incarnation, lifecycle, credential) triple, which fences the mark: a
+/// verdict about a credential that was replaced, or a holder the id lost, while the request was in flight
+/// lands nowhere.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn report_failover(
     router: &RouterHandle,
@@ -2321,7 +2328,7 @@ pub(crate) fn report_failover(
     mark: Option<AccountState>,
     pin: Option<PinRef>,
     request_id: &str,
-    generations: (u64, u64),
+    generations: (u64, u64, u64),
     set_at: i64,
 ) {
     if let Some(cooldown) = cooldown {
@@ -2337,29 +2344,33 @@ pub(crate) fn report_failover(
             reason: cooldown.reason.to_string(),
             window: cooldown.window,
             source_request_id: Some(request_id.to_string()),
+            incarnation: generations.0,
         };
         router.report(Report::Cooldown {
             account_id: account_id.to_string(),
             row,
             pin,
-            lifecycle_generation: generations.0,
-            credential_generation: generations.1,
+            incarnation: generations.0,
+            lifecycle_generation: generations.1,
+            credential_generation: generations.2,
         });
     } else if let Some(pin) = pin {
         // A mark without a cooldown still ends the pin: the account cannot serve until an operator acts.
         router.report(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
-            lifecycle_generation: generations.0,
-            credential_generation: generations.1,
+            incarnation: generations.0,
+            lifecycle_generation: generations.1,
+            credential_generation: generations.2,
         });
     }
     if let Some(state) = mark {
         router.report(Report::AccountState {
             account_id: account_id.to_string(),
             state,
-            lifecycle_generation: generations.0,
-            credential_generation: generations.1,
+            incarnation: generations.0,
+            lifecycle_generation: generations.1,
+            credential_generation: generations.2,
         });
     }
 }

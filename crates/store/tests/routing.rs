@@ -31,6 +31,7 @@ fn cooldown(account: &str, scope: &str, until: i64) -> CooldownRow {
         reason: "rate_limit".into(),
         window: "five_hour".into(),
         source_request_id: None,
+        incarnation: 1,
     }
 }
 
@@ -115,6 +116,8 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         created_at: 1,
         last_used_at: 1,
         migrated_at: None,
+        key_generation: 1,
+        incarnation: 1,
     };
     store.upsert_pin(&pin).unwrap();
     store
@@ -152,6 +155,7 @@ fn overage_evidence_only_moves_forward_in_time() {
         reset: Some(900),
         observed_at: 100,
         source: "head".into(),
+        incarnation: 1,
     };
     assert!(store.upsert_overage(&newer).unwrap());
     let older = OverageRow {
@@ -178,6 +182,8 @@ fn a_pin_carries_when_it_last_migrated_for_utilization() {
         created_at: 1,
         last_used_at: 1,
         migrated_at: None,
+        key_generation: 1,
+        incarnation: 1,
     };
     store.upsert_pin(&pin).unwrap();
     store
@@ -201,4 +207,73 @@ fn a_pin_carries_when_it_last_migrated_for_utilization() {
         None,
         "a fresh pin clears the dwell"
     );
+}
+
+#[test]
+fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
+    let store = store_with(&["a"]);
+    let pin = PinRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        migrated_at: None,
+        key_generation: 7,
+        incarnation: 3,
+    };
+    store.upsert_pin(&pin).unwrap();
+    store
+        .upsert_cooldown(&CooldownRow {
+            incarnation: 3,
+            ..cooldown("a", "account", 10_000)
+        })
+        .unwrap();
+    let reading = OverageRow {
+        account_id: "a".into(),
+        in_use: true,
+        since: Some(50),
+        reset: None,
+        observed_at: 100,
+        source: "sample".into(),
+        incarnation: 3,
+    };
+    store.upsert_overage(&reading).unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins[0].key_generation, load.pins[0].incarnation),
+        (7, 3)
+    );
+    assert_eq!(load.cooldowns[0].incarnation, 3);
+    assert_eq!(load.overage[0].incarnation, 3);
+
+    store
+        .upsert_pin(&PinRow {
+            epoch: 2,
+            key_generation: 8,
+            incarnation: 4,
+            ..pin
+        })
+        .unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.pins[0].key_generation, load.pins[0].incarnation),
+        (8, 4),
+        "a pin made again is the new holders'"
+    );
+    assert!(
+        store
+            .upsert_overage(&OverageRow {
+                in_use: false,
+                observed_at: 90,
+                incarnation: 4,
+                ..reading
+            })
+            .unwrap(),
+        "a reading from another holder of the id is no older than the one it replaces"
+    );
+    let overage = &store.load_routing().unwrap().overage[0];
+    assert_eq!((overage.in_use, overage.incarnation), (false, 4));
 }

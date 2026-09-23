@@ -97,7 +97,7 @@ fn disconnect_revokes_both_credential_kinds() {
     store
         .set_api_key_secret("a", &Secret::new("sk-ant-api03-x"))
         .unwrap();
-    store.open_refresh_attempt("a", 1, g).unwrap();
+    store.open_refresh_attempt("a", 1, 1, g).unwrap();
     let bumped = store.bump_lifecycle("a").unwrap();
     assert!(store.credentials("a").unwrap().is_none());
     assert!(
@@ -109,8 +109,73 @@ fn disconnect_revokes_both_credential_kinds() {
         "disconnect resolves the attempt left open from before it"
     );
     assert!(
-        store.open_refresh_attempt("a", bumped, 0).is_ok(),
+        store.open_refresh_attempt("a", 1, bumped, 0).is_ok(),
         "the refresh gate is clear again on the new lifecycle generation"
+    );
+}
+
+#[test]
+fn deleting_an_account_ends_its_pending_refresh_attempt() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let g = store
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
+        .unwrap();
+    store.open_refresh_attempt("a", 1, 1, g).unwrap();
+    store.delete_account("a", "test").unwrap();
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "the attempt was the deleted holder's"
+    );
+    store.insert_account(&account("a")).unwrap();
+    let g = store
+        .commit_credentials("a", 2, 1, None, None, &bundle("at-2"))
+        .unwrap();
+    assert!(
+        store.open_refresh_attempt("a", 2, 1, g).is_ok(),
+        "so the next holder's first refresh is not blocked by it"
+    );
+}
+
+#[test]
+fn an_attempt_carries_the_incarnation_it_began_under() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let g = store
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
+        .unwrap();
+    let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
+    store
+        .resolve_refresh_attempt(id, 1, AttemptOutcome::Failed("rejected".into()))
+        .unwrap();
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert!(
+        store.last_refresh_attempt("a", 2).unwrap().is_none(),
+        "the settled attempt is the previous holder's history, not the new one's"
+    );
+    assert_eq!(
+        store
+            .last_refresh_attempt("a", 1)
+            .unwrap()
+            .unwrap()
+            .detail
+            .as_deref(),
+        Some("rejected"),
+        "and it stays under the incarnation it began under"
+    );
+    let g = store
+        .commit_credentials("a", 2, 1, None, None, &bundle("at-2"))
+        .unwrap();
+    store.open_refresh_attempt("a", 2, 1, g).unwrap();
+    assert_eq!(
+        store
+            .pending_refresh_attempts()
+            .unwrap()
+            .iter()
+            .map(|a| a.incarnation)
+            .collect::<Vec<_>>(),
+        vec![2]
     );
 }
 
@@ -121,12 +186,12 @@ fn an_uncertain_attempt_blocks_new_attempts() {
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
     assert!(matches!(
-        store.open_refresh_attempt("a", 1, g),
+        store.open_refresh_attempt("a", 1, 1, g),
         Err(StoreError::AttemptPending)
     ));
 }
@@ -138,7 +203,7 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .commit_credentials("a", 1, 1, Some(g), Some(id), &bundle("at-2"))
         .unwrap();
@@ -147,7 +212,7 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
         "a commit leaves no attempt behind"
     );
     assert_eq!(
-        store.last_refresh_attempt("a").unwrap().unwrap().outcome,
+        store.last_refresh_attempt("a", 1).unwrap().unwrap().outcome,
         Some("committed".to_string()),
         "the commit's own attempt is the one that committed"
     );
@@ -160,7 +225,7 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
@@ -168,7 +233,7 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
     store
         .commit_credentials("a", 1, 1, Some(g), None, &bundle("at-2"))
         .unwrap();
-    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
     assert_eq!(attempt.outcome.as_deref(), Some("failed"));
     assert_eq!(attempt.detail.as_deref(), Some("superseded"));
     assert!(
@@ -176,7 +241,7 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
         "the committed bundle answers what the attempt was waiting on"
     );
     assert!(
-        store.open_refresh_attempt("a", 1, g + 1).is_ok(),
+        store.open_refresh_attempt("a", 1, 1, g + 1).is_ok(),
         "the new bundle can be refreshed"
     );
 }
@@ -241,9 +306,9 @@ fn only_one_refresh_attempt_can_be_pending() {
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    let id = store.open_refresh_attempt("a", 1, g).unwrap();
+    let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     assert!(matches!(
-        store.open_refresh_attempt("a", 1, g),
+        store.open_refresh_attempt("a", 1, 1, g),
         Err(StoreError::AttemptPending)
     ));
     store
@@ -404,21 +469,19 @@ fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its
     store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    let stranded = store.open_refresh_attempt("a", 1, 1).unwrap();
+    let stranded = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store.delete_account("a", "test").unwrap();
     store.insert_account(&account("a")).unwrap();
-    assert!(matches!(
-        store.resolve_refresh_attempt(stranded, 1, AttemptOutcome::Uncertain("lost".into())),
-        Err(StoreError::Stale)
-    ));
     assert!(
-        store
-            .last_refresh_attempt("a")
-            .unwrap()
-            .unwrap()
-            .outcome
-            .is_none(),
-        "the row the deleted slot left behind is untouched, so it quarantines nothing"
+        matches!(
+            store.resolve_refresh_attempt(stranded, 1, AttemptOutcome::Uncertain("lost".into())),
+            Err(StoreError::AttemptNotFound(_))
+        ),
+        "the open attempt went with the holder it began under"
+    );
+    assert!(
+        store.last_refresh_attempt("a", 2).unwrap().is_none(),
+        "so nothing the deleted slot left behind quarantines the one that took its id"
     );
 }
 
@@ -438,11 +501,11 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
             state: AccountState::Ready,
         })
         .unwrap();
-    let first = store.open_refresh_attempt("a", 1, 1).unwrap();
+    let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store
         .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
         .unwrap();
-    let second = store.open_refresh_attempt("a", 1, 1).unwrap();
+    let second = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     assert!(
         store
             .refresh_attempts_resolved_after(0, 0, 10)
@@ -475,7 +538,7 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
     let stamp = rows[1].resolved_at;
     let conn_rows: Vec<u64> = (0..5)
         .map(|i| {
-            let id = store.open_refresh_attempt("a", 1, 1).unwrap();
+            let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
             store
                 .resolve_refresh_attempt(id, 1, AttemptOutcome::Failed(format!("tie {i}")))
                 .unwrap();
@@ -505,11 +568,11 @@ fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     assert_eq!(store.newest_resolved_refresh_attempt().unwrap(), None);
-    let first = store.open_refresh_attempt("a", 1, 1).unwrap();
+    let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     store
         .resolve_refresh_attempt(first, 1, AttemptOutcome::Failed("transport".into()))
         .unwrap();
-    let open = store.open_refresh_attempt("a", 1, 1).unwrap();
+    let open = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     assert_eq!(
         store
             .newest_resolved_refresh_attempt()

@@ -240,6 +240,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
                 reason: "rate_limit".into(),
                 window: "w".into(),
                 source_request_id: None,
+                incarnation: 1,
             })
             .unwrap();
     }

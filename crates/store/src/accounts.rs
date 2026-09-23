@@ -285,8 +285,9 @@ impl Store {
     /// `set_state` for a verdict formed before a request that took a while: the state only moves while the
     /// slot still holds the exact credentials the caller looked at. A disconnect moves the lifecycle
     /// generation and a re-pair without one moves the credential generation, so both have to match or the
-    /// verdict is about credentials that no longer exist and would only lock out what replaced them. Reports
-    /// whether the row moved.
+    /// verdict is about credentials that no longer exist and would only lock out what replaced them. A slot
+    /// deleted and created again under the same id reads both generations at 1 again, so the incarnation has
+    /// to match as well. Reports whether the row moved.
     ///
     /// One statement, because two would leave a window between the check and the update exactly as wide as
     /// the one this exists to close.
@@ -294,13 +295,14 @@ impl Store {
         &self,
         id: &str,
         state: AccountState,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let updated = conn.execute(
             "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
-             WHERE id = ?1 AND lifecycle_generation = ?4 \
+             WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
              AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
                   OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
             params![
@@ -308,7 +310,8 @@ impl Store {
                 state,
                 jiff::Timestamp::now().as_millisecond(),
                 lifecycle_generation as i64,
-                credential_generation as i64
+                credential_generation as i64,
+                incarnation as i64
             ],
         )?;
         Ok(updated > 0)
@@ -367,6 +370,12 @@ impl Store {
             .optional()?;
         let incarnation = incarnation.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
         tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        // An open attempt is the deleted holder's, and left standing it would block the next holder's first
+        // refresh or quarantine it at the next start. A settled one stays as history under its incarnation.
+        tx.execute(
+            &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
+            params![id],
+        )?;
         tx.execute(
             "INSERT INTO account_tombstones (id, incarnation) VALUES (?1, ?2) \
              ON CONFLICT(id) DO UPDATE SET incarnation = max(account_tombstones.incarnation, excluded.incarnation)",

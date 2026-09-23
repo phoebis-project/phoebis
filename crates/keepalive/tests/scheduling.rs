@@ -32,10 +32,12 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     settled(&r, |r| async move {
         r.h.router
@@ -105,7 +107,9 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
                 reset: None,
                 observed_at: r.now(),
                 source: EvidenceSource::Head,
+                incarnation: 1,
             },
+            incarnation: 1,
         });
         settled(&r, |r| async move {
             r.h.router
@@ -139,7 +143,9 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
                     reset: None,
                     observed_at: r.now() + 1,
                     source: EvidenceSource::Head,
+                    incarnation: 1,
                 },
+                incarnation: 1,
             });
             settled(&r, |r| async move {
                 r.h.router
@@ -509,10 +515,12 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     settled(&r, |r| async move {
         r.h.router
@@ -651,10 +659,12 @@ async fn cool_account(r: &Rig) {
             reason: "rate_limit".into(),
             window: "five_hour".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     settled(r, |r| async move {
         r.h.router

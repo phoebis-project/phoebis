@@ -83,6 +83,8 @@ pub struct PendingAttempt {
     pub id: u64,
     pub account_id: String,
     pub credential_generation: u64,
+    /// The holder of the id the attempt began under, which a recovery compares before acting on it.
+    pub incarnation: u64,
     pub lifecycle_generation: u64,
     pub started_at: i64,
 }
@@ -510,6 +512,7 @@ impl Store {
     pub fn open_refresh_attempt(
         &self,
         account_id: &str,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> Result<u64, StoreError> {
@@ -524,9 +527,9 @@ impl Store {
         }
         let now = jiff::Timestamp::now().as_millisecond();
         conn.execute(
-            "INSERT INTO refresh_attempts (account_id, lifecycle_generation, credential_generation, started_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![account_id, lifecycle_generation as i64, credential_generation as i64, now],
+            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, started_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![account_id, incarnation as i64, lifecycle_generation as i64, credential_generation as i64, now],
         )?;
         Ok(conn.last_insert_rowid() as u64)
     }
@@ -536,10 +539,10 @@ impl Store {
     /// the row for good, a disconnect racing a slow token request for instance, is dropped rather than
     /// applied, and says so by returning `false`.
     ///
-    /// `incarnation` is the one the caller's work began under. An account deleted and recreated keeps the
-    /// attempt rows of the slot that is gone, so a verdict from the old incarnation answers `Stale` rather
-    /// than settling, or reopening as uncertain, a row the new one now owns. An id with no account row left
-    /// has nothing to be stale against, so its orphaned attempts still settle.
+    /// `incarnation` is the one the caller's work began under: a verdict from an incarnation the id has since
+    /// moved past answers `Stale` rather than settling, or reopening as uncertain, a row under the id's new
+    /// holder. An id with no account row left has nothing to be stale against, so its orphaned attempts still
+    /// settle.
     pub fn resolve_refresh_attempt(
         &self,
         attempt_id: u64,
@@ -590,7 +593,7 @@ impl Store {
     pub fn pending_refresh_attempts(&self) -> Result<Vec<PendingAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, account_id, credential_generation, lifecycle_generation, started_at \
+            "SELECT id, account_id, credential_generation, lifecycle_generation, started_at, incarnation \
              FROM refresh_attempts WHERE {PENDING_WHERE} ORDER BY id"
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -598,6 +601,7 @@ impl Store {
                 id: row.get::<_, i64>(0)? as u64,
                 account_id: row.get(1)?,
                 credential_generation: row.get::<_, i64>(2)? as u64,
+                incarnation: row.get::<_, i64>(5)? as u64,
                 lifecycle_generation: row.get::<_, i64>(3)? as u64,
                 started_at: row.get(4)?,
             })
@@ -606,14 +610,17 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
+    /// not this one's.
     pub fn last_refresh_attempt(
         &self,
         account_id: &str,
+        incarnation: u64,
     ) -> Result<Option<LastAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT resolved_at, outcome, detail FROM refresh_attempts WHERE account_id = ?1 ORDER BY id DESC LIMIT 1",
-            params![account_id],
+            "SELECT resolved_at, outcome, detail FROM refresh_attempts WHERE account_id = ?1 AND incarnation = ?2 ORDER BY id DESC LIMIT 1",
+            params![account_id, incarnation as i64],
             |row| Ok(LastAttempt { resolved_at: row.get(0)?, outcome: row.get(1)?, detail: row.get(2)? }),
         )
         .optional()

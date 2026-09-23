@@ -259,7 +259,10 @@ pub async fn quarantined_parts(
     detail: &str,
 ) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
     let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
-    let attempt = parts.store.open_refresh_attempt("business", 1, 1).unwrap();
+    let attempt = parts
+        .store
+        .open_refresh_attempt("business", 1, 1, 1)
+        .unwrap();
     parts
         .store
         .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Uncertain(detail.to_string()))

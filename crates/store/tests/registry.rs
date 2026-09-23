@@ -68,6 +68,9 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let path = dir.path().join("router.sqlite");
     // Every migration above the stored version runs again on the next open, and an `ALTER TABLE ADD COLUMN`
     // cannot run twice, so each older database below is rolled back past every column it would re-add.
+    const UNDO_V20: &str = "ALTER TABLE pins DROP COLUMN key_generation; ALTER TABLE pins DROP COLUMN incarnation; \
+         ALTER TABLE cooldowns DROP COLUMN incarnation; ALTER TABLE overage_state DROP COLUMN incarnation; \
+         ALTER TABLE refresh_attempts DROP COLUMN incarnation;";
     const UNDO_V17: &str = "ALTER TABLE api_keys DROP COLUMN retired_secret_last_used_at;";
     const UNDO_V13: &str = "ALTER TABLE pools DROP COLUMN cache_ttl_json; ALTER TABLE pools DROP COLUMN cache_diagnostics;";
     const UNDO_V12: &str = "";
@@ -78,12 +81,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 19);
+    assert_eq!(store.schema_version().unwrap(), 20);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        19,
+        20,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -97,7 +100,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -106,7 +109,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        19,
+        20,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -120,18 +123,29 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         0,
         "and the row it already held takes the first sample newer than the epoch as evidence"
     );
+    assert_eq!(
+        migrated
+            .load_routing()
+            .unwrap()
+            .cooldowns
+            .pop()
+            .unwrap()
+            .incarnation,
+        0,
+        "and names no holder, so the first reload drops it"
+    );
     drop(migrated);
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        19,
+        20,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -150,14 +164,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        19,
+        20,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -169,14 +183,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        19,
+        20,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -188,7 +202,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "DROP INDEX registry_changes_target; {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "DROP INDEX registry_changes_target; {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -196,7 +210,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        19,
+        20,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -276,12 +290,15 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
         "CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL); \
          INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES ('old', 1); \
          ALTER TABLE api_keys DROP COLUMN retired_secret_last_used_at; \
+         ALTER TABLE pins DROP COLUMN key_generation; ALTER TABLE pins DROP COLUMN incarnation; \
+         ALTER TABLE cooldowns DROP COLUMN incarnation; ALTER TABLE overage_state DROP COLUMN incarnation; \
+         ALTER TABLE refresh_attempts DROP COLUMN incarnation; \
          UPDATE meta SET value = '15' WHERE key = 'schema_version';",
     )
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 19);
+    assert_eq!(migrated.schema_version().unwrap(), 20);
     migrated
         .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
         .unwrap();
@@ -648,7 +665,7 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     assert_eq!(store.credential_generation("nobody").unwrap(), None);
     assert!(
         !store
-            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1)
+            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 1)
             .unwrap(),
         "a verdict about the replaced key changes nothing"
     );
@@ -657,8 +674,50 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
         AccountState::Ready
     );
     assert!(store
-        .set_state_if_generations("a", AccountState::ReauthRequired, 1, 2)
+        .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
         .unwrap());
+}
+
+/// An api-key account holding a secret at generation 1, as every fresh slot under an id does.
+fn insert_ready_api_key_account(store: &Store, id: &str) {
+    store
+        .insert_account(&account(id, AccountKind::ApiKey))
+        .unwrap();
+    store.set_api_key_secret(id, &Secret::new("k1")).unwrap();
+}
+
+fn seeded_api_key_account(id: &str) -> Store {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    insert_ready_api_key_account(&store, id);
+    store
+}
+
+#[test]
+fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
+    let store = seeded_api_key_account("a");
+    let (incarnation, lifecycle, credential) = (1, 1, 1);
+    store.delete_account("a", "test").unwrap();
+    insert_ready_api_key_account(&store, "a");
+    let moved = store
+        .set_state_if_generations(
+            "a",
+            AccountState::FundingRequired,
+            incarnation,
+            lifecycle,
+            credential,
+        )
+        .unwrap();
+    assert!(!moved, "the verdict named a holder that is gone");
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready
+    );
+    assert!(
+        store
+            .set_state_if_generations("a", AccountState::FundingRequired, 2, 1, 1)
+            .unwrap(),
+        "the holder the tombstone numbered 2 takes its own verdicts"
+    );
 }
 
 #[test]

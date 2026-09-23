@@ -2,7 +2,7 @@
 //! registry snapshot on request, pulls utilization samples in the background, and writes state through a
 //! single writer so the store sees every change in the order the loop made it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -112,11 +112,14 @@ pub struct SelectAnswer {
     pub cancel: CancellationToken,
 }
 
+/// Every report that names an account names its holder too: an id is reusable, and a report whose
+/// incarnation is not the snapshot account's changes neither memory nor the store.
 #[derive(Clone, Debug)]
 pub enum Report {
     AccountState {
         account_id: String,
         state: AccountState,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     },
@@ -124,16 +127,19 @@ pub enum Report {
         account_id: String,
         row: CooldownRow,
         pin: Option<PinRef>,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     },
     Overage {
         account_id: String,
         evidence: OverageEvidence,
+        incarnation: u64,
     },
     PinInvalidated {
         account_id: String,
         pin: PinRef,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     },
@@ -144,6 +150,7 @@ pub enum Report {
     Sample {
         account_id: String,
         sample: UtilizationSample,
+        incarnation: u64,
     },
 }
 
@@ -187,6 +194,12 @@ enum Command {
         reply: oneshot::Sender<Result<(), String>>,
     },
     Report(Report),
+    /// A usage fetch ended: `at` is when its sample landed, `None` for a fetch that failed.
+    SampleFinished {
+        account_id: String,
+        incarnation: u64,
+        at: Option<i64>,
+    },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
     },
@@ -328,7 +341,7 @@ struct Task {
     /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
     invalidated: HashMap<(String, String, String), (String, &'static str, i64)>,
     revision: u64,
-    sampled_at: HashMap<String, i64>,
+    sampling: Sampling,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
     store: Arc<Store>,
@@ -410,7 +423,7 @@ pub fn spawn(
         events,
         invalidated: HashMap::new(),
         revision: 1,
-        sampled_at: HashMap::new(),
+        sampling: Sampling::default(),
         snapshot,
         state,
         store,
@@ -454,12 +467,14 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
             StateWrite::AccountState {
                 account_id,
                 state,
+                incarnation,
                 lifecycle_generation,
                 credential_generation,
             } => {
                 moved |= store.set_state_if_generations(
                     &account_id,
                     state,
+                    incarnation,
                     lifecycle_generation,
                     credential_generation,
                 )?;
@@ -649,6 +664,17 @@ impl Task {
                 let _ = reply.send(SelectAnswer { result, cancel });
             }
             Command::Report(report) => self.report(report),
+            Command::SampleFinished {
+                account_id,
+                incarnation,
+                at,
+            } => {
+                // The reload already dropped the marker of a holder the id moved past, and the one standing
+                // now may be the next holder's own fetch.
+                if !self.moved_past(&account_id, incarnation) {
+                    self.sampling.finish(&account_id, at);
+                }
+            }
             Command::Reload { reply } => {
                 let _ = reply.send(self.reload().await);
             }
@@ -748,15 +774,22 @@ impl Task {
                 account_id,
                 mut row,
                 pin,
+                incarnation,
                 lifecycle_generation,
                 credential_generation,
             } => {
-                if self.superseded(&account_id, lifecycle_generation, credential_generation) {
+                if self.superseded(
+                    &account_id,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                ) {
                     return;
                 }
                 // The router's own clock dates the row, so a sample is compared against the loop's timeline
                 // rather than the relay's.
                 row.set_at = (self.clock)();
+                row.incarnation = incarnation;
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -787,8 +820,13 @@ impl Task {
             }
             Report::Overage {
                 account_id,
-                evidence,
+                mut evidence,
+                incarnation,
             } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
+                evidence.incarnation = incarnation;
                 let at = evidence.observed_at;
                 let (was, since) = match self.state.overage(&account_id) {
                     Some(current) => (current.in_use, current.since),
@@ -817,6 +855,7 @@ impl Task {
                             reset: current.reset,
                             observed_at: current.observed_at,
                             source: current.source.as_str().into(),
+                            incarnation: current.incarnation,
                         })]);
                     }
                 }
@@ -824,10 +863,16 @@ impl Task {
             Report::PinInvalidated {
                 account_id,
                 pin,
+                incarnation,
                 lifecycle_generation,
                 credential_generation,
             } => {
-                if self.superseded(&account_id, lifecycle_generation, credential_generation) {
+                if self.superseded(
+                    &account_id,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                ) {
                     return;
                 }
                 if self.state.invalidate_pin(&pin, &account_id) {
@@ -862,7 +907,14 @@ impl Task {
                     }
                 }
             }
-            Report::Sample { account_id, sample } => {
+            Report::Sample {
+                account_id,
+                sample,
+                incarnation,
+            } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: two pulls can be in flight, and the older one's reading is one
@@ -877,17 +929,20 @@ impl Task {
             Report::AccountState {
                 account_id,
                 state,
+                incarnation,
                 lifecycle_generation,
                 credential_generation,
             } => {
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
-                // first and the reload follows once it has landed. The write is fenced by both generations:
-                // a verdict about a credential that was replaced, or a slot that was disconnected, lands
-                // nowhere. It goes through the writer every other routing write uses, so shutdown drains it
-                // rather than leaving a mark in a detached task the runtime may drop unpolled.
+                // first and the reload follows once it has landed. The write is fenced by the incarnation and
+                // both generations: a verdict about a credential that was replaced, a slot that was
+                // disconnected, or a holder the id no longer has lands nowhere. It goes through the writer
+                // every other routing write uses, so shutdown drains it rather than leaving a mark in a
+                // detached task the runtime may drop unpolled.
                 self.write(vec![StateWrite::AccountState {
                     account_id,
                     state,
+                    incarnation,
                     lifecycle_generation,
                     credential_generation,
                 }]);
@@ -905,16 +960,19 @@ impl Task {
     fn superseded(
         &self,
         account_id: &str,
+        incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> bool {
+        if self.moved_past(account_id, incarnation) {
+            return true;
+        }
         let snapshot = self
             .snapshot
             .read()
             .expect("snapshot lock poisoned")
             .clone();
         let Some(account) = snapshot.account(account_id) else {
-            tracing::debug!(account = %account_id, "a report named an account the registry no longer holds");
             return true;
         };
         if account.lifecycle_generation != lifecycle_generation {
@@ -929,6 +987,23 @@ impl Task {
             return true;
         }
         false
+    }
+
+    /// Whether the id no longer names the holder a report was formed about: the account is gone, or was
+    /// deleted and created again, which resets both generations to the values the old holder started at.
+    fn moved_past(&self, account_id: &str, incarnation: u64) -> bool {
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone();
+        let moved = snapshot
+            .account(account_id)
+            .is_none_or(|account| account.incarnation != incarnation);
+        if moved {
+            tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
+        }
+        moved
     }
 
     async fn reload(&mut self) -> Result<(), String> {
@@ -962,15 +1037,25 @@ impl Task {
             .expect("snapshot lock poisoned")
             .clone();
         // A pause is not a reason to cancel: `enabled` governs routing and probes only, and an admitted request
-        // finishes on its account. A disconnect or a deletion takes the credential away, so its streams end.
+        // finishes on its account. A disconnect or a deletion takes the credential away, so its streams end,
+        // and so do those of a holder deleted and created again under its id since the previous snapshot.
+        // Samples and the sampler's marks are keyed by id alone, so a moved holder's go here, before the purge.
         for account in previous.accounts() {
-            let present = next.account(&account.id).is_some_and(|a| {
-                !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
-            });
+            let moved = next
+                .account(&account.id)
+                .is_none_or(|a| a.incarnation != account.incarnation);
+            let present = !moved
+                && next.account(&account.id).is_some_and(|a| {
+                    !matches!(a.state, AccountState::Disconnected | AccountState::Unpaired)
+                });
             if !present {
                 if let Some(token) = self.cancel.remove(&account.id) {
                     token.cancel();
                 }
+            }
+            if moved {
+                self.state.forget_sample(&account.id);
+                self.sampling.forget(&account.id);
             }
         }
         *self.snapshot.write().expect("snapshot lock poisoned") = next;
@@ -1059,7 +1144,9 @@ impl Task {
     }
 
     /// Samples arrive through `Report::Sample` from a background fetch, so the loop never waits on the
-    /// network; a selection uses whatever samples exist when it runs.
+    /// network; a selection uses whatever samples exist when it runs. The fetch names the holder it was
+    /// started for, so an answer that lands after a delete, a create and a reload under the same id is
+    /// refused rather than recorded against the next holder.
     fn pull_samples(&mut self, request: &SelectRequest) {
         let Some(usage) = self.usage.clone() else {
             return;
@@ -1078,39 +1165,55 @@ impl Task {
         let now = (self.clock)();
         let ttl = self.config.sample_ttl.as_millis() as i64;
         for candidate in &request.candidates {
-            let oauth = snapshot
-                .account(&candidate.account_id)
-                .is_some_and(|a| a.kind == phoebis_store::AccountKind::Oauth);
-            let stale = self
-                .sampled_at
-                .get(&candidate.account_id)
-                .is_none_or(|at| now - at >= ttl);
+            let Some(account) = snapshot.account(&candidate.account_id) else {
+                continue;
+            };
+            let oauth = account.kind == phoebis_store::AccountKind::Oauth;
+            let due = self.sampling.due(&candidate.account_id, now, ttl);
             let needs = needs_sample(pool, &self.state, &candidate.account_id, now);
-            if !oauth || !stale || !needs {
+            if !oauth || !due || !needs {
                 continue;
             }
-            self.sampled_at.insert(candidate.account_id.clone(), now);
-            let (usage, tx, account_id) =
-                (usage.clone(), self.tx.clone(), candidate.account_id.clone());
+            self.sampling.begin(&candidate.account_id);
+            let (usage, tx, clock, account_id, incarnation) = (
+                usage.clone(),
+                self.tx.clone(),
+                self.clock.clone(),
+                candidate.account_id.clone(),
+                account.incarnation,
+            );
             tokio::spawn(async move {
                 let Some(tx) = tx.upgrade() else { return };
-                if let Ok(snapshot) = usage.snapshot(&account_id).await {
-                    let (sample, overage) = sample_from_usage(&snapshot);
-                    let _ = tx
-                        .send(Command::Report(Report::Sample {
-                            account_id: account_id.clone(),
-                            sample,
-                        }))
-                        .await;
-                    if let Some(evidence) = overage {
+                let at = match usage.snapshot(&account_id).await {
+                    Ok(snapshot) => {
+                        let (sample, overage) = sample_from_usage(&snapshot, incarnation);
                         let _ = tx
-                            .send(Command::Report(Report::Overage {
-                                account_id,
-                                evidence,
+                            .send(Command::Report(Report::Sample {
+                                account_id: account_id.clone(),
+                                sample,
+                                incarnation,
                             }))
                             .await;
+                        if let Some(evidence) = overage {
+                            let _ = tx
+                                .send(Command::Report(Report::Overage {
+                                    account_id: account_id.clone(),
+                                    evidence,
+                                    incarnation,
+                                }))
+                                .await;
+                        }
+                        Some(clock())
                     }
-                }
+                    Err(_) => None,
+                };
+                let _ = tx
+                    .send(Command::SampleFinished {
+                        account_id,
+                        incarnation,
+                        at,
+                    })
+                    .await;
             });
         }
     }
@@ -1119,6 +1222,42 @@ impl Task {
         if !writes.is_empty() {
             let _ = self.writer.send(writes);
         }
+    }
+}
+
+/// The sampler's bookkeeping per account id. An account is sampled again once its last sample is a TTL old,
+/// dated when the sample landed rather than when the fetch left, so a failed fetch leaves it due at the next
+/// selection instead of unsampled for a whole TTL. The in-flight mark is what keeps two selections from
+/// fetching the same account twice meanwhile.
+#[derive(Default)]
+struct Sampling {
+    in_flight: HashSet<String>,
+    sampled_at: HashMap<String, i64>,
+}
+
+impl Sampling {
+    fn due(&self, account_id: &str, now: i64, ttl: i64) -> bool {
+        !self.in_flight.contains(account_id)
+            && self
+                .sampled_at
+                .get(account_id)
+                .is_none_or(|at| now - at >= ttl)
+    }
+
+    fn begin(&mut self, account_id: &str) {
+        self.in_flight.insert(account_id.to_string());
+    }
+
+    fn finish(&mut self, account_id: &str, at: Option<i64>) {
+        self.in_flight.remove(account_id);
+        if let Some(at) = at {
+            self.sampled_at.insert(account_id.to_string(), at);
+        }
+    }
+
+    fn forget(&mut self, account_id: &str) {
+        self.in_flight.remove(account_id);
+        self.sampled_at.remove(account_id);
     }
 }
 
@@ -1149,7 +1288,11 @@ fn needs_sample(
             .is_some_and(|s| s.fable.unwrap_or(0.0) >= 1.0)
 }
 
-pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option<OverageEvidence>) {
+/// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names.
+pub fn sample_from_usage(
+    snapshot: &UsageSnapshot,
+    incarnation: u64,
+) -> (UtilizationSample, Option<OverageEvidence>) {
     let window = |key: &str| snapshot.windows.iter().find(|w| w.key == key);
     let fraction = |key: &str| window(key).and_then(|w| w.utilization).map(|u| u / 100.0);
     let reset = |key: &str| window(key).and_then(|w| w.resets_at);
@@ -1181,6 +1324,7 @@ pub fn sample_from_usage(snapshot: &UsageSnapshot) -> (UtilizationSample, Option
                 reset,
                 observed_at: snapshot.fetched_at,
                 source: EvidenceSource::Sample,
+                incarnation,
             })
         }
     };
@@ -1226,6 +1370,7 @@ mod tests {
                 reason: reason.into(),
                 window: "five_hour".into(),
                 source_request_id: None,
+                incarnation: 1,
             }],
             ..RoutingLoad::default()
         })
@@ -1296,6 +1441,7 @@ mod tests {
                         reason: (*reason).into(),
                         window: "five_hour".into(),
                         source_request_id: None,
+                        incarnation: 1,
                     })
                     .collect(),
                 ..RoutingLoad::default()
@@ -1325,6 +1471,38 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_usage_fetch_leaves_the_account_due_for_the_next_sample() {
+        let pool = PoolRow {
+            migrate_above_utilization: Some(0.8),
+            ..plain_pool()
+        };
+        let state = RoutingState::from_load(RoutingLoad::default());
+        let ttl = 60_000;
+        let mut sampling = Sampling::default();
+        let due = |sampling: &Sampling, now: i64| {
+            sampling.due("a", now, ttl) && needs_sample(&pool, &state, "a", now)
+        };
+        assert!(due(&sampling, 1_000));
+        sampling.begin("a");
+        assert!(
+            !due(&sampling, 1_000),
+            "a second selection while the fetch is out asks nothing"
+        );
+        sampling.finish("a", None);
+        assert!(
+            due(&sampling, 2_000),
+            "the fetch failed, so the next selection a second later asks again"
+        );
+        sampling.begin("a");
+        sampling.finish("a", Some(2_500));
+        assert!(
+            !due(&sampling, 3_000),
+            "a sample that landed stands for the TTL"
+        );
+        assert!(due(&sampling, 2_500 + ttl));
+    }
+
+    #[test]
     fn a_kind_ordered_pool_is_sampled_even_when_nothing_else_reads_usage() {
         let quiet = RoutingState::from_load(RoutingLoad::default());
         let kind_ordered = PoolRow {
@@ -1348,6 +1526,7 @@ mod tests {
                 reset: None,
                 observed_at: 1_000,
                 source: EvidenceSource::Sample,
+                incarnation: 1,
             },
         );
         assert!(

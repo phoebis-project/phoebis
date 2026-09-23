@@ -310,6 +310,7 @@ pub fn select(
             pool.overage_policy,
             &Candidate {
                 account_id: current.account_id.clone(),
+                incarnation: current.incarnation,
                 priority: 0,
                 upstream_model: String::new(),
             },
@@ -496,6 +497,8 @@ pub fn select(
             created_at: request.now,
             last_used_at: request.now,
             migrated_at: (migrated == Some(MigrateReason::Utilization)).then_some(request.now),
+            key_generation: snapshot.key(&request.key_id).map_or(0, |k| k.created_at),
+            incarnation: chosen.incarnation,
         };
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));

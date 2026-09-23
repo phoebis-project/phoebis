@@ -276,10 +276,12 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
             reason: "rate_limit".into(),
             window: "seven_day".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     let resp = h
         .app

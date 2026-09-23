@@ -277,7 +277,7 @@ async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines()
         "an uncertain rotation does not cost a usable token"
     );
     assert_eq!(store.pending_refresh_attempts().unwrap().len(), 1);
-    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
     assert_eq!(attempt.outcome.as_deref(), Some("uncertain"));
     assert!(
         attempt.detail.is_some_and(|detail| !detail.is_empty()),
@@ -713,11 +713,110 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
             .expose(),
         "fresh"
     );
-    let attempt = store.last_refresh_attempt("a").unwrap().unwrap();
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
     assert_eq!(
         attempt.detail.as_deref(),
         Some("disconnected"),
         "the disconnect settled the attempt, and the late verdict does not rewrite it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_reauth_verdict_from_a_previous_incarnation_is_dropped() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        })),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let mgr = Arc::new(mgr);
+    let refreshing = tokio::spawn({
+        let mgr = mgr.clone();
+        async move { mgr.acquire("a").await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while up.requests().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the refresh reached the token endpoint");
+
+    // The operator deletes the slot and creates it again under the same id while the token request is in
+    // flight. Both generations read 1 again, so only the incarnation tells the two holders apart.
+    store.delete_account("a", "test").unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: Some(phoebis_store::Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                email: "test@example.invalid".into(),
+                organization_uuid: None,
+            }),
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .commit_credentials(
+            "a",
+            2,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("fresh"),
+                refresh_token: Some(Secret::new("rt2")),
+                issued_at: 1_000_000,
+                expires_at: 1_000_000 + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    up.release();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), refreshing)
+        .await
+        .expect("the refresh finished")
+        .unwrap();
+    assert!(matches!(outcome, Err(AcquireError::ReauthRequired)));
+
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "the verdict was about the holder the id had before"
+    );
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "fresh",
+        "and the new holder serves its own bundle"
     );
     up.shutdown().await;
 }
@@ -808,6 +907,47 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
 }
 
 #[tokio::test]
+async fn an_attempt_another_holder_of_the_id_left_is_closed_at_start_rather_than_quarantining() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    let generation = store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    // The generations match the stored bundle; only the incarnation says the attempt is not this holder's.
+    store.open_refresh_attempt("a", 2, 1, generation).unwrap();
+    assert!(mgr.recover_on_start().unwrap().is_empty());
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready
+    );
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    assert_eq!(
+        store
+            .last_refresh_attempt("a", 2)
+            .unwrap()
+            .unwrap()
+            .detail
+            .as_deref(),
+        Some("superseded")
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing_the_start() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let (mgr, store, up) = manager_with(vec![], now).await;
@@ -838,8 +978,8 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
     let readable = store
         .commit_credentials("b", 1, 1, None, None, &bundle())
         .unwrap();
-    store.open_refresh_attempt("a", 1, unreadable).unwrap();
-    store.open_refresh_attempt("b", 1, readable).unwrap();
+    store.open_refresh_attempt("a", 1, 1, unreadable).unwrap();
+    store.open_refresh_attempt("b", 1, 1, readable).unwrap();
     // What a damaged row, a truncated write, or a storage key that no longer opens this row looks like from
     // here: the bundle cannot be compared against the attempt at all.
     store.debug_corrupt_credentials("a").unwrap();

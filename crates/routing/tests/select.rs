@@ -211,6 +211,7 @@ fn cooled(account: &str, scope: &str, until: i64, window: &str) -> CooldownRow {
         reason: "rate_limit".into(),
         window: window.into(),
         source_request_id: None,
+        incarnation: 1,
     }
 }
 
@@ -221,6 +222,7 @@ fn overage(in_use: bool, observed_at: i64, reset: Option<i64>) -> OverageEvidenc
         reset,
         observed_at,
         source: EvidenceSource::Head,
+        incarnation: 1,
     }
 }
 
@@ -1345,6 +1347,7 @@ fn a_candidate_the_snapshot_no_longer_holds_is_never_eligible() {
         account_id: "deleted".into(),
         priority: 0,
         upstream_model: "claude-sonnet-5".into(),
+        incarnation: 1,
     });
     let mut r = rng();
     for i in 0..10 {
@@ -1476,6 +1479,7 @@ fn the_first_overage_evidence_normalizes_since_like_every_later_one() {
             reset: None,
             observed_at: 100,
             source: EvidenceSource::Sample,
+            incarnation: 1,
         },
     );
     assert_eq!(
@@ -2477,6 +2481,7 @@ fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_
         reset: None,
         observed_at,
         source: EvidenceSource::Sample,
+        incarnation: 1,
     };
     st.record_overage("a", sampled(true, 1_000));
     let mut served = std::collections::HashSet::new();

@@ -129,7 +129,7 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
         (detail["kind"].as_str(), detail["target"].as_str()),
         (Some("account_updated"), Some("a"))
     );
-    let attempt = h.store.open_refresh_attempt("a", 1, 1).unwrap();
+    let attempt = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     h.store
         .resolve_refresh_attempt(
             attempt,

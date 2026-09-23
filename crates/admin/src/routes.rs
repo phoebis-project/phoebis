@@ -1004,7 +1004,11 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .map(|models| models.len())
         .unwrap_or_default();
     let credential = state.store.credential_metadata(&row.id).ok().flatten();
-    let attempt = state.store.last_refresh_attempt(&row.id).ok().flatten();
+    let attempt = state
+        .store
+        .last_refresh_attempt(&row.id, row.incarnation)
+        .ok()
+        .flatten();
     // The store refuses to open a second attempt while one is unresolved or uncertain, so the newest
     // attempt is the only one either state can be hiding in.
     let quarantined = attempt.as_ref().is_some_and(|attempt| {

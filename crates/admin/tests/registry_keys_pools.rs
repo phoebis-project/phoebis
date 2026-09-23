@@ -584,6 +584,8 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
                 created_at: common::NOW - 10_000,
                 last_used_at,
                 migrated_at: None,
+                key_generation: common::generation(&store, "k"),
+                incarnation: 1,
             })
             .unwrap();
     }
@@ -667,6 +669,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             created_at: common::NOW - 10,
             last_used_at: common::NOW - 5,
             migrated_at: None,
+            key_generation: common::generation(&store, "k"),
+            incarnation: 1,
         })
         .unwrap();
     store
@@ -679,6 +683,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             created_at: 0,
             last_used_at: common::NOW - 90_000_000,
             migrated_at: None,
+            key_generation: common::generation(&store, "k"),
+            incarnation: 1,
         })
         .unwrap();
     // A second app over the same store: its router task loads the pins the first one never saw.
@@ -847,7 +853,9 @@ async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage()
             reset: None,
             observed_at: common::NOW,
             source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
         },
+        incarnation: 1,
     });
     let pools = common::wait_json(&parts.app, "/admin/pools", &cookie, |v| {
         v["pools"][0]["status"] == "exhausted"
@@ -884,7 +892,9 @@ async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
             reset: None,
             observed_at: common::NOW,
             source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
         },
+        incarnation: 1,
     });
     let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
         v["accounts"][0]["overage"]["in_use"] == true

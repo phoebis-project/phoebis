@@ -580,7 +580,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     rig.store
         .set_state("direct", AccountState::FundingRequired)
         .unwrap();
-    let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+    let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(
             attempt,
@@ -599,6 +599,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
             fable_reset: None,
             observed_at: NOW,
         },
+        incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     poller.tick().await;
@@ -640,7 +641,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
         !open.iter().any(|(k, _)| k == "refresh_failed"),
         "one failure is not two in a row"
     );
-    let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+    let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(
             attempt,
@@ -662,7 +663,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
         .set_state("business", AccountState::Ready)
         .unwrap();
     rig.store.set_state("direct", AccountState::Ready).unwrap();
-    let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+    let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(attempt, 1, phoebis_store::AttemptOutcome::Committed)
         .unwrap();
@@ -677,6 +678,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
             fable_reset: None,
             observed_at: NOW + 1,
         },
+        incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let mut poller = Poller::new(
@@ -718,6 +720,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
             fable_reset: None,
             observed_at: NOW + 2,
         },
+        incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     poller.tick().await;
@@ -875,6 +878,7 @@ async fn a_tick_with_no_open_event_issues_no_clear_and_one_with_open_events_clea
             fable_reset: None,
             observed_at: NOW,
         },
+        incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let mut spent = BTreeMap::new();
@@ -947,7 +951,7 @@ async fn a_refresh_failed_delivery_names_whether_the_attempt_failed_or_went_unce
         phoebis_store::AttemptOutcome::Failed("invalid_grant".into()),
         phoebis_store::AttemptOutcome::Uncertain("refresh response lost".into()),
     ] {
-        let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+        let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
         rig.store
             .resolve_refresh_attempt(attempt, 1, outcome)
             .unwrap();
@@ -992,7 +996,7 @@ async fn two_failed_refreshes_name_the_failed_outcome_on_the_event_and_the_deliv
         Tracked::default(),
     );
     for _ in 0..2 {
-        let attempt = rig.store.open_refresh_attempt("business", 1, 1).unwrap();
+        let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
         rig.store
             .resolve_refresh_attempt(
                 attempt,

@@ -418,10 +418,12 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
             reason: "rate_limit".into(),
             window: "retry_after".into(),
             source_request_id: None,
+            incarnation: 1,
         },
         pin: None,
         lifecycle_generation: 1,
         credential_generation: 1,
+        incarnation: 1,
     });
     // The task records the cooldown in its own state before it queues the write, so a row on disk means the
     // snapshot the admin route reads already has it.
