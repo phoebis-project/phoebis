@@ -2335,6 +2335,7 @@ impl Relay {
         // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
         // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
         // chunk was promised text and coded bytes are worse than none.
+        let mut chunk_published = false;
         let answer = match inspectable_copy(head, &raw).map(Bytes::from) {
             None => None,
             Some(text) => {
@@ -2345,6 +2346,7 @@ impl Relay {
                     body: text.clone(),
                     phase: None,
                 });
+                chunk_published = true;
                 // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
                 // body task.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
@@ -2354,15 +2356,23 @@ impl Relay {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
         };
-        self.answer(
-            trace,
-            built(builder, Body::from(payload.clone())),
-            outcome,
-            usage,
-            facts,
-            Some(payload.len() as u64),
-        )
-        .await
+        let response = built(builder, Body::from(payload.clone()));
+        // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but
+        // this path published one above, and a bus that drops it must be detectable rather than uncounted.
+        trace
+            .complete(
+                &outcome,
+                response.status().as_u16(),
+                usage,
+                facts,
+                None,
+                Some(payload.len() as u64),
+                chunk_published.then_some(1),
+                None,
+                (self.clock)(),
+            )
+            .await;
+        with_outcome(response, outcome)
     }
 }
 

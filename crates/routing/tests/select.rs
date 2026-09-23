@@ -180,6 +180,38 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// `s` rebuilt with key "k" carrying a different `created_at`, the generation a delete and a recreate under
+/// the same id leaves; every other row reads exactly as `s`'s did.
+fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
+    let load = RegistryLoad {
+        accounts: s.accounts().cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s
+            .keys()
+            .cloned()
+            .map(|mut k| {
+                if k.id == "k" {
+                    k.created_at = created_at;
+                }
+                k
+            })
+            .collect(),
+        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
+        models: s
+            .accounts()
+            .flat_map(|a| {
+                ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+                    .into_iter()
+                    .filter_map(|m| s.served(&a.id, m).cloned())
+            })
+            .collect(),
+        pools: s.pools().cloned().collect(),
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
 fn request(
     s: &RegistrySnapshot,
     session: Option<&str>,
@@ -334,6 +366,31 @@ fn priority_zero_wins_until_every_priority_zero_account_is_ineligible_and_a_pin_
         ),
         "a",
         "a new session goes back to priority 0"
+    );
+}
+
+#[test]
+fn a_fresh_pin_carries_the_generation_the_request_was_admitted_under_not_the_snapshots() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    // Admitted against the key's original generation; the snapshot select reads from names a later one, as
+    // a delete and a recreate of the same id between admission and this call would leave it.
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000);
+    let recreated = key_recreated(&s, 500);
+    let (_, writes) = select(&mut st, &recreated, &req, &mut r);
+    assert!(
+        writes.iter().any(|w| matches!(
+            w,
+            StateWrite::UpsertPin(p) if p.key_generation == req.key_generation
+        )),
+        "the pin is stamped with the generation the relay admitted the request under"
+    );
+    assert!(
+        !writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.key_generation == 500)),
+        "not with the generation the id happens to carry in the snapshot select reads from"
     );
 }
 

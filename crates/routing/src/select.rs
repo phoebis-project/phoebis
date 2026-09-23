@@ -497,7 +497,10 @@ pub fn select(
             created_at: request.now,
             last_used_at: request.now,
             migrated_at: (migrated == Some(MigrateReason::Utilization)).then_some(request.now),
-            key_generation: snapshot.key(&request.key_id).map_or(0, |k| k.created_at),
+            // The generation the relay admitted this request under, not the snapshot's: a key deleted and
+            // created again under its id between admission and here must not stamp the new holder's
+            // generation on a pin this request's old one is choosing.
+            key_generation: request.key_generation,
             incarnation: chosen.incarnation,
         };
         state.put_pin(row.clone());

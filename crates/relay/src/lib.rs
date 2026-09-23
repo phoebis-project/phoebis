@@ -56,7 +56,7 @@ pub enum RelayError {
     AccountUuid,
     #[error("the request body ended before it was complete")]
     BodyIncomplete,
-    #[error("request body has no {} member to edit", .0.path())]
+    #[error("{}", .0.shape_message())]
     BodyShape(BodyMember),
     #[error("the request body did not arrive in time")]
     BodyTimeout,

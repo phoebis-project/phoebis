@@ -248,6 +248,68 @@ async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
 }
 
 #[tokio::test]
+async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouched() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+
+    assert!(mgr.acquire("a").await.is_err());
+    let after_first = store.credential_metadata("a").unwrap().unwrap();
+    assert_eq!(
+        after_first.last_error.as_deref(),
+        Some("refresh rejected with status 503")
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    // The 503 armed a backoff the manager's own clock never moves past, so every later acquire fails
+    // on the backoff itself rather than reaching the token endpoint again.
+    assert!(mgr.acquire("a").await.is_err());
+    let after_second = store.credential_metadata("a").unwrap().unwrap();
+    assert_eq!(
+        after_second.last_error.as_deref(),
+        Some("refresh is waiting out a backoff")
+    );
+    assert_ne!(
+        after_second.last_error_at, after_first.last_error_at,
+        "a message that changed from the row's still writes"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    assert!(mgr.acquire("a").await.is_err());
+    let after_third = store.credential_metadata("a").unwrap().unwrap();
+    assert_eq!(
+        after_third.last_error_at, after_second.last_error_at,
+        "the same message a second time leaves the row untouched"
+    );
+
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let rule = Rule {

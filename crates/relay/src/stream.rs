@@ -35,6 +35,10 @@ pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
 /// Per-chunk bound on what a decoder may hand back for one upstream chunk: an 8 KiB compressed chunk can
 /// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
+/// It is a budget against the 8 KiB reads the transport fills at a time, not against a whole body: at
+/// deflate's compression ceiling one wire chunk can still decode past it, and the decode-for-caller path ends
+/// the body with an error there rather than a cut. The native client passes bytes through undecoded and is
+/// unaffected.
 pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 
 /// What a committed stream is still watched for. The inspection copy is the pre-commit hold's, so the events it

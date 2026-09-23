@@ -89,6 +89,17 @@ impl BodyMember {
             BodyMember::Repeated(name) => name,
         }
     }
+
+    /// `RelayError::BodyShape`'s `Display` text: a repeated member was found, not absent, so it reads
+    /// nothing like the other two variants' "has no ... member to edit".
+    pub(crate) fn shape_message(self) -> String {
+        match self {
+            BodyMember::Repeated(name) => {
+                format!("request body carries the top-level member \"{name}\" more than once")
+            }
+            other => format!("request body has no {} member to edit", other.path()),
+        }
+    }
 }
 
 /// What a splice found where it expected a member.
@@ -756,5 +767,17 @@ mod tests {
         for (start, end) in spans {
             assert_eq!(&body[start..end], br#"{"type":"ephemeral","ttl":"1h"}"#);
         }
+    }
+
+    #[test]
+    fn body_shapes_display_names_a_repeated_member_rather_than_an_absent_one() {
+        assert_eq!(
+            RelayError::BodyShape(BodyMember::Repeated("model")).to_string(),
+            "request body carries the top-level member \"model\" more than once"
+        );
+        assert_eq!(
+            RelayError::BodyShape(BodyMember::Model).to_string(),
+            "request body has no model member to edit"
+        );
     }
 }

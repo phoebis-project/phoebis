@@ -114,6 +114,11 @@ container's own environment before it probes the proxy listener. A file it canno
 unset secret variable therefore reads as `unhealthy` rather than as a passing check, with the reason in `docker
 inspect`.
 
+A ledger writer that stops draining leaves every request that publishes a fact waiting for room in its queue,
+which over time fills the proxy listener's connection slots with requests that never finish. `phoebis health`
+connects to that same listener, so it queues behind them too, and the container reads `unhealthy` for a cause
+the probe itself never touches.
+
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
 `config.yaml` sets `admin.plain_http: true` with no `origin`, so the cookie is issued without `Secure` and any
@@ -157,7 +162,9 @@ Further warning lines name a storage key file, data directory or database whose 
 expects; the router starts either way and logs the same warnings.
 
 On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever
-is still running.
+is still running. That 30 seconds also covers the keepalive shutdown and the alert engine's own drain ahead of
+it, so a slow keepalive shutdown leaves the listeners whatever is left of the one budget rather than a fresh
+30 seconds of their own.
 
 `health` loads the file the way `check-config` does, so it needs the same environment. It connects to
 `proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,

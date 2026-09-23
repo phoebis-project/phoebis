@@ -481,7 +481,7 @@ fn from_env(name: &str) -> Result<Secret, ConfigError> {
             })
         }
     };
-    if value.len() < 16 {
+    if value.chars().count() < 16 {
         return Err(ConfigError::SecretTooShort {
             name: name.to_string(),
         });
@@ -781,6 +781,21 @@ mod tests {
         assert!(matches!(
             load(&file_with_secret_env(dir.path(), "short", "TEST_CFG_SHORT")),
             Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_SHORT"
+        ));
+    }
+
+    #[test]
+    fn a_fifteen_character_secret_with_one_multibyte_character_still_refuses_as_too_short() {
+        let dir = tempfile::tempdir().unwrap();
+        // Fifteen characters, sixteen bytes: a byte count would wrongly read this as long enough.
+        std::env::set_var("TEST_CFG_MULTIBYTE_SHORT", "fourteen-charsé");
+        assert!(matches!(
+            load(&file_with_secret_env(
+                dir.path(),
+                "multibyte-short",
+                "TEST_CFG_MULTIBYTE_SHORT"
+            )),
+            Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_MULTIBYTE_SHORT"
         ));
     }
 

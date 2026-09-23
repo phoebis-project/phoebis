@@ -227,12 +227,15 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 13: a request's truncation is stored on its own row rather than recomputed from the bodies table,
 /// since a capture cut by a chunk lost after the last one that arrived never raises `response_len_seen` past
-/// what the row already stored, leaving the recompute no way to see the cut.
+/// what the row already stored, leaving the recompute no way to see the cut. No backfill: a row written before
+/// this version reads the column's default, `0`, even when its bodies row is in fact short.
 ///
 /// Version 14: a cooldown's seconds are booked to the hour each part elapses in, not to the hour an
 /// announcement was recorded, so an extension crossing an hour boundary and a clear that lands mid-hour each
 /// affect only the hours they actually touch. `cooldown_segments` keeps each hour's own booked contribution
-/// for a clear to read back; `cooldown_spans` keeps the account's currently accounted end alone.
+/// for a clear to read back; `cooldown_spans` keeps the account's currently accounted end alone. No backfill:
+/// a cooldown set before this version has no segments of its own, so a clear that lands after it takes back
+/// none of the seconds already booked under the old rule.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,

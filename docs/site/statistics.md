@@ -125,7 +125,8 @@ message and then a `{"kind": "delta", ...}` message for every change. The feed k
 finished requests, whichever bound is reached first; a request or response preview inside a message is at most
 4 KiB; and a client that falls 1,024 messages behind the broadcast is disconnected rather than left to grow an
 unbounded backlog. A session logged in with the viewer secret sees no preview on the socket, and a past
-snapshot carries no preview whatever the role.
+snapshot carries no preview whatever the role. The socket closes `1008 session ended` once its session ends,
+and at most 64 sockets are served at once, a further one refused `503 live feed at capacity` until one closes.
 
 ## The console's views
 

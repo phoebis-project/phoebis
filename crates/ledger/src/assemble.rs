@@ -501,13 +501,15 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         kept_warm: false,
         bodies_captured: bodies.is_some(),
         request_truncated: false,
-        response_truncated: gapped
-            || short
-            || bodies.as_ref().is_some_and(|b| {
-                b.response_body
+        // A gap or a short trail only means something for a key that captures: a non-capturing key
+        // never had bytes to lose, so it must not read truncated when the bus merely dropped a chunk.
+        response_truncated: bodies.as_ref().is_some_and(|b| {
+            gapped
+                || short
+                || b.response_body
                     .as_ref()
                     .is_some_and(|body| (body.len() as u64) < b.response_len_seen)
-            }),
+        }),
         user_agent: user_agent_of(&observed.headers),
         effort: observed.shape.effort.clone(),
         thinking_type: observed.shape.thinking_type.clone(),
@@ -1371,7 +1373,14 @@ mod tests {
         let mut a = Assembler::new(clock_at(1_000));
         a.observe(observed_with_body("r1", 0, vec![b'x'; 10_000]));
         assert_eq!(a.retained_request_bytes(), 0);
+        // A chunk dropped at the bus still marks the entry gapped even though nothing is captured.
+        a.observe(chunk("r1", 1));
         let records = a.observe(Event::RequestComplete(completion("r1", None, None)));
-        assert_eq!(request_of(&records).request_bytes, Some(10_000));
+        let request = request_of(&records);
+        assert_eq!(request.request_bytes, Some(10_000));
+        assert!(
+            !request.response_truncated,
+            "nothing was captured, so nothing reads truncated"
+        );
     }
 }

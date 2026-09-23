@@ -21,8 +21,8 @@ fn ok_rule() -> Rule {
     }
 }
 
-async fn send(h: &Harness, body: &str) -> (u16, String, String) {
-    let request = Request::post("/v1/messages")
+async fn send(h: &Harness, path: &str, body: &str) -> (u16, String, String) {
+    let request = Request::post(path)
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
@@ -53,7 +53,7 @@ async fn a_second_top_level_model_is_refused_before_admission() {
             r#""model":"claude-opus-5"}"#
         ),
     ] {
-        let (status, code, text) = send(&h, body).await;
+        let (status, code, text) = send(&h, "/v1/messages", body).await;
         assert_eq!(status, 400, "{body}");
         assert_eq!(code, "body_shape", "{text}");
         assert!(
@@ -74,7 +74,7 @@ async fn a_repeated_metadata_or_stream_member_is_refused_and_a_nested_repeat_is_
         r#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"a"},"#,
         r#""metadata":{"user_id":"b"},"messages":[],"max_tokens":8}"#
     );
-    let (status, code, text) = send(&h, twice).await;
+    let (status, code, text) = send(&h, "/v1/messages", twice).await;
     assert_eq!(status, 400);
     assert_eq!(code, "body_shape");
     assert!(
@@ -83,7 +83,7 @@ async fn a_repeated_metadata_or_stream_member_is_refused_and_a_nested_repeat_is_
         "{text}"
     );
     let streams = r#"{"model":"claude-sonnet-4-5","stream":false,"stream":true,"messages":[],"max_tokens":8}"#;
-    let (status, code, text) = send(&h, streams).await;
+    let (status, code, text) = send(&h, "/v1/messages", streams).await;
     assert_eq!(status, 400);
     assert_eq!(code, "body_shape");
     assert!(
@@ -94,7 +94,7 @@ async fn a_repeated_metadata_or_stream_member_is_refused_and_a_nested_repeat_is_
     assert!(up.requests().is_empty());
     // A repeat below the top level is the upstream's to judge, and the wire is unchanged for it.
     let nested = r#"{"model":"claude-sonnet-4-5","metadata":{"model":"x","model":"y"},"messages":[],"max_tokens":8}"#;
-    let (status, _, _) = send(&h, nested).await;
+    let (status, _, _) = send(&h, "/v1/messages", nested).await;
     assert_eq!(status, 200);
     let received: serde_json::Value = serde_json::from_slice(&up.requests()[0].body).unwrap();
     assert_eq!(received["model"], "claude-sonnet-4-5");
@@ -112,7 +112,7 @@ async fn a_scan_that_cannot_finish_refuses_the_body_and_a_deep_single_member_is_
         r#"{{"model":"claude-sonnet-4-5","padding":{},"model":"claude-opus-5","messages":[],"max_tokens":8}}"#,
         deep(130)
     );
-    let (status, code, text) = send(&h, &past_the_scan).await;
+    let (status, code, text) = send(&h, "/v1/messages", &past_the_scan).await;
     assert_eq!(status, 400);
     assert_eq!(code, "invalid_body");
     assert!(text.contains("nests deeper than the relay reads"), "{text}");
@@ -121,7 +121,7 @@ async fn a_scan_that_cannot_finish_refuses_the_body_and_a_deep_single_member_is_
     let escaped = format!(
         r#"{{"model":"claude-sonnet-4-5","messages":[],"max_tokens":8,"{escaped_key}":"claude-opus-5"}}"#
     );
-    let (status, code, text) = send(&h, &escaped).await;
+    let (status, code, text) = send(&h, "/v1/messages", &escaped).await;
     assert_eq!(status, 400);
     assert_eq!(code, "body_shape");
     assert!(
@@ -136,7 +136,27 @@ async fn a_scan_that_cannot_finish_refuses_the_body_and_a_deep_single_member_is_
         r#"{{"model":"claude-sonnet-4-5","padding":{},"messages":[],"max_tokens":8}}"#,
         deep(100)
     );
-    let (status, _, _) = send(&h, &within).await;
+    let (status, _, _) = send(&h, "/v1/messages", &within).await;
     assert_eq!(status, 200);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    let body = concat!(
+        r#"{"model":"claude-sonnet-4-5","model":"claude-opus-5","#,
+        r#""messages":[]}"#
+    );
+    let (status, code, text) = send(&h, "/v1/messages/count_tokens", body).await;
+    assert_eq!(status, 400);
+    assert_eq!(code, "body_shape");
+    assert!(
+        // The wire body is JSON, so the message's own embedded quotes are backslash-escaped in it.
+        text.contains(r#"top-level member \"model\" more than once"#),
+        "{text}"
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
     up.shutdown().await;
 }

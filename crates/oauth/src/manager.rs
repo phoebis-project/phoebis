@@ -189,12 +189,25 @@ impl CredentialManager {
                     AcquireError::Unavailable(detail) => detail.clone(),
                     other => other.to_string(),
                 };
-                if let Err(error) = self.inner.store.record_credential_error(
-                    account_id,
-                    account.incarnation,
-                    &message,
-                ) {
-                    tracing::warn!(account = %account_id, %error, "could not record the credential failure");
+                // An account stuck on the same failure for hours must not cost a store write per request
+                // it is handed: only a message that actually changed is worth landing.
+                let unchanged = self
+                    .inner
+                    .store
+                    .credential_metadata(account_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|metadata| {
+                        metadata.last_error.as_deref() == Some(message.as_str())
+                    });
+                if !unchanged {
+                    if let Err(error) = self.inner.store.record_credential_error(
+                        account_id,
+                        account.incarnation,
+                        &message,
+                    ) {
+                        tracing::warn!(account = %account_id, %error, "could not record the credential failure");
+                    }
                 }
                 Err(failure)
             }

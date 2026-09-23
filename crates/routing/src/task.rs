@@ -1173,6 +1173,7 @@ impl Task {
             );
             tokio::spawn(async move {
                 let Some(tx) = tx.upgrade() else { return };
+                let mut guard = SampleGuard::new(&account_id, incarnation, tx.clone());
                 let at = match usage.snapshot(&account_id).await {
                     Ok(snapshot) => {
                         let (sample, overage) = sample_from_usage(&snapshot, incarnation);
@@ -1196,6 +1197,7 @@ impl Task {
                     }
                     Err(_) => None,
                 };
+                guard.finish();
                 let _ = tx
                     .send(Command::SampleFinished {
                         account_id,
@@ -1264,6 +1266,45 @@ impl Sampling {
     fn forget(&mut self, account_id: &str) {
         self.in_flight.remove(account_id);
         self.sampled_at.remove(account_id);
+    }
+}
+
+/// Sends a failed `SampleFinished` if the sample task it guards ends without sending its own: a panic inside
+/// `sample_from_usage`, the one synchronous step of that task, unwinds through this guard first, and without
+/// it the account's in-flight mark would outlive the panicked fetch until a reload or restart cleared it.
+struct SampleGuard {
+    account_id: String,
+    incarnation: u64,
+    tx: mpsc::Sender<Command>,
+    done: bool,
+}
+
+impl SampleGuard {
+    fn new(account_id: &str, incarnation: u64, tx: mpsc::Sender<Command>) -> SampleGuard {
+        SampleGuard {
+            account_id: account_id.to_string(),
+            incarnation,
+            tx,
+            done: false,
+        }
+    }
+
+    /// Marks the task's own `SampleFinished` as sent, so the drop below sends nothing more.
+    fn finish(&mut self) {
+        self.done = true;
+    }
+}
+
+impl Drop for SampleGuard {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let _ = self.tx.try_send(Command::SampleFinished {
+            account_id: std::mem::take(&mut self.account_id),
+            incarnation: self.incarnation,
+            at: None,
+        });
     }
 }
 
@@ -1506,6 +1547,36 @@ mod tests {
             "a sample that landed stands for the TTL"
         );
         assert!(due(&sampling, 2_500 + ttl));
+    }
+
+    #[tokio::test]
+    async fn a_sample_guard_dropped_without_finishing_sends_a_failed_sample_finished() {
+        let (tx, mut rx) = mpsc::channel(1);
+        {
+            let _guard = SampleGuard::new("a", 3, tx);
+        }
+        let Some(Command::SampleFinished {
+            account_id,
+            incarnation,
+            at,
+        }) = rx.recv().await
+        else {
+            panic!("the drop must send SampleFinished on its own");
+        };
+        assert_eq!((account_id.as_str(), incarnation, at), ("a", 3, None));
+    }
+
+    #[tokio::test]
+    async fn a_sample_guard_that_finished_sends_nothing_on_drop() {
+        let (tx, mut rx) = mpsc::channel(1);
+        {
+            let mut guard = SampleGuard::new("a", 3, tx);
+            guard.finish();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "the task's own send is the only one, once it finished"
+        );
     }
 
     #[test]
