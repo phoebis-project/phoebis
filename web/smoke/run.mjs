@@ -1390,7 +1390,7 @@ if (failoverRow) {
 }
 m.unmount();
 
-// A read that fails for new filters draws the error over the sections and none of the rows the filters before
+// A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before
 // the change read; Try again reads the new filters again.
 {
   const page = await mount('/analytics');
