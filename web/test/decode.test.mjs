@@ -377,6 +377,26 @@ test('a cache-miss reason the console does not know keeps its own name on the at
   assert.equal(d.missLabel('messages_changed'), 'History edited');
 });
 
+test('a cache-miss reason named like an object member keeps its name as its label and its count as a number in every sum', async () => {
+  const names = ['__proto__', 'constructor', 'toString'];
+  const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+  assert.deepEqual(names.map(d.missLabel), names);
+  // JSON.parse keeps `__proto__` as an own key, as the route's body arrives; an object literal would set the prototype.
+  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], cache_miss_reasons: JSON.parse('{"__proto__": 3, "constructor": 4, "toString": 5, "none": 2}') });
+  assert.deepEqual(names.map((n) => own(group.cacheMissReasons, n)), [3, 4, 5], 'the decoder keeps each count under its name');
+  const wire = fixture('requests').requests.find((r) => r.id === 'r-captured');
+  const rows = names.map((name) => d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, cache_miss_reason: name })) }));
+  assert.deepEqual(rows.map((r) => r.attempts[r.attempts.length - 1].cacheMissReason), names);
+  const [folded] = d.foldGroups(rows, 'all');
+  assert.deepEqual(names.map((n) => own(folded.cacheMissReasons, n)), [1, 1, 1], 'a session fold counts each under its name');
+  const summed = d.sumGroups([group, folded]);
+  assert.deepEqual(names.map((n) => own(summed.cacheMissReasons, n)), [4, 5, 6], 'the sum is a number for each');
+  assert.deepEqual(d.missReasonOrder([summed]), [...d.CACHE_MISS_REASONS, ...names]);
+  const to = new Date();
+  const [mocked] = await new d.MockApi().getAnalyticsBreakdown({ from: new Date(to.getTime() - 86_400_000).toISOString(), groupBy: 'key', to: to.toISOString() });
+  assert.equal(Object.getPrototypeOf(mocked.cacheMissReasons), null, 'the mock sums into a map with no inherited members too');
+});
+
 test('the session fold buckets a range the way the analytics routes do', () => {
   const hour = 3_600_000;
   const day = 24 * hour;

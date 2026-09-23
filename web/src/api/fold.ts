@@ -1,4 +1,4 @@
-import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
@@ -128,7 +128,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
     else g.uncached += 1;
     const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
-    if (reason) g.cacheMissReasons[reason] = (g.cacheMissReasons[reason] ?? 0) + 1;
+    if (reason) g.cacheMissReasons[reason] = missCount(g.cacheMissReasons, reason) + 1;
     if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
   }
   for (const [key, g] of groups) {
@@ -181,7 +181,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     out.cost = { cacheRead: plus(out.cost.cacheRead, g.cost.cacheRead), cacheWrite: plus(out.cost.cacheWrite, g.cost.cacheWrite), input: out.cost.input + g.cost.input, output: out.cost.output + g.cost.output };
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = (out.errors[code] ?? 0) + n;
-    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = (out.cacheMissReasons[reason] ?? 0) + n;
+    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;
     for (const k of ['failed', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];

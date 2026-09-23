@@ -12,6 +12,7 @@ import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Sk
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
 import { useNow } from '@/lib/hooks';
+import { projectAt } from '@/lib/projection';
 
 const RING_SPAN_S = 30 * 60;
 const MINUTE_MS = 60_000;
@@ -169,37 +170,7 @@ export function ObservePage() {
   }, [view, windowStart, sessionFilter]);
 
   const all = useMemo(() => {
-    if (historical) {
-      // The ring holds finished rows only, so a row that had not finished by the
-      // end of the span is shown as it looked then: in flight, head known if seen.
-      // What the ring keeps no history of (the usage, the throughput) is marked
-      // unknown rather than shown at its final value.
-      return view.recent
-        .filter((r) => Date.parse(r.phases.receivedAt) <= atMs && Date.parse(r.phases.receivedAt) >= fromMs)
-        .map((r): LiveRequest => {
-          const finishedAt = r.phases.finishedAt ? Date.parse(r.phases.finishedAt) : 0;
-          if (finishedAt <= atMs) return r;
-          const seen = (t?: string) => (t && Date.parse(t) <= atMs ? t : undefined);
-          const started = r.attempts.filter((a) => Date.parse(a.startedAt) <= atMs);
-          // The row records the final attempt's head time alone, so the last attempt started by this instant
-          // keeps its response facts only when it is the final one and its head came first; otherwise its
-          // status, cooldown and windows may postdate the instant.
-          const headKnown = seen(r.phases.headAt) !== undefined && started.length === r.attempts.length;
-          const attempts = started.map((a, i) => (i < started.length - 1 ? a : headKnown ? { ...a, outcome: 'in_flight' as const } : { ...a, cooldownSet: null, outcome: 'in_flight' as const, upstreamStatus: null, windows: [] }));
-          return {
-            ...r,
-            accountId: seen(r.phases.selectedAt) ? r.accountId : null,
-            attempts,
-            costUsd: 0,
-            outputTps: null,
-            phases: { receivedAt: r.phases.receivedAt, selectedAt: seen(r.phases.selectedAt), writtenAt: seen(r.phases.writtenAt), headAt: seen(r.phases.headAt), firstContentAt: seen(r.phases.firstContentAt), streamEndAt: seen(r.phases.streamEndAt) },
-            preview: null,
-            state: 'in_flight',
-            status: seen(r.phases.headAt) ? r.status : null,
-            usage: null,
-          };
-        });
-    }
+    if (historical) return view.recent.filter((r) => Date.parse(r.phases.receivedAt) <= atMs && Date.parse(r.phases.receivedAt) >= fromMs).map((r) => projectAt(r, atMs));
     return [...view.inFlight.values(), ...view.recent].filter((r) => Date.parse(r.phases.receivedAt) >= fromMs).sort((a, b) => Date.parse(b.phases.receivedAt) - Date.parse(a.phases.receivedAt));
   }, [view, historical, atMs, fromMs]);
 

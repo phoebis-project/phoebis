@@ -1,5 +1,5 @@
 import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, PinMigrationReason, RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
-import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
 import type { HourlyRollup } from './analytics';
@@ -421,7 +421,7 @@ function rollups(): HourlyRollup[] {
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
     const cacheMissReasons = emptyCacheMissReasons();
-    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = (cacheMissReasons[a.cacheMissReason] ?? 0) + 1;
+    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
     const kept = isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35));
@@ -593,7 +593,8 @@ function historicalRollups(): HourlyRollup[] {
       };
       if (unknownReasonOwed && lane.keyId === 'desktop' && t >= startOfHour(NOW) - 12 * DAY && inference.cacheMissReasons.none > inference.expiredBetweenTurns) {
         unknownReasonOwed = false;
-        inference.cacheMissReasons = { ...inference.cacheMissReasons, future_reason: 1, none: inference.cacheMissReasons.none - 1 };
+        inference.cacheMissReasons.future_reason = 1;
+        inference.cacheMissReasons.none -= 1;
       }
       out.push(inference);
       // The hours an earlier holder of `desktop` spent, deleted before the live key was created: one day of

@@ -14,8 +14,14 @@ export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   unavailable: 'Unavailable',
 };
 
+// The route passes any name the beta sent, so a lookup by that name sees own keys only: `__proto__` or
+// `constructor` would otherwise answer a member every object inherits. The lib target predates `Object.hasOwn`.
+const hasOwn = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
+
 /** A reason the console has no label for reads under the name the beta gave it. */
-export const missLabel = (reason: CacheMissReason): string => CACHE_MISS_LABEL[reason] ?? reason;
+export const missLabel = (reason: CacheMissReason): string => (hasOwn(CACHE_MISS_LABEL, reason) ? CACHE_MISS_LABEL[reason] : reason);
+
+export const missCount = (reasons: Record<CacheMissReason, number>, reason: CacheMissReason): number => (hasOwn(reasons, reason) ? reasons[reason] : 0);
 
 /** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */
 export function missReasonOrder(groups: readonly { cacheMissReasons: Record<CacheMissReason, number> }[]): CacheMissReason[] {
@@ -38,14 +44,19 @@ export const WASTED_PROBE_LABEL: Record<WastedProbeReason, string> = {
 
 export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => ({ idle_limit: 0, released: 0, replaced: 0, session_ended: 0 });
 
-/** Seeds the known reasons at zero; a sum adds any other name it meets beside them. */
-export const emptyCacheMissReasons = (): Record<CacheMissReason, number> => ({
-  messages_changed: 0,
-  model_changed: 0,
-  none: 0,
-  not_requested: 0,
-  previous_message_not_found: 0,
-  system_changed: 0,
-  tools_changed: 0,
-  unavailable: 0,
-});
+/**
+ * Seeds the known reasons at zero; a sum adds any other name it meets beside them. The map has no prototype, so
+ * a name such as `__proto__` or `constructor` is a key like any other: it neither reads an inherited member as
+ * its count nor, assigned, replaces the map's prototype.
+ */
+export const emptyCacheMissReasons = (): Record<CacheMissReason, number> =>
+  Object.assign(Object.create(null) as Record<CacheMissReason, number>, {
+    messages_changed: 0,
+    model_changed: 0,
+    none: 0,
+    not_requested: 0,
+    previous_message_not_found: 0,
+    system_changed: 0,
+    tools_changed: 0,
+    unavailable: 0,
+  });

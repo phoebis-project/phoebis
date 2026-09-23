@@ -7,6 +7,7 @@ export * from '@/lib/cache';
 export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/pattern';
+export * from '@/lib/projection';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';
 export { MockApi } from '@/mock';

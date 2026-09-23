@@ -12,7 +12,7 @@ import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Button, Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder } from '@/lib/cache';
+import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
@@ -205,10 +205,10 @@ export function AnalyticsPage() {
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;
   const stale = series.stale || breakdown.stale || log.stale;
+  // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
+  // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    series.reload();
-    breakdown.reload();
-    log.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, byModel, byPool, keyKeys, log, modelKeys, poolKeys, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -848,7 +848,7 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
 function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
-    .map((reason) => ({ count: totals.cacheMissReasons[reason] ?? 0, reason }))
+    .map((reason) => ({ count: missCount(totals.cacheMissReasons, reason), reason }))
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
@@ -913,7 +913,7 @@ function MissReasonsByGroup({ groups, groupLabel, loading }: { groupLabel: strin
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
-        cells: [...order.map((reason) => fmtInt(g.cacheMissReasons[reason] ?? 0)), fmtInt(g.expiredBetweenTurns)],
+        cells: [...order.map((reason) => fmtInt(missCount(g.cacheMissReasons, reason))), fmtInt(g.expiredBetweenTurns)],
       }))}
     />
   );

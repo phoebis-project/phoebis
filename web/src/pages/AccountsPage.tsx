@@ -465,7 +465,10 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
             </Button>
           )}
         >
-          <ServedModels account={account} catalog={catalog} canMutate={canMutate} onSaved={onChanged} />
+          {/* One editor per upstream: a save still pending for the upstream left behind settles, and rolls back, in
+              its own instance rather than over this list. The one handler outliving it, onSaved, reloads every
+              upstream alike, so it needs no guard. */}
+          <ServedModels key={account.id} account={account} catalog={catalog} canMutate={canMutate} onSaved={onChanged} />
         </Card>
 
         <div className="stack">

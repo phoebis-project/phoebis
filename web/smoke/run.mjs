@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
+const { api, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -535,6 +535,38 @@ await m.navigate('/upstreams/business');
   // One mock instance backs every mount, so the list goes back to the story for the checks after this one.
   boxes()[0]?.click();
   await m.settle(800);
+}
+// A save still pending when the operator moves to another upstream settles after the move: its failure must not
+// put the upstream it left behind onto the one now shown, nor its list reach the next toggle there.
+{
+  const boxes = () => [...m.container.querySelectorAll('.served__list input[type=checkbox]')];
+  const shown = () => [...m.container.querySelectorAll('.served__list li')].map((li) => `${li.querySelector('.mono')?.textContent}=${li.querySelector('input')?.checked}`);
+  const personal = (await api.listAccounts()).find((a) => a.id === 'personal').servedModels;
+  const { updateServedModels } = api;
+  const sent = [];
+  let refuse = null;
+  api.updateServedModels = (id, models) => {
+    if (id === 'business') return new Promise((_, reject) => (refuse = () => reject(new Error('the router refused the business list'))));
+    sent.push([id, models.map((x) => x.id).sort()]);
+    return updateServedModels.call(api, id, models);
+  };
+  boxes()[0]?.click();
+  await m.settle(50);
+  await m.navigate('/upstreams/personal');
+  const before = shown();
+  refuse?.();
+  await m.settle(200);
+  const after = shown();
+  boxes()[0]?.click();
+  await m.settle(600);
+  api.updateServedModels = updateServedModels;
+  await updateServedModels.call(api, 'personal', personal);
+  const want = personal.map((x) => x.id).sort();
+  results.push({
+    name: '/upstreams a save that fails after a switch of upstream leaves the new list alone, and its next toggle sends its own models',
+    ok: refuse !== null && before.length === personal.length && JSON.stringify(after) === JSON.stringify(before) && sent.length === 1 && sent[0][0] === 'personal' && JSON.stringify(sent[0][1]) === JSON.stringify(want),
+    missing: [`held ${refuse !== null}`, `before ${before.join(',')}`, `after ${after.join(',')}`, `sent ${JSON.stringify(sent)}`, `want ${want.join(',')}`],
+  });
 }
 await m.navigate('/upstreams/spare');
 {
@@ -1387,6 +1419,18 @@ if (failoverRow) {
     results.push({ name: '/requests cache row names the failover reason', ok: rows.includes('Cache Previous message not found'), missing: rows });
     results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a no response to read'), missing: rows });
   }
+  // The route passes any reason name through, so one that names a member every object inherits must read as
+  // itself rather than reach the member. The mock serves the row by reference, so the name is put back after.
+  if (noneRow) {
+    const attempt = noneRow.attempts[0];
+    const seen = problems.length;
+    attempt.cacheMissReason = '__proto__';
+    await m.navigate(`/requests/${noneRow.id}`);
+    const rows = cacheRows();
+    const thrown = problems.slice(seen);
+    attempt.cacheMissReason = 'none';
+    results.push({ name: '/requests cache row reads a reason named __proto__ under its own name', ok: rows.includes('Cache __proto__') && thrown.length === 0, missing: [...rows, ...thrown.map((p) => p.slice(0, 120))] });
+  }
 }
 m.unmount();
 
@@ -1419,6 +1463,55 @@ m.unmount();
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
   await page.settle(900);
   results.push({ name: '/analytics Try again reads the new filters again', ok: !page.text().includes('Could not load the analytics for these filters') && JSON.stringify(keyRows()) === JSON.stringify(['desktop']), missing: keyRows() });
+  page.unmount();
+}
+
+// An outage of the ledger fails every analytics read at once, the section and filter-choice reads beside the three
+// the error state names, and Try again is the one control that reads again, so it has to reach all of them.
+{
+  const outage = failCalls({ getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsSeries: '/admin/analytics/series', listAccountRollups: '/admin/analytics/accounts' }, 'the ledger is unavailable');
+  const page = await mount('/analytics');
+  const choices = async () => {
+    const counts = [];
+    for (const trigger of page.container.querySelectorAll('.filters .mselect__trigger')) {
+      trigger.click();
+      await page.settle(60);
+      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll('.mselect__option').length ?? 0}`);
+      trigger.click();
+      await page.settle(60);
+    }
+    return counts;
+  };
+  const tableRows = (title) => [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelectorAll('tbody td.mono').length ?? 0;
+  const downText = page.text();
+  const downChoices = await choices();
+  outage.recover();
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
+  await page.settle(900);
+  const t = page.text();
+  const upChoices = await choices();
+  const sections = ['traffic', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) === null);
+  const tables = ['Cache by model', 'Cache warming by pool', 'Upstreams in range'].map((title) => `${title} ${tableRows(title)}`);
+  const groupBys = outage.calls.getAnalyticsBreakdown.map(([q]) => q.groupBy).sort();
+  const reads = { breakdown: groupBys.join(','), rollups: outage.calls.listAccountRollups.length, series: outage.calls.getAnalyticsSeries.length };
+  outage.restore();
+  results.push({
+    name: '/analytics Try again after a page-wide outage reads every section and filter choice again',
+    ok:
+      downText.includes('Could not load the analytics for these filters') &&
+      downChoices.length === 4 &&
+      downChoices.every((c) => c.endsWith(' 0')) &&
+      !t.includes('Could not load the analytics for these filters') &&
+      !t.includes('Could not load this breakdown') &&
+      sections.length === 0 &&
+      tables.every((row) => !row.endsWith(' 0')) &&
+      upChoices.length === 4 &&
+      upChoices.every((c) => !c.endsWith(' 0')) &&
+      reads.breakdown === 'account,key,key,model,model,pool,pool' &&
+      reads.rollups === 1 &&
+      reads.series === 1,
+    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `sections missing ${sections.join(',')}`, ...tables, JSON.stringify(reads), t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
+  });
   page.unmount();
 }
 

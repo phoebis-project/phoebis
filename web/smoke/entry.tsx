@@ -45,6 +45,37 @@ export const failNextCall = (name: string, path: string, message: string) => {
   };
 };
 
+/**
+ * Fails every call of the named methods, keyed to the route each one reads, the way an outage of the store
+ * behind them fails them all at once. `recover` lets calls through again and records each one's arguments, so a
+ * check can tell which reads a retry made; `restore` puts the original methods back.
+ */
+export const failCalls = (routes: Record<string, string>, message: string) => {
+  const mock = api as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const originals = Object.fromEntries(Object.keys(routes).map((name) => [name, mock[name]]));
+  const calls: Record<string, unknown[][]> = Object.fromEntries(Object.keys(routes).map((name) => [name, []]));
+  let down = true;
+  for (const [name, path] of Object.entries(routes)) {
+    mock[name] = (...args: unknown[]) => {
+      if (!down) {
+        calls[name].push(args);
+        return originals[name].apply(api, args);
+      }
+      reportFailure({ message, path, status: 503 });
+      return Promise.reject(new ApiError(503, message, null));
+    };
+  }
+  return {
+    calls,
+    recover: () => {
+      down = false;
+    },
+    restore: () => {
+      for (const name of Object.keys(routes)) mock[name] = originals[name];
+    },
+  };
+};
+
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');
 
