@@ -11,7 +11,7 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
   oauth_unverified: 'subscription probes off',
   overage: 'overage',
   paused: 'paused',
-  pool_exhausted: 'Pool exhausted',
+  pool_exhausted: 'pool exhausted',
   probe_error: 'probe error',
   quota_exhausted: 'quota exhausted',
   reauth: 'needs re-auth',

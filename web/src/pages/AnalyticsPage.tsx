@@ -349,7 +349,7 @@ export function AnalyticsPage() {
           body={failure}
           action={
             <Button size="sm" onClick={retry}>
-              Retry
+              Try again
             </Button>
           }
         />
