@@ -1,4 +1,4 @@
-import type { AttemptWindow, LiveAttempt, LiveDelta, LiveEvent, LiveMetric, LivePhases, LiveRequest, LiveSnapshot, LiveTick, RequestKind, RequestLog, Transport, Usage } from '@/api/types';
+import type { AttemptWindow, LiveAttempt, LiveDelta, LiveMetric, LivePhases, LiveRequest, LiveTick, RequestKind, RequestLog, Transport, Usage, WindowId } from '@/api/types';
 import { histogramOf, percentileFromHistogram } from '@/lib/histogram';
 import { ACCOUNTS } from './accounts';
 import { createRng } from './rng';
@@ -122,12 +122,96 @@ function fromLog(r: RequestLog): LiveRequest {
 
 const metric = (value: number | null, series: number[], quality: LiveMetric['quality']): LiveMetric => ({ quality, series, value });
 
+type Wire = Record<string, unknown>;
+/** A frame as the router's socket sends it: snake_case names, Unix milliseconds, attempts counted from one. */
+export type LiveFrame = { delta: Wire; kind: 'delta' } | { kind: 'snapshot'; snapshot: Wire };
+
+const ms = (at: string) => Date.parse(at);
+// The header sampler's name for the third window, which the decoder folds onto the UI's own.
+const WIRE_WINDOW: Record<WindowId, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7d_oi' };
+const wireAttempt = (a: LiveAttempt): Wire => ({
+  account_id: a.accountId,
+  cooldown_set: a.cooldownSet && { reason: a.cooldownSet.reason, until: ms(a.cooldownSet.until) },
+  index: a.index + 1,
+  outcome: a.outcome,
+  started_at: ms(a.startedAt),
+  upstream_status: a.upstreamStatus,
+  windows: a.windows.map((w) => ({ id: WIRE_WINDOW[w.id], resets_at: w.resetsAt === null ? null : ms(w.resetsAt), utilization: w.utilization })),
+});
+/** The router leaves a phase out until it is observed. */
+function wirePhases(p: LivePhases): Wire {
+  const at = { finished_at: p.finishedAt, first_content_at: p.firstContentAt, head_at: p.headAt, received_at: p.receivedAt, selected_at: p.selectedAt, stream_end_at: p.streamEndAt, written_at: p.writtenAt };
+  return Object.fromEntries(Object.entries(at).flatMap(([k, v]) => (v === undefined ? [] : [[k, ms(v)]])));
+}
+// The router's live usage carries five token counts; the thinking share and the server tools reach the console
+// with the ledger row alone.
+const wireUsage = (u: Usage | null): Wire => ({ cache_read: u?.cacheRead ?? 0, cache_write_1h: u?.cacheWrite1h ?? 0, cache_write_5m: u?.cacheWrite5m ?? 0, input: u?.input ?? 0, output: u?.output ?? 0 });
+const wireRequest = (r: LiveRequest): Wire => ({
+  account_id: r.accountId,
+  agent_id: r.agentId,
+  attempts: r.attempts.map(wireAttempt),
+  // Nothing in the console reads the byte count, so the simulator keeps none.
+  bytes_relayed: 0,
+  canonical_model: r.model,
+  cost_usd: r.costUsd,
+  error_code: r.errorCode,
+  id: r.id,
+  key_id: r.keyId,
+  kind: r.kind,
+  model: r.model,
+  output_tps: r.outputTps,
+  phases: wirePhases(r.phases),
+  pool_id: r.poolId,
+  preview: r.preview,
+  session_id: r.sessionId,
+  state: r.state,
+  status: r.status,
+  transport: r.transport,
+  usage: wireUsage(r.usage),
+  user_agent: r.userAgent,
+});
+const wireMetric = (m: LiveMetric): Wire => ({ quality: m.quality, series: m.series, value: m.value });
+const wireTick = (t: LiveTick): Wire => {
+  const m = t.metrics;
+  return {
+    at: ms(t.at),
+    metrics: {
+      active_streams: wireMetric(m.activeStreams),
+      cost_per_minute: wireMetric(m.costPerMinute),
+      error_rate: wireMetric(m.errorRate),
+      output_tps: wireMetric(m.outputTps),
+      requests_per_second: wireMetric(m.requestsPerSecond),
+      ttfb_p50: wireMetric(m.ttfbP50),
+      ttfb_p95: wireMetric(m.ttfbP95),
+      ttfb_p99: wireMetric(m.ttfbP99),
+    },
+  };
+};
+function wireDelta(d: LiveDelta): Wire {
+  switch (d.type) {
+    case 'started':
+      return { cursor: d.cursor, request: wireRequest(d.request), type: d.type };
+    case 'selected':
+      return { account_id: d.accountId, at: ms(d.at), attempt: wireAttempt(d.attempt), cursor: d.cursor, ...(d.failed ? { failed: wireAttempt(d.failed) } : {}), id: d.id, type: d.type };
+    case 'head':
+      return { at: ms(d.at), attempt: wireAttempt(d.attempt), cursor: d.cursor, id: d.id, status: d.status, type: d.type };
+    case 'progress':
+      return { at: ms(d.at), cursor: d.cursor, id: d.id, output_tps: d.outputTps, type: d.type, usage: wireUsage(d.usage) };
+    case 'preview':
+      return { chunk: d.chunk, cursor: d.cursor, id: d.id, type: d.type };
+    case 'finished':
+      return { at: ms(d.at), attempts: d.attempts.map(wireAttempt), cost_usd: d.costUsd, cursor: d.cursor, error_code: d.errorCode, id: d.id, phases: wirePhases(d.phases), status: d.status, type: d.type, usage: wireUsage(d.usage) };
+    case 'tick':
+      return { cursor: d.cursor, tick: wireTick(d.tick), type: d.type };
+  }
+}
+
 /** A row the feed itself runs always has a usage; only a page's projection of a past instant has none. */
 type FeedRequest = LiveRequest & { usage: Usage };
 
 class LiveFeed {
   private cursor = 0;
-  private handlers = new Set<(e: LiveEvent) => void>();
+  private handlers = new Set<(frame: LiveFrame) => void>();
   private inFlight = new Map<string, { plan: Plan; request: FeedRequest }>();
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
   private recent: LiveRequest[] = [];
@@ -189,7 +273,7 @@ class LiveFeed {
     this.advanceOne(request, plan, now);
   }
 
-  subscribe(handler: (e: LiveEvent) => void): () => void {
+  subscribe(handler: (frame: LiveFrame) => void): () => void {
     this.handlers.add(handler);
     handler({ kind: 'snapshot', snapshot: this.snapshot() });
     if (this.handlers.size === 1) this.run();
@@ -199,12 +283,12 @@ class LiveFeed {
     };
   }
 
-  private snapshot(): LiveSnapshot {
+  private snapshot(): Wire {
     return {
       cursor: this.cursor,
-      inFlight: [...this.inFlight.values()].map((e) => ({ ...e.request, attempts: [...e.request.attempts], phases: { ...e.request.phases }, usage: { ...e.request.usage } })),
-      recent: this.recent.map((r) => ({ ...r })),
-      tick: this.tick(Date.now()),
+      in_flight: [...this.inFlight.values()].map((e) => wireRequest(e.request)),
+      recent: this.recent.map(wireRequest),
+      tick: wireTick(this.tick(Date.now())),
     };
   }
 
@@ -231,7 +315,8 @@ class LiveFeed {
   }
 
   private emit(delta: LiveDelta) {
-    for (const h of this.handlers) h({ kind: 'delta', delta });
+    const wire = wireDelta(delta);
+    for (const h of this.handlers) h({ delta: wire, kind: 'delta' });
   }
 
   private push(key: keyof LiveTick['metrics'], value: number | null) {

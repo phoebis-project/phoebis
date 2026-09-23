@@ -173,3 +173,20 @@ test('round robin ranks the overage subtier behind the plan-funded one it rotate
   const deferredOnly = selectionOrder(pool('round_robin', 'prefer_plan', [member('over', 0)]), accounts, []);
   assert.deepEqual(deferredOnly[0].next, ['over'], 'a subtier with nothing ahead of it is still the one the router takes');
 });
+
+test('round robin with the subscription preference walks the kind tiers first and rotates inside each', () => {
+  const trio = [account('key', { kind: 'api_key' }), account('a'), account('b')];
+  const members = [member('key', 0), member('a', 1), member('b', 1)];
+  const tiers = selectionOrder(pool('round_robin', 'allow', members, { preferSubscription: true }), trio, []);
+  assert.deepEqual(
+    tiers.map((t) => [t.group, t.priority, t.next.sort()]),
+    [
+      [0, 1, ['a', 'b']],
+      [2, 0, []],
+    ],
+    'the subscription tier leads although its priority is lower, and every member of it is the rotation\'s next',
+  );
+  assert.deepEqual(tiers[0].placements.map((p) => p.rank), [1, 1], 'the cursor, not a score, picks among them');
+  const flat = selectionOrder(pool('round_robin', 'allow', members), trio, []);
+  assert.deepEqual(flat.map((t) => [t.group, t.priority, t.next]), [[0, 0, ['key']], [0, 1, []]], 'without the preference priority alone orders the tiers');
+});

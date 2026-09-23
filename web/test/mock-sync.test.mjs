@@ -13,6 +13,12 @@ const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 const day = new Date(Date.now() - 86_400_000).toISOString();
 const now = new Date().toISOString();
 const query = { from: day, groupBy: 'key', to: now };
+// Signed in as the admin: several rows write, and the gate refuses those writes to anyone else.
+const admin = async () => {
+  const api = new d.MockApi();
+  await api.login('admin');
+  return api;
+};
 
 /**
  * One row per fixture: how the decoder reads it, and how the mock answers the same route. A list route
@@ -67,7 +73,7 @@ test('every fixture has a row in the sync table or is listed as unconsumed', () 
 
 for (const [name, row] of Object.entries(SYNC)) {
   test(`the mock answers ${name} in the shape the decoder reads`, async () => {
-    const api = new d.MockApi();
+    const api = await admin();
     const expected = row.expect ? row.expect(fixture(name)) : row.decode(fixture(name));
     const answered = await row.mock(api);
     const findings = row.expect ? Object.keys(expected).filter((k) => !(k in (answered ?? {}))).map((k) => `.${k}: only in the fixture`) : same(shapeOf(expected), answered, '', 0, row.opaque);
@@ -113,7 +119,7 @@ function members(value, path, at = '') {
 
 for (const [name, paths] of Object.entries(CLOSED)) {
   test(`the mock answers ${name} with values inside the decoder's closed sets`, async () => {
-    const answered = await SYNC[name].mock(new d.MockApi());
+    const answered = await SYNC[name].mock(await admin());
     for (const [path, set] of Object.entries(paths)) {
       const found = members(answered, path);
       // An answer with nothing at the path would pass without checking a single value.
@@ -128,7 +134,7 @@ for (const [name, paths] of Object.entries(CLOSED)) {
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 
 test('the mock refuses the affinity and the keepalive values the route refuses', async () => {
-  const api = new d.MockApi();
+  const api = await admin();
   const all = (await api.listPools()).find((p) => p.id === 'all');
   const refused = async (input, message) => assert.rejects(api.updatePool('all', input), (e) => e.status === 400 && e.message === message);
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false } }, 'affinity_ttl_seconds is 0 or at least 60');
@@ -143,7 +149,7 @@ test('the mock refuses the affinity and the keepalive values the route refuses',
 });
 
 test('the mock stores a key edit\'s enabled flag and expiry and folds them into the status', async () => {
-  const api = new d.MockApi();
+  const api = await admin();
   const batch = (await api.listKeys()).find((k) => k.id === 'batch');
   assert.deepEqual([batch.enabled, batch.status], [false, 'disabled']);
   const edit = { allowedModels: batch.allowedModels, bodyCaptureHours: batch.bodyCaptureHours, enabled: false, keepaliveOptOut: batch.keepaliveOptOut, name: 'nightly', notes: batch.notes, poolId: batch.poolId };
@@ -157,7 +163,7 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
 });
 
 test('the mock deletes an upstream with its pool memberships, and a disconnect keeps the identity', async () => {
-  const api = new d.MockApi();
+  const api = await admin();
   assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'mail')), 'the story puts mail in a pool');
   await api.deleteAccount('mail');
   assert.equal((await api.listAccounts()).some((a) => a.id === 'mail'), false);

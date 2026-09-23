@@ -1,9 +1,11 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { ApiError } from '@/api/http';
+import { decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { ApiError, slug } from '@/api/http';
 import type {
-  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery,
-  Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
+  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, MemberEligibility, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool,
+  RequestDetail, RequestLog, RequestPage, RequestQuery, Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
 } from '@/api/types';
+import { urlHost } from '@/lib/format';
 import type { NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
@@ -22,6 +24,20 @@ const MOCK_SEED = 4_211;
 
 // A short delay keeps loading states honest without making the mock feel slow.
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+// The routes' own wording, so a page draws the text the router would have sent.
+const VIEWER_WRITE = 'the viewer role cannot change anything';
+const VIEWER_BODIES = 'captured bodies are for administrators';
+const KEY_TAKEN = 'a key with this id exists';
+const POOL_TAKEN = 'a pool with this id exists';
+
+/** The part of the rule check a dialog can reach, in the route's order and wording; create and edit share it. */
+const ruleRefusal = (input: AlertRuleInput): string | null => {
+  if (input.kind !== 'utilization_above') return null;
+  if (input.threshold === null || !(input.threshold >= 0 && input.threshold <= 1)) return 'utilization_above needs a threshold between 0 and 1';
+  if (input.windowId === null) return 'utilization_above needs a window of 5h, 7d, or 7d_oi';
+  return null;
+};
 
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
@@ -84,13 +100,14 @@ const seedRole = (role: Role | null) => {
   }
 };
 
-/** The role the mock build previews, which the alert events route reads to decide whether to blank a question. */
+/** The role the mock build previews, which outranks the session's the way the console's own reading of it does. */
 const PREVIEW_ROLE_KEY = 'phoebis.role';
-const previewsViewer = (): boolean => {
+const previewedRole = (): Role | null => {
   try {
-    return localStorage.getItem(PREVIEW_ROLE_KEY) === 'viewer';
+    const role = localStorage.getItem(PREVIEW_ROLE_KEY);
+    return role === 'admin' || role === 'viewer' ? role : null;
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -133,6 +150,17 @@ const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   if (FLAGGED.includes(a.status)) return a.status;
   if (!enabled) return 'paused';
   return a.cooldowns.length ? 'cooldown' : 'ready';
+};
+
+/**
+ * The pool route's reading of a member, in its order: paused or not ready is unavailable, then an account-wide
+ * cooldown, then overage the router observed under a policy that admits none.
+ */
+const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy']): MemberEligibility => {
+  if (!a || !a.routingEnabled || FLAGGED.includes(a.status)) return 'unavailable';
+  if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
+  if (policy === 'never' && a.overage?.inUse) return 'overage';
+  return 'eligible';
 };
 
 /**
@@ -190,13 +218,23 @@ export class MockApi implements Api {
   private sessions: Session[] = [...SESSIONS];
   private settings: Settings = { ...SETTINGS };
 
+  /** The role the console is drawn for: a preview first, as the session provider reads it, then the signed-in one. */
+  private role(): Role | null {
+    return previewedRole() ?? this.session?.role ?? seededRole();
+  }
+
+  /** The gate's refusal of a write to anyone but the admin; the writes it lets a viewer through never call this. */
+  private mutation(): void {
+    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_WRITE, null);
+  }
+
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
   }
 
   private account(accountId: string): Account {
     const a = this.accounts.find((x) => x.id === accountId);
-    if (!a) throw new ApiError(404, `Unknown account ${accountId}`, 'not_found');
+    if (!a) throw new ApiError(404, `Unknown account ${accountId}`, null);
     return a;
   }
 
@@ -205,12 +243,14 @@ export class MockApi implements Api {
     return next;
   }
 
-  cancelPairing(pairingId: string) {
+  async cancelPairing(pairingId: string) {
+    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 150);
   }
 
   async clearCooldown(accountId: string, scope: string) {
+    this.mutation();
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
     this.putAccount({ ...a, cooldowns, status: cooldowns.length ? a.status : 'ready' });
@@ -218,12 +258,14 @@ export class MockApi implements Api {
   }
 
   async clearFunding(accountId: string) {
+    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
     return latency(undefined, 200);
   }
 
   async completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview> {
+    this.mutation();
     const submitted = 'url' in input ? fromCallbackUrl(input.url) : input;
     if (!submitted) throw new Error('That URL carries no authorization code and state. Paste the whole address the browser landed on, or the code on its own.');
     // The router refuses a callback whose state does not belong to the pairing the id names.
@@ -233,14 +275,16 @@ export class MockApi implements Api {
     return latency({ email: existing?.email ?? 'new.login@example.com', organization: existing ? `${existing.label} workspace` : 'Personal', state: submitted.state }, 500);
   }
 
-  confirmPairing(pairingId: string) {
+  async confirmPairing(pairingId: string) {
+    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 250);
   }
 
-  confirmPriceImport(token: string) {
+  async confirmPriceImport(token: string) {
+    this.mutation();
     const preview = this.pricePreview;
-    if (!preview || preview.token !== token) return Promise.reject(new ApiError(404, 'that preview is no longer available; import again', 'not_found'));
+    if (!preview || preview.token !== token) return Promise.reject(new ApiError(404, 'that preview is no longer available; import again', null));
     const imported = new Map(preview.models.map((m) => [m.model, m]));
     const current = this.settings.pricing.models;
     const added = preview.models.filter((m) => !current.some((c) => c.model === m.model));
@@ -249,7 +293,8 @@ export class MockApi implements Api {
     return latency(this.settings.pricing, 300);
   }
 
-  createAccount(input: AccountInput): Promise<Account> {
+  async createAccount(input: AccountInput): Promise<Account> {
+    this.mutation();
     const account: Account = {
       ...ACCOUNT_SAMPLE,
       catalogSyncedAt: null,
@@ -274,18 +319,25 @@ export class MockApi implements Api {
     return latency(account, 300);
   }
 
-  createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
+  async createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
+    this.mutation();
+    const refusal = ruleRefusal(input);
+    if (refusal) throw new ApiError(400, refusal, null);
     const rule: AlertRule = { ...ALERT_RULE_SAMPLE, createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
     this.rules = [...this.rules, rule];
     return latency(rule, 250);
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
+    this.mutation();
+    // The client sends the id it derives from the name, so a name already taken is an id already taken.
+    const id = slug(input.name);
+    if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
     const body = this.token(40);
     const secret = `phoebis-${body}`;
     const key: ApiKey = {
       ...KEY_SAMPLE,
-      id: `key_${body.slice(0, 6)}`,
+      id,
       name: input.name,
       prefix: secret.slice(0, 8),
       poolId: input.poolId,
@@ -304,14 +356,20 @@ export class MockApi implements Api {
     return latency({ key, secret }, 300);
   }
 
-  createPool(input: PoolInput): Promise<Pool> {
+  async createPool(input: PoolInput): Promise<Pool> {
+    this.mutation();
+    const id = slug(input.name);
+    if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
+    const refusal = poolRefusal(input);
+    if (refusal) throw new ApiError(400, refusal, null);
+    if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) throw new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
     const pool: Pool = {
       ...POOL_SAMPLE,
       ...input,
       activePins: 0,
       cost24h: 0,
-      id: input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      members: input.members.map((m) => ({ ...m, eligible: 'eligible' as const })),
+      id,
+      members: input.members.map((m) => ({ ...m, eligible: eligibilityOf(this.accounts.find((a) => a.id === m.accountId), input.overagePolicy) })),
       // The input carries the operator's flag alone, so the route resolves it against the strategy here.
       preferSubscriptionEffective: effectiveSubscriptionPreference(input),
       requests24h: 0,
@@ -322,23 +380,27 @@ export class MockApi implements Api {
   }
 
   async deleteAccount(accountId: string) {
+    this.mutation();
     this.account(accountId);
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
     return latency(undefined, 250);
   }
 
-  deleteAlertRule(id: string) {
+  async deleteAlertRule(id: string) {
+    this.mutation();
     this.rules = this.rules.filter((r) => r.id !== id);
     return latency(undefined, 200);
   }
 
-  deleteKey(id: string) {
+  async deleteKey(id: string) {
+    this.mutation();
     this.keys = this.keys.filter((k) => k.id !== id);
     return latency(undefined, 200);
   }
 
-  deletePool(id: string) {
+  async deletePool(id: string) {
+    this.mutation();
     // A key reaches only its own pool's members, so a pool cannot leave while keys still point at it.
     if (this.keys.some((k) => k.poolId === id)) return Promise.reject(new ApiError(409, 'pool still has keys', null));
     this.pools = this.pools.filter((p) => p.id !== id);
@@ -346,6 +408,7 @@ export class MockApi implements Api {
   }
 
   async disconnectAccount(accountId: string) {
+    this.mutation();
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was.
     this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
@@ -360,7 +423,9 @@ export class MockApi implements Api {
     return latency(seriesOf(ALL_ROLLUPS, query));
   }
 
-  getCapturedBodies(requestId: string) {
+  async getCapturedBodies(requestId: string) {
+    // The bodies route checks the role itself: it is the one read the gate would let a viewer through to.
+    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_BODIES, null);
     const r = requestById.get(requestId);
     return latency(r ? capturedBodiesFor(r) : null);
   }
@@ -444,13 +509,15 @@ export class MockApi implements Api {
 
   listAlertEvents(state?: 'open' | 'resolved') {
     const stored = emptyStore() ? [] : this.events;
-    const viewer = previewsViewer();
+    const viewer = this.role() !== 'admin';
     const events = stored.map((e) => questionFor(e, viewer));
     return latency(state ? events.filter((e) => e.state === state) : events);
   }
 
   listAlertRules() {
-    return latency(emptyStore() ? [] : this.rules);
+    const rules = emptyStore() ? [] : this.rules;
+    // A webhook URL can carry the receiver's credential in its path, so the route answers a viewer the host alone.
+    return latency(this.role() === 'admin' ? rules : rules.map((r) => ({ ...r, webhookUrl: urlHost(r.webhookUrl) })));
   }
 
   listCatalog() {
@@ -507,12 +574,14 @@ export class MockApi implements Api {
   }
 
   async pauseAccount(accountId: string) {
+    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
     return latency(undefined, 250);
   }
 
-  previewPriceImport(url: string) {
+  async previewPriceImport(url: string) {
+    this.mutation();
     const preview = { ...PRICE_IMPORT_SAMPLE, changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
     this.pricePreview = { models: preview.models, token: preview.token, url };
     return latency(preview, 400);
@@ -522,45 +591,52 @@ export class MockApi implements Api {
     return latency(undefined, 400);
   }
 
-  releaseSession(keyId: string, sessionId: string) {
+  async releaseSession(keyId: string, sessionId: string) {
+    this.mutation();
     this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId && !s.historical));
     return latency(undefined, 250);
   }
 
   async renameAccount(accountId: string, label: string) {
+    this.mutation();
     return latency(this.putAccount({ ...this.account(accountId), label }), 250);
   }
 
-  resolveAlertEvent(id: string): Promise<AlertEvent> {
+  async resolveAlertEvent(id: string): Promise<AlertEvent> {
+    this.mutation();
     const event = this.events.find((e) => e.id === id);
-    if (!event) return Promise.reject(new ApiError(404, `Unknown event ${id}`, 'not_found'));
+    if (!event) return Promise.reject(new ApiError(404, `Unknown event ${id}`, null));
     const next: AlertEvent = { ...event, resolvedAt: iso(NOW), state: 'resolved' };
     this.events = this.events.map((e) => (e.id === id ? next : e));
     return latency(next, 250);
   }
 
   async resumeAccount(accountId: string) {
+    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
     return latency(undefined, 250);
   }
 
-  revokeKey(id: string) {
+  async revokeKey(id: string) {
+    this.mutation();
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
     this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
     return latency(undefined, 250);
   }
 
-  rotateKey(id: string): Promise<CreatedApiKey> {
+  async rotateKey(id: string): Promise<CreatedApiKey> {
+    this.mutation();
     const key = this.keys.find((k) => k.id === id);
-    if (!key) return Promise.reject(new ApiError(404, `Unknown key ${id}`, 'not_found'));
+    if (!key) return Promise.reject(new ApiError(404, `Unknown key ${id}`, null));
     const secret = `phoebis-${this.token(40)}`;
     const next: ApiKey = { ...key, prefix: secret.slice(0, 8), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }
 
-  startPairing(accountId: string): Promise<PairingSession> {
+  async startPairing(accountId: string): Promise<PairingSession> {
+    this.mutation();
     const state = this.token(24);
     // The router names the pairing with an id of its own; the state only ever travels through the browser.
     const id = `pair_${this.token(10)}`;
@@ -578,24 +654,37 @@ export class MockApi implements Api {
   }
 
   subscribeLive(handler: (event: LiveEvent) => void) {
-    return liveFeed().subscribe(handler);
+    // Through the decoders the socket's frames take, so every page reads the feed the way the served console does.
+    return liveFeed().subscribe((frame) => {
+      if (frame.kind === 'snapshot') return handler({ kind: 'snapshot', snapshot: decodeLiveSnapshot(frame.snapshot) });
+      const delta = decodeLiveDelta(frame.delta);
+      if (delta) handler({ delta, kind: 'delta' });
+    });
   }
 
   async syncCatalog(accountId: string): Promise<SyncResult> {
+    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, catalogSyncedAt: iso(NOW) });
     return latency({ added: [], error: null, missing: a.servedModels.filter((m) => !m.inCatalog).map((m) => m.upstreamId), seeded: false }, 500);
   }
 
-  testAlertRule(id: string): Promise<AlertDeliveryTest> {
+  async testAlertRule(id: string): Promise<AlertDeliveryTest> {
+    this.mutation();
     const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, 'not_found'));
+    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, null));
     return latency({ error: null, status: 200 }, 400);
   }
 
-  updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
+  async updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
+    this.mutation();
     const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, 'not_found'));
+    if (!rule) return Promise.reject(new ApiError(404, `Unknown rule ${id}`, null));
+    // An open event resolves under the rule's kind, so the route holds the kind still while one is open.
+    const open = this.events.filter((e) => e.ruleId === id && e.state === 'open').length;
+    if (input.kind !== rule.kind && open > 0) throw new ApiError(409, `the condition cannot change while ${open} ${open === 1 ? 'event is' : 'events are'} open for this rule`, null);
+    const refusal = ruleRefusal(input);
+    if (refusal) throw new ApiError(400, refusal, null);
     // An absent secret leaves the stored one alone, so the badge only turns off when an empty string clears it.
     const hasSecret = input.secret === undefined ? rule.hasSecret : input.secret !== '';
     const next: AlertRule = { ...rule, enabled: input.enabled, hasSecret, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
@@ -603,7 +692,8 @@ export class MockApi implements Api {
     return latency(next, 250);
   }
 
-  updateKey(id: string, input: KeyInput): Promise<ApiKey> {
+  async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
+    this.mutation();
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const { expiresAt: expiry, ...rest } = input;
@@ -616,7 +706,8 @@ export class MockApi implements Api {
     return latency(next, 250);
   }
 
-  updatePool(id: string, input: PoolInput): Promise<Pool> {
+  async updatePool(id: string, input: PoolInput): Promise<Pool> {
+    this.mutation();
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -639,10 +730,12 @@ export class MockApi implements Api {
   }
 
   async updateServedModels(accountId: string, models: ServedModel[]) {
+    this.mutation();
     return latency(this.putAccount({ ...this.account(accountId), servedModels: models }), 250);
   }
 
   async verifyAccount(accountId: string) {
+    this.mutation();
     this.account(accountId);
     return latency({ ok: true, status: 200 }, 400);
   }

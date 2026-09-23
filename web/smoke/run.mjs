@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
+const { api, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -251,7 +251,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant', 'Loading quota']);
+expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
@@ -279,9 +279,28 @@ expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Re
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
 }
 {
+  // The mock's snapshots read the same before and after a refresh, so the check watches the calls the button makes.
+  const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth').map((a) => a.id).sort();
+  const refreshed = [];
+  let reads = 0;
+  const { listQuotaSnapshots, refreshUsage } = api;
+  api.refreshUsage = (id) => {
+    refreshed.push(id);
+    return refreshUsage.call(api, id);
+  };
+  api.listQuotaSnapshots = () => {
+    reads += 1;
+    return listQuotaSnapshots.call(api);
+  };
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh all')?.click();
   await m.settle(1_200);
-  results.push({ name: '/quota Refresh all reloads every card', ok: m.text().includes('6 loaded'), missing: [m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'] });
+  api.refreshUsage = refreshUsage;
+  api.listQuotaSnapshots = listQuotaSnapshots;
+  results.push({
+    name: '/quota Refresh all refreshes every subscription upstream, then reads every card again',
+    ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && reads > 0 && m.text().includes('6 loaded'),
+    missing: [refreshed.join(','), `reads ${reads}`, m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'],
+  });
 }
 {
   // The mock registry holds six, so the plural is what this can read; the singular is asserted by its absence.
@@ -2574,6 +2593,13 @@ m = await mount('/keys');
   const t = m.text();
   results.push({ name: 'viewer: /keys hides Create API key', ok: !t.includes('Create API key'), missing: [] });
   results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
+  // A control a page forgets to hide would still reach the router's gate, so the mock answers it the same way.
+  const refused = await api.createKey({ allowedModels: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
+  results.push({
+    name: 'viewer: a write through the mock is refused with the gate\'s 403',
+    ok: refused?.status === 403 && refused.message === 'the viewer role cannot change anything' && refused.code === null && !(await api.listKeys()).some((k) => k.id === 'viewer-write'),
+    missing: [refused ? `${refused.status} ${refused.message} ${refused.code}` : 'the write went through'],
+  });
 }
 // Every control named here is a button, and a label is matched against the buttons rather than against the page
 // text because the copy carries the same words: the upstreams status filter alone offers "Paused". A closed

@@ -10,3 +10,4 @@ export * from '@/lib/pattern';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';
 export { MockApi } from '@/mock';
+export { liveFeed } from '@/mock/live';

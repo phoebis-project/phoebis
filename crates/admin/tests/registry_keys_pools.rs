@@ -1020,6 +1020,78 @@ async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_throu
 }
 
 #[tokio::test]
+async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag_and_its_effect() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let flags = |v: &serde_json::Value| {
+        (
+            v["strategy"].as_str().map(str::to_owned),
+            v["prefer_subscription"].as_bool(),
+            v["prefer_subscription_effective"].as_bool(),
+        )
+    };
+    let preferred = post(&app, "/admin/pools", r#"{"id":"rotating","label":"Rotating","strategy":"round_robin","prefer_subscription":true,"members":[{"account_id":"direct","priority":0},{"account_id":"business","priority":1}]}"#, Some(&cookie)).await;
+    assert_eq!(preferred.status(), 201);
+    let rr = Some("round_robin".to_owned());
+    assert_eq!(
+        flags(&json(preferred).await),
+        (rr.clone(), Some(true), Some(true)),
+        "a strategy that reads no sample orders by kind only because the operator asked for it"
+    );
+    let plain = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"plain","label":"Plain","strategy":"round_robin"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        flags(&json(plain).await),
+        (rr.clone(), Some(false), Some(false))
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let stored = listed["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "rotating")
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        flags(&stored),
+        (rr, Some(true), Some(true)),
+        "the create stored the flag rather than answering it once"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_api_key_sub_strategy_on_create_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"odd","label":"Odd","api_key_sub_strategy":"least_utilized"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"],
+        "api_key_sub_strategy must be priority_random or round_robin"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert!(
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != "odd"),
+        "a refused create stores no pool"
+    );
+}
+
+#[tokio::test]
 async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
