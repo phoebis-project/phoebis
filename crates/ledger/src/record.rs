@@ -30,8 +30,9 @@ pub struct RequestRecord {
     pub client_drift: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
-    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured. Derived
-    /// on read from `bodies`; the writer's value is never stored.
+    /// Whether the captured body is shorter than what the relay saw; false when nothing was captured. The
+    /// assembler's own verdict, stored on this row: a stream cut by a chunk lost after the last one that
+    /// arrived never shows up in a length comparison against the bodies table, so the row has to carry it.
     pub request_truncated: bool,
     pub response_truncated: bool,
     /// The caller's `User-Agent` as it was sent, `None` when it sent none.

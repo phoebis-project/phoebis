@@ -120,10 +120,7 @@ impl Assembler {
             .in_flight
             .iter()
             .filter(|(_, e)| e.observed.body_capture_hours > 0)
-            .map(|(id, e)| {
-                let size = e.observed.body.len() + e.response_body.as_ref().map_or(0, Vec::len);
-                (id.clone(), size, e.seq)
-            })
+            .map(|(id, e)| (id.clone(), capture_size(e), e.seq))
             .max_by_key(|(_, size, seq)| (*size, std::cmp::Reverse(*seq)))
             .map(|(id, size, _)| (id, size))?;
         if let Some(entry) = self.in_flight.get_mut(&victim) {
@@ -132,6 +129,17 @@ impl Assembler {
         }
         self.captured_bytes = self.captured_bytes.saturating_sub(freed);
         Some(gap(&victim, "capture_budget", now))
+    }
+
+    /// Removes the entry the entry cap names, releasing its share of the capture budget first: the budget's
+    /// own accounting has no other hook into an eviction this cap decides on its own.
+    fn evict_for_entry_cap(&mut self, victim: &str) {
+        let Some(entry) = self.in_flight.remove(victim) else {
+            return;
+        };
+        if entry.observed.body_capture_hours > 0 {
+            self.captured_bytes = self.captured_bytes.saturating_sub(capture_size(&entry));
+        }
     }
 
     pub fn observe(&mut self, event: Event) -> Vec<Record> {
@@ -155,7 +163,7 @@ impl Assembler {
                         .min_by_key(|(_, e)| (e.seen_at, e.seq))
                         .map(|(id, _)| id.clone())
                     {
-                        self.in_flight.remove(&victim);
+                        self.evict_for_entry_cap(&victim);
                         records.push(gap(&victim, "in_flight_cap", now));
                     }
                 }
@@ -273,6 +281,13 @@ impl Assembler {
         }
         dropped
     }
+}
+
+/// What an entry currently charges to the capture budget: its retained request body plus whatever of its
+/// response has been captured so far. The one place both eviction paths read this from, so bytes released by
+/// either always leave the same accounting behind.
+fn capture_size(entry: &InFlight) -> usize {
+    entry.observed.body.len() + entry.response_body.as_ref().map_or(0, Vec::len)
 }
 
 /// A gap inside one request, as opposed to the writer's gap over dropped records: the row that follows is
@@ -1273,6 +1288,38 @@ mod tests {
             vec![("r0".to_string(), "in_flight_cap".to_string())],
             "the first observed is the only one evicted"
         );
+    }
+
+    #[test]
+    fn the_entry_cap_eviction_releases_the_victims_capture_budget_too() {
+        let mut a = Assembler::new(clock_at(1_000));
+        for i in 0..MAX_IN_FLIGHT {
+            a.observe(observed_capturing_with_body(
+                &format!("r{i}"),
+                vec![b'x'; 10],
+            ));
+        }
+        let before = a.retained_capture_bytes();
+        assert_eq!(before, MAX_IN_FLIGHT * 10);
+        let records = a.observe(observed_capturing_with_body("overflow", vec![b'x'; 10]));
+        assert_eq!(
+            records.iter().find_map(gap_detail),
+            Some(("r0".to_string(), "in_flight_cap".to_string()))
+        );
+        assert_eq!(
+            a.retained_capture_bytes(),
+            before,
+            "the evicted entry's bytes came back out, so the new entry's charge does not grow the total"
+        );
+        // Nothing leaked upward: steady turnover at the entry cap never approaches the capture budget.
+        let more = a.observe(observed_capturing_with_body("more", vec![b'x'; 10]));
+        assert!(
+            !more
+                .iter()
+                .any(|r| gap_detail(r).is_some_and(|(_, reason)| reason == "capture_budget")),
+            "the budget was never approached, only the unrelated entry cap"
+        );
+        assert_eq!(a.retained_capture_bytes(), before);
     }
 
     #[test]

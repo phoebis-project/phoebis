@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use phoebis_bus::{
     Event as BusEvent, Kind, Origin, Outcome as BusOutcome, RequestComplete, RequestObserved,
-    RequestShape, ResponseFacts,
+    RequestShape, ResponseChunk, ResponseFacts,
 };
-use phoebis_ledger::{EventRecord, LedgerConfig, Record, RequestRecord};
+use phoebis_ledger::{
+    list_requests, EventRecord, LedgerConfig, LiveKeys, Record, RequestFilter, RequestRecord,
+};
 use phoebis_profile::fixtures::BodyFixture;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -681,6 +683,78 @@ fn complete_event(id: &str) -> BusEvent {
         response_chunks: None,
         finished_at: 1,
     })
+}
+
+fn observed_capturing_event(id: &str) -> BusEvent {
+    let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
+        unreachable!()
+    };
+    observed.body_capture_hours = 1;
+    BusEvent::RequestObserved(observed)
+}
+
+fn chunk_event(id: &str, index: u32, body: &str) -> BusEvent {
+    BusEvent::ResponseChunk(ResponseChunk {
+        request_id: id.into(),
+        attempt: 1,
+        index,
+        body: bytes::Bytes::from(body.to_string()),
+        phase: None,
+    })
+}
+
+/// A completion naming more chunks than the test goes on to deliver, so the capture reads back short.
+fn complete_short_event(id: &str, response_chunks: u32) -> BusEvent {
+    let BusEvent::RequestComplete(mut complete) = complete_event(id) else {
+        unreachable!()
+    };
+    complete.response_chunks = Some(response_chunks);
+    BusEvent::RequestComplete(complete)
+}
+
+/// The row `list_requests` hands back, the same query `/admin/requests` runs.
+async fn listed(h: &Harness, id: &str) -> RequestRecord {
+    wait_for_async(Duration::from_secs(5), || async {
+        let id = id.to_string();
+        h.db.read(move |c| {
+            let (rows, _) =
+                list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 50)?;
+            Ok(rows.into_iter().find(|(r, _)| r.id == id).map(|(r, _)| r))
+        })
+        .await
+        .unwrap()
+    })
+    .await
+}
+
+/// A capture whose last chunk was dropped at the bus reads back truncated through a real database round
+/// trip, not only through the in-memory assembler: `insert_request_in` has to store the flag the assembler
+/// computes, since the read-time comparison against the bodies table cannot see this particular gap (nothing
+/// after the drop ever raises `response_len_seen` past what the row already captured).
+#[tokio::test]
+async fn a_short_capture_reads_back_truncated_through_the_database() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.bus.publish(observed_capturing_event("trunc-1"));
+    h.bus.publish(chunk_event("trunc-1", 0, "partial"));
+    // The completion says two chunks were published; only one arrived.
+    h.bus.publish(complete_short_event("trunc-1", 2));
+    let row = listed(&h, "trunc-1").await;
+    assert!(
+        row.response_truncated,
+        "a short capture reads back truncated through the same query the admin route runs"
+    );
+    let gap = wait_for_async(Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "ledger_gap")
+    })
+    .await;
+    let detail: serde_json::Value = serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["reason"].as_str(), Some("chunk_dropped"));
+    up.shutdown().await;
 }
 
 /// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room

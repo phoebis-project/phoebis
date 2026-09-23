@@ -218,6 +218,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 12: a request refused for client drift keeps the kind on its own row, not only on the alert and the
 /// attempt the refusal never reached.
+///
+/// Version 13: a request's truncation is stored on its own row rather than recomputed from the bodies table,
+/// since a capture cut by a chunk lost after the last one that arrived never raises `response_len_seen` past
+/// what the row already stored, leaving the recompute no way to see the cut.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -448,5 +452,10 @@ ALTER TABLE requests ADD COLUMN rotation_at INTEGER;",
     (
         12,
         "ALTER TABLE requests ADD COLUMN client_drift TEXT;",
+    ),
+    (
+        13,
+        "ALTER TABLE requests ADD COLUMN request_truncated INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE requests ADD COLUMN response_truncated INTEGER NOT NULL DEFAULT 0;",
     ),
 ];
