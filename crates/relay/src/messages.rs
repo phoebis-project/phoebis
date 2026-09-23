@@ -740,7 +740,10 @@ impl Relay {
                 }
             }
         };
-        self.router.touch_key(&key.id, presented, key.rotated_at);
+        // A probe is the router's own traffic; "used" in the key list means a client presented the key.
+        if probe.is_none() {
+            self.router.touch_key(&key.id, presented, key.rotated_at);
+        }
         let capture_hours = snapshot
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);

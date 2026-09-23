@@ -398,6 +398,7 @@ dependencies = [
  "bytes",
  "phoebis-bus",
  "phoebis-cch",
+ "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-oauth",
  "phoebis-profile",

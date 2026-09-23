@@ -334,8 +334,9 @@ between {min} and {max}, not {value}`.
 | `oauth_prewarm_verified` | `false` | `true` once the expiry-crossing experiment has passed for combinations in use |
 
 `max_retained_bytes` below `max_request_bytes` refuses with `keepalive.max_retained_bytes must be at least
-keepalive.max_request_bytes` instead of the range message. Until `oauth_prewarm_verified` is set, no probe runs
-on an `oauth` account.
+keepalive.max_request_bytes` instead of the range message. `max_sessions` counts live sessions only: an ended
+session frees its slot at once, though its tombstone stays until the session expiry sweeps it. Until
+`oauth_prewarm_verified` is set, no probe runs on an `oauth` account.
 
 ### proxy
 

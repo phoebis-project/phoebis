@@ -3,6 +3,7 @@
 //! it does I/O.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -135,6 +136,7 @@ reasons! {
     Paused => "paused",
     PoolDisabled => "pool_disabled",
     ProbeAuthenticationError => "probe_authentication_error",
+    ProbePoolExhausted => "probe_pool_exhausted",
     ProbeQuotaExhausted => "probe_quota_exhausted",
     ProbeRetryLimit => "probe_retry_limit",
     ProbeTransportError => "probe_transport_error",
@@ -399,6 +401,9 @@ pub struct Engine {
     /// Woken by every worker that finishes, which is what `wait_idle` waits on.
     pub(crate) idle: Notify,
     pub(crate) workers: TaskTracker,
+    /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
+    /// Cheap enough to keep in every build; only the reader is gated.
+    router_view_calls: AtomicU64,
 }
 
 impl Engine {
@@ -427,7 +432,16 @@ impl Engine {
             cancel: CancellationToken::new(),
             idle: Notify::new(),
             workers: TaskTracker::new(),
+            router_view_calls: AtomicU64::new(0),
         })
+    }
+
+    /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a
+    /// release build carries no way to count the scheduler's own router traffic.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub fn router_views(&self) -> u64 {
+        self.router_view_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn limits(&self) -> &KeepaliveLimits {
@@ -589,13 +603,25 @@ impl Inner {
             })
     }
 
+    /// The cheap half of what a tick needs to decide before it asks the router: whether any live agent still
+    /// holds a recipe. An idle session, or one whose companion has sent nothing real yet, retains nothing for
+    /// the gate to read, so the tick that finds none needs no fresher view than the one it already has.
+    pub(crate) fn anything_due(&self) -> bool {
+        self.sessions.iter().any(|(key, session)| {
+            session
+                .agents
+                .iter()
+                .any(|(agent_id, agent)| self.live(key, agent_id) && agent.current.is_some())
+        })
+    }
+
     /// The cap is a budget per UTC day, so the day the sum was taken for is carried with it and the first
     /// writer past midnight starts it over. Every writer of `spent_today` rolls under the same lock it
     /// charges: a probe that completes after midnight would otherwise land on yesterday's sum and have its
     /// charge cleared by the next tick.
     pub(crate) fn roll_day(&mut self, now: i64) {
         let day = now.div_euclid(86_400_000);
-        if self.spent_day != day {
+        if self.spent_day < day {
             self.spent_today.clear();
             self.spent_day = day;
         }
@@ -1151,17 +1177,18 @@ impl Engine {
                 })
         };
         if let Some((read, key_generation, pool_id, account, model)) = credit {
-            if let Some(saving) = gross_saving(&self.parts.pricing.current(), &model, read) {
-                inner
-                    .sessions
-                    .get_mut(&key)
-                    .unwrap()
-                    .agents
-                    .get_mut(&agent_id)
-                    .unwrap()
-                    .net_usd += saving;
-                credited = Some((read, key_generation, pool_id, account, model, saving));
-            }
+            // The mark says a probe kept this request warm, which is true whatever the price table knows;
+            // the saving is what the table can put a number on, zero for a model it does not price.
+            let saving = gross_saving(&self.parts.pricing.current(), &model, read).unwrap_or(0.0);
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .net_usd += saving;
+            credited = Some((read, key_generation, pool_id, account, model, saving));
         }
         let (ready, armed) = inner.sessions[&key]
             .agents
@@ -1290,15 +1317,28 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let max_workers = self.parts.limits.max_workers;
+        // The three asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
+        // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
+        // without a command.
+        let something_due = {
+            let mut inner = self.lock();
+            if inner.closed {
+                return;
+            }
+            inner.expire(now, expiry);
+            inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
+            inner.roll_day(now);
+            inner.anything_due()
+        };
+        if !something_due {
+            return;
+        }
         let view = self.router_view(now).await;
         let jobs = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
             }
-            inner.expire(now, expiry);
-            inner.drop_sessions_of_dead_keys(&view.snapshot);
-            inner.roll_day(now);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
@@ -1490,6 +1530,8 @@ impl Engine {
     /// Three asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64) -> RouterView {
+        self.router_view_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let snapshot = self.parts.router.snapshot();
         let pins = self
             .parts

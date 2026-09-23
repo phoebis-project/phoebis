@@ -4,6 +4,7 @@ mod common;
 use std::str::FromStr;
 
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::Respond;
 
@@ -749,7 +750,8 @@ async fn probe_outcomes_are_classified() {
         );
     }
     // An upstream 401 never reaches the engine as a 401: the relay marks the account and fails over, and with
-    // no account left answers the untimed exhaustion 503, which the engine reads as the authentication pause.
+    // no account left answers the untimed exhaustion 503, which pauses under its own reason whatever marked
+    // the account.
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -768,7 +770,7 @@ async fn probe_outcomes_are_classified() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeAuthenticationError, None)
+        (Reason::ProbePoolExhausted, None)
     );
     // A 429 on every account is the relay's exhaustion 429: the same pause a single 429 after failover gets.
     let mut r = rig(RigSpec::default()).await;
@@ -804,6 +806,67 @@ async fn probe_outcomes_are_classified() {
         r.status("main").reason,
         Reason::Scheduled,
         "a real request re-arms the agent"
+    );
+}
+
+/// A pinned account that disconnects between admission and the probe's own selection leaves the pool with
+/// nothing to serve: the relay answers its untimed exhaustion, and the pause reads that reason rather than the
+/// authentication one a marked account gets.
+#[tokio::test]
+async fn an_exhaustion_503_pauses_under_its_own_reason() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.h.store
+        .set_state("a", AccountState::Disconnected)
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").next_probe_at),
+        (Reason::ProbePoolExhausted, None)
+    );
+}
+
+/// The day the cap charges against is read under the same lock that charges it, so a charge stamped with a
+/// day before the one already summed must not roll the sum back to it.
+#[tokio::test]
+async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        // The jump across midnight below is many times the default idle budget and the session expiry, and
+        // this case is about the day roll alone.
+        policy: KeepalivePolicy {
+            max_idle_seconds: 0,
+            ..RigSpec::default().policy
+        },
+        session_expiry: std::time::Duration::from_secs(1_000_000_000),
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "the day's first charge");
+    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
+    r.clock
+        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2, "the next day's own charge");
+    let after_the_roll = r.engine.spent_today();
+    // Nothing is due at this stamp, so only `roll_day`'s own comparison is exercised: a day already summed
+    // must not read as behind a day that came before it.
+    r.clock
+        .store(NOW + 270_000, std::sync::atomic::Ordering::SeqCst);
+    r.engine.step().await;
+    assert_eq!(
+        r.engine.spent_today(),
+        after_the_roll,
+        "the earlier stamp left the day already summed alone"
     );
 }
 

@@ -770,6 +770,35 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
 }
 
 #[tokio::test]
+async fn a_kept_warm_request_on_an_unpriced_model_is_marked_and_counted_with_zero_saving() {
+    // claude-sonnet-4-5 is BODY's own model and stays out of the shipped price table for this test, unlike
+    // the priced tests above.
+    let mut r = rig(RigSpec::default()).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", BODY).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let before = r.status("main").net_usd;
+    r.advance(60_000);
+    let second = r.observe_with("main", BODY).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (credit.kept_warm_requests, credit.kept_warm_tokens),
+        (1, 2_000),
+        "the mark and the tokens count on a model the price table does not know"
+    );
+    assert_eq!(credit.saved_usd_gross, 0.0);
+    assert_eq!(
+        r.status("main").net_usd,
+        before,
+        "no saving to add for an unpriced model"
+    );
+    assert!(row(&r, &second).await.kept_warm);
+}
+
+#[tokio::test]
 async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;

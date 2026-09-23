@@ -145,7 +145,7 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of sixteen reasons attached:
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of seventeen reasons attached:
 
 | Reason | Console label | Console hint |
 | --- | --- | --- |
@@ -159,6 +159,7 @@ A recipe is `armed`, its probe scheduled or arming from the first stream event o
 | `oauth_unverified` | subscription probes off | Off until the account's expiry-crossing experiment passes. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
 | `paused` | paused | The account is paused, the pool is disabled, or the key opted out. |
+| `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
 | `probe_error` | probe error | The last probe failed on the transport or was refused. |
 | `quota_exhausted` | quota exhausted | The account's usage window is spent; probes resume when it resets. |
 | `reauth` | needs re-auth | The account needs re-pairing or funding before anything can be sent on it. |
@@ -182,12 +183,13 @@ how these sessions are used."
 ## What the ledger records
 
 Per pool and per hour, the ledger's rollup carries the keepalive fields the console reads: `kept_warm_requests`
-and `kept_warm_tokens`, the requests and tokens a probe kept off a cache miss; `saved_usd_gross`, what those
-kept-warm tokens saved against paying them as uncached input every turn; `probe_cost_usd`, what sending the
-probes cost; `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and
-`wasted_probe_usd`, probes still unanswered when the recipe was discarded, and what they cost;
-`wasted_probe_reasons`, those wasted probes counted by the reason above; and `probes_skipped`, a due probe a gate
-withheld rather than sending, for example because the cost cap or a cooldown already held the recipe.
+and `kept_warm_tokens`, the requests and tokens a probe kept off a cache miss on any model the request named;
+`saved_usd_gross`, what those kept-warm tokens saved against paying them as uncached input every turn, zero for
+a model the price table does not know; `probe_cost_usd`, what sending the probes cost; `probe_migrated`, a
+probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`, probes
+still unanswered when the recipe was discarded, and what they cost; `wasted_probe_reasons`, those wasted
+probes counted by the reason above; and `probes_skipped`, a due probe a gate withheld rather than sending, for
+example because the cost cap or a cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
 `probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap.

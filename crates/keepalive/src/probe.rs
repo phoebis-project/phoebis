@@ -227,7 +227,7 @@ impl Inner {
         table: &PriceTable,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
-            account: job.account.clone().unwrap_or_default(),
+            account: job.account.clone().unwrap_or_else(|| "-".to_string()),
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
             cost_usd: 0.0,
@@ -510,10 +510,10 @@ impl Inner {
     }
 
     /// The Go `probeErrorLocked`, read from the answer the relay gave: a 429 after failover, or the exhaustion
-    /// 429 the relay answers when every account is cooled, is the quota pause; the untimed exhaustion 503 is what
-    /// an authentication failure becomes once the relay marked the account, so it pauses as one; a 5xx forwarded
-    /// from upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost
-    /// exchange (status 0) is a transport error.
+    /// 429 the relay answers when every account is cooled, is the quota pause; the untimed exhaustion 503, when
+    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
+    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
+    /// (status 0) is a transport error.
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,
@@ -524,7 +524,7 @@ impl Inner {
     ) {
         let reason = match status {
             429 => Reason::ProbeQuotaExhausted,
-            _ if exhausted => Reason::ProbeAuthenticationError,
+            _ if exhausted => Reason::ProbePoolExhausted,
             500..=599 => return self.retry(key, agent_id, Reason::RetryableProbeError, now),
             401 | 403 => Reason::ProbeAuthenticationError,
             400..=499 => Reason::UnsupportedProbe,

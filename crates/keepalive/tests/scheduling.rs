@@ -15,6 +15,26 @@ async fn armed(spec: RigSpec) -> Rig {
 }
 
 #[tokio::test]
+async fn an_idle_tick_asks_the_router_nothing() {
+    let mut r = rig(RigSpec::default()).await;
+    let before = r.engine.router_views();
+    r.step().await;
+    assert_eq!(
+        r.engine.router_views(),
+        before,
+        "a registered session with no recipe asks the router nothing"
+    );
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.engine.router_views(),
+        before + 1,
+        "a due recipe asks the router once"
+    );
+}
+
+#[tokio::test]
 async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0)],

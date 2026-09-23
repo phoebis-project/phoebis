@@ -110,6 +110,8 @@ rendered:
 
 The `model` label is bounded by the price table: a model the table prices keeps its own id, and every other
 model is reported as `other`, so a downstream caller cannot grow the label set by naming models it likes.
+`phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
+attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
 `phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them.

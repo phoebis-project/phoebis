@@ -175,6 +175,40 @@ pub async fn rig(spec: RigSpec) -> Rig {
     rig
 }
 
+/// A `session_start` for `session_id`, under the rig's one instance: a multi-session test names its own
+/// session while sharing the instance a single-session test gets by default.
+pub fn session_start(session_id: &str) -> Event {
+    Event {
+        event: "session_start".into(),
+        session_id: session_id.into(),
+        ..Default::default()
+    }
+}
+
+/// A `session_end` for `session_id`.
+pub fn session_end(session_id: &str) -> Event {
+    Event {
+        event: "session_end".into(),
+        session_id: session_id.into(),
+        ..Default::default()
+    }
+}
+
+/// A `session_start` naming its own instance and, when replacing one, the instance it replaces.
+pub fn session_start_as(
+    session_id: &str,
+    instance_id: &str,
+    previous_instance: Option<&str>,
+) -> Event {
+    Event {
+        event: "session_start".into(),
+        session_id: session_id.into(),
+        instance_id: instance_id.into(),
+        previous_instance_id: previous_instance.map(String::from),
+        ..Default::default()
+    }
+}
+
 impl Rig {
     pub fn now(&self) -> i64 {
         self.clock.load(Ordering::SeqCst)
@@ -195,14 +229,40 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    /// A lifecycle event for the rig's one session and instance, under the harness key, with the next sequence.
+    /// A lifecycle event under the harness key, with the next sequence. A caller that leaves `session_id`
+    /// unset gets the rig's one session; one that leaves `instance_id` unset gets that session's own current
+    /// instance (the rig's default session and instance before either is registered), so `session_end` and
+    /// `session_start` need only the session id a multi-session test is driving.
     pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
         self.sequence += 1;
         event.sequence = self.sequence;
-        event.session_id = "session".into();
-        event.instance_id = "instance".into();
+        if event.session_id.is_empty() {
+            event.session_id = "session".into();
+        }
+        if event.instance_id.is_empty() {
+            let generation = self.generation("desktop");
+            event.instance_id = self
+                .engine
+                .snapshot("desktop", generation)
+                .sessions
+                .into_iter()
+                .find(|s| s.session_id == event.session_id)
+                .map(|s| s.instance_id)
+                .unwrap_or_else(|| "instance".into());
+        }
         self.engine
             .apply_event("desktop", self.generation("desktop"), event)
+    }
+
+    /// A snapshot of the rig's own key, for a test that reads a tombstone's `ended` flag or a live session's
+    /// sequence.
+    pub fn snapshot(&self) -> phoebis_keepalive::Snapshot {
+        self.engine.snapshot("desktop", self.generation("desktop"))
+    }
+
+    /// The lease the rig's limits carry, so a test that waits one out never repeats the number.
+    pub fn lease_ms(&self) -> i64 {
+        self.engine.limits().lease_ms()
     }
 
     pub fn state(&mut self, agent: &str, state: &str) {

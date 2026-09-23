@@ -458,6 +458,16 @@ impl Inner {
             .sessions
             .get(&key)
             .is_some_and(|s| s.key_generation == key_generation);
+        // An ended session keeps its entry for the snapshot's tombstone until the expiry and holds no slot;
+        // the bound is about what is live, and it is met by every start that brings a session to life, an
+        // instance replacement included. A same-instance recovery of a live session consumes nothing.
+        let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
+        if becomes_live {
+            let live = self.sessions.values().filter(|s| !s.ended).count();
+            if live >= max_sessions {
+                return Err(err("session_limit", 429));
+            }
+        }
         if mine {
             let session = self.sessions.get_mut(&key).expect("the session just read");
             if session.instance == ev.instance_id {
@@ -482,15 +492,8 @@ impl Inner {
             if ev.previous_instance_id.as_deref() != Some(session.instance.as_str()) {
                 return Err(err("instance_conflict", 409));
             }
-        } else {
-            if ev.previous_instance_id.is_some() {
-                return Err(err("unknown_previous_instance", 409));
-            }
-            // A start that replaces a previous holder's session takes the entry it already holds, so the
-            // bound only refuses one that would add an entry.
-            if !self.sessions.contains_key(&key) && self.sessions.len() >= max_sessions {
-                return Err(err("session_limit", 429));
-            }
+        } else if ev.previous_instance_id.is_some() {
+            return Err(err("unknown_previous_instance", 409));
         }
         let held = self.sessions.get(&key).map(|s| s.agents.len()).unwrap_or(0);
         if self.agents - held >= max_agents {

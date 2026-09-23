@@ -20,6 +20,7 @@ pub enum ViewReason {
     OauthUnverified,
     Overage,
     Paused,
+    PoolExhausted,
     ProbeError,
     QuotaExhausted,
     Reauth,
@@ -46,6 +47,7 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         Overage => ViewReason::Overage,
         Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut
         | IneligibleCredential | SubagentsOff => ViewReason::Paused,
+        ProbePoolExhausted => ViewReason::PoolExhausted,
         InvalidProbeUsage
         | MissingAccount
         | ProbeAuthenticationError

@@ -5,6 +5,11 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The step scheduler's router-ask counter, see `Engine::router_views`. A dependent's dev-dependency, and this
+# crate's own below, turn it on for a test build, so a release build carries no counter reader.
+debug-hooks = []
+
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -28,6 +33,8 @@ url = { workspace = true }
 
 [dev-dependencies]
 boring = { workspace = true }
+# An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
+phoebis-keepalive = { path = ".", features = ["debug-hooks"] }
 phoebis-profile = { path = "../profile" }
 phoebis-transport = { path = "../transport" }
 fake-upstream = { path = "../../tests/fake_upstream" }

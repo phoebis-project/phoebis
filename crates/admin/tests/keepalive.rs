@@ -783,3 +783,124 @@ async fn an_ended_session_is_listed_without_a_companion() {
         (Some(1), Some(0))
     );
 }
+
+/// A probe is the router's own traffic: it never presents the key, so it must not move `last_used_at`, which
+/// only a request the key itself authenticated should touch.
+#[tokio::test]
+async fn a_probe_leaves_the_keys_last_used_at_alone() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    parts
+        .store
+        .put_served_models(
+            "direct",
+            &[phoebis_store::ServedModelWrite {
+                upstream_id: "claude-sonnet-4-5".into(),
+                selected: true,
+                long_context: false,
+            }],
+            "test",
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let created = json(
+        post(
+            &parts.app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let secret = created["secret"].as_str().unwrap().to_string();
+    let generation = common::generation(&parts.store, "desktop");
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    phoebis_keepalive::spawn_observer(parts.keepalive.clone());
+    parts.up.add_credential_rule(
+        common::API_KEY,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec(),
+        },
+    );
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let proxy = phoebis_relay::router(parts.relay.clone());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("x-api-key", &secret)
+        .header("content-type", "application/json")
+        .header("x-claude-code-session-id", "s1")
+        .header("x-claude-code-agent-id", "main")
+        .body(axum::body::Body::from(
+            r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let resp = proxy.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        parts
+            .store
+            .api_key("desktop")
+            .unwrap()
+            .unwrap()
+            .last_used_at
+            .is_some()
+            .then_some(())
+    })
+    .await;
+    let touched = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await["keys"][0]
+        ["last_used_at"]
+        .as_i64();
+    assert!(touched.is_some(), "the client request touched the key");
+    let due = fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        parts
+            .keepalive
+            .agent_status("desktop", "s1", "main")
+            .and_then(|s| s.next_probe_at)
+    })
+    .await;
+    parts
+        .clock_cell
+        .store(due + 1_000, std::sync::atomic::Ordering::SeqCst);
+    parts.keepalive.step().await;
+    parts.keepalive.wait_idle().await;
+    assert!(
+        parts
+            .keepalive
+            .agent_status("desktop", "s1", "main")
+            .unwrap()
+            .probes
+            >= 1,
+        "the probe ran"
+    );
+    // The router task processes commands in order, so a round trip through it waits out anything a probe
+    // queued before this point.
+    parts.router.reload().await.unwrap();
+    let after = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await["keys"][0]
+        ["last_used_at"]
+        .as_i64();
+    assert_eq!(
+        after, touched,
+        "a probe must not move the key's last_used_at"
+    );
+}

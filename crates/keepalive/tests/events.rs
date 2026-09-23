@@ -10,6 +10,80 @@ use phoebis_keepalive::{
 };
 use common::*;
 
+#[tokio::test]
+async fn the_session_bound_counts_live_sessions_only() {
+    let mut rig = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 128,
+            ..RigSpec::default().limits
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    for i in 0..128 {
+        rig.event(session_start(&format!("s-{i}"))).unwrap();
+        rig.event(session_end(&format!("s-{i}"))).unwrap();
+    }
+    let ack = rig.event(session_start("s-128"));
+    assert!(ack.is_ok(), "128 ended sessions hold no slot: {ack:?}");
+    // The rig's own bootstrap session and "s-128" already hold two of the 128 slots, so the rest of the
+    // budget is 126 before the next live-bringing start is refused.
+    for i in 0..126 {
+        rig.event(session_start(&format!("t-{i}"))).unwrap();
+    }
+    let refused = rig.event(session_start("t-126")).unwrap_err();
+    assert_eq!(refused.code, "session_limit");
+    let snapshot = rig.snapshot();
+    assert!(
+        snapshot
+            .sessions
+            .iter()
+            .any(|s| s.session_id == "s-0" && s.ended),
+        "the tombstone is still read"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
+    // The rig's own bootstrap session holds one slot already, so the cap here is two: one for it, one for
+    // "a" or "b".
+    let mut rig = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 2,
+            ..RigSpec::default().limits
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    rig.event(session_start_as("a", "i1", None)).unwrap();
+    rig.event(session_end("a")).unwrap();
+    rig.event(session_start_as("b", "i-b", None)).unwrap();
+    // The tombstone's entry exists, so a bound over "adds an entry" would let this through.
+    let refused = rig
+        .event(session_start_as("a", "i2", Some("i1")))
+        .unwrap_err();
+    assert_eq!(refused.code, "session_limit");
+}
+
+#[tokio::test]
+async fn a_same_instance_recovery_of_a_live_session_takes_no_slot() {
+    let mut rig = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 2,
+            ..RigSpec::default().limits
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    rig.event(session_start_as("a", "i1", None)).unwrap();
+    rig.advance(rig.lease_ms() + 1_000); // the lease lapsed; the session is live and unattended
+    let ack = rig.event(session_start_as("a", "i1", None));
+    assert!(
+        ack.is_ok(),
+        "a live session's own instance re-adopts it: {ack:?}"
+    );
+}
+
 fn usage(read: u64, write_5m: u64) -> Usage {
     Usage {
         cache_read_tokens: Some(read),
