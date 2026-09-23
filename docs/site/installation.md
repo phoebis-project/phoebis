@@ -460,12 +460,13 @@ beside the database that keeps a second process off the same data.
 every credential in the database, so keep it outside any backup that carries the database, which is useless
 without it.
 
-The registry file also holds the relay's session memory: for each key, session, and agent, the previous request
-id and the prompt id the relay restores into a Claude Code request's attribution line. The in-process copy is
-the one the relay reads; changes reach the file every five seconds, at shutdown, and as soon as the entries
-waiting to be written reach `sessions.memory_cap`, a session missing from memory after a restart or past
-`sessions.memory_cap` is read back from the file on its next request, and rows older than
-`sessions.memory_retention_days` are dropped once an hour ([sessions](#sessions)).
+The registry file also holds the relay's session memory: for each key, session, and agent, the previous request id and
+the prompt id the relay restores into a Claude Code request's attribution line. The in-process copy is the one the
+relay reads; changes reach the file every five seconds, at shutdown, and as soon as the records evicted from memory
+before they were written reach `sessions.memory_cap` (that overlay is bounded by the cap too; a record it sheds because
+a write hung is counted in the log), a session missing from memory after a restart or past `sessions.memory_cap`
+is read back from the file on its next request, and rows older than `sessions.memory_retention_days` are dropped
+once an hour ([sessions](#sessions)).
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used
 as given, the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with

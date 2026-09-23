@@ -12,14 +12,13 @@ use phoebis_store::{MemoryRecord, MemoryStore, StoreError};
 /// The default idle bound, also the client's own session expiry default; `sessions.memory_idle_seconds`
 /// replaces it.
 pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
-/// Entries held at most; past it the least recently seen entry goes. The unflushed overlay an eviction leaves
-/// behind has two regimes: while the store answers, it grows past the cap and asks for a flush the moment it
-/// reaches one, which empties it, because dropping a record a working store would have taken is the one loss
-/// nothing can undo; while the store is failing, it drops its oldest at the cap rather than growing without
-/// limit, so the relay holds at most twice this many records through an outage. Every string an entry holds
-/// is bounded on the way in (the key's ids and the model by `identity`, the carried prompt id by `facts`, the
-/// upstream's own ids by the response limits), so an entry is a few hundred bytes and the cap bounds memory at
-/// a few tens of megabytes on a host that never restarts.
+/// Entries held at most; past it the least recently seen entry goes. The overlay an eviction leaves behind is
+/// bounded by the same cap in every regime: while the store answers, it asks for a flush the moment it reaches
+/// the cap, so a shed there happens only when that flush does not land first; while the store is failing, it
+/// sheds its oldest at the cap. So the relay holds at most twice this many records in any regime. Every string
+/// an entry holds is bounded on the way in (the key's ids and the model by `identity`, the carried prompt id by
+/// `facts`, the upstream's own ids by the response limits), so an entry is a few hundred bytes and the cap
+/// bounds memory at a few tens of megabytes on a host that never restarts.
 pub const MEMORY_CAP: usize = 65_536;
 
 /// A minute between sweeps is often enough to keep the map from growing unbounded between requests, and rare
@@ -92,7 +91,9 @@ struct Entry {
 }
 
 impl Entry {
-    fn record(&self, now: i64) -> MemoryRecord {
+    /// The entry's own `last_seen` is the record's, never a flush clock: a save that recovers after an outage
+    /// must not stamp an expired entry fresh.
+    fn record(&self) -> MemoryRecord {
         let v1 = RecordV1 {
             accounts: self
                 .accounts
@@ -112,7 +113,7 @@ impl Entry {
         MemoryRecord {
             record_version: RECORD_VERSION,
             payload: serde_json::to_string(&v1).expect("the record serializes"),
-            last_seen: now,
+            last_seen: self.last_seen,
         }
     }
 
@@ -156,7 +157,8 @@ struct Inner {
     /// the map: the read started when the key was absent, and an eviction between its start and its guard is
     /// exactly what would let it install its older copy over a newer one that was written and saved meanwhile.
     loading: HashSet<MemoryKey>,
-    /// Whether the last save failed, which is the only regime the overlay drops a record in.
+    /// Whether the last save failed. Gates the flush request alone: while true, an overlay at the cap is
+    /// already shedding on its own and asking again would only spend a flush that has nothing new to save.
     store_failing: bool,
     /// Bumped by every write; a dirty or a pending entry is filed under the sequence of its latest write, so a
     /// flush that lands after a newer write still knows which write it saved.
@@ -165,12 +167,15 @@ struct Inner {
     dirty: HashMap<MemoryKey, u64>,
     /// A keyed overlay for the entries that left the map with a change unflushed: an eviction or an idle purge
     /// moves the record here rather than losing it, and a write or a read that lands on the same key revives it
-    /// before falling back to the map or the disk. Bounded by `cap`, the same as `entries`.
+    /// before falling back to the map or the disk. Bounded by `cap` in every regime; a shed is counted in
+    /// `dropped_pending`.
     pending: HashMap<MemoryKey, (MemoryRecord, u64)>,
-    /// Records the overlay has shed because it was already at `cap` when another arrived, since the last time
-    /// a flush reported them. Real loss, not double counting: an entry the overlay drops is one `acknowledge`
-    /// will never see.
+    /// Records the overlay shed because it was at `cap` when another arrived, whether the store was failing or
+    /// a save had not landed yet, since the last time a flush reported them.
     dropped_pending: u64,
+    /// Unsaved records retired because they fell past the retention before a save took them; reported once,
+    /// at the next successful flush.
+    expired_unsaved: u64,
 }
 
 pub struct SessionMemory {
@@ -200,6 +205,7 @@ impl SessionMemory {
                 dirty: HashMap::new(),
                 pending: HashMap::new(),
                 dropped_pending: 0,
+                expired_unsaved: 0,
             }),
             cap,
             flush_wanted: tokio::sync::Notify::new(),
@@ -244,7 +250,7 @@ impl SessionMemory {
         // a write landing on a key evicted moments earlier continues that record rather than racing it to the
         // store with a fresh one.
         if !inner.entries.contains_key(key) {
-            revive_pending(&mut inner, key, now, self.cap);
+            revive_pending(&mut inner, key, now, self.cap, self.retention_ms);
         }
         let is_new = !inner.entries.contains_key(key);
         // Resolved before the entry is touched: a parent lookup and the child's own insertion must not borrow
@@ -308,7 +314,14 @@ impl SessionMemory {
     pub fn record_request_id(&self, key: &MemoryKey, account_id: &str, request_id: &str, now: i64) {
         self.purge(now);
         let mut inner = self.inner.lock().unwrap();
-        let account = account_entry(&mut inner, key, account_id, now, self.cap);
+        let account = account_entry(
+            &mut inner,
+            key,
+            account_id,
+            now,
+            self.cap,
+            self.retention_ms,
+        );
         account.request_id = Some(request_id.to_string());
         self.mark_dirty(&mut inner, key);
     }
@@ -323,7 +336,14 @@ impl SessionMemory {
     ) {
         self.purge(now);
         let mut inner = self.inner.lock().unwrap();
-        let account = account_entry(&mut inner, key, account_id, now, self.cap);
+        let account = account_entry(
+            &mut inner,
+            key,
+            account_id,
+            now,
+            self.cap,
+            self.retention_ms,
+        );
         account
             .message_ids
             .insert(canonical_model.to_string(), message_id.to_string());
@@ -411,7 +431,9 @@ impl SessionMemory {
         self.purge(now);
         {
             let mut inner = self.inner.lock().unwrap();
-            if inner.entries.contains_key(key) || revive_pending(&mut inner, key, now, self.cap) {
+            if inner.entries.contains_key(key)
+                || revive_pending(&mut inner, key, now, self.cap, self.retention_ms)
+            {
                 return;
             }
             // Marked for the whole read: nothing may evict or purge the key while its older copy is on its
@@ -460,25 +482,46 @@ impl SessionMemory {
     /// What a flush writes: every overlay record under the sequence it left the map at, and every dirty entry
     /// as a record under the sequence of its latest write, each carrying the `last_seen` of the entry itself
     /// rather than the flush's clock, so saves that fail for longer than the retention and then recover write
-    /// no expired entry back under a fresh timestamp. A record already past the retention is left out
-    /// altogether: it names a session the read-through would miss and the store's purge would drop. Nothing is
-    /// removed here; `acknowledge` does that once the save has landed.
+    /// no expired entry back under a fresh timestamp. A record already past the retention is retired here
+    /// rather than left out: it names a session the read-through would miss, and a record nothing will ever
+    /// save has no business in the overlay. Nothing else is removed here; `acknowledge` does that once the
+    /// save has landed.
     pub fn snapshot_dirty(&self, now: i64) -> Vec<(MemoryKey, MemoryRecord, u64)> {
-        let inner = self.inner.lock().unwrap();
-        let retained =
-            |record: &MemoryRecord| record.last_seen >= now.saturating_sub(self.retention_ms);
+        let mut inner = self.inner.lock().unwrap();
+        let cutoff = now.saturating_sub(self.retention_ms);
+        let expired_pending: Vec<MemoryKey> = inner
+            .pending
+            .iter()
+            .filter(|(_, (record, _))| record.last_seen < cutoff)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in expired_pending {
+            inner.pending.remove(&key);
+            inner.expired_unsaved += 1;
+        }
+        let expired_dirty: Vec<MemoryKey> = inner
+            .dirty
+            .keys()
+            .filter(|key| {
+                inner
+                    .entries
+                    .get(*key)
+                    .is_some_and(|entry| entry.last_seen < cutoff)
+            })
+            .cloned()
+            .collect();
+        for key in expired_dirty {
+            inner.dirty.remove(&key);
+            inner.expired_unsaved += 1;
+        }
         let mut out: Vec<(MemoryKey, MemoryRecord, u64)> = inner
             .pending
             .iter()
-            .filter(|(_, (record, _))| retained(record))
             .map(|(key, (record, sequence))| (key.clone(), record.clone(), *sequence))
             .collect();
         for (key, sequence) in &inner.dirty {
             if let Some(entry) = inner.entries.get(key) {
-                let record = entry.record(entry.last_seen);
-                if retained(&record) {
-                    out.push((key.clone(), record, *sequence));
-                }
+                out.push((key.clone(), entry.record(), *sequence));
             }
         }
         out
@@ -517,6 +560,9 @@ impl SessionMemory {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let batch = memory.snapshot_dirty(now);
             if batch.is_empty() {
+                // Nothing to save is not a failure: the regime flag would otherwise outlive the outage
+                // that set it once every unsaved record has expired.
+                memory.inner.lock().unwrap().store_failing = false;
                 return Ok(());
             }
             let records: Vec<(MemoryKey, MemoryRecord)> = batch
@@ -535,21 +581,30 @@ impl SessionMemory {
                 .map(|(key, _, sequence)| (key, sequence))
                 .collect();
             memory.acknowledge(&saved);
+            // Reported once, on the recovery that follows a streak: an outage that neither drops nor
+            // expires anything stays silent here, and one that does says so exactly once rather than on
+            // every later flush. Kept out of the empty-batch return above: a flush with nothing to save has
+            // not recovered anything yet to report.
+            let (dropped, expired) = {
+                let mut inner = memory.inner.lock().unwrap();
+                (
+                    std::mem::take(&mut inner.dropped_pending),
+                    std::mem::take(&mut inner.expired_unsaved),
+                )
+            };
+            if dropped > 0 || expired > 0 {
+                tracing::warn!(
+                    dropped,
+                    expired,
+                    "the session memory's overlay lost records: shed at the cap, or expired before a save \
+                     took them"
+                );
+            }
             Ok(())
         })
         .await;
         match flushed {
-            Ok(Ok(())) => {
-                // Reported once, on the recovery that follows a streak: an outage that never drops anything
-                // stays silent here, and one that does says so exactly once rather than on every later flush.
-                let dropped = std::mem::take(&mut self.inner.lock().unwrap().dropped_pending);
-                if dropped > 0 {
-                    tracing::warn!(
-                        dropped,
-                        "the session memory's overlay dropped records while the store was unreachable"
-                    );
-                }
-            }
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 let dropped = self.inner.lock().unwrap().dropped_pending;
                 tracing::warn!(
@@ -583,8 +638,9 @@ fn account_entry<'a>(
     account_id: &str,
     now: i64,
     cap: usize,
+    retention_ms: i64,
 ) -> &'a mut AccountMemory {
-    if !inner.entries.contains_key(key) && !revive_pending(inner, key, now, cap) {
+    if !inner.entries.contains_key(key) && !revive_pending(inner, key, now, cap, retention_ms) {
         evict_if_full(inner, cap);
     }
     let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
@@ -604,10 +660,23 @@ fn account_entry<'a>(
 
 /// An overlay record for `key` back into the map, dirty under a fresh sequence so the next flush writes it
 /// with its new `last_seen`; answers whether there was one.
-fn revive_pending(inner: &mut Inner, key: &MemoryKey, now: i64, cap: usize) -> bool {
+fn revive_pending(
+    inner: &mut Inner,
+    key: &MemoryKey,
+    now: i64,
+    cap: usize,
+    retention_ms: i64,
+) -> bool {
     let Some((record, _)) = inner.pending.get(key) else {
         return false;
     };
+    // Judged as the read-through judges a row: an expired record revived here would be written back under
+    // a fresh timestamp, which is what the dirty tier's filter exists to prevent.
+    if record.last_seen < now.saturating_sub(retention_ms) {
+        inner.pending.remove(key);
+        inner.expired_unsaved += 1;
+        return false;
+    }
     // Decoded before the record leaves the overlay: a payload this build cannot read is an unflushed change
     // that still belongs on disk, and removing it first would drop it for good.
     let Some(entry) = Entry::from_record(record, now) else {
@@ -643,7 +712,7 @@ fn evict_if_full(inner: &mut Inner, cap: usize) {
         .remove(&oldest)
         .expect("just found under the lock");
     if let Some(sequence) = inner.dirty.remove(&oldest) {
-        let record = entry.record(entry.last_seen);
+        let record = entry.record();
         stash_pending(inner, cap, oldest, record, sequence);
     }
 }
@@ -665,17 +734,16 @@ fn purge_locked(inner: &mut Inner, now: i64, idle_ms: i64, cap: usize) {
             .remove(&key)
             .expect("just found under the lock");
         if let Some(sequence) = inner.dirty.remove(&key) {
-            let record = entry.record(entry.last_seen);
+            let record = entry.record();
             stash_pending(inner, cap, key, record, sequence);
         }
     }
 }
 
-/// Inserts an overlay record. While the store is failing the overlay is held at `cap`: whichever record has
-/// the smallest `last_seen` goes, the new arrival included, since that is the one the idle purge would have
-/// shed first anyway, and it is counted so a flush that keeps failing can eventually say how much it lost.
-/// While the store answers nothing is shed, because the next flush takes the whole overlay and losing a record
-/// a working store would have written is not recoverable; the flusher is asked for that flush at the cap.
+/// Inserts an overlay record. The overlay is held at `cap` in every regime: whichever record has the smallest
+/// `last_seen` goes, the new arrival included, since that is the one the idle purge would have shed first, and
+/// it is counted so a later flush can say how much was lost. While the store answers, the flusher is asked for
+/// a flush the moment the overlay reaches the cap, so a shed there means a save that hung or failed.
 fn stash_pending(
     inner: &mut Inner,
     cap: usize,
@@ -683,7 +751,7 @@ fn stash_pending(
     record: MemoryRecord,
     sequence: u64,
 ) {
-    if inner.store_failing && inner.pending.len() >= cap {
+    if inner.pending.len() >= cap {
         let oldest = inner
             .pending
             .iter()
@@ -736,11 +804,13 @@ mod tests {
         fail_next_save: AtomicBool,
         hold_load: Mutex<Option<Arc<Barrier>>>,
         hold_save: Mutex<Option<Arc<Barrier>>>,
+        loads_started: AtomicUsize,
         saves_started: AtomicUsize,
     }
 
     impl MemoryStore for MapStore {
         fn load(&self, key: &MemoryKey) -> Result<Option<MemoryRecord>, StoreError> {
+            self.loads_started.fetch_add(1, Ordering::SeqCst);
             // The row is read before the hold, so a held read answers with what was there when it started,
             // which is what a slow store does and what a test about a stale copy needs.
             let row = self.rows.lock().unwrap().get(key).cloned();
@@ -973,23 +1043,122 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_healthy_store_keeps_every_evicted_record_and_the_overlay_asks_for_its_flush() {
+    async fn expired_records_leave_the_overlay_and_the_dirty_set_at_the_flush_that_skips_them() {
+        let store = Arc::new(MapStore::default());
+        let mem = Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
+        let (a, b) = (key("a"), key("b"));
+        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        store.fail_next_save.store(true, Ordering::SeqCst);
+        mem.flush(1_000).await;
+        mem.record_request_id(&b, "acct", "req_b", 1_500); // evicts a into the overlay
+                                                           // Past the retention for both: the flush that leaves them out also retires them.
+        mem.flush(5_000).await;
+        let inner = mem.inner.lock().unwrap();
+        assert!(
+            inner.pending.is_empty(),
+            "the expired overlay record was retired"
+        );
+        assert!(
+            inner.dirty.is_empty(),
+            "the expired dirty entry was retired"
+        );
+        assert!(
+            !inner.store_failing,
+            "an empty batch after a refused save clears the flag"
+        );
+        assert_eq!(inner.expired_unsaved, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_save_bounds_the_overlay_at_the_cap() {
         let store = Arc::new(MapStore::default());
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
-        let (a, b, c) = (key("a"), key("b"), key("c"));
-        // Three sessions between two flushes at a cap of one: each write evicts the one before it, and the
-        // overlay holds what the store has not taken yet rather than shedding it.
+        let (a, b, c, d) = (key("a"), key("b"), key("c"), key("d"));
+        mem.record_request_id(&a, "acct", "req_a", 1_000);
+        let gate = Arc::new(Barrier::new(2));
+        *store.hold_save.lock().unwrap() = Some(gate.clone());
+        let held = tokio::spawn({
+            let mem = mem.clone();
+            async move { mem.flush(1_000).await }
+        });
+        fake_upstream::wait_for(Duration::from_secs(5), || {
+            (store.saves_started.load(Ordering::SeqCst) == 1).then_some(())
+        })
+        .await;
+        // The save is parked with the store answering nothing; evictions keep arriving.
+        mem.record_request_id(&b, "acct", "req_b", 2_000); // evicts a
+        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts b; the overlay is at the cap, a is shed
+        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts c; b is shed
+                                                           // Captured before the barrier releases: the parked save thread waits on `gate` for a second party
+                                                           // that must arrive whether or not the assertion below holds, or the runtime's drop hangs forever
+                                                           // joining a blocking thread nothing would release.
+        let (pending_len, holds_c, dropped) = {
+            let inner = mem.inner.lock().unwrap();
+            (
+                inner.pending.len(),
+                inner.pending.contains_key(&c),
+                inner.dropped_pending,
+            )
+        };
+        tokio::task::spawn_blocking(move || gate.wait())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), held)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pending_len, 1,
+            "the overlay never grows past the cap while a save hangs"
+        );
+        assert!(holds_c);
+        assert_eq!(dropped, 2);
+    }
+
+    #[tokio::test]
+    async fn an_overlay_record_past_the_retention_is_not_revived() {
+        let store = Arc::new(MapStore::default());
+        let mem = Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), 1_000));
+        let a = key("a");
+        mem.inner
+            .lock()
+            .unwrap()
+            .pending
+            .insert(a.clone(), (seeded("req_old", Some("p-old"), 0), 1));
+        mem.restore(&a, 5_000).await;
+        assert_eq!(
+            mem.previous(&a, "acct", "claude-sonnet-4-5").request_id,
+            None
+        );
+        let inner = mem.inner.lock().unwrap();
+        assert!(
+            !inner.pending.contains_key(&a),
+            "the expired record left the overlay"
+        );
+        assert_eq!(inner.expired_unsaved, 1);
+    }
+
+    #[tokio::test]
+    async fn a_healthy_store_keeps_every_evicted_record_and_the_overlay_asks_for_its_flush() {
+        let store = Arc::new(MapStore::default());
+        let mem =
+            Arc::new(SessionMemory::new(2, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
+        let (a, b, c, d) = (key("a"), key("b"), key("c"), key("d"));
+        // Four sessions at a cap of two: c evicts a, d evicts b, and the overlay holds what the store has not
+        // taken yet, reaching the cap and asking for its own flush, rather than shedding either record.
         mem.record_request_id(&a, "acct", "req_a", 1_000);
         mem.record_request_id(&b, "acct", "req_b", 2_000);
-        mem.record_request_id(&c, "acct", "req_c", 3_000);
+        mem.record_request_id(&c, "acct", "req_c", 3_000); // evicts a into the overlay
+        mem.record_request_id(&d, "acct", "req_d", 4_000); // evicts b into the overlay; the overlay is at the cap
         tokio::time::timeout(Duration::from_secs(5), mem.flush_wanted())
             .await
             .expect("an overlay at the cap asks the flusher for a flush of its own");
-        mem.flush(3_000).await;
+        mem.flush(4_000).await;
         assert_eq!(request_id_of(&store, &a).as_deref(), Some("req_a"));
         assert_eq!(request_id_of(&store, &b).as_deref(), Some("req_b"));
         assert_eq!(request_id_of(&store, &c).as_deref(), Some("req_c"));
+        assert_eq!(request_id_of(&store, &d).as_deref(), Some("req_d"));
         assert_eq!(mem.inner.lock().unwrap().dropped_pending, 0);
     }
 
