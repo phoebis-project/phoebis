@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{
-    apply_filter, breakdown, bucket_index, delta_of, key_request_totals, read_account_rollups,
-    read_rollups, AttemptRecord, Histogram, LedgerDb, LiveKeys, RequestRecord, RollupFilter,
-    RollupRow, UNATTRIBUTED,
+    apply_filter, breakdown, bucket_index, delta_of, fold_keepalive, key_request_totals,
+    read_account_rollups, read_rollups, AttemptRecord, Histogram, KeepaliveDelta, LedgerDb,
+    LiveKeys, RequestRecord, RollupFilter, RollupRow, UNATTRIBUTED,
 };
 use rand::{RngExt, SeedableRng};
 
@@ -468,6 +468,45 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         with_probes.iter().any(|g| g.key == "k1"),
         "the same group appears once probes count as requests: {with_probes:?}"
     );
+}
+
+#[test]
+fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                at: 1_000,
+                key_id: "desktop".into(),
+                pool_id: "main".into(),
+                account_id: "a".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                kept_warm_request_id: Some("r1".into()),
+                kept_warm_requests: 1,
+                kept_warm_tokens: 2_000,
+                saved_usd_gross: 0.0036,
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let live = LiveKeys::default();
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    // A kept-warm credit never touches `requests`, so a group made only of credit rows never sees a probe
+    // row either; it belongs in the default breakdown, not just the probe-counted one.
+    let default_groups = breakdown(&filtered, "user_agent", false, &live, &[]);
+    let group = default_groups
+        .iter()
+        .find(|g| g.key == UNATTRIBUTED)
+        .expect("a group of keepalive credits alone stays in the default breakdown");
+    assert_eq!(group.kept_warm.requests, 1);
+    assert!(group.savings.gross_usd > 0.0);
 }
 
 /// One request the replace path rewrites, always under the same id.

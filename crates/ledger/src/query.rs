@@ -709,30 +709,36 @@ fn sum_groups(
     live: &LiveKeys,
     agent_groups: &[String],
 ) -> Vec<GroupRow> {
-    // Two sums per group: the request side, which a probe row joins only when probes count as requests, and
-    // the probe rows on their own, which the derived probe counts and the probe side of the savings read.
-    let mut sums: BTreeMap<String, (RollupRow, RollupRow)> = BTreeMap::new();
+    // Two sums per group, and whether a non-probe row ever joined it: the request side, which a probe row
+    // joins only when probes count as requests; the probe rows on their own, which the derived probe counts
+    // and the probe side of the savings read; and the flag a keepalive credit needs, since it carries a real
+    // kind but never adds to `requests`.
+    let mut sums: BTreeMap<String, (RollupRow, RollupRow, bool)> = BTreeMap::new();
     for row in rows {
         let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
                 RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
                 RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
+                false,
             )
         });
         if row.kind == "probe" {
             entry.1.add(row);
+        } else {
+            entry.2 = true;
         }
         if probes_counted || row.kind != "probe" {
             entry.0.add(row);
         }
     }
-    // A group whose rows in the range are all probes never touched the request side; without this it would
-    // report zero requests rather than staying out of a breakdown that does not count probes as requests.
-    sums.retain(|_, (sum, _)| probes_counted || sum.requests > 0);
+    // A group whose rows in the range are all probes never joins the request side under the default filter;
+    // without this it would report zero requests rather than staying out of a breakdown that does not count
+    // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
+    sums.retain(|_, (_, _, saw_non_probe)| probes_counted || *saw_non_probe);
     let mut out: Vec<GroupRow> = sums
         .iter()
-        .map(|(k, (sum, probes))| {
+        .map(|(k, (sum, probes, _))| {
             let label = if group_by == "key" {
                 live.label_of(k)
             } else {
