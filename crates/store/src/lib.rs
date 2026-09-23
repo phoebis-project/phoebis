@@ -153,11 +153,7 @@ impl Store {
     pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
-        // A bare file name has an empty parent, which is the current directory.
-        let dir = match db_path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
+        let dir = permissions::data_dir_of(db_path);
         let dir_existed = dir.exists();
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -238,12 +234,9 @@ impl Store {
 /// Runs the v1 `SCHEMA`, then every migration above the stored `schema_version`, each inside its own
 /// transaction, so a crash mid-migration leaves the version at the last one that actually committed.
 fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
+    // A per-connection setting, never written to the database file, so it costs nothing to set before the
+    // version is even known.
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    if on_disk {
-        // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-    }
-    conn.execute_batch(schema::SCHEMA)?;
     let current = read_version(conn)?;
     if current > schema::SCHEMA_VERSION {
         return Err(StoreError::SchemaTooNew {
@@ -251,6 +244,12 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
             supported: schema::SCHEMA_VERSION,
         });
     }
+    if on_disk {
+        // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
+        // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
+    conn.execute_batch(schema::SCHEMA)?;
     for (version, sql) in schema::MIGRATIONS {
         if *version <= current {
             continue;
@@ -266,9 +265,21 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// A database from before `meta.schema_version` existed is schema version 1: the v1 `SCHEMA` created every
-/// table it needs, just none of the migrations above it.
+/// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
+/// above runs before `schema::SCHEMA` creates it. A database from before `meta.schema_version` existed is
+/// schema version 1: the v1 `SCHEMA` created every table it needs, just none of the migrations above it.
 fn read_version(conn: &Connection) -> Result<u32, StoreError> {
+    let has_meta: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_meta {
+        return Ok(0);
+    }
     let stored: Option<String> = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -299,11 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_stamped_by_a_newer_build_refuses_to_open() {
+    fn a_registry_stamped_by_a_newer_build_refuses_to_open_before_any_table_exists() {
+        // Hand-written rather than built by a first `prepare` call: a schema already at `SCHEMA_VERSION` would
+        // make every statement in `schema::SCHEMA` a no-op regardless of where the version check ran, so this
+        // is the only setup that actually proves the check runs before any DDL does.
         let mut conn = Connection::open_in_memory().unwrap();
-        prepare(&mut conn, false).unwrap();
+        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
         conn.execute(
-            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
             params![(schema::SCHEMA_VERSION + 1).to_string()],
         )
         .unwrap();
@@ -315,6 +330,18 @@ mod tests {
                 if found == schema::SCHEMA_VERSION + 1 && supported == schema::SCHEMA_VERSION
             ),
             "{error:?}"
+        );
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            tables,
+            vec!["meta".to_string()],
+            "no statement of schema::SCHEMA or a migration ran before the refusal"
         );
     }
 }

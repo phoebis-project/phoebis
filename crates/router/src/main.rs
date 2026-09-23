@@ -74,10 +74,7 @@ fn main() -> anyhow::Result<()> {
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");
             }
-            let data_dir = match config.storage.path.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => parent,
-                _ => std::path::Path::new("."),
-            };
+            let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
             for warning in phoebis_store::permissions::check_private_dir(data_dir) {
                 println!("warning: {warning}");
             }

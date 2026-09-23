@@ -34,6 +34,16 @@ pub fn check_private_dir(path: &Path) -> Vec<String> {
     check_private_file(path, 0o700)
 }
 
+/// The directory holding `path`: its parent, or `.` for a bare file name (an empty parent). Shared by
+/// `Store::open`, which creates the directory, and `check-config`, which only checks it, so a database path
+/// resolves to the same directory before either one exists.
+pub fn data_dir_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +77,14 @@ mod tests {
         let warnings = check_private_dir(dir.path());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("0700"));
+    }
+
+    #[test]
+    fn a_bare_file_names_the_current_directory() {
+        assert_eq!(data_dir_of(Path::new("router.sqlite")), Path::new("."));
+        assert_eq!(
+            data_dir_of(Path::new("data/router.sqlite")),
+            Path::new("data")
+        );
     }
 }

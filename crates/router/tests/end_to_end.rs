@@ -446,6 +446,79 @@ usage:
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn no_socket_is_accepted_on_the_admin_listener_once_shutdown_has_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let proxy_port = free_port();
+    let admin_port = free_port();
+    let metrics_port = free_port();
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_SHUTDOWN_ADMIN
+  plain_http: true
+compatibility:
+  outbound_gzip: false
+  profile: claude-code-2.1.269-linux-x64
+  usage_entrypoint: cli
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+usage:
+  cache_ttl_seconds: 60
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_SHUTDOWN_ADMIN", "admin-secret-shutdown");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    // The listener binds on the server task's first turns, so a connect is retried until it succeeds rather
+    // than raced with the boot, the same way `logged_in` waits out the boot elsewhere in this file.
+    let give_up = std::time::Instant::now() + SETTLE;
+    loop {
+        if tokio::net::TcpStream::connect(("127.0.0.1", admin_port))
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the admin listener never accepted a connection"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    let refused = tokio::net::TcpStream::connect(("127.0.0.1", admin_port)).await;
+    assert!(
+        refused.is_err(),
+        "a connection was accepted on the admin port after shutdown had already returned"
+    );
+}
+
 /// A unified 429 on one seat fails the client's
 /// request over to its sibling inside a single call, and the log, the cooldown, and the session all show it.
 #[tokio::test]
