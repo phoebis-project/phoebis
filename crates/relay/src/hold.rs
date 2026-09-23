@@ -41,7 +41,7 @@ impl Inspect {
         match self.decoder.as_mut() {
             None => self.parser.feed(raw),
             // A copy that will not decode is not one the relay can act on; the caller treats it as an overflow.
-            Some(decoder) => match decoder.feed(raw) {
+            Some(decoder) => match decoder.feed_bounded(raw, INSPECT_BUFFER) {
                 Ok(out) => self.parser.feed(&out),
                 Err(_) => Err(Overflow),
             },

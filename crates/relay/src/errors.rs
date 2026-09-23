@@ -113,6 +113,12 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 },
             },
         },
+        RelayError::BodyTimeout => Failure {
+            status: StatusCode::REQUEST_TIMEOUT,
+            error_type: "invalid_request_error",
+            code: "request_timeout",
+            message: "the request body did not arrive in time",
+        },
         RelayError::BodyTooLarge => Failure {
             status: StatusCode::PAYLOAD_TOO_LARGE,
             error_type: "request_too_large",

@@ -92,6 +92,8 @@ pub struct Limits {
     pub cooldown_fallback: Duration,
     pub head_timeout: Duration,
     pub hold_timeout: Duration,
+    /// The longest an upstream may go silent mid-stream before the relay gives up, and the longest a request
+    /// body may take to arrive after authentication.
     pub idle_timeout: Duration,
     /// Upstream submissions one caller request may cost across every account it tries.
     pub max_attempts: u8,
@@ -713,27 +715,57 @@ impl Relay {
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
         let client_version = self.drift.check(&parts.headers);
-        let Ok(raw) = axum::body::to_bytes(body, self.limits.max_request_bytes).await else {
+        // A caller that stops sending holds a task and a buffer for nothing; the idle bound the stream side
+        // already gives an upstream is the fair one here too.
+        let raw = match tokio::time::timeout(
+            self.limits.idle_timeout,
+            axum::body::to_bytes(body, self.limits.max_request_bytes),
+        )
+        .await
+        {
+            Ok(Ok(raw)) => raw,
+            Err(_) => {
+                trace.observed(
+                    Some(&key),
+                    None,
+                    &parts.headers,
+                    Bytes::new(),
+                    false,
+                    capture_hours,
+                    RequestShape::default(),
+                    presented == Presented::Retired,
+                    key.rotated_at,
+                );
+                return self.refused(
+                    &trace,
+                    relay_failure(&RelayError::BodyTimeout),
+                    Some(&key),
+                    None,
+                    client_version.as_deref(),
+                );
+            }
             // Either the caller went past the limit or its own connection broke mid-body; either way there is
             // no complete request to relay.
-            trace.observed(
-                Some(&key),
-                None,
-                &parts.headers,
-                Bytes::new(),
-                false,
-                capture_hours,
-                RequestShape::default(),
-                presented == Presented::Retired,
-                key.rotated_at,
-            );
-            return self.refused(
-                &trace,
-                relay_failure(&RelayError::BodyTooLarge),
-                Some(&key),
-                None,
-                client_version.as_deref(),
-            );
+            Ok(Err(_)) => {
+                trace.observed(
+                    Some(&key),
+                    None,
+                    &parts.headers,
+                    Bytes::new(),
+                    false,
+                    capture_hours,
+                    RequestShape::default(),
+                    presented == Presented::Retired,
+                    key.rotated_at,
+                );
+                return self.refused(
+                    &trace,
+                    relay_failure(&RelayError::BodyTooLarge),
+                    Some(&key),
+                    None,
+                    client_version.as_deref(),
+                );
+            }
         };
         let facts = BodyFacts::read(&raw);
         let stream = wants_stream(&raw);
@@ -2390,20 +2422,30 @@ pub(crate) fn report_failover(
     }
 }
 
+/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
+fn at_buffered_bound(error: TransportError) -> TransportError {
+    match error {
+        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BUFFERED_BODY),
+        other => other,
+    }
+}
+
 /// Decoded in pieces under the same bound as the inspection copy, so a small compressed rejection cannot
 /// expand without limit in memory.
 fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportError> {
     let mut out = Vec::new();
     for piece in raw.chunks(DECODE_PIECE) {
-        out.extend(decoder.feed(piece)?);
-        if out.len() > MAX_BUFFERED_BODY {
-            return Err(TransportError::TooLarge(MAX_BUFFERED_BODY));
-        }
+        out.extend(
+            decoder
+                .feed_bounded(piece, MAX_BUFFERED_BODY - out.len())
+                .map_err(at_buffered_bound)?,
+        );
     }
-    out.extend(decoder.finish()?);
-    if out.len() > MAX_BUFFERED_BODY {
-        return Err(TransportError::TooLarge(MAX_BUFFERED_BODY));
-    }
+    out.extend(
+        decoder
+            .finish_bounded(MAX_BUFFERED_BODY - out.len())
+            .map_err(at_buffered_bound)?,
+    );
     Ok(Bytes::from(out))
 }
 
@@ -2443,29 +2485,33 @@ fn built(builder: Builder, body: Body) -> Response {
         .expect("a forwarded response head is always well formed")
 }
 
-/// Whether the caller said it can read this content coding. An entry weighted `q=0` is a refusal, so the
-/// payload is decoded for it rather than passed through.
+/// Whether the caller said it can read this content coding. An explicit entry for the coding decides, the last
+/// one written winning, and only when none names it does a wildcard speak; every `Accept-Encoding` line is read,
+/// since a proxy may add one beside the client's. `q=0` on the deciding entry is a refusal.
 fn caller_accepts(caller: &HeaderMap, coding: &str) -> bool {
-    let Some(accept) = caller
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    accept.split(',').any(|entry| {
-        let (name, params) = entry.split_once(';').unwrap_or((entry, ""));
-        let name = name.trim();
-        let refused = params
-            .split(';')
-            .filter_map(|param| param.trim().strip_prefix("q="))
-            .any(|weight| {
-                weight
-                    .trim()
-                    .parse::<f32>()
-                    .is_ok_and(|weight| weight <= 0.0)
-            });
-        !refused && (name.eq_ignore_ascii_case(coding) || name == "*")
-    })
+    let mut explicit = None;
+    let mut wildcard = None;
+    for line in caller
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+    {
+        for entry in line.split(',') {
+            let (name, params) = entry.split_once(';').unwrap_or((entry, ""));
+            let refused = params
+                .split(';')
+                .filter_map(|p| p.trim().strip_prefix("q="))
+                .any(|w| w.trim().parse::<f32>().is_ok_and(|w| w <= 0.0));
+            let accepted = !refused;
+            let name = name.trim();
+            if name.eq_ignore_ascii_case(coding) {
+                explicit = Some(accepted);
+            } else if name == "*" {
+                wildcard = Some(accepted);
+            }
+        }
+    }
+    explicit.or(wildcard).unwrap_or(false)
 }
 
 /// The caller's own `User-Agent`, the only handle an operator has on which client drifted.
@@ -2494,13 +2540,14 @@ fn inspectable_copy(head: &ResponseHead, raw: &[u8]) -> Option<Vec<u8>> {
 fn inspectable(decoder: &mut dyn Decoder, raw: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for piece in raw.chunks(DECODE_PIECE) {
-        out.extend(decoder.feed(piece).ok()?);
-        if out.len() > MAX_BUFFERED_BODY {
-            return None;
-        }
+        out.extend(
+            decoder
+                .feed_bounded(piece, MAX_BUFFERED_BODY - out.len())
+                .ok()?,
+        );
     }
-    out.extend(decoder.finish().ok()?);
-    (out.len() <= MAX_BUFFERED_BODY).then_some(out)
+    out.extend(decoder.finish_bounded(MAX_BUFFERED_BODY - out.len()).ok()?);
+    Some(out)
 }
 
 /// Local identifier for one relayed request, echoed in every local error body so a caller's failure can be

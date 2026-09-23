@@ -33,6 +33,10 @@ const CHANNEL_DEPTH: usize = 64;
 /// same cap bounds the decoded copy a compressed rejection is classified from.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
+/// Per-chunk bound on what a decoder may hand back for one upstream chunk: an 8 KiB compressed chunk can
+/// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
+pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
+
 /// What a committed stream is still watched for. The inspection copy is the pre-commit hold's, so the events it
 /// already consumed are not seen a second time and the parser's bound is all the memory this costs.
 pub(crate) struct PostCommit {
@@ -89,7 +93,7 @@ impl Publish {
         }
         let text = match self.decoder.as_mut() {
             None => piece.clone(),
-            Some(decoder) => match decoder.feed(raw) {
+            Some(decoder) => match decoder.feed_bounded(raw, STREAM_DECODED_CHUNK_MAX) {
                 Ok(out) => Bytes::from(out),
                 // A consumer of a chunk was promised text, so nothing is better than bytes that are not.
                 Err(_) => {
@@ -394,7 +398,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             }
             observe_end(&mut observer);
             if let Some(mut decoder) = decoder {
-                match decoder.finish() {
+                match decoder.finish_bounded(STREAM_DECODED_CHUNK_MAX) {
                     Ok(tail) if !tail.is_empty() => {
                         let tail = Bytes::from(tail);
                         // The tail is the rest of the decoded body, so the chunks a consumer joins are the
@@ -568,7 +572,9 @@ fn decode_piece(
 ) -> Result<Bytes, TransportError> {
     match decoder {
         None => Ok(raw),
-        Some(decoder) => decoder.feed(&raw).map(Bytes::from),
+        Some(decoder) => decoder
+            .feed_bounded(&raw, STREAM_DECODED_CHUNK_MAX)
+            .map(Bytes::from),
     }
 }
 

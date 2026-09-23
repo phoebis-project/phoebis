@@ -1,5 +1,9 @@
+use axum::body::Body;
+use axum::http::Request;
+use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
+use std::time::Duration;
 use tower::ServiceExt;
 
 mod common;
@@ -611,5 +615,107 @@ async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt(
         common::outcome(&resp).upstream_request_id.as_deref(),
         Some("req_up_0001")
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_explicit_refusal_beats_the_wildcard_whatever_the_order_or_the_line() {
+    for accept in ["gzip;q=0, *;q=1", "*;q=1, gzip;q=0"] {
+        let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
+        let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+        let mut request = common::stream_request("phoebis-testkey");
+        common::set_header(&mut request, "accept-encoding", accept);
+        let resp = app.oneshot(request).await.unwrap();
+        assert!(
+            resp.headers().get("content-encoding").is_none(),
+            "{accept}: decoded for the caller"
+        );
+        assert_eq!(
+            resp.into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .as_ref(),
+            COMPRESSIBLE
+        );
+        up.shutdown().await;
+    }
+    // Two header lines, the browser's and a proxy's, combined before the rule applies.
+    let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let mut request = common::stream_request("phoebis-testkey");
+    request.headers_mut().append(
+        axum::http::header::ACCEPT_ENCODING,
+        axum::http::HeaderValue::from_static("*"),
+    );
+    request.headers_mut().append(
+        axum::http::header::ACCEPT_ENCODING,
+        axum::http::HeaderValue::from_static("gzip;q=0"),
+    );
+    let resp = app.oneshot(request).await.unwrap();
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "two lines: decoded for the caller"
+    );
+    assert_eq!(
+        resp.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .as_ref(),
+        COMPRESSIBLE
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_compressed_chunk_that_expands_past_the_bound_ends_the_stream_with_an_error() {
+    let bomb = gzip(&vec![b'a'; 8 << 20]);
+    let up = gzip_upstream(bomb).await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let mut request = common::stream_request("phoebis-testkey");
+    common::set_header(&mut request, "accept-encoding", "identity");
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.into_body().collect().await;
+    assert!(
+        body.is_err(),
+        "the body ended in an error rather than a multi-megabyte chunk"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_that_stops_arriving_is_refused_at_the_idle_timeout() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = common::harness_with_limits(
+        &up,
+        &[common::oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        common::PoolSpec::default(),
+        phoebis_relay::Limits {
+            idle_timeout: Duration::from_millis(300),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tx.send(Ok(Bytes::from_static(b"{\"model\":")))
+        .await
+        .unwrap();
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    let request = Request::post("/v1/messages")
+        .header("authorization", format!("Bearer {}", common::KEY))
+        .header("content-type", "application/json")
+        .body(body)
+        .unwrap();
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 408);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "request_timeout"
+    );
+    drop(tx);
     up.shutdown().await;
 }

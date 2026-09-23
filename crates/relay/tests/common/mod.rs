@@ -222,6 +222,23 @@ pub async fn harness_with(
     harness_on(store, up, accounts, pool, models, limits).await
 }
 
+/// `harness_with`, without naming a model list, for a case that only needs to override `Limits`.
+pub async fn harness_with_limits(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    limits: Limits,
+) -> Harness {
+    harness_with(
+        up,
+        accounts,
+        pool,
+        &["claude-sonnet-4-5", "claude-opus-5"],
+        limits,
+    )
+    .await
+}
+
 /// The same builder over a store the caller already opened, so a test can reopen an on-disk store and see its
 /// rows survive. Seeding accounts, the pool, and the key is skipped once the store already has accounts, and
 /// the model seed is skipped when the caller wants a bare catalog for its own sync to fill in.

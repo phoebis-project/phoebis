@@ -23,7 +23,7 @@ pub type ResolveFuture = Pin<Box<dyn Future<Output = Option<SocketAddr>> + Send>
 
 /// Bounds a control-plane response body: these are small JSON payloads, so anything past this is a malformed
 /// or malicious upstream rather than a legitimate response.
-const MAX_BODY: usize = 4 * 1024 * 1024;
+pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
 pub struct ControlClient {
     // Kept for the constructor's stable shape across its call sites; `send` forwards the caller-built `RawRequest`
@@ -114,8 +114,19 @@ impl ControlClient {
             body.extend_from_slice(&chunk);
         }
         let mut d = decoder(encoding(&head)?);
-        let mut out = d.feed(&body)?;
-        out.extend(d.finish()?);
+        let mut out = d.feed_bounded(&body, MAX_BODY).map_err(at_body_bound)?;
+        out.extend(
+            d.finish_bounded(MAX_BODY - out.len())
+                .map_err(at_body_bound)?,
+        );
         Ok((head, Bytes::from(out)))
+    }
+}
+
+/// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
+fn at_body_bound(error: TransportError) -> TransportError {
+    match error {
+        TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BODY),
+        other => other,
     }
 }

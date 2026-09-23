@@ -496,7 +496,10 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
+| Body read timeout | 600 seconds for a request body to arrive after authentication, the same as the stream idle wait. |
+| Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
+| Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
 | Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |

@@ -882,6 +882,56 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_pass_through_chunk_past_the_decoded_bound_reaches_the_caller_and_leaves_no_chunk_on_the_bus(
+) {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&vec![0u8; 8 << 20]).unwrap();
+    let bomb = encoder.finish().unwrap();
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![
+                ("content-encoding".into(), "gzip".into()),
+                ("content-type".into(), "text/event-stream".into()),
+            ],
+            body: bomb.clone(),
+        },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    set_header(&mut req, "accept-encoding", "gzip");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-encoding")
+            .map(|v| v.to_str().unwrap()),
+        Some("gzip")
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        body.as_ref(),
+        bomb.as_slice(),
+        "the caller gets the wire bytes untouched"
+    );
+    let (events, chunks) = drain_until_complete(&mut sub).await;
+    assert!(
+        chunks.is_empty(),
+        "the expansion past the bound reaches no chunk"
+    );
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!()
+    };
+    assert_eq!(complete.response_bytes, Some(bomb.len() as u64));
+    up.shutdown().await;
+}
+
 /// The probe path authenticates by key id through an extension nothing on the socket can set, and publishes the
 /// request as a keepalive probe: the ledger's `kind = probe` and the engine's own-probe filter both read that.
 #[tokio::test]

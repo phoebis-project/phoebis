@@ -9,6 +9,11 @@ const MAX_HEAD: usize = 64 * 1024;
 // Bounds a streaming-1xx upstream: MAX_HEAD only caps the size of the head being parsed, not how many can precede it.
 const MAX_INTERIM: u32 = 8;
 
+/// An upstream declares a chunk in a few bytes; a size line or a trailer block past these is a peer that
+/// stopped speaking HTTP, and reading on would only grow the buffer until the idle timeout.
+pub const MAX_CHUNK_LINE: usize = 1024;
+pub const MAX_TRAILERS: usize = 16 * 1024;
+
 pub struct ResponseHead {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -224,6 +229,9 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
                 return Ok(Some(self.buf.split_to(take).freeze()));
             }
             let Some(nl) = self.buf.windows(2).position(|w| w == b"\r\n") else {
+                if self.buf.len() > MAX_CHUNK_LINE {
+                    return Err(TransportError::Response("chunk framing too long".into()));
+                }
                 self.fill().await?;
                 continue;
             };
@@ -234,12 +242,21 @@ impl<R: AsyncRead + Unpin> BodyReader<R> {
             self.buf.advance(nl + 2);
             if size == 0 {
                 // Trailers, if any, end with an empty line.
+                let mut trailer_bytes = 0usize;
                 loop {
                     if let Some(p) = self.buf.windows(2).position(|w| w == b"\r\n") {
+                        trailer_bytes += p + 2;
+                        if trailer_bytes > MAX_TRAILERS {
+                            return Err(TransportError::Response("chunk framing too long".into()));
+                        }
                         self.buf.advance(p + 2);
                         if p == 0 {
                             break;
                         }
+                    } else if self.buf.len() > MAX_CHUNK_LINE
+                        || trailer_bytes + self.buf.len() > MAX_TRAILERS
+                    {
+                        return Err(TransportError::Response("chunk framing too long".into()));
                     } else {
                         self.fill().await?;
                     }
@@ -306,5 +323,45 @@ mod tests {
         let mut buf = BytesMut::new();
         let result = read_head(&mut rx, &mut buf).await;
         assert!(matches!(result, Err(TransportError::Response(_))));
+    }
+
+    #[tokio::test]
+    async fn a_chunk_size_line_without_an_end_is_refused_at_the_line_bound() {
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        let feeder = tokio::spawn(async move {
+            writer.write_all(b"1;").await.unwrap();
+            for _ in 0..64 {
+                if writer.write_all(&[b'x'; 4096]).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut body = BodyReader::new(reader, BytesMut::new(), Framing::Chunked);
+        let error = body.next_chunk().await.unwrap_err();
+        assert!(
+            error.to_string().contains("chunk framing too long"),
+            "{error}"
+        );
+        feeder.abort();
+    }
+
+    #[tokio::test]
+    async fn trailers_past_the_bound_are_refused() {
+        let (mut writer, reader) = tokio::io::duplex(128 * 1024);
+        let feeder = tokio::spawn(async move {
+            writer.write_all(b"0\r\nX-Trailer: ").await.unwrap();
+            for _ in 0..16 {
+                if writer.write_all(&[b'x'; 4096]).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut body = BodyReader::new(reader, BytesMut::new(), Framing::Chunked);
+        let error = body.next_chunk().await.unwrap_err();
+        assert!(
+            error.to_string().contains("chunk framing too long"),
+            "{error}"
+        );
+        feeder.abort();
     }
 }

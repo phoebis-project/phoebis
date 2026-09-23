@@ -314,18 +314,13 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
     {
         out.extend(
             decoder
-                .feed(&chunk)
+                .feed_bounded(&chunk, MAX_BODY)
                 .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
         );
-        if out.len() > MAX_BODY {
-            return Err(DiscoveryError::Malformed(
-                "models response too large".into(),
-            ));
-        }
     }
     out.extend(
         decoder
-            .finish()
+            .finish_bounded(MAX_BODY)
             .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
     );
     Ok((head.status, out, reusable))
