@@ -279,7 +279,7 @@ ALTER TABLE overage_state ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE refresh_attempts ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 "#;
 
-// A credential failure that never opens a refresh attempt (a backoff, a quarantine, an unpaired slot) has
+// A credential failure that never opens a refresh attempt (a backoff, a quarantine) has
 // nowhere else to leave its reason; a row from before this column reads no error, which is the safe reading
 // for a failure that predates the column.
 const V21: &str = r#"
