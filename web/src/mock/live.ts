@@ -110,7 +110,7 @@ function fromLog(r: RequestLog): LiveRequest {
     outputTps: ok && r.kind === 'inference' && streaming ? (r.usage.output / streaming) * 1000 : null,
     phases,
     poolId: r.poolId,
-    preview: r.keyId === 'laptop' && ok && r.kind === 'inference' ? PREVIEW_WORDS.slice(0, rng.int(12, PREVIEW_WORDS.length)).join(' ') : null,
+    preview: null,
     sessionId: r.sessionId,
     state: 'finished',
     status: r.status,
@@ -151,8 +151,39 @@ class LiveFeed {
       const m = this.measure(t);
       for (const k of keys) this.push(k, m[k]);
     }
+    this.seedStream(now);
     // Seeds may replay to completion at once (short count_tokens calls), so top up until the floor holds.
     for (let i = 0; i < 20 && this.inFlight.size < MIN_IN_FLIGHT + 1; i += 1) this.start(now - rng.int(400, 9_000));
+  }
+
+  /**
+   * A laptop stream that opened before the feed and runs for another minute. A finished request carries no
+   * preview, so this is the one an admin opens to read output while it arrives, whatever the drawn plans hold.
+   */
+  private seedStream(now: number) {
+    const lane = LANES.find((l) => l.keyId === 'laptop') ?? LANES[0];
+    const model = 'claude-sonnet-5';
+    const plan: Plan = {
+      attemptsPlanned: 1,
+      durationMs: 80_000,
+      failoverAt: 0,
+      finalStatus: 200,
+      finalUsage: finalUsageFor(model, 'inference', 200),
+      firstContentAt: 1_600,
+      headAt: 1_100,
+      kind: 'inference',
+      lastProgressAt: 0,
+      model,
+      nextPreviewAt: 1_600,
+      previewIndex: 0,
+      selectAt: 60,
+      startedMs: now - 12_000,
+      streamEndAt: 79_000,
+      writtenAt: 140,
+    };
+    const request: LiveRequest = { ...this.requestFor(lane, plan), transport: 'sse' };
+    this.inFlight.set(request.id, { plan, request });
+    this.advanceOne(request, plan, now);
   }
 
   subscribe(handler: (e: LiveEvent) => void): () => void {
@@ -346,10 +377,7 @@ class LiveFeed {
       streamEndAt: streamed ? iso(s + plan.streamEndAt) : undefined,
       writtenAt: iso(s + plan.writtenAt),
     };
-    if (streamed) {
-      req.outputTps = (plan.finalUsage.output / Math.max(50, plan.streamEndAt - plan.firstContentAt)) * 1000;
-      if (req.keyId === 'laptop') req.preview = PREVIEW_WORDS.slice(0, rng.int(12, PREVIEW_WORDS.length)).join(' ');
-    }
+    if (streamed) req.outputTps = (plan.finalUsage.output / Math.max(50, plan.streamEndAt - plan.firstContentAt)) * 1000;
     req.state = 'finished';
     return req;
   }
@@ -435,6 +463,8 @@ class LiveFeed {
       req.outputTps = (plan.finalUsage.output / Math.max(50, plan.streamEndAt - plan.firstContentAt)) * 1000;
       if (!req.phases.streamEndAt) req.phases.streamEndAt = iso(plan.startedMs + plan.streamEndAt);
     }
+    // The router's feed drops a request's preview when it finishes, so a snapshot's ring never carries one.
+    req.preview = null;
     req.state = 'finished';
     this.recent.unshift(req);
     const cutoff = finishedMs - RING_SPAN;

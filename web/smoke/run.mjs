@@ -147,12 +147,25 @@ m = await mount('/observe');
   firstRow?.click();
   await m.settle(300);
   expect('/observe detail pane', m.text(), ['Phases', 'Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished', 'Attempts', 'Usage', 'Cache write, 5m', 'Cache write, 1h']);
-  // A finished 200 inference is the shape the feed carries output for; an in-flight row may not have reached its first content token yet.
-  const previewRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
-  previewRow?.click();
+  // The feed carries output only while a request runs, and a running 200 may not have reached its first content
+  // token yet, so every running laptop stream past its head is tried until one draws its preview; the story
+  // keeps one streaming at any instant this check runs.
+  const running = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') !== null);
+  let previewShown = false;
+  for (const tr of running) {
+    tr.click();
+    await m.settle(300);
+    // The pane keeps the row clicked before this one, so the preview is read right after this row's click.
+    if (m.container.querySelector('.observe__detail .preview') !== null) {
+      previewShown = true;
+      break;
+    }
+  }
+  results.push({ name: '/observe an admin sees the preview of a running request', ok: previewShown, missing: [running.length ? 'no preview' : 'no running laptop stream'] });
+  const finishedStream = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
+  finishedStream?.click();
   await m.settle(300);
-  // The pane keeps the row clicked before this one, so the preview has to be asserted on a row this check found.
-  results.push({ name: '/observe an admin sees the preview of a captured request', ok: previewRow !== undefined && m.container.querySelector('.observe__detail .preview') !== null, missing: [previewRow ? 'no preview' : 'no finished laptop inference row'] });
+  results.push({ name: '/observe a finished stream keeps no preview, as the feed drops it', ok: finishedStream !== undefined && m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [finishedStream ? 'a preview is still drawn' : 'no finished laptop stream'] });
   const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
   plainRow?.click();
   await m.settle(300);
