@@ -187,7 +187,8 @@ time, and pin churn per upstream. Cooldown time books to the hour it elapses in 
 cleared early gives back only the hours it never held. A cooldown is booked up to seven days ahead of the announcement
 that set it, and a later announcement books the next stretch. Filtered to one session, the view sums the request log
 instead of the rollups, and the cost split, the cache write and read costs, and the Cache warming figures read as
-unavailable because the request log does not carry them.
+unavailable because the request log does not carry them; the Upstreams section keeps reading the rollups for the
+range, since they carry no session, and its subtitle says so.
 
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)
