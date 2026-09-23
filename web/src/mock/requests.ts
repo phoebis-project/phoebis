@@ -421,7 +421,7 @@ function rollups(): HourlyRollup[] {
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
     const cacheMissReasons = emptyCacheMissReasons();
-    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] += 1;
+    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = (cacheMissReasons[a.cacheMissReason] ?? 0) + 1;
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
     const kept = isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35));
@@ -514,6 +514,9 @@ function historicalRollups(): HourlyRollup[] {
   // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
   // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
   let maxEffortOwed = true;
+  // One desktop hour reports a reason the console has no label for, as a later beta may send one. Twelve days
+  // back puts it in the month alone, so the day and the week draw the eight known reasons.
+  let unknownReasonOwed = true;
   const out: HourlyRollup[] = [];
   const start = startOfHour(NOW) - 30 * DAY;
   const end = startOfHour(NOW) - 24 * HOUR;
@@ -588,6 +591,10 @@ function historicalRollups(): HourlyRollup[] {
         savings: { grossUsd: keptWarmSaving(model, keptTokens), probeCostUsd: 0 },
         ...ZERO_WASTE,
       };
+      if (unknownReasonOwed && lane.keyId === 'desktop' && t >= startOfHour(NOW) - 12 * DAY && inference.cacheMissReasons.none > inference.expiredBetweenTurns) {
+        unknownReasonOwed = false;
+        inference.cacheMissReasons = { ...inference.cacheMissReasons, future_reason: 1, none: inference.cacheMissReasons.none - 1 };
+      }
       out.push(inference);
       // The hours an earlier holder of `desktop` spent, deleted before the live key was created: one day of
       // the second week back, so the month answers the pair of key groups and the shorter ranges do not.

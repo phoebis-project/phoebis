@@ -122,10 +122,13 @@ function fromLog(r: RequestLog): LiveRequest {
 
 const metric = (value: number | null, series: number[], quality: LiveMetric['quality']): LiveMetric => ({ quality, series, value });
 
+/** A row the feed itself runs always has a usage; only a page's projection of a past instant has none. */
+type FeedRequest = LiveRequest & { usage: Usage };
+
 class LiveFeed {
   private cursor = 0;
   private handlers = new Set<(e: LiveEvent) => void>();
-  private inFlight = new Map<string, { plan: Plan; request: LiveRequest }>();
+  private inFlight = new Map<string, { plan: Plan; request: FeedRequest }>();
   private loopTimer: ReturnType<typeof setTimeout> | null = null;
   private recent: LiveRequest[] = [];
   private series = new Map<keyof LiveTick['metrics'], number[]>();
@@ -181,7 +184,7 @@ class LiveFeed {
       streamEndAt: 79_000,
       writtenAt: 140,
     };
-    const request: LiveRequest = { ...this.requestFor(lane, plan), transport: 'sse' };
+    const request: FeedRequest = { ...this.requestFor(lane, plan), transport: 'sse' };
     this.inFlight.set(request.id, { plan, request });
     this.advanceOne(request, plan, now);
   }
@@ -312,7 +315,7 @@ class LiveFeed {
     };
   }
 
-  private requestFor(lane: Lane, plan: Plan): LiveRequest {
+  private requestFor(lane: Lane, plan: Plan): FeedRequest {
     const transport: Transport = plan.kind === 'inference' && rng.chance(0.86) ? 'sse' : 'json';
     return {
       ...LIVE_REQUEST_SAMPLE,
@@ -348,7 +351,7 @@ class LiveFeed {
   }
 
   /** Runs every phase of a request straight through; used to seed the ring with finished rows. */
-  private settle(req: LiveRequest, plan: Plan, finishAt: number): LiveRequest {
+  private settle(req: FeedRequest, plan: Plan, finishAt: number): FeedRequest {
     const s = plan.startedMs;
     const first = this.attemptFor(req, 0, s + plan.selectAt, []);
     req.attempts = [first];
@@ -398,7 +401,7 @@ class LiveFeed {
     if (count < MIN_IN_FLIGHT || (count < MAX_IN_FLIGHT && rng.chance(0.3))) this.start(now);
   }
 
-  private advanceOne(req: LiveRequest, plan: Plan, now: number) {
+  private advanceOne(req: FeedRequest, plan: Plan, now: number) {
     const elapsed = now - plan.startedMs;
     const at = (offset: number) => iso(plan.startedMs + offset);
     if (req.attempts.length === 0 && elapsed >= plan.selectAt) {

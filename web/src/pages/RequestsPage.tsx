@@ -7,7 +7,7 @@ import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
-import { CACHE_MISS_LABEL, isDivergence } from '@/lib/cache';
+import { isDivergence, missLabel } from '@/lib/cache';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { StatusBadge } from './DashboardPage';
@@ -580,7 +580,7 @@ function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   return (
     <li>
       <span className="muted">Cache</span>
-      <span className={reason === null || reason === 'not_requested' ? 'muted' : ''}>{reason === null ? 'n/a' : CACHE_MISS_LABEL[reason]}</span>
+      <span className={reason === null || reason === 'not_requested' ? 'muted' : ''}>{reason === null ? 'n/a' : missLabel(reason)}</span>
       <span className="muted">{detail()}</span>
     </li>
   );

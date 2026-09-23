@@ -5,7 +5,7 @@ import type {
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
-import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
 
@@ -224,7 +224,7 @@ export const ATTEMPT_OUTCOME_VALUES = ['auth_failed', 'canceled', 'rate_limited'
 export const REQUEST_KIND_VALUES = ['count_tokens', 'inference', 'probe'] as const;
 export const REQUEST_OUTCOME_VALUES = ['canceled', 'exhausted', 'failed', 'rejected', 'succeeded'] as const;
 const outcomeOf = (v: unknown): AttemptOutcome => ATTEMPT_OUTCOME_VALUES.find((o) => o === str(v)) ?? 'upstream_error';
-const missReason = (v: unknown): CacheMissReason | null => ((CACHE_MISS_REASONS as string[]).includes(str(v)) ? (str(v) as CacheMissReason) : v === null || v === undefined ? null : 'unavailable');
+const missReason = (v: unknown): CacheMissReason | null => strOrNull(v);
 const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const id = windowId(str(w.id)); return id === null ? [] : [{ id, resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization) }]; });
 const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
 const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { contextEdits: strings(s.context_edits), effort: strOrNull(s.effort), maxTokens: numOrNull(s.max_tokens), messageCount: num(s.message_count), requestedServiceTier: strOrNull(s.requested_service_tier), requestedSpeed: strOrNull(s.requested_speed), systemBlocks: num(s.system_blocks), temperature: numOrNull(s.temperature), thinkingBudget: numOrNull(s.thinking_budget), thinkingType: strOrNull(s.thinking_type), toolCount: num(s.tool_count) }; };
@@ -254,6 +254,12 @@ const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => R
   for (const k of keys) out[k] = num(m[k]);
   return out;
 };
+/** The route rolls reasons up by the name the beta sent, so a name the console does not know stays a key of its own. */
+const missReasons = (v: unknown): Record<CacheMissReason, number> => {
+  const out = emptyCacheMissReasons();
+  for (const [reason, n] of Object.entries(rec(v))) out[reason] = num(n);
+  return out;
+};
 const histogram = (v: unknown): number[] => { const h = list(v).map((x) => num(x)); return h.length === BUCKET_COUNT ? h : emptyHistogram(); };
 const quartet = (v: unknown) => { const q = rec(v); return { p50: numOrNull(q.p50), p90: numOrNull(q.p90), p95: numOrNull(q.p95), p99: numOrNull(q.p99) }; };
 
@@ -265,7 +271,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const t = rec(g.tokens);
   const c = rec(g.cost);
   return {
-    attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: record(CACHE_MISS_REASONS, g.cache_miss_reasons, emptyCacheMissReasons),
+    attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cost: { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) }, costUsd: num(g.cost_usd),
     errors: Object.fromEntries(Object.entries(rec(g.errors)).map(([k, n]) => [k, num(n)])), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
@@ -302,7 +308,7 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agents: num(s.agents), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id) };
 }
 
-export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
+export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
 export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);

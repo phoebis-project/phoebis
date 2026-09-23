@@ -5,10 +5,18 @@ export interface Loaded<T> {
   error: string | null;
   loading: boolean;
   reload: () => void;
+  /**
+   * `data` does not answer the current deps: a load for other deps is running, or the last load failed. The
+   * data is kept for callers that tolerate an older answer; one that draws it as the answer checks this first.
+   */
+  stale: boolean;
 }
+
+const sameDeps = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
 
 export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = []): Loaded<T> {
   const [data, setData] = useState<T | null>(null);
+  const [loadedFor, setLoadedFor] = useState<readonly unknown[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
@@ -19,6 +27,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       (value) => {
         if (!alive) return;
         setData(value);
+        setLoadedFor(deps);
         setError(null);
         setLoading(false);
       },
@@ -33,7 +42,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
-  return { data, error, loading, reload: () => setNonce((n) => n + 1) };
+  return { data, error, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
 }
 
 /** A shared clock so every countdown on a page advances in the same tick. */

@@ -272,11 +272,10 @@ export interface AttemptWindow {
 }
 
 /**
- * Why the prompt-cache prefix did not hit, from the cache diagnostics beta.
- * Ordered as the beta documents it rather than alphabetically: the no-divergence
- * answer first, then the diagnosed divergences, then the two non-answers.
+ * Why the prompt-cache prefix did not hit, as the cache diagnostics beta named it. The router stores whatever
+ * name the beta sends, so a name added after the console's eight (`CACHE_MISS_REASONS`) is kept as sent.
  */
-export type CacheMissReason = 'none' | 'model_changed' | 'system_changed' | 'tools_changed' | 'messages_changed' | 'previous_message_not_found' | 'unavailable' | 'not_requested';
+export type CacheMissReason = string;
 
 /** What the answer said about itself; `servedModel` only when it differs from the resolved model. */
 export interface AttemptResponse {
@@ -451,16 +450,23 @@ export interface AnalyticsGroup {
   attempts: number;
   cacheHits: number;
   cacheMisses: number;
+  /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
-  cost: CostSplit;
+  /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
+  cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
   costUsd: number;
   errors: Record<string, number>;
   exhausted: number;
   expiredBetweenTurns: number;
   failed: number;
   failovers: number;
+  /**
+   * Set on a group folded from request rows, the session view's source: the rows carry no cost split, no
+   * savings and no kept-warm mark, so those figures are null and the probe counts are not measured.
+   */
+  fromRequests?: true;
   histograms: LatencyHistograms;
-  keptWarm: { requests: number; tokens: number };
+  keptWarm: { requests: number; tokens: number } | null;
   key: string;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
@@ -468,7 +474,7 @@ export interface AnalyticsGroup {
   rateLimited: number;
   rejected: number;
   requests: number;
-  savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number };
+  savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number } | null;
   succeeded: number;
   /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
    * thinking share and the rest. */
@@ -552,6 +558,7 @@ export type RecipeReason =
   | 'oauth_unverified'
   | 'overage'
   | 'paused'
+  | 'pool_exhausted'
   | 'probe_error'
   | 'quota_exhausted'
   | 'reauth'
@@ -837,7 +844,8 @@ export interface LiveRequest {
   state: LiveState;
   status: number | null;
   transport: Transport;
-  usage: Usage;
+  /** Null only on a historical projection, which cannot say how much of the final usage existed at its instant. */
+  usage: Usage | null;
   /** The client that sent the request, as it named itself; `null` when it named nothing. */
   userAgent: string | null;
 }

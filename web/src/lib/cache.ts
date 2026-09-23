@@ -14,6 +14,16 @@ export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   unavailable: 'Unavailable',
 };
 
+/** A reason the console has no label for reads under the name the beta gave it. */
+export const missLabel = (reason: CacheMissReason): string => CACHE_MISS_LABEL[reason] ?? reason;
+
+/** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */
+export function missReasonOrder(groups: readonly { cacheMissReasons: Record<CacheMissReason, number> }[]): CacheMissReason[] {
+  const others = new Set<CacheMissReason>();
+  for (const g of groups) for (const reason of Object.keys(g.cacheMissReasons)) if (!CACHE_MISS_REASONS.includes(reason)) others.add(reason);
+  return [...CACHE_MISS_REASONS, ...[...others].sort()];
+}
+
 /** The `*_changed` reasons are the diagnosed divergences, each naming the part of the prompt the prefix broke at. */
 export const isDivergence = (reason: CacheMissReason) => reason.endsWith('_changed');
 
@@ -28,6 +38,7 @@ export const WASTED_PROBE_LABEL: Record<WastedProbeReason, string> = {
 
 export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => ({ idle_limit: 0, released: 0, replaced: 0, session_ended: 0 });
 
+/** Seeds the known reasons at zero; a sum adds any other name it meets beside them. */
 export const emptyCacheMissReasons = (): Record<CacheMissReason, number> => ({
   messages_changed: 0,
   model_changed: 0,

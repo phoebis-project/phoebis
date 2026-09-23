@@ -356,6 +356,69 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
 });
 
+test('a cache-miss reason the console does not know keeps its own name on the attempt and in every sum', () => {
+  const body = fixture('requests');
+  const wire = body.requests.find((r) => r.id === 'r-captured');
+  const row = d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, cache_miss_reason: 'future_reason' })) });
+  assert.ok(row.attempts.every((a) => a.cacheMissReason === 'future_reason'), 'the attempt answers the reason as sent rather than reading unavailable');
+  assert.equal(d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, cache_miss_reason: null })) }).attempts[0].cacheMissReason, null);
+  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], cache_miss_reasons: { future_reason: 3, none: 2 } });
+  assert.equal(group.cacheMissReasons.future_reason, 3, 'the breakdown keeps the unknown key under its name');
+  assert.equal(group.cacheMissReasons.none, 2);
+  assert.equal(group.cacheMissReasons.not_requested, 0, 'every known reason stays present so each column draws');
+  const [folded] = d.foldGroups([row], 'all');
+  assert.equal(folded.cacheMissReasons.future_reason, 1, 'a session fold counts it under its name too');
+  const summed = d.sumGroups([group, group, folded]);
+  assert.equal(summed.cacheMissReasons.future_reason, 7);
+  assert.equal(summed.cacheMissReasons.none, 4);
+  assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known eight in reading order, then the rest alphabetically');
+  assert.equal(d.missLabel('future_reason'), 'future_reason');
+  assert.equal(d.missLabel('messages_changed'), 'History edited');
+});
+
+test('the session fold buckets a range the way the analytics routes do', () => {
+  const hour = 3_600_000;
+  const day = 24 * hour;
+  assert.equal(d.bucketSizeFor(48 * hour), hour);
+  assert.equal(d.bucketSizeFor(48 * hour + 1), 6 * hour);
+  assert.equal(d.bucketSizeFor(20 * day), 6 * hour, 'a twenty-day range buckets at six hours, as the route answers it');
+  assert.equal(d.bucketSizeFor(30 * day), 6 * hour);
+  assert.equal(d.bucketSizeFor(30 * day + 1), day);
+});
+
+test('a session fold marks what request rows cannot supply and a sum carries the gap rather than a number', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const [folded] = d.foldGroups(rows, 'all');
+  assert.equal(folded.fromRequests, true);
+  assert.equal(folded.savings, null);
+  assert.equal(folded.keptWarm, null);
+  assert.equal(folded.cost.cacheRead, null);
+  assert.equal(folded.cost.cacheWrite, null);
+  const route = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
+  assert.equal(route.fromRequests, undefined, 'a route group carries every figure');
+  const mixed = d.sumGroups([route, folded]);
+  assert.equal(mixed.cost.cacheRead, null, 'a null source makes the sum unavailable, never NaN');
+  assert.equal(mixed.cost.cacheWrite, null);
+  assert.equal(mixed.savings, null);
+  assert.equal(mixed.keptWarm, null);
+  assert.equal(mixed.fromRequests, true);
+  assert.equal(mixed.costUsd, route.costUsd + folded.costUsd, 'the figures the rows do carry still sum');
+  const routeOnly = d.sumGroups([route, route]);
+  assert.equal(routeOnly.cost.cacheRead, route.cost.cacheRead * 2);
+  assert.equal(routeOnly.savings.grossUsd, route.savings.grossUsd * 2);
+  assert.equal(routeOnly.keptWarm.requests, route.keptWarm.requests * 2);
+  assert.equal(routeOnly.fromRequests, undefined);
+  const [bucket] = d.foldRequests(rows, 3_600_000, rows[rows.length - 1].at, rows[0].at);
+  assert.ok(bucket.groups.every((g) => g.savings === null && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
+});
+
+test('a recipe held because every account of its pool was exhausted keeps that reason', () => {
+  const [wire] = fixture('keepalive_recipes').recipes;
+  const recipe = d.decodeRecipe({ ...wire, reason: 'pool_exhausted', state: 'held' });
+  assert.equal(recipe.reason, 'pool_exhausted');
+  assert.equal(recipe.state, 'held');
+});
+
 test('the downstream snippet keeps the placeholder and names the inference listener when it is known', () => {
   const known = d.snippetFor('127.0.0.1:8080').split('\n');
   assert.equal(known.length, 4);

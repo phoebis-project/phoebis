@@ -139,6 +139,8 @@ const RECIPE_REASONS: (RecipeReason | null)[] = [
 const SUBAGENT_HOLDS = new Map<number, RecipeReason>([
   [0, 'cold_probes'],
   [7, 'affinity_too_short'],
+  // The last agent the story draws, so holding it moves no other roll.
+  [9, 'pool_exhausted'],
 ]);
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {

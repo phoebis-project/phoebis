@@ -1,4 +1,4 @@
-import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
@@ -6,6 +6,7 @@ import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, Requ
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });
 
+/** A group as the routes answer one, every figure present. */
 const empty = (key: string, label = key): AnalyticsGroup => ({
   attempts: 0,
   cacheHits: 0,
@@ -32,6 +33,12 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
   uncached: 0,
 });
+
+/**
+ * A group folded from request rows. A row carries one cost total and no probe or kept-warm facts, so the split,
+ * the savings and the kept-warm figures stay unknown rather than reading as zero.
+ */
+const emptyFolded = (key: string, label = key): AnalyticsGroup => ({ ...empty(key, label), cost: { cacheRead: null, cacheWrite: null, input: 0, output: 0 }, fromRequests: true, keptWarm: null, savings: null });
 
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
@@ -90,7 +97,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const kept = patterns.length ? rows.filter((r) => patterns.some((p) => matchesPattern(p, r.userAgent ?? '-'))) : rows;
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
-    const g = groups.get(key) ?? empty(key, labelOf(r, key, by, latest));
+    const g = groups.get(key) ?? emptyFolded(key, labelOf(r, key, by, latest));
     groups.set(key, g);
     const list = lists.get(key) ?? [];
     list.push(r);
@@ -121,7 +128,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
     else g.uncached += 1;
     const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
-    if (reason && CACHE_MISS_REASONS.includes(reason)) g.cacheMissReasons[reason] += 1;
+    if (reason) g.cacheMissReasons[reason] = (g.cacheMissReasons[reason] ?? 0) + 1;
     if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
   }
   for (const [key, g] of groups) {
@@ -161,20 +168,29 @@ export async function loadSessionRequests(load: (cursor: string | undefined) => 
   return { partial: true, requests };
 }
 
-/** Several groups of one point summed into one, for the charts and tiles that draw totals. */
+const plus = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : a + b);
+
+/**
+ * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
+ * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole.
+ */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
     for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached'] as const) out[k] += g[k];
-    for (const k of ['cacheRead', 'cacheWrite', 'input', 'output'] as const) out.cost[k] += g.cost[k];
+    out.cost = { cacheRead: plus(out.cost.cacheRead, g.cost.cacheRead), cacheWrite: plus(out.cost.cacheWrite, g.cost.cacheWrite), input: out.cost.input + g.cost.input, output: out.cost.output + g.cost.output };
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = (out.errors[code] ?? 0) + n;
-    for (const reason of CACHE_MISS_REASONS) out.cacheMissReasons[reason] += g.cacheMissReasons[reason];
-    out.keptWarm.requests += g.keptWarm.requests;
-    out.keptWarm.tokens += g.keptWarm.tokens;
+    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = (out.cacheMissReasons[reason] ?? 0) + n;
+    if (g.fromRequests) out.fromRequests = true;
+    out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;
     for (const k of ['failed', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
-    for (const k of ['grossUsd', 'probeCostUsd', 'wastedProbeUsd', 'wastedProbes'] as const) out.savings[k] += g.savings[k];
-    for (const reason of WASTED_PROBE_REASONS) out.savings.wastedProbeReasons[reason] += g.savings.wastedProbeReasons[reason];
+    const { savings } = g;
+    if (out.savings === null || savings === null) out.savings = null;
+    else {
+      for (const k of ['grossUsd', 'probeCostUsd', 'wastedProbeUsd', 'wastedProbes'] as const) out.savings[k] += savings[k];
+      for (const reason of WASTED_PROBE_REASONS) out.savings.wastedProbeReasons[reason] += savings.wastedProbeReasons[reason];
+    }
   }
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));

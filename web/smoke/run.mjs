@@ -208,6 +208,26 @@ m = await mount('/observe');
     results.push({ name: '/observe selected span tints its minutes', ok: tinted > 0 && tinted < 30, missing: [String(tinted)] });
     const label = m.container.querySelector('.range__foot .num')?.textContent ?? '';
     results.push({ name: '/observe label reads start to end plus duration', ok: /^\d{2}:\d{2}:\d{2} to \d{2}:\d{2}:\d{2}, (\d+m( \d+s)?|\d+s)$/.test(label.trim()), missing: [label] });
+    {
+      // The ring holds finished rows only, so a row still running at the end of a past span is a projection whose
+      // usage the ring cannot reconstruct. Few rows run at any one instant, so the end handle walks the ring until
+      // a span ends on one.
+      let running;
+      for (let end = 330; end < 1800 && running === undefined; end += 30) {
+        setter.call(handles[1], String(end));
+        handles[1].dispatchEvent(new window.Event('input', { bubbles: true }));
+        await m.settle(60);
+        running = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.querySelector('.ldot--inflight') !== null);
+      }
+      running?.click();
+      await m.settle(200);
+      const pane = m.container.querySelector('.observe__detail')?.textContent ?? '';
+      results.push({
+        name: '/observe a request running at the end of a past span reads its usage as not reconstructed',
+        ok: running !== undefined && pane.includes('Usage (not reconstructed for this instant)') && !pane.includes('Usage so far') && running.children[11]?.textContent?.trim() === '-' && running.children[12]?.textContent?.trim() === '-',
+        missing: running === undefined ? ['no row runs at the end of any span'] : [pane.slice(0, 240), running.children[11]?.textContent ?? '', running.children[12]?.textContent ?? ''],
+      });
+    }
     const liveBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Live');
     liveBtn?.click();
     await m.settle(200);
@@ -1351,6 +1371,31 @@ if (failoverRow) {
 }
 m.unmount();
 
+// A read that fails for new filters draws the error over the sections and none of the rows the filters before
+// the change read; Retry reads the new filters again.
+{
+  const page = await mount('/analytics');
+  const keyRows = () => [...([...page.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'))?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+  const before = keyRows();
+  const keyFilter = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
+  keyFilter?.querySelector('.mselect__trigger')?.click();
+  await page.settle(150);
+  failNextCall('getAnalyticsBreakdown', '/admin/analytics/breakdown', 'the ledger is unavailable');
+  [...(keyFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+  await page.settle(900);
+  const t = page.text();
+  const failed = keyRows().filter(Boolean);
+  results.push({
+    name: '/analytics a failed read for new filters draws the error state and none of the rows read before',
+    ok: before.includes('laptop') && t.includes('Could not load the analytics for these filters') && t.includes('the ledger is unavailable') && failed.length === 0,
+    missing: [`before ${before.join(',')}`, `after ${failed.join(',')}`, t.slice(0, 160)],
+  });
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Retry')?.click();
+  await page.settle(900);
+  results.push({ name: '/analytics Retry reads the new filters again', ok: !page.text().includes('Could not load the analytics for these filters') && JSON.stringify(keyRows()) === JSON.stringify(['desktop']), missing: keyRows() });
+  page.unmount();
+}
+
 m = await mount('/analytics');
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Upstreams', 'Peak 5-hour utilization', 'Upstreams in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
 {
@@ -1421,6 +1466,13 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.*', 'other', 'phoebis-batch/*']),
       missing: named,
     });
+    await typeGroups(['y'.repeat(300), ...Array.from({ length: 32 }, (_, i) => `client-${i}/*`)].join('\n'));
+    const bounded = m.container.querySelector('textarea[aria-label="Client groups"]')?.value.split('\n') ?? [];
+    results.push({
+      name: '/analytics the client groups hold 32 patterns of 256 characters at most',
+      ok: bounded.length === 32 && bounded[0].length === 256 && bounded[31] === 'client-30/*' && m.text().includes('32 patterns of 256 characters at most, as the route accepts'),
+      missing: [String(bounded.length), String(bounded[0]?.length), bounded[31] ?? ''],
+    });
     await typeGroups('');
 
     // Effort rides on the hourly rollups, and the synthesized month is the range that holds all three.
@@ -1450,6 +1502,35 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
+  }
+  {
+    // The account rollups carry the range and the upstream alone, so the section takes the upstream selection and
+    // says the other filters do not reach it.
+    const upstreamTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Upstreams in range'));
+    const upstreamRows = () => [...(upstreamTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+    const every = upstreamRows();
+    const filter = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+    const toggle = async (label, value) => {
+      filter(label)?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+      [...(filter(label)?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === value)?.click();
+      await m.settle(700);
+      filter(label)?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+    };
+    const picked = every[0] ?? '';
+    await toggle('Upstream', picked);
+    const narrowed = upstreamRows();
+    const plain = upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    await toggle('Key', 'desktop');
+    const noted = upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    await toggle('Key', 'desktop');
+    await toggle('Upstream', picked);
+    results.push({
+      name: '/analytics the upstreams section takes the upstream selection and names the filters it ignores',
+      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and upstreams' && noted === 'Totals for the selected range and upstreams; the key, pool, model and client filters do not apply here' && JSON.stringify(upstreamRows()) === JSON.stringify(every),
+      missing: [`every ${every.join(',')}`, `narrowed ${narrowed.join(',')}`, plain, noted],
+    });
   }
   {
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
@@ -1492,6 +1573,15 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     };
     const unfiltered = trafficRows();
     results.push({ name: '/analytics a deleted holder of a reused key id is its own group', ok: unfiltered.has('desktop (deleted)') && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    // One hour of the month reports a reason the console has no label for; the table lists it under its own name
+    // after the eight it knows, and the panel draws a bar for it.
+    const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    const monthBars = [...([...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason')?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+    results.push({
+      name: '/analytics a miss reason the console does not know keeps its own column and bar',
+      ok: JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not requested', 'future_reason', 'Expired between turns']) && monthBars.length === 9 && monthBars.includes('future_reason'),
+      missing: [...reasonHeads, ...monthBars],
+    });
     const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
     const pick = async (label) => {
       keyFilter?.querySelector('.mselect__trigger')?.click();
@@ -1873,7 +1963,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const open = m.container.querySelectorAll('.srow__detail').length;
   results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
-  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'unsupported shape']);
+  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'Pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
   {
     const netNegative = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'net negative');
@@ -1990,6 +2080,18 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   await m.settle(900);
   results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
+  {
+    // The request log carries one cost total and no probe or kept-warm facts, so a session view draws those
+    // figures as unavailable rather than as zero.
+    const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row .stat__value')].map((v) => v.textContent?.trim());
+    const costCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Write cost vs read cost');
+    const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
+    results.push({
+      name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
+      ok: tiles.length === 4 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
+      missing: [...tiles, ...costLegend],
+    });
+  }
   {
     // The request log takes the same four filters the rollup query does, so a model the session never used
     // empties the page instead of leaving every number where it was.

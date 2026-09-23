@@ -172,13 +172,32 @@ export function ObservePage() {
     if (historical) {
       // The ring holds finished rows only, so a row that had not finished by the
       // end of the span is shown as it looked then: in flight, head known if seen.
+      // What the ring keeps no history of (the usage, the throughput) is marked
+      // unknown rather than shown at its final value.
       return view.recent
         .filter((r) => Date.parse(r.phases.receivedAt) <= atMs && Date.parse(r.phases.receivedAt) >= fromMs)
-        .map((r) => {
+        .map((r): LiveRequest => {
           const finishedAt = r.phases.finishedAt ? Date.parse(r.phases.finishedAt) : 0;
           if (finishedAt <= atMs) return r;
           const seen = (t?: string) => (t && Date.parse(t) <= atMs ? t : undefined);
-          return { ...r, state: 'in_flight' as const, status: seen(r.phases.headAt) ? r.status : null, costUsd: 0, preview: null, phases: { receivedAt: r.phases.receivedAt, selectedAt: seen(r.phases.selectedAt), writtenAt: seen(r.phases.writtenAt), headAt: seen(r.phases.headAt), firstContentAt: seen(r.phases.firstContentAt), streamEndAt: seen(r.phases.streamEndAt) } };
+          const started = r.attempts.filter((a) => Date.parse(a.startedAt) <= atMs);
+          // The row records the final attempt's head time alone, so the last attempt started by this instant
+          // keeps its response facts only when it is the final one and its head came first; otherwise its
+          // status, cooldown and windows may postdate the instant.
+          const headKnown = seen(r.phases.headAt) !== undefined && started.length === r.attempts.length;
+          const attempts = started.map((a, i) => (i < started.length - 1 ? a : headKnown ? { ...a, outcome: 'in_flight' as const } : { ...a, cooldownSet: null, outcome: 'in_flight' as const, upstreamStatus: null, windows: [] }));
+          return {
+            ...r,
+            accountId: seen(r.phases.selectedAt) ? r.accountId : null,
+            attempts,
+            costUsd: 0,
+            outputTps: null,
+            phases: { receivedAt: r.phases.receivedAt, selectedAt: seen(r.phases.selectedAt), writtenAt: seen(r.phases.writtenAt), headAt: seen(r.phases.headAt), firstContentAt: seen(r.phases.firstContentAt), streamEndAt: seen(r.phases.streamEndAt) },
+            preview: null,
+            state: 'in_flight',
+            status: seen(r.phases.headAt) ? r.status : null,
+            usage: null,
+          };
         });
     }
     return [...view.inFlight.values(), ...view.recent].filter((r) => Date.parse(r.phases.receivedAt) >= fromMs).sort((a, b) => Date.parse(b.phases.receivedAt) - Date.parse(a.phases.receivedAt));
@@ -543,8 +562,14 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
         <AttemptTrail attempts={r.attempts} />
       </td>
       <td className="right num">
-        {fmtCompact(tokensTotal(r.usage))}
-        <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
+        {r.usage === null ? (
+          <span className="muted">-</span>
+        ) : (
+          <>
+            {fmtCompact(tokensTotal(r.usage))}
+            <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
+          </>
+        )}
       </td>
       <td className="right num">{r.outputTps === null ? <span className="muted">-</span> : r.outputTps.toFixed(0)}</td>
       <td className="right num">{r.state === 'finished' ? fmtUsd(r.costUsd) : <span className="muted">-</span>}</td>
@@ -713,17 +738,26 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
       </section>
 
       <section>
-        <h3 className="section-title">Usage{r.state === 'in_flight' ? ' so far' : ''}</h3>
-        <KeyValue
-          rows={[
-            { label: 'Input', value: fmtInt(r.usage.input) },
-            { label: 'Cache read', value: fmtInt(r.usage.cacheRead) },
-            { label: 'Cache write, 5m', value: fmtInt(r.usage.cacheWrite5m) },
-            { label: 'Cache write, 1h', value: fmtInt(r.usage.cacheWrite1h) },
-            { label: 'Output', value: fmtInt(r.usage.output) },
-            { label: 'Estimated cost', value: r.state === 'finished' ? fmtUsd(r.costUsd) : <span className="muted">not yet</span> },
-          ]}
-        />
+        {r.usage === null ? (
+          <>
+            <h3 className="section-title">Usage (not reconstructed for this instant)</h3>
+            <p className="muted">The ring keeps each request's final usage only, so the tokens counted by this instant are not known.</p>
+          </>
+        ) : (
+          <>
+            <h3 className="section-title">Usage{r.state === 'in_flight' ? ' so far' : ''}</h3>
+            <KeyValue
+              rows={[
+                { label: 'Input', value: fmtInt(r.usage.input) },
+                { label: 'Cache read', value: fmtInt(r.usage.cacheRead) },
+                { label: 'Cache write, 5m', value: fmtInt(r.usage.cacheWrite5m) },
+                { label: 'Cache write, 1h', value: fmtInt(r.usage.cacheWrite1h) },
+                { label: 'Output', value: fmtInt(r.usage.output) },
+                { label: 'Estimated cost', value: r.state === 'finished' ? fmtUsd(r.costUsd) : <span className="muted">not yet</span> },
+              ]}
+            />
+          </>
+        )}
       </section>
 
       <section>

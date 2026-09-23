@@ -1,5 +1,5 @@
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestKind, WastedProbeReason } from '@/api/types';
-import { CACHE_MISS_REASONS, WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
+import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { keyById } from './pools';
@@ -112,7 +112,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
 
   const cacheMissReasons = emptyCacheMissReasons();
-  for (const r of counted) for (const reason of CACHE_MISS_REASONS) cacheMissReasons[reason] += r.cacheMissReasons[reason];
+  // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
+  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = (cacheMissReasons[reason] ?? 0) + n;
   const wastedProbeReasons = emptyWastedProbeReasons();
   for (const r of probeRows) for (const reason of WASTED_PROBE_REASONS) wastedProbeReasons[reason] += r.wastedProbeReasons[reason];
 
