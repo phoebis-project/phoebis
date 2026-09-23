@@ -188,9 +188,10 @@ the deploy files, or the console's sources). To release:
    `sha-<short commit>`.
 
 A failed smoke leaves untagged digests in the registry and no tag; a failed guard leaves nothing. A manual dispatch
-(Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without pushing;
-run it after a change to the Dockerfile or the workflow, and before the first release. The package inherits the
-repository's visibility: while the repository is private, pulling needs a token with `read:packages`.
+(Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without pushing; run
+it after a change to the Dockerfile or the workflow, and before the first release. The package inherits the repository's
+visibility: while the repository is private, pulling needs a token with `read:packages`. The image name is derived from
+the repository that runs the workflow, so a renamed repository publishes under its new name without a workflow change.
 
 ## License
 
