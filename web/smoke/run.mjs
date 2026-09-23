@@ -1372,7 +1372,7 @@ if (failoverRow) {
 m.unmount();
 
 // A read that fails for new filters draws the error over the sections and none of the rows the filters before
-// the change read; Retry reads the new filters again.
+// the change read; Try again reads the new filters again.
 {
   const page = await mount('/analytics');
   const keyRows = () => [...([...page.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'))?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
