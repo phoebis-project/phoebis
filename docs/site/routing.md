@@ -56,10 +56,13 @@ account {id} not found`, and the pool is not created.
 strategy is `earliest_refresh` or `least_utilized`, whatever the flag holds, because those two strategies order
 by kind regardless of it. A pool with keys cannot be deleted: `409 pool still has keys`.
 
-Under `earliest_refresh` and `least_utilized`, every subscription account with plan quota is tried before one in
-overage, and both before any API-key account, whatever the priorities say, because an API key has no usage
-sample to order by; `api_key_sub_strategy` orders the API-key group instead. Each strategy's rule, as the
-console states it on the pool card:
+The kind order (subscription accounts with plan quota, then those in overage, then API keys) is in force under
+`earliest_refresh` and `least_utilized` whatever `prefer_subscription` says, and under `priority_random` and
+`round_robin` only when `prefer_subscription` is on; where it is in force, it outranks the priorities.
+`api_key_sub_strategy` orders the API-key group only under `earliest_refresh` and `least_utilized`, once that
+group is the first with an eligible upstream, because an API key has no usage sample for those two to order by;
+under `priority_random` and `round_robin` the API-key group takes the pool's own strategy. Each strategy's rule, as
+the console states it on the pool card:
 
 **`earliest_refresh`**: Subscription upstreams with plan quota first, then those in overage, then API keys;
 within a tier, the one whose 7-day window resets soonest; ties are random.
@@ -67,10 +70,11 @@ within a tier, the one whose 7-day window resets soonest; ties are random.
 **`least_utilized`**: Subscription upstreams with plan quota first, then those in overage, then API keys;
 within a tier, the one with the lowest 5-hour utilization; ties are random.
 
-**`priority_random`**: Within the first tier that has an eligible upstream, any of them at random.
+**`priority_random`**: Within the first tier that has an eligible upstream (tiers split by kind when
+prefer_subscription is on), any of them at random.
 
-**`round_robin`**: Within the first tier that has an eligible upstream, each in turn; a restart starts the round
-again.
+**`round_robin`**: Within the first tier that has an eligible upstream (tiers split by kind when
+prefer_subscription is on), each in turn; a restart starts the round again.
 
 ### Cache TTL
 
@@ -79,9 +83,12 @@ carries `enabled` (default `false`), `main` (default
 `1h`) and `subagent` (default `5m`) in `5m` or `1h`, `in_overage` (default unset), and `models`, a list of
 `{model, main, subagent}` overrides on canonical ids. With it on, every `cache_control` marker in the body is
 rewritten to the TTL for the request's agent and model, the ones inside a tool result's own content included, the
-`extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped;
-the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` then has no effect through the pool. A request that carries no
-marker at all gets the API's top-level `cache_control` member with the TTL instead, and a request with any marker
+`extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped,
+except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The guard
+refuses when a JSON decoder counts a different number of markers than the rewrite reached, as with a
+`cache_control` key spelled with escapes or repeated in one object. On every other body the client's own
+`CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A request that carries no marker at all gets the
+API's top-level `cache_control` member with the TTL instead, and a request with any marker
 keeps its count. `in_overage` takes over while the write costs money: the serving upstream is in overage, or is
 an API-key upstream. The TTL is priced per attempt, so a request that fails over reads its destination's state,
 and a request without an agent id reads as the main conversation. Mixed TTLs across a session's requests are fine:
@@ -177,12 +184,13 @@ sibling in overage does not receive a spent pin, whether or not the pinned accou
 the overage rule would hand the session back on the next request. With no sibling holding allowance the session
 stays and the upstream's answer decides.
 
-Any move records a `pin_migrated` event with reason `overage`, `spent`, or `utilization`. A pin released without a move
-records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`, `cooldown`,
-`deleted`, `expired`, `overage`, `paused`, `spent`, `unserved`, the account's state when it cannot serve
-(`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found
-nothing else against the account, as with a utilization move whose destination emptied. Releasing a session by hand,
-from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+Any move records a `pin_migrated` event with reason `cooldown` or `mark` (a failover or a credential mark moved
+it), `overage`, `spent`, or `utilization`. A pin released without a move records `pin_expired` with `reasons`,
+every fact the selection found against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`,
+`paused`, `spent`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
+`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a
+utilization move whose destination emptied. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -196,7 +204,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 | 429, 5h/7d/status rejected (not Fable-only) | Account-wide until the reset, or Retry-After, or fallback | Yes |
 | 429, only 7d_oi-status rejected, both shared windows OK | Model-scoped for the model, same deadline | Yes |
 | 429 without unified headers | Account-wide, Retry-After or fallback | Yes |
-| 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the event's headers | Yes |
+| 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
 
 **api_key**
 
@@ -225,7 +233,9 @@ account-wide fallback duration instead. An HTTP date is read against the upstrea
 is present, to reduce clock-skew error. A valid long delay is never shortened, and every deadline is an absolute
 time with a one-second margin that survives a restart.
 
-Each client request runs at most `routing.max_attempts` upstream attempts, each on a distinct account:
+Each client request runs at most `routing.max_attempts` wire submissions; a same-account retry after a transport
+failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps
+says. Each attempt goes through these steps:
 
 1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified
    rate-limit headers the client's automatic continue reads; `untimed` answers `503` with error code

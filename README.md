@@ -35,8 +35,8 @@ store or a socket. Installing as a service, and every setting of the file, is on
 [installation page](docs/site/installation.md).
 
 The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64
-with every release; `deploy/compose.yaml` and `deploy/config.container.yaml` run it under bridge networking with
-its health check ([how](docs/site/installation.md#run-the-container)).
+with every release; `deploy/compose.yaml` and `deploy/config.container.yaml` run it under bridge networking, and
+the image's `HEALTHCHECK` runs `phoebis health` ([how](docs/site/installation.md#run-the-container)).
 
 ## Where things are
 

@@ -270,7 +270,7 @@ minutes, measured from the session's last request on any of its agents, once per
 request arms the rule again.
 
 **Session parked** posts `session_parked` when the companion reports the main agent parked and `session_resumed`
-on the session's next request or when the companion reports the agent busy or idle again; without a companion
+on the main agent's next request or when the companion reports the agent busy or idle again; without a companion
 for the session neither happens.
 
 **Subagent active** posts `subagent_started` on a subagent's first request, or on the companion's `agent_start`,

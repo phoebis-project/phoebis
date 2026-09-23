@@ -134,6 +134,9 @@ The Upstreams view offers these actions, each calling its own route:
 | Re-sync | Runs discovery again. |
 | Verify | `api_key` only; asks the account's host for its model list. |
 
+On an `api_key` account the extra headers go with the secret, so a re-pair stores both again in one
+[PATCH](api.md#patch-adminaccountsid).
+
 The console warns before Clear cooldown runs: "The upstream becomes eligible immediately. If the upstream is
 still rate limited, the next request re-enters cooldown."
 

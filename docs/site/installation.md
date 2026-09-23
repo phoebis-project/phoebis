@@ -2,8 +2,8 @@
 
 The router is one binary, `phoebis`, built from this repository, and one YAML file that names its listeners, its two
 database files, and the environment variables that hold its secrets. This page walks the build, the service
-install, the three commands, and every setting the file accepts, with its default, its bounds, and the message a
-bad value gets.
+install, the commands, and every setting the file accepts, with its default, its bounds, and the message a bad value
+gets.
 
 ## Build
 
@@ -208,6 +208,7 @@ admin:
   secret_env: ROUTER_ADMIN_SECRET
   viewer_secret_env: ROUTER_VIEWER_SECRET
 compatibility:
+  # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false
   outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
@@ -321,8 +322,8 @@ Refused with:
 With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07`
 beta and a `diagnostics.previous_message_id` naming the previous answer on the same key, session, agent, model,
 and upstream, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
-`cache_diagnostics`. The id is kept in memory only: the first
-request after a restart, and the first on an upstream the session moved to, carries `null`.
+`cache_diagnostics`. The id follows the session memory: it
+survives a restart through the registry copy and starts at `null` on an upstream the session moved to.
 
 ### keepalive
 
@@ -456,7 +457,7 @@ refused with `usage.refresh_concurrency must be at least 1`.
 The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
 `keepalive` bounds, `routing.catalog_sync_interval_seconds`, the four `sessions` keys,
-`stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.retention_days`,
+`stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.rollup_retention_days`,
 `quota.sample_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name
 the same file. The first failure is the one reported, so fix the file top to bottom to find the next one.
 

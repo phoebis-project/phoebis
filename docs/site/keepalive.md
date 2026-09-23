@@ -147,7 +147,7 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
 `probing`, with a probe in flight; or `held`, with no probe scheduled and one of seventeen reasons attached:
 
-| Reason | Console label | Console hint |
+| Reason | Console label | What it means |
 | --- | --- | --- |
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
@@ -167,8 +167,8 @@ A recipe is `armed`, its probe scheduled or arming from the first stream event o
 | `storage_limit` | storage limit | The engine is at its retained-request or session limit. |
 | `unsupported_shape` | unsupported shape | The last request had no cacheable prefix the probe could replay. |
 
-Four of those reasons also settle as a wasted probe, counted when the recipe stops with one already sent and
-unanswered:
+A wasted probe settles with one of four reasons of its own, counted when the recipe stops with one already sent
+and unanswered:
 
 | Reason | What settles it |
 | --- | --- |

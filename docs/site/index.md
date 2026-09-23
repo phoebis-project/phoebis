@@ -7,7 +7,7 @@ itself, and picks that account from a pool. Three listeners make up one process:
 
 | Page | What it covers |
 | --- | --- |
-| [Installation](installation.md) | The build, the service, the three commands, and every bootstrap setting. |
+| [Installation](installation.md) | The build, the service, the commands, and every bootstrap setting. |
 | [Downstream client](client.md) | The client's environment block and what each variable changes. |
 | [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](routing.md) | Accounts, pools, keys, selection, cooldowns, failover, and overage. |

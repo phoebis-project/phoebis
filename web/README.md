@@ -1,20 +1,34 @@
 # Phoebis Router web UI
 
-A clickable mock of the admin console for Phoebis Router: a self-hosted gateway that sits in front of Claude Code
-sessions, holds several upstreams, groups them into pools, issues API keys, and records per-request statistics.
+The admin console for Phoebis Router: a self-hosted gateway that sits in front of Claude Code sessions, holds
+several upstreams, groups them into pools, issues API keys, and records per-request statistics. The router's build
+embeds the bundle (`crates/ui`) and serves it from the admin listener, where the console reads and writes the admin
+routes through `HttpApi` in `src/api/http.ts`. `src/api/` also defines the response types, their decoders, and the
+`Api` interface.
 
-Every number on screen comes from fixture data in `src/mock/`. A seeded pseudo-random generator produces seven days of
-quota history and a day of request logs, so charts look the same on each reload. `src/api/` defines the response types
-and the `Api` interface; `MockApi` in `src/mock/index.ts` is the only implementation. Swap it for a real client to
-connect the UI to a running router.
+`MockApi` in `src/mock/index.ts` implements the same interface from fixture data, for the mock's browser pass, the
+smoke checks, the unit tests, and work on a view without a router. It is chosen only when `VITE_PHOEBIS_MOCK=1` is set
+and never ships in the served bundle. A seeded pseudo-random generator produces seven days of quota history and a day
+of request logs, so charts look the same on each reload. The mock refuses what the router refuses for the inputs the
+forms bound, in the route's own wording, so a form that drifts from its route fails against the mock as well.
 
 ## Run it
 
 ```sh
 npm install
-npm run dev      # http://127.0.0.1:5173
-npm run build    # typecheck, then bundle into dist/
+npm run dev                    # http://127.0.0.1:5173, /admin proxied to a router on 127.0.0.1:8081
+VITE_PHOEBIS_MOCK=1 npm run dev    # the same page against the mock; sign in with admin or viewer
+npm run build                  # typecheck, then bundle into dist/
 ```
+
+The other scripts:
+
+- `npm run build:mock` bundles the console with the mock into `dist-mock/`.
+- `npm run e2e` runs the browser pass against a running router ([e2e/README.md](e2e/README.md)).
+- `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port.
+- `npm run smoke` mounts every view in jsdom against the mock and checks what it draws.
+- `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
+- `npm test` builds the test bundle and runs the unit tests under `test/`.
 
 Node 20.19 or a later 20, or 22.12 or later, and npm 9 or newer (`.nvmrc` and the `engines` field say so). The
 dependency list is React 18, react-router-dom 7, and Recharts; styling is plain CSS with custom properties.

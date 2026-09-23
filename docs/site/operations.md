@@ -165,8 +165,9 @@ step no longer does, and GitHub Pages keeps serving the last deployment at the s
 To unpublish the site instead, use the Pages settings' unpublish operation: choose "Unpublish site" and confirm,
 then check that the published URL answers `404` before treating the site as taken down.
 
-To build the site locally, run `pipx run zensical build --clean` at the repository root; it writes `site/`. `pipx
-run zensical serve` previews it.
+To build the site locally, run `pipx run zensical==0.0.62 build --clean --strict` at the repository root; it writes
+`site/`. The workflow pins the same version, so a local build passes or fails as the workflow's does.
+`pipx run zensical==0.0.62 serve` previews the site.
 
 ## Releasing
 
