@@ -16,8 +16,10 @@ use phoebis_transport::{
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::sync::{
     atomic::{AtomicI64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 
 fn bodies_match_measured_key_order() {
     let p = claude_code_2_1_269_linux_x64();
@@ -1120,4 +1122,159 @@ async fn a_refresh_that_rotates_nothing_answers_that_no_newer_token_exists() {
         "a token endpoint having a bad minute is not a reason to ask for re-pairing"
     );
     up.shutdown().await;
+}
+
+/// One formatted line per captured event, the span's own fields joined ahead of the event's, so a line
+/// carries the account id `debug_span!` attached without a second pass over the span stack.
+#[derive(Default)]
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.push_str(&format!("{}={value:?} ", field.name()));
+    }
+}
+
+thread_local! {
+    // A global subscriber's callsite interest is cached process-wide: a thread-local default installed only
+    // for this test would race every other test in the binary that also refreshes, some of which would win
+    // the cache with a subscriber that is not interested and silence this one's events for good. Routing
+    // through a thread-local sink instead of a thread-local default keeps the interest decision uncontested
+    // (one global subscriber, always interested) while keeping every test's capture to its own thread.
+    static SINK: std::cell::RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { std::cell::RefCell::new(None) };
+}
+
+struct CaptureLayer;
+
+impl<S> tracing_subscriber::Layer<S> for CaptureLayer
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::Id,
+        ctx: Context<'_, S>,
+    ) {
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(fields);
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        if event.metadata().target() != "phoebis_oauth::manager" {
+            return;
+        }
+        SINK.with(|cell| {
+            let Some(sink) = cell.borrow().clone() else {
+                return;
+            };
+            let mut line = String::new();
+            if let Some(scope) = ctx.event_scope(event) {
+                for span in scope.from_root() {
+                    if let Some(fields) = span.extensions().get::<Fields>() {
+                        line.push_str(&fields.0);
+                    }
+                }
+            }
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            line.push_str(&fields.0);
+            sink.lock().unwrap().push(line);
+        });
+    }
+}
+
+/// Installs the capturing layer as the process's one subscriber, the first time any test calls this, and
+/// points this thread's events at a fresh buffer until the guard drops.
+fn capture() -> (Arc<Mutex<Vec<String>>>, impl Drop) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    SINK.with(|cell| *cell.borrow_mut() = Some(lines.clone()));
+    struct ClearSink;
+    impl Drop for ClearSink {
+        fn drop(&mut self) {
+            SINK.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+    (lines, ClearSink)
+}
+
+#[tokio::test]
+async fn a_refresh_traces_its_steps() {
+    let (lines, _guard) = capture();
+
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::ReauthRequired)
+    ));
+    up.shutdown().await;
+
+    let lines = lines.lock().unwrap();
+    let text = lines.join("\n");
+    assert!(
+        lines.iter().all(|line| line.contains("account=a ")),
+        "every event carries the account id: {text}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("attempt=")),
+        "the attempt opened: {text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("host=") && l.contains("platform.claude.com")),
+        "the request sent: {text}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("status=400")),
+        "the status read: {text}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("outcome=\"failed\"") && l.contains("detail=")),
+        "the outcome resolved: {text}"
+    );
+    assert!(
+        !text.contains("sk-ant-"),
+        "a token reached the trace: {text}"
+    );
+    assert!(
+        !text.contains("refresh_token="),
+        "a refresh token reached the trace: {text}"
+    );
 }

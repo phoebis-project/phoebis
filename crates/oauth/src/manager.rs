@@ -16,6 +16,7 @@ use phoebis_transport::response::ResponseHead;
 use phoebis_transport::TransportError;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use serde_json::Value;
+use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
 use crate::identity::{identity_matches, IdentityClaims};
@@ -177,7 +178,27 @@ impl CredentialManager {
         if bundle.expires_at - now > refresh_margin(&bundle) {
             return Ok(access_token(&account, &bundle));
         }
-        self.join_or_start(account_id, bundle.generation).await
+        match self.join_or_start(account_id, bundle.generation).await {
+            Ok(token) => Ok(token),
+            Err(failure) => {
+                // A backoff, a quarantine, or a store race can all fail this call without ever opening a
+                // refresh attempt, which is the one place `resolve` would otherwise have recorded why.
+                // `Unavailable`'s own detail is used bare rather than through `AcquireError`'s Display, which
+                // wraps it in a generic "credential unavailable:" prefix that only restates the field name.
+                let message = match &failure {
+                    AcquireError::Unavailable(detail) => detail.clone(),
+                    other => other.to_string(),
+                };
+                if let Err(error) = self.inner.store.record_credential_error(
+                    account_id,
+                    account.incarnation,
+                    &message,
+                ) {
+                    tracing::warn!(account = %account_id, %error, "could not record the credential failure");
+                }
+                Err(failure)
+            }
+        }
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -353,7 +374,19 @@ impl Inner {
         Ok((account, bundle))
     }
 
+    /// Traced under one span per call, so an operator reading logs for a failing account can follow one
+    /// refresh's steps without the account id repeated on every line.
     async fn refresh(
+        &self,
+        account_id: &str,
+        observed_generation: u64,
+    ) -> Result<AccessToken, RefreshFailure> {
+        self.refresh_inner(account_id, observed_generation)
+            .instrument(tracing::debug_span!("refresh", account = %account_id))
+            .await
+    }
+
+    async fn refresh_inner(
         &self,
         account_id: &str,
         observed_generation: u64,
@@ -410,6 +443,7 @@ impl Inner {
             }
             Err(error) => return Err(store_failure(error)),
         };
+        tracing::debug!(attempt, "refresh attempt opened");
 
         let Some(refresh_token) = &bundle.refresh_token else {
             self.resolve(
@@ -428,6 +462,7 @@ impl Inner {
         let body = refresh_body(self.profile, refresh_token.expose(), scopes);
         let request = control_request(self.profile, ControlKind::Token, None, Some(body));
         let host = ControlKind::Token.host(self.profile);
+        tracing::debug!(host = %host, "refresh request sent");
 
         let sent = self.control.send(request, &host, REFRESH_TIMEOUT).await;
         let (head, payload) = match sent {
@@ -454,9 +489,10 @@ impl Inner {
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
+        let code = error_code(&payload);
+        tracing::debug!(status = head.status, code, "refresh response status read");
 
         if head.status != 200 {
-            let code = error_code(&payload);
             let detail = match &code {
                 Some(code) => format!("refresh rejected with status {} ({code})", head.status),
                 None => format!("refresh rejected with status {}", head.status),
@@ -625,6 +661,12 @@ impl Inner {
     // A failed bookkeeping write must not mask why the refresh failed: the class is what the caller acts
     // on, and the next refresh derives the same state again from the store.
     fn resolve(&self, attempt: u64, incarnation: u64, outcome: AttemptOutcome) {
+        let (label, detail) = match &outcome {
+            AttemptOutcome::Committed => ("committed", None),
+            AttemptOutcome::Failed(detail) => ("failed", Some(detail.as_str())),
+            AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail.as_str())),
+        };
+        tracing::debug!(outcome = label, detail, "refresh attempt resolved");
         let _ = self
             .store
             .resolve_refresh_attempt(attempt, incarnation, outcome);

@@ -281,6 +281,68 @@ pub async fn quarantined_parts(
     (parts.app, parts.up, parts.store, parts.manager)
 }
 
+/// A paired slot with an already-expired token, backing off after the token endpoint rejected the last
+/// refresh: the state an operator has to be shown even though no refresh attempt is left open.
+pub async fn backing_off_parts() -> (
+    Router,
+    FakeUpstream,
+    Arc<Store>,
+    Arc<CredentialManager>,
+    Arc<AtomicI64>,
+) {
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    parts
+        .store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            Some(1),
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW - 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    parts.up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let _ = parts.manager.acquire("business").await;
+    let _ = parts.manager.acquire("business").await;
+    (
+        parts.app,
+        parts.up,
+        parts.store,
+        parts.manager,
+        parts.clock_cell,
+    )
+}
+
+/// Switches the token endpoint back to a successful, identity-matched response, for a test that drives a
+/// refresh past a rejection it set up earlier.
+pub fn succeed_token_requests(up: &FakeUpstream) {
+    up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: as_account(control_response(ControlFixture::Token), ACCOUNT_UUID),
+        },
+    );
+}
+
 /// An app that pins its admin origin, as every configuration outside plain HTTP must.
 pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
     let parts = app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await;

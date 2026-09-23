@@ -50,11 +50,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (18, V18),
     (19, V19),
     (20, V20),
+    (21, V21),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -276,4 +277,11 @@ ALTER TABLE pins ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE cooldowns ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE overage_state ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE refresh_attempts ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
+"#;
+
+// A credential failure that never opens a refresh attempt (a backoff, a quarantine, an unpaired slot) has
+// nowhere else to leave its reason; a row from before this column reads no error, which is the safe reading
+// for a failure that predates the column.
+const V21: &str = r#"
+ALTER TABLE credentials ADD COLUMN last_error TEXT;
 "#;

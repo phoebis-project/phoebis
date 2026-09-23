@@ -3,19 +3,56 @@ use axum::http::Request;
 use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tower::ServiceExt;
 
 mod common;
 
+fn ping_event() -> SseEvent {
+    SseEvent {
+        event: "ping".into(),
+        data: r#"{"type":"ping"}"#.into(),
+    }
+}
+
+fn message_start_event() -> SseEvent {
+    SseEvent {
+        event: "message_start".into(),
+        data: r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
+    }
+}
+
+fn weird_future_event() -> SseEvent {
+    SseEvent {
+        event: "weird_future_event".into(),
+        data: r#"{"type":"weird_future_event"}"#.into(),
+    }
+}
+
+fn text_delta_event(text: &str) -> SseEvent {
+    SseEvent {
+        event: "content_block_delta".into(),
+        data: format!(
+            r#"{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{text}"}}}}"#
+        ),
+    }
+}
+
+fn message_stop_event() -> SseEvent {
+    SseEvent {
+        event: "message_stop".into(),
+        data: r#"{"type":"message_stop"}"#.into(),
+    }
+}
+
 #[tokio::test]
 async fn sse_is_relayed_event_by_event_with_pings_and_unknown_events_intact() {
     let events = vec![
-        SseEvent { event: "ping".into(), data: r#"{"type":"ping"}"#.into() },
-        SseEvent { event: "message_start".into(), data: r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into() },
-        SseEvent { event: "weird_future_event".into(), data: r#"{"type":"weird_future_event"}"#.into() },
-        SseEvent { event: "content_block_delta".into(), data: r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#.into() },
-        SseEvent { event: "message_stop".into(), data: r#"{"type":"message_stop"}"#.into() },
+        ping_event(),
+        message_start_event(),
+        weird_future_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
     ];
     // Gated: the fake writes the first event and then blocks until release(). The relay holds that ping until
     // the stream commits, so the response head itself cannot arrive before the release.
@@ -717,5 +754,50 @@ async fn a_body_that_stops_arriving_is_refused_at_the_idle_timeout() {
         "request_timeout"
     );
     drop(tx);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_relayed_stream_is_delivered_frame_by_frame_as_the_upstream_writes() {
+    let events = vec![
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events,
+            delay_between: Duration::from_millis(400),
+        },
+    }])
+    .await;
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(common::stream_request("phoebis-testkey"))
+        .await
+        .unwrap();
+    let mut body = resp.into_body();
+    let started = Instant::now();
+    let first = body.frame().await.unwrap().unwrap();
+    assert!(first
+        .data_ref()
+        .unwrap()
+        .starts_with(b"event: message_start"));
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
+        "the first event was not held for the second"
+    );
+    let second = body.frame().await.unwrap().unwrap();
+    assert!(second
+        .data_ref()
+        .unwrap()
+        .starts_with(b"event: content_block_delta"));
+    assert!(
+        started.elapsed() >= Duration::from_millis(350),
+        "the second arrived with the upstream's delay"
+    );
     up.shutdown().await;
 }

@@ -57,6 +57,12 @@ pub struct CredentialMetadata {
     pub expires_at: i64,
     pub refresh_expires_at: Option<i64>,
     pub scopes: String,
+    /// The reason of the last credential failure that opened no refresh attempt (a backoff, a quarantine, an
+    /// unpaired slot); cleared by the next committed credential.
+    pub last_error: Option<String>,
+    /// When `last_error` was recorded. Meaningful only alongside `last_error`: it rides on the row's
+    /// `updated_at`, which a commit that clears the error also advances, so the pairing never goes stale.
+    pub last_error_at: i64,
 }
 
 #[derive(Debug)]
@@ -205,7 +211,7 @@ impl Store {
     ) -> Result<Option<CredentialMetadata>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation \
+            "SELECT generation, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation, last_error, updated_at \
              FROM credentials WHERE account_id = ?1",
             params![account_id],
             |row| {
@@ -216,11 +222,32 @@ impl Store {
                     refresh_expires_at: row.get(3)?,
                     scopes: row.get(4)?,
                     lifecycle_generation: row.get::<_, i64>(5)? as u64,
+                    last_error: row.get(6)?,
+                    last_error_at: row.get(7)?,
                 })
             },
         )
         .optional()
         .map_err(StoreError::from)
+    }
+
+    /// Records a credential failure that opened no refresh attempt (a backoff, a quarantine, an unpaired
+    /// slot), so `credential.last_error` has something to show; a no-op once the account has moved past the
+    /// incarnation the caller observed, since the failure is no longer about the slot standing there now.
+    pub fn record_credential_error(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        message: &str,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let now = jiff::Timestamp::now().as_millisecond();
+        let updated = conn.execute(
+            "UPDATE credentials SET last_error = ?3, updated_at = ?4 WHERE account_id = ?1 \
+             AND EXISTS (SELECT 1 FROM accounts WHERE accounts.id = ?1 AND accounts.incarnation = ?2)",
+            params![account_id, incarnation as i64, message, now],
+        )?;
+        Ok(updated > 0)
     }
 
     /// Commits a new credential generation in one transaction: the incarnation and the lifecycle generation
@@ -307,12 +334,14 @@ impl Store {
         )?;
         let now = jiff::Timestamp::now().as_millisecond();
 
+        // `last_error` is cleared here rather than through a separate call: the connection mutex is not
+        // reentrant, and a credential that just committed has nothing stale left to explain.
         tx.execute(
-            "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+            "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at, last_error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL) \
              ON CONFLICT(account_id) DO UPDATE SET generation = excluded.generation, lifecycle_generation = excluded.lifecycle_generation, \
              sealed = excluded.sealed, nonce = excluded.nonce, issued_at = excluded.issued_at, expires_at = excluded.expires_at, \
-             refresh_expires_at = excluded.refresh_expires_at, scopes = excluded.scopes, updated_at = excluded.updated_at",
+             refresh_expires_at = excluded.refresh_expires_at, scopes = excluded.scopes, updated_at = excluded.updated_at, last_error = NULL",
             params![
                 account_id,
                 new_generation as i64,

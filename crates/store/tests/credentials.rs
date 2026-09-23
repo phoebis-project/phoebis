@@ -629,3 +629,50 @@ fn the_resolved_cursor_query_reads_through_its_index() {
         "and the index supplies the order rather than a sort: {plan}"
     );
 }
+
+#[test]
+fn a_credential_error_is_recorded_refused_past_its_incarnation_and_cleared_by_the_next_commit() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
+        .unwrap();
+
+    assert!(store
+        .record_credential_error("a", 1, "refresh is waiting out a backoff")
+        .unwrap());
+    let metadata = store.credential_metadata("a").unwrap().unwrap();
+    assert_eq!(
+        metadata.last_error.as_deref(),
+        Some("refresh is waiting out a backoff")
+    );
+
+    // The slot is deleted and recreated under the same id, so the incarnation the caller still holds no
+    // longer names the row standing there: the write must not land on the replacement's credentials.
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .commit_credentials("a", 2, 1, None, None, &bundle("at-2"))
+        .unwrap();
+    assert!(!store
+        .record_credential_error("a", 1, "stale write")
+        .unwrap());
+    assert_eq!(
+        store.credential_metadata("a").unwrap().unwrap().last_error,
+        None,
+        "the stale write never reached the replacement's row"
+    );
+
+    // A committed credential clears whatever error was recorded against the slot it replaces.
+    store
+        .record_credential_error("a", 2, "refresh rejected with status 503")
+        .unwrap();
+    store
+        .commit_credentials("a", 2, 1, Some(1), None, &bundle("at-3"))
+        .unwrap();
+    assert_eq!(
+        store.credential_metadata("a").unwrap().unwrap().last_error,
+        None,
+        "a fresh commit leaves no stale error behind"
+    );
+}

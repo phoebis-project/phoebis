@@ -131,6 +131,35 @@ async fn a_request_that_never_leaves_reports_an_unreachable_upstream() {
     assert!(matches!(error, TransportError::Unreachable(_)), "{error:?}");
 }
 
+/// The upstream reads the whole request before it gates, so by the time the timeout fires the body is
+/// already handed over; only the response is missing.
+#[tokio::test]
+async fn a_timeout_after_the_body_was_handed_over_is_not_unreachable() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::CloseAfterRequest)),
+    }])
+    .await;
+    let profile = claude_code_2_1_269_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let error = client
+        .send(
+            token_request(),
+            "platform.claude.com",
+            Duration::from_millis(300),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("the gated upstream never answers");
+    assert!(matches!(error, TransportError::Io(_)), "{error:?}");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_zstd_bomb_response_is_refused_at_the_control_bound() {
     let bomb = zstd::stream::encode_all(vec![0u8; 8 << 20].as_slice(), 19).unwrap();

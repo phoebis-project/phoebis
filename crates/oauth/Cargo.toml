@@ -31,3 +31,4 @@ debug-hooks = []
 phoebis-oauth = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
+tracing-subscriber = { workspace = true }

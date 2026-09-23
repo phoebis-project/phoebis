@@ -10,9 +10,10 @@ use std::time::Duration;
 use boring::ssl::SslConnector;
 use bytes::{Bytes, BytesMut};
 use phoebis_profile::Profile;
+use tokio::io::AsyncWriteExt;
 
 use crate::decode::{decoder, encoding};
-use crate::request::{write_request, RawRequest, WriteProgress};
+use crate::request::{serialize_head, RawRequest};
 use crate::response::{framing, read_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
 
@@ -88,20 +89,7 @@ impl ControlClient {
                     TransportError::Io(error) => TransportError::Unreachable(error.to_string()),
                     other => other,
                 })?;
-        write_request(&mut conn, &req).await.map_err(|f| {
-            match f.progress {
-                WriteProgress::NothingWritten | WriteProgress::HeadWritten => {
-                    TransportError::Unreachable(format!(
-                        "request to {host} was not sent: {}",
-                        f.error
-                    ))
-                }
-                // The body is already in the socket and only the flush failed, so the upstream may well
-                // have read the whole request and acted on it.
-                WriteProgress::BodyWritten => TransportError::Io(f.error),
-            }
-        })?;
-        sent.store(true, Ordering::SeqCst);
+        write_tracked(&mut conn, &req, host, sent).await?;
         let mut buf = BytesMut::new();
         let head = read_head(&mut conn, &mut buf).await?;
         let f = framing(&head);
@@ -128,5 +116,84 @@ fn at_body_bound(error: TransportError) -> TransportError {
     match error {
         TransportError::TooLarge(_) => TransportError::TooLarge(MAX_BODY),
         other => other,
+    }
+}
+
+/// Written here rather than through the shared `write_request`, so `sent` can flip the instant the body
+/// clears `write_all`: a cancellation racing the call as a whole cannot tell that instant from one a moment
+/// earlier, and the same refresh token would otherwise be spent twice.
+async fn write_tracked<W: tokio::io::AsyncWrite + Unpin>(
+    w: &mut W,
+    req: &RawRequest,
+    host: &str,
+    sent: &AtomicBool,
+) -> Result<(), TransportError> {
+    if let Err(error) = w.write_all(&serialize_head(req)).await {
+        return Err(TransportError::Unreachable(format!(
+            "request to {host} was not sent: {error}"
+        )));
+    }
+    if let Err(error) = w.write_all(&req.body).await {
+        return Err(TransportError::Unreachable(format!(
+            "request to {host} was not sent: {error}"
+        )));
+    }
+    // Handed to the socket in full: the peer may read and act on it whether or not the flush returns, so a
+    // timeout from here on is an uncertain outcome rather than an unsent request.
+    sent.store(true, Ordering::SeqCst);
+    w.flush().await.map_err(TransportError::Io)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    /// Accepts every write instantly but never completes a flush, so the flag's timing is provable without
+    /// racing a real socket's timing.
+    struct StallOnFlush;
+
+    impl tokio::io::AsyncWrite for StallOnFlush {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_body_is_marked_sent_before_a_flush_that_never_returns() {
+        let req = RawRequest {
+            method: "POST",
+            target: "/v1/oauth/token".into(),
+            headers: vec![],
+            body: Bytes::from_static(b"{}"),
+        };
+        let sent = AtomicBool::new(false);
+        let mut w = StallOnFlush;
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            write_tracked(&mut w, &req, "host", &sent),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the flush never resolves, so the call has to time out"
+        );
+        assert!(
+            sent.load(Ordering::SeqCst),
+            "the body was handed over before the stalled flush, not after it"
+        );
     }
 }

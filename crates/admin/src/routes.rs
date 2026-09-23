@@ -1014,6 +1014,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     let quarantined = attempt.as_ref().is_some_and(|attempt| {
         attempt.resolved_at.is_none() || attempt.outcome.as_deref() == Some("uncertain")
     });
+    // A failure that opened no attempt (a backoff, a quarantine, an unpaired slot) still updates the
+    // credential row, so whichever of the two landed last is the one that answers `credential.last_error`.
+    let attempt_error = attempt
+        .as_ref()
+        .filter(|attempt| {
+            matches!(
+                attempt.outcome.as_deref(),
+                Some("failed") | Some("uncertain")
+            )
+        })
+        .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));
     // Built ahead of the `json!` call below: the profile block pushes the macro past its expansion depth,
     // as `attempt_json` found for the request log.
     let profile = state
@@ -1048,10 +1059,16 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "refresh_expires_at": credential.refresh_expires_at,
             "generation": credential.generation,
             "last_refresh_at": attempt.as_ref().and_then(|attempt| attempt.resolved_at),
-            "last_error": attempt
-                .as_ref()
-                .filter(|attempt| matches!(attempt.outcome.as_deref(), Some("failed") | Some("uncertain")))
-                .and_then(|attempt| attempt.detail.clone()),
+            "last_error": match (&attempt_error, credential.last_error.as_ref()) {
+                (Some((at, detail)), Some(text)) => {
+                    // A tie favors the credential error: a backoff recorded right after the attempt that
+                    // armed it lands in the same millisecond on the store's clock as often as not.
+                    if credential.last_error_at >= *at { Some(text.clone()) } else { detail.clone() }
+                }
+                (Some((_, detail)), None) => detail.clone(),
+                (None, Some(text)) => Some(text.clone()),
+                (None, None) => None,
+            },
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,

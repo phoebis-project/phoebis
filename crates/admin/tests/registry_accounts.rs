@@ -1,5 +1,7 @@
 mod common;
-use common::{delete, get, json, login, patch, post, put};
+use common::{
+    backing_off_parts, delete, get, json, login, patch, post, put, succeed_token_requests,
+};
 use fake_upstream::Respond;
 
 #[tokio::test]
@@ -966,4 +968,39 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
             .contains("PLACEHOLDER"),
         "no credential in the list"
     );
+}
+
+#[tokio::test]
+async fn a_backoff_that_opened_no_attempt_shows_up_as_the_credentials_last_error() {
+    let (app, up, _store, manager, clock_cell) = backing_off_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let accounts = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let business = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(
+        business["credential"]["last_error"], "refresh is waiting out a backoff",
+        "a failure that opened no attempt still says why the account is unavailable"
+    );
+
+    succeed_token_requests(&up);
+    // Past the backoff the rejection armed, so this acquire actually reaches the token endpoint again.
+    clock_cell.fetch_add(61_000, std::sync::atomic::Ordering::SeqCst);
+    assert!(manager.acquire("business").await.is_ok());
+    let accounts = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let business = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(
+        business["credential"]["last_error"],
+        serde_json::Value::Null,
+        "a successful refresh clears the recorded error"
+    );
+    up.shutdown().await;
 }
