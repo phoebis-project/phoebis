@@ -745,7 +745,7 @@ export const SETTINGS: Settings = {
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped table' },
   quota: { pollIntervalSeconds: 3_600, sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
-  routing: { catalogSyncIntervalSeconds: 86_400, cooldownFallbackSeconds: 60, maxAttempts: 3 },
+  routing: { catalogSyncIntervalSeconds: 86_400, cooldownFallbackSeconds: 60, maxAttempts: 3, modelRejectionSeconds: 3_600 },
   sessions: { expireAfterSeconds: 86_400 },
   storage: { ledgerPath: './data/ledger.sqlite', path: './data/router.sqlite', pricingPath: './pricing.yaml' },
   usage: { cacheTtlSeconds: 60, refreshConcurrency: 2 },

@@ -34,6 +34,7 @@ fn observed(id: &str, at: i64, capture_hours: u32) -> phoebis_bus::Event {
         owner_id: None,
         model: "claude-sonnet-4-5".into(),
         canonical_model: "claude-sonnet-4-5".into(),
+        wire_model: "claude-sonnet-4-5".into(),
         stream: true,
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),

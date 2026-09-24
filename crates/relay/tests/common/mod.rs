@@ -590,6 +590,7 @@ pub fn default_limits() -> Limits {
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     }
 }
 
@@ -717,6 +718,45 @@ pub fn json_200() -> Respond {
         status: 200,
         headers: vec![],
         body: b"{\"ok\":true}".to_vec(),
+    }
+}
+
+/// The headers a real Anthropic JSON error carries, so the pass-through test has something of the upstream's
+/// own to check survived the forward.
+fn error_headers() -> Vec<(String, String)> {
+    vec![
+        ("content-type".into(), "application/json".into()),
+        ("request-id".into(), "req_fake".into()),
+    ]
+}
+
+/// The answer `api.anthropic.com` gives for an id it does not serve.
+pub fn json_404_model(model: &str) -> Respond {
+    Respond::Json {
+        status: 404,
+        headers: error_headers(),
+        body: serde_json::json!({
+            "type": "error",
+            "error": { "type": "not_found_error", "message": format!("model: {model}") },
+            "request_id": "req_fake",
+        })
+        .to_string()
+        .into_bytes(),
+    }
+}
+
+/// A 404 that names no model, forwarded as it came.
+pub fn json_404_plain() -> Respond {
+    Respond::Json {
+        status: 404,
+        headers: error_headers(),
+        body: serde_json::json!({
+            "type": "error",
+            "error": { "type": "not_found_error", "message": "Not Found" },
+            "request_id": "req_fake",
+        })
+        .to_string()
+        .into_bytes(),
     }
 }
 

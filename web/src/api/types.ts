@@ -770,7 +770,7 @@ export interface Settings {
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { pollIntervalSeconds: number; sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogSyncIntervalSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number };
+  routing: { catalogSyncIntervalSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */

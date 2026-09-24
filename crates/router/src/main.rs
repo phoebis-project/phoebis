@@ -44,9 +44,10 @@ fn main() -> anyhow::Result<()> {
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!("profile {}", config.compatibility.profile);
             println!(
-                "routing: max_attempts {}, cooldown_fallback {}s, catalog sync every {}s",
+                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog sync every {}s",
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
+                config.routing.model_rejection_seconds,
                 config.routing.catalog_sync_interval_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());

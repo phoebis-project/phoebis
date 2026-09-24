@@ -808,6 +808,7 @@ async fn app_with_webhook_policy(
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     };
     let relay = Arc::new(
         Relay::new(
@@ -869,6 +870,7 @@ async fn app_with_webhook_policy(
         ledger_path: "test".into(),
         max_attempts: 3,
         metrics_listen: "127.0.0.1:9464".into(),
+        model_rejection_seconds: 3_600,
         pricing_path: None,
         profile: p.name.into(),
         proxy_listen: "test".into(),

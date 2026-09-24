@@ -819,6 +819,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),

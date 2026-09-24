@@ -104,6 +104,7 @@ pub struct SettingsView {
     pub ledger_path: String,
     pub max_attempts: u8,
     pub metrics_listen: String,
+    pub model_rejection_seconds: u64,
     pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,

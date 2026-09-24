@@ -227,6 +227,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     };
     let h = harness_with(
         &up,

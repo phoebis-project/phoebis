@@ -249,6 +249,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 | 401, or 403 with `authentication_error`, Oauth | Refresh once, else `reauth_required` | Yes, post-refresh |
 | 401, or 403 with `authentication_error`, api_key | `reauth_required` now | Yes |
 | 403 `permission_error` | Model-scoped, one hour, reason permission; credential stays valid | Yes |
+| 404 `not_found_error` naming a model | Model-scoped, `routing.model_rejection_seconds`, reason model_rejected | Yes |
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
@@ -259,6 +260,11 @@ seconds up; anything non-finite, negative, malformed, or absent is invalid, and 
 account-wide fallback duration instead. An HTTP date is read against the upstream's own `Date` header when one
 is present, to reduce clock-skew error. A valid long delay is never shortened, and every deadline is an absolute
 time with a one-second margin that survives a restart.
+
+A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
+the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
+to the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the
+one that served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
 
 Each client request runs at most `routing.max_attempts` wire submissions; a same-account retry after a transport
 failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps

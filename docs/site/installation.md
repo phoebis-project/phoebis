@@ -152,7 +152,7 @@ so it is safe to run against a production file while the router is up. It prints
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `profile {config.compatibility.profile}`
-6. `routing: max_attempts {n}, cooldown_fallback {n}s, catalog sync every {n}s`
+6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog sync every {n}s`
 7. `ledger at {config.stats.ledger_path}`
 8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days, quota poll every {n}s`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
@@ -239,6 +239,8 @@ routing:
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3
+  # How long an upstream that answered 404 for a model is skipped for that model.
+  model_rejection_seconds: 3600
 sessions:
   expire_after_seconds: 86400
   # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
@@ -373,12 +375,14 @@ Defaults whole.
 | `catalog_sync_interval_seconds` | `86400` | at least 300 |
 | `cooldown_fallback_seconds` | `60` | any number of seconds |
 | `max_attempts` | `3` | 1 to 8 |
+| `model_rejection_seconds` | `3600` | 1 to 604800 |
 
 Refused with:
 
 - `catalog_sync_interval_seconds`: `routing.catalog_sync_interval_seconds must be at least 300`
 - `cooldown_fallback_seconds`: nothing
 - `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
+- `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
 
 ### sessions
 

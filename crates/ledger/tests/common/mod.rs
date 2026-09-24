@@ -297,6 +297,7 @@ pub async fn harness_on(
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     };
     let relay = Arc::new(
         Relay::new(

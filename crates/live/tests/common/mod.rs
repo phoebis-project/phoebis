@@ -209,6 +209,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     };
     let relay = Arc::new(
         Relay::new(

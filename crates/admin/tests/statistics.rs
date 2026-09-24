@@ -915,6 +915,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),

@@ -357,6 +357,7 @@ export function SettingsPage() {
             rows={[
               { label: 'Catalog sync interval (seconds)', value: fmtInt(s.routing.catalogSyncIntervalSeconds), mono: true, title: bootstrapNote('routing.catalog_sync_interval_seconds') },
               { label: 'Cooldown fallback (seconds)', value: fmtInt(s.routing.cooldownFallbackSeconds), mono: true, title: bootstrapNote('routing.cooldown_fallback_seconds') },
+              { label: 'Model rejection (seconds)', value: fmtInt(s.routing.modelRejectionSeconds), mono: true, title: bootstrapNote('routing.model_rejection_seconds') },
               { label: 'Max attempts', value: fmtInt(s.routing.maxAttempts), mono: true, title: bootstrapNote('routing.max_attempts') },
             ]}
           />

@@ -11,6 +11,7 @@ use phoebis_bus::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
+use phoebis_routing::MODEL_REJECTED_REASON;
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
@@ -72,6 +73,9 @@ pub(crate) struct InFlight {
     /// random: a real clock rarely ties, but a flood arriving in the same millisecond must still evict the
     /// same entry every time.
     pub seq: u64,
+    /// Every account whose head rejected this request's model, in the order the heads arrived: what a later
+    /// success's `model_permitted` event names as who was skipped first.
+    pub rejected_by: Vec<String>,
 }
 
 pub struct Assembler {
@@ -183,6 +187,7 @@ impl Assembler {
                         seen_at: now,
                         request_len,
                         seq,
+                        rejected_by: Vec::new(),
                     },
                 );
                 if capturing {
@@ -206,6 +211,11 @@ impl Assembler {
                     return Vec::new();
                 };
                 entry.seen_at = now;
+                let key_id = entry.observed.key_id.clone();
+                let session_id = entry.observed.session_id.clone();
+                let canonical_model = entry.observed.canonical_model.clone();
+                let wire_model = entry.observed.wire_model.clone();
+                let source_request_id = entry.observed.request_id.clone();
                 let Some(attempt) = entry
                     .attempts
                     .iter_mut()
@@ -214,6 +224,32 @@ impl Assembler {
                     return Vec::new();
                 };
                 let parsed = fill_head(attempt, &head);
+                let mut records = Vec::new();
+                if head
+                    .cooldown
+                    .as_ref()
+                    .is_some_and(|c| c.reason == MODEL_REJECTED_REASON)
+                {
+                    entry.rejected_by.push(attempt.account_id.clone());
+                    records.push(Record::Event(EventRecord {
+                        at: head.observed_at,
+                        kind: "model_rejected".into(),
+                        account_id: Some(attempt.account_id.clone()),
+                        key_id,
+                        session_id,
+                        model: Some(canonical_model),
+                        detail: Some(
+                            json!({
+                                "attempt": head.attempt,
+                                "request_id": attempt.upstream_request_id,
+                                "source_request_id": source_request_id,
+                                "wire_model": wire_model,
+                            })
+                            .to_string(),
+                        ),
+                        ..Default::default()
+                    }));
+                }
                 if attempt.account_kind == "oauth" {
                     if let Some((unified, wire)) = parsed {
                         let (quota, extra) = samples_from_unified(
@@ -223,11 +259,11 @@ impl Assembler {
                             head.observed_at,
                         );
                         if !quota.is_empty() || extra.is_some() {
-                            return vec![Record::Samples { quota, extra }];
+                            records.push(Record::Samples { quota, extra });
                         }
                     }
                 }
-                Vec::new()
+                records
             }
             Event::ResponseChunk(chunk) => self.chunk(&chunk),
             Event::RequestComplete(complete) => match self.remove(&complete.request_id) {
@@ -381,6 +417,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         next_index,
         gapped,
         request_len,
+        rejected_by,
         ..
     } = entry;
     let mut records = Vec::new();
@@ -448,6 +485,27 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             if let Some(outcome) = terminal_outcome(complete) {
                 last.outcome = outcome.into();
             }
+        }
+        if last.outcome == "succeeded" && !rejected_by.is_empty() {
+            records.push(Record::Event(EventRecord {
+                at: complete.finished_at,
+                kind: "model_permitted".into(),
+                account_id: Some(last.account_id.clone()),
+                key_id: observed.key_id.clone(),
+                session_id: observed.session_id.clone(),
+                model: Some(observed.canonical_model.clone()),
+                detail: Some(
+                    json!({
+                        "attempt": complete.attempt,
+                        "rejected_by": rejected_by,
+                        "request_id": last.upstream_request_id,
+                        "source_request_id": observed.request_id,
+                        "wire_model": observed.wire_model,
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            }));
         }
     }
     for attempt in &mut attempts {
@@ -587,6 +645,7 @@ mod tests {
             owner_id: None,
             model: "claude-sonnet-5[1m]".into(),
             canonical_model: "claude-sonnet-5".into(),
+            wire_model: "claude-sonnet-5".into(),
             stream: true,
             headers: vec![],
             body: Bytes::from_static(b"0123456789"),
@@ -669,6 +728,28 @@ mod tests {
             observed_at: at,
         })
     }
+    /// `head`'s sibling for a rejection: a 404 whose cooldown carries the `model_rejected` reason, so the
+    /// rejection and permit tests exercise the assembler's real cooldown-reading path rather than the 429
+    /// shape `head` builds.
+    fn rejection_head(id: &str, n: u8, at: i64) -> Event {
+        Event::ResponseHead(ResponseHead {
+            request_id: id.into(),
+            attempt: n,
+            status: 404,
+            headers: vec![("request-id".into(), format!("req_up_{n}"))],
+            first_event: None,
+            outcome: AttemptOutcome::UpstreamError,
+            cooldown: Some(CooldownSet {
+                scope: "model:claude-sonnet-5".into(),
+                until: at + 3_601_000,
+                reason: "model_rejected".into(),
+                window: "model_rejection".into(),
+            }),
+            written_at: at - 10,
+            observed_at: at,
+        })
+    }
+
     fn complete(
         id: &str,
         n: u8,
@@ -1417,6 +1498,118 @@ mod tests {
         assert!(
             !request.response_truncated,
             "nothing was captured, so nothing reads truncated"
+        );
+    }
+
+    #[test]
+    fn a_rejection_head_records_the_rejection_and_the_serving_attempt_the_permit() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r1", Some("k")));
+        a.observe(selected("r1", 1, "a", 1_010));
+        let rejected = a.observe(rejection_head("r1", 1, 1_060));
+        assert_eq!(
+            rejected.len(),
+            1,
+            "the head arm records exactly the rejection"
+        );
+        let Record::Event(event) = &rejected[0] else {
+            panic!("expected an event record");
+        };
+        assert_eq!(
+            (
+                event.kind.as_str(),
+                event.account_id.as_deref(),
+                event.key_id.as_deref(),
+                event.session_id.as_deref(),
+                event.model.as_deref(),
+                event.at
+            ),
+            (
+                "model_rejected",
+                Some("a"),
+                Some("k"),
+                Some("s1"),
+                Some("claude-sonnet-5"),
+                1_060
+            )
+        );
+        let detail: serde_json::Value =
+            serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (
+                detail["attempt"].as_u64(),
+                detail["request_id"].as_str(),
+                detail["source_request_id"].as_str(),
+                detail["wire_model"].as_str()
+            ),
+            (
+                Some(1),
+                Some("req_up_1"),
+                Some("r1"),
+                Some("claude-sonnet-5")
+            )
+        );
+        a.observe(selected("r1", 2, "b", 1_100));
+        a.observe(head("r1", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let done = a.observe(complete("r1", 2, Some("b"), Outcome::Succeeded, 200, None));
+        let permit = done
+            .iter()
+            .find_map(|r| match r {
+                Record::Event(e) if e.kind == "model_permitted" => Some(e),
+                _ => None,
+            })
+            .expect("a model_permitted event");
+        assert_eq!(
+            (
+                permit.account_id.as_deref(),
+                permit.key_id.as_deref(),
+                permit.session_id.as_deref(),
+                permit.model.as_deref(),
+                permit.at
+            ),
+            (
+                Some("b"),
+                Some("k"),
+                Some("s1"),
+                Some("claude-sonnet-5"),
+                1_500
+            )
+        );
+        let detail: serde_json::Value =
+            serde_json::from_str(permit.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(detail["attempt"].as_u64(), Some(2));
+        assert_eq!(detail["rejected_by"], serde_json::json!(["a"]));
+        assert_eq!(
+            (
+                detail["request_id"].as_str(),
+                detail["source_request_id"].as_str(),
+                detail["wire_model"].as_str()
+            ),
+            (Some("req_up_2"), Some("r1"), Some("claude-sonnet-5"))
+        );
+    }
+
+    #[test]
+    fn a_rejection_followed_by_no_success_records_no_permit() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r2", Some("k")));
+        a.observe(selected("r2", 1, "a", 1_010));
+        a.observe(rejection_head("r2", 1, 1_060));
+        a.observe(selected("r2", 2, "b", 1_100));
+        a.observe(head("r2", 2, 429, AttemptOutcome::RateLimited, 1_150));
+        let done = a.observe(complete(
+            "r2",
+            2,
+            Some("b"),
+            Outcome::Failed,
+            429,
+            Some("rate_limit_error"),
+        ));
+        assert!(
+            !done
+                .iter()
+                .any(|r| matches!(r, Record::Event(e) if e.kind == "model_permitted")),
+            "no success followed the rejection, so no permit is recorded"
         );
     }
 }

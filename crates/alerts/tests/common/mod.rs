@@ -310,6 +310,7 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: Bytes::from_static(b"{}"),

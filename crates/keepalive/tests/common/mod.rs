@@ -400,6 +400,7 @@ impl Rig {
             owner_id: None,
             model: model.clone(),
             canonical_model: model.to_ascii_lowercase(),
+            wire_model: model.to_ascii_lowercase(),
             stream: true,
             headers: vec![
                 ("anthropic-beta".into(), "test-beta".into()),

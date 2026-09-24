@@ -572,7 +572,7 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.deepEqual(s.quota, { pollIntervalSeconds: wire.quota.poll_interval_seconds, sampleRetentionDays: wire.quota.sample_retention_days });
-  assert.deepEqual(s.routing, { catalogSyncIntervalSeconds: wire.routing.catalog_sync_interval_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts });
+  assert.deepEqual(s.routing, { catalogSyncIntervalSeconds: wire.routing.catalog_sync_interval_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');

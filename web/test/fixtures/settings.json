@@ -83,7 +83,8 @@
     "routing": {
       "catalog_sync_interval_seconds": 86400,
       "cooldown_fallback_seconds": 60,
-      "max_attempts": 3
+      "max_attempts": 3,
+      "model_rejection_seconds": 3600
     },
     "sessions": {
       "expire_after_seconds": 86400

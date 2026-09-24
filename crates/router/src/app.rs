@@ -249,6 +249,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 idle_timeout: IDLE_TIMEOUT,
                 max_attempts: config.routing.max_attempts,
                 max_request_bytes: MAX_REQUEST_BYTES,
+                model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
             },
         )
         .with_bus(bus.clone())
@@ -357,6 +358,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             ledger_path: config.stats.ledger_path.display().to_string(),
             max_attempts: config.routing.max_attempts,
             metrics_listen: config.stats.metrics_listen.to_string(),
+            model_rejection_seconds: config.routing.model_rejection_seconds,
             pricing_path: config
                 .stats
                 .pricing_path

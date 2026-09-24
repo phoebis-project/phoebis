@@ -114,6 +114,9 @@ pub struct RoutingConfig {
     pub cooldown_fallback_seconds: u64,
     #[serde(default = "default_max_attempts")]
     pub max_attempts: u8,
+    /// How long an account is skipped for a model it answered 404 for.
+    #[serde(default = "default_model_rejection")]
+    pub model_rejection_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +196,8 @@ pub enum ConfigError {
     MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
+    #[error("routing.model_rejection_seconds must be between 1 and 604800, not {value}")]
+    ModelRejectionOutOfRange { value: u64 },
     #[error("environment variable {name} still holds the example placeholder")]
     PlaceholderSecret { name: String },
     #[error("quota.poll_interval_seconds must be at least 900")]
@@ -266,6 +271,7 @@ impl Default for RoutingConfig {
             catalog_sync_interval_seconds: default_catalog_interval(),
             cooldown_fallback_seconds: default_cooldown_fallback(),
             max_attempts: default_max_attempts(),
+            model_rejection_seconds: default_model_rejection(),
         }
     }
 }
@@ -330,6 +336,11 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if !(1..=8).contains(&config.routing.max_attempts) {
         return Err(ConfigError::MaxAttemptsOutOfRange {
             value: config.routing.max_attempts,
+        });
+    }
+    if !(1..=604_800).contains(&config.routing.model_rejection_seconds) {
+        return Err(ConfigError::ModelRejectionOutOfRange {
+            value: config.routing.model_rejection_seconds,
         });
     }
     config.keepalive.validate()?;
@@ -518,6 +529,10 @@ fn default_metrics_listen() -> SocketAddr {
     ([127, 0, 0, 1], 9464).into()
 }
 
+fn default_model_rejection() -> u64 {
+    3_600
+}
+
 fn default_poll_interval() -> u64 {
     3_600
 }
@@ -632,9 +647,10 @@ mod tests {
             (
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
-                config.routing.catalog_sync_interval_seconds
+                config.routing.catalog_sync_interval_seconds,
+                config.routing.model_rejection_seconds
             ),
-            (3, 60, 86_400)
+            (3, 60, 86_400, 3_600)
         );
         assert_eq!(
             (
@@ -643,14 +659,15 @@ mod tests {
             ),
             (86_400, 72)
         );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_sync_interval_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_sync_interval_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
         assert_eq!(
             (
                 config.routing.max_attempts,
+                config.routing.model_rejection_seconds,
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
-            (5, 7_200, 24)
+            (5, 1_800, 7_200, 24)
         );
         assert!(matches!(
             load(&file(dir.path(), "zero", "routing:\n  max_attempts: 0\n")),
@@ -659,6 +676,22 @@ mod tests {
         assert!(matches!(
             load(&file(dir.path(), "nine", "routing:\n  max_attempts: 9\n")),
             Err(ConfigError::MaxAttemptsOutOfRange { value: 9 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "rejection-zero",
+                "routing:\n  model_rejection_seconds: 0\n"
+            )),
+            Err(ConfigError::ModelRejectionOutOfRange { value: 0 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "rejection-too-long",
+                "routing:\n  model_rejection_seconds: 604801\n"
+            )),
+            Err(ConfigError::ModelRejectionOutOfRange { value: 604_801 })
         ));
         assert!(matches!(
             load(&file(

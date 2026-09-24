@@ -21,7 +21,7 @@ use phoebis_bus::{
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
     resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Presented, Report,
-    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
@@ -98,6 +98,8 @@ pub struct Limits {
     /// Upstream submissions one caller request may cost across every account it tries.
     pub max_attempts: u8,
     pub max_request_bytes: usize,
+    /// How long an account is skipped for a model it answered 404 for.
+    pub model_rejection: Duration,
 }
 
 /// What one relayed request cost and how it ended, attached to the response for the accounting layer that
@@ -358,6 +360,9 @@ impl Trace {
             owner_id: identity.and_then(|i| i.owner_id.clone()),
             model: identity.map(|i| i.model.clone()).unwrap_or_default(),
             canonical_model: identity
+                .map(|i| i.canonical_model.clone())
+                .unwrap_or_default(),
+            wire_model: identity
                 .map(|i| i.canonical_model.clone())
                 .unwrap_or_default(),
             stream,
@@ -1574,7 +1579,7 @@ impl Relay {
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
         // already handed its connection back to the pool.
-        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
+        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
             let Some(drained) = until_cancelled(
                 drain_bounded(&mut reader, self.limits.idle_timeout),
                 ctx.cancel,
@@ -1697,6 +1702,8 @@ impl Relay {
                 body_prefix: decoded.as_deref(),
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
+                wire_model: &ctx.identity.canonical_model,
+                model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -1825,6 +1832,7 @@ impl Relay {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
                         let fallback_ms = ctx.fallback_ms;
+                        let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
                         let (router, clock, account_id, kind, model, pin, request_id) = (
                             self.router.clone(),
                             self.clock.clone(),
@@ -1858,6 +1866,8 @@ impl Relay {
                                     // never reaches it.
                                     injected: &[],
                                     can_strip: false,
+                                    wire_model: &model,
+                                    model_rejection_ms,
                                 },
                             ) {
                                 report_failover(
@@ -1903,6 +1913,10 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
+        // Read before `report_failover` moves `cooldown` below.
+        let rejected = cooldown
+            .as_ref()
+            .is_some_and(|c| c.reason == MODEL_REJECTED_REASON);
         // A non-portable request keeps its pin: the failed response goes back to the client on the
         // account that holds its state, and only the cooldown is recorded.
         report_failover(
@@ -1941,12 +1955,29 @@ impl Relay {
                 .await,
             );
         }
-        // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
+        // Every failover row the table produces answers 400, 401, 403, 404, or 429, all of which were
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
         if ctx.portable && ctx.spent < self.limits.max_attempts {
             return Next::FailOver;
+        }
+        // The budget is spent and this account's rejection was the last word: the caller gets the router's
+        // own refusal rather than a 404 that names an account it can never retry.
+        if ctx.portable && rejected {
+            let mut outcome = outcome;
+            outcome.error_code = Some(MODEL_REJECTED.code.to_string());
+            return Next::Respond(
+                self.answer(
+                    ctx.trace,
+                    MODEL_REJECTED.response(ctx.request_id),
+                    outcome,
+                    None,
+                    ResponseFacts::default(),
+                    None,
+                )
+                .await,
+            );
         }
         Next::Respond(
             self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)

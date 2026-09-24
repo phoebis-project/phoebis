@@ -12,6 +12,9 @@ pub struct RequestRecord {
     pub agent_id: Option<String>,
     pub parent_agent_id: Option<String>,
     pub model: String,
+    /// The name the router records the model under: the dated id the catalog lists once the router has
+    /// resolved the client's spelling, the folded spelling (the `[1m]` suffix removed, ASCII lowercased) until
+    /// then.
     pub canonical_model: String,
     pub stream: bool,
     pub kind: String,

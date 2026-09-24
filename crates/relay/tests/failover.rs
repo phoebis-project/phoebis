@@ -358,6 +358,65 @@ async fn a_model_outside_the_rules_is_refused_and_any_other_reaches_the_upstream
 }
 
 #[tokio::test]
+async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_an_upstream_call() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.router.report(phoebis_routing::Report::Cooldown {
+        account_id: "a".into(),
+        row: phoebis_store::CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-4-5".into(),
+            until: NOW + 3_600_000,
+            set_at: 0,
+            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()
+                .get("x-phoebis-error-code")
+                .unwrap()
+                .to_str()
+                .unwrap()
+        ),
+        (404, "model_rejected")
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        body["error"]["message"],
+        "every account in this pool rejected the model"
+    );
+    assert!(up.requests().is_empty());
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-opus-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credential_usable() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

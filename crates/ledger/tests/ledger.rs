@@ -663,6 +663,7 @@ fn observed_event(id: &str) -> BusEvent {
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: false,
         headers: vec![],
         body: bytes::Bytes::new(),
