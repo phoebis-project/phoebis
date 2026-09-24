@@ -1147,6 +1147,28 @@ async fn the_periodic_refresh_fires_on_the_stepped_clock() {
 }
 
 #[tokio::test]
+async fn the_periodic_refresh_forces_a_request_past_a_cache_window_longer_than_the_interval() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(catalog_rules()).await;
+    // The window outlasts the 21,600 s interval the harness spawns the sweep with, so a plain fetch would answer
+    // from the cache; the sweep still has to force a real request once the account is due.
+    let h = harness_with_catalog_window(
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        Duration::from_secs(30_000),
+    )
+    .await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    h.clock.store(NOW + 21_601_000, Ordering::SeqCst);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_refresh_that_moves_a_spelling_to_a_newer_snapshot_rekeys_through_the_acknowledged_command(
 ) {
     let up = FakeUpstream::start(vec![Rule {

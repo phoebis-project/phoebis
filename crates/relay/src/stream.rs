@@ -225,12 +225,15 @@ impl Publish {
             }
         }
         // The API answering under another snapshot is the alias moving; one refresh brings the listing up to it.
-        if let (Some(resolved), Some(served)) = (
-            self.outcome.canonical_model.as_deref(),
-            self.response.model.as_deref(),
-        ) {
-            self.catalog
-                .note_served(&self.outcome.account_id, resolved, served);
+        // A body that failed or was cancelled may have named a model from a partial or misleading answer.
+        if matches!(end, BodyEnd::Complete) {
+            if let (Some(resolved), Some(served)) = (
+                self.outcome.canonical_model.as_deref(),
+                self.response.model.as_deref(),
+            ) {
+                self.catalog
+                    .note_served(&self.outcome.account_id, resolved, served);
+            }
         }
         self.fire_pending_hook().await;
         let outcome = match (end, self.stream_error.take()) {

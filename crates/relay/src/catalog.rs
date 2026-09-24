@@ -332,9 +332,11 @@ impl CatalogService {
     /// Refreshes every enabled `Ready` account whose listing is `every` old, checked each `tick` on the
     /// service's clock; the handle ends with the service. Accounts refresh one after another, a known bound: a
     /// slow upstream stretches the sweep by its own round trips, and nothing shrinks it meanwhile, since a
-    /// published spelling never moves back to an older snapshot. A due account is read through `fetch`, not
-    /// `refresh`: `every` is always past the fetch window, so staleness alone forces a real request, and a
-    /// plain fetch coalesces with a fill already in flight rather than evicting it out from under itself.
+    /// published spelling never moves back to an older snapshot. A due account with nothing already filling it
+    /// is read through `refresh` (evict then fetch), since the cache window (`routing.catalog_cache_seconds`,
+    /// up to a day) can outlast `every` and a plain fetch would answer from the cache without a request; a due
+    /// account with a fill already in flight is skipped, since that fill's own landing is a fresher read than
+    /// this tick could force.
     pub fn spawn_refresh(self: &Arc<Self>, every: Duration, tick: Duration) -> JoinHandle<()> {
         let service = Arc::clone(self);
         tokio::spawn(async move {
@@ -349,8 +351,8 @@ impl CatalogService {
                     .filter(|a| a.enabled && a.state == AccountState::Ready)
                     .collect();
                 for account in accounts {
-                    if service.slot_due(&account, every, now) {
-                        service.fetch(&account).await;
+                    if service.slot_due(&account, every, now) && !service.fill_in_flight(&account) {
+                        service.refresh(&account).await;
                     }
                 }
             }
@@ -375,6 +377,24 @@ impl CatalogService {
         match fetched_at {
             Some(fetched_at) => fetched_at + every.as_millis() as i64 <= now,
             None => true,
+        }
+    }
+
+    /// Whether another caller is between `fetch`'s two `fresh_slot` checks for this account's current slot key
+    /// right now: its coalescing lock is held. A map this cannot even inspect (another insert mid-flight) counts
+    /// as in flight too, since skipping a tick costs nothing but colliding with a caller it cannot see does.
+    fn fill_in_flight(&self, account: &AccountRow) -> bool {
+        let key = SlotKey {
+            account_id: account.id.clone(),
+            incarnation: account.incarnation,
+            revision: account.revision,
+        };
+        let Ok(fills) = self.fills.try_lock() else {
+            return true;
+        };
+        match fills.get(&key) {
+            Some(lock) => lock.try_lock().is_err(),
+            None => false,
         }
     }
 
@@ -409,6 +429,13 @@ impl CatalogService {
                 return;
             }
             service.refresh(&row).await;
+            // `refresh`'s own eviction just cleared this account's entry as account churn would; restored so
+            // the rate limit still holds against a second mismatched answer landing right behind this one.
+            service
+                .served_refreshed
+                .lock()
+                .expect(SERVED_REFRESHED_POISONED)
+                .insert(account_id, now);
         });
     }
 
@@ -425,6 +452,10 @@ impl CatalogService {
         let mut slots = self.slots.lock().expect(SLOTS_POISONED);
         slots.retain(|key, _| key.account_id != account_id);
         drop(slots);
+        self.served_refreshed
+            .lock()
+            .expect(SERVED_REFRESHED_POISONED)
+            .remove(account_id);
         // Best effort: a fill lock this misses is merely unused from here on, never looked up again under
         // the evicted holder's key, so leaving it costs nothing but a little memory.
         if let Ok(mut fills) = self.fills.try_lock() {
