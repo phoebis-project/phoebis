@@ -671,7 +671,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Default allowed models', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool']);
   const nameInput = dlg?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1036,7 +1036,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
 m.unmount();
 
 m = await mount('/keys');
-expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool default', 'revoked', 'Create API key', 'Never', 'still on the previous secret']);
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create API key', 'Never', 'still on the previous secret']);
 {
   const retired = [...m.container.querySelectorAll('.card--table tbody tr .sub')].find((s) => (s.textContent ?? '').includes('still on the previous secret'));
   results.push({
@@ -1078,7 +1078,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Allowed models', 'Pool default', 'Selected', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out']);
   results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
   {
     const poolSelect = dlg?.querySelector('select');
@@ -1092,7 +1092,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   }
   {
     const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Models', 'Cache warming', 'Capture']), missing: nav });
+    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Cache warming', 'Capture']), missing: nav });
     const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
     results.push({ name: '/keys dialog body repeats the sections', ok: JSON.stringify(headings) === JSON.stringify(nav), missing: headings });
   }
@@ -2770,7 +2770,7 @@ m = await mount('/keys');
   results.push({ name: 'viewer: /keys hides Create API key', ok: !t.includes('Create API key'), missing: [] });
   results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
   // A control a page forgets to hide would still reach the router's gate, so the mock answers it the same way.
-  const refused = await api.createKey({ allowedModels: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
+  const refused = await api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
   results.push({
     name: 'viewer: a write through the mock is refused with the gate\'s 403',
     ok: refused?.status === 403 && refused.message === 'the viewer role cannot change anything' && refused.code === null && !(await api.listKeys()).some((k) => k.id === 'viewer-write'),

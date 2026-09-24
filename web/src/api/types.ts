@@ -118,6 +118,15 @@ export interface CatalogModel {
   longContext: boolean;
 }
 
+/** One entry of a model rule list: a pattern over the folded canonical id, negated when `not` is set. */
+export interface ModelRule {
+  not: boolean;
+  pattern: string;
+}
+
+/** How a key's own list meets its pool's: `extend` appends the pool's entries after the key's own, `replace` leaves them out. */
+export type ModelRulesMode = 'extend' | 'replace';
+
 export interface QuotaSample {
   at: string;
   utilization: number;
@@ -206,12 +215,12 @@ export interface Pool {
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
-  defaultAllowedModels: string[] | null;
   id: string;
   keepalive: PoolKeepalive;
   members: { accountId: string; eligible: MemberEligibility; priority: number }[];
   /** Null disables utilization-driven migration. */
   migrateAboveUtilization: number | null;
+  modelRules: ModelRule[];
   name: string;
   overagePolicy: OveragePolicy;
   /** The operator's stored answer. A sample-driven strategy orders by kind regardless; read the effective flag for that. */
@@ -230,7 +239,6 @@ export interface Pool {
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
-  allowedModels: string[] | null;
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;
@@ -242,6 +250,10 @@ export interface ApiKey {
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
   lifetime: { cost: number; requests: number };
+  /** Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model. */
+  longContextTwins: boolean;
+  modelRules: ModelRule[];
+  modelRulesMode: ModelRulesMode;
   name: string;
   notes: string | null;
   poolId: string;

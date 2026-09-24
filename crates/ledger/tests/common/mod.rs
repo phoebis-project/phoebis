@@ -18,7 +18,7 @@ use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    Secret, StorageKey, Store, Strategy, SubStrategy,
+    RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
@@ -165,7 +165,7 @@ pub async fn harness_on(
                     overage_policy: OveragePolicy::PreferPlan,
                     migrate_above_utilization: None,
                     select_below_utilization: None,
-                    default_allowed_models: None,
+                    model_rules: Vec::new(),
                     keepalive_json: "{}".into(),
                     body_capture_hours: capture.0,
                     prefer_subscription: false,
@@ -198,7 +198,9 @@ pub async fn harness_on(
                     enabled: true,
                     revoked_at: None,
                     expires_at: None,
-                    allowed_models: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: RulesMode::Extend,
+                    long_context_twins: true,
                     keepalive_opt_out: false,
                     body_capture_hours: capture.1,
                     secret_digest: store.api_key_digest(KEY).to_vec(),

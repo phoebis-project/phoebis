@@ -5,7 +5,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelSource, OveragePolicy,
-    PoolMember, PoolRow, RegistryLoad, RoutingLoad, ServedModel, Strategy, SubStrategy,
+    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, ServedModel, Strategy, SubStrategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -96,7 +96,9 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             enabled: true,
             revoked_at: None,
             expires_at: None,
-            allowed_models: None,
+            model_rules: Vec::new(),
+            model_rules_mode: RulesMode::Extend,
+            long_context_twins: true,
             keepalive_opt_out: false,
             body_capture_hours: None,
             secret_digest: vec![0; 32],
@@ -139,7 +141,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             overage_policy: pool.policy,
             migrate_above_utilization: pool.migrate,
             select_below_utilization: pool.select_below,
-            default_allowed_models: None,
+            model_rules: Vec::new(),
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,

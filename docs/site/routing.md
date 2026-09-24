@@ -38,7 +38,7 @@ Every field, in the order the request body takes them:
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1` |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
-| `default_allowed_models` | unset | a list of canonical model ids |
+| `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
@@ -123,7 +123,7 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `notes` | optional |
 | `enabled` | `true` by default |
 | `expires_at` | unset by default; Unix milliseconds |
-| `allowed_models` | unset means the pool's own default |
+| `model_rules`, `model_rules_mode`, `long_context_twins` | see Model rules and the client page's models listing |
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
 
@@ -137,6 +137,32 @@ the admin secret can read them."
 
 [kl]: assets/keys-light.png#only-light
 [kd]: assets/keys-dark.png#only-dark
+
+## Model rules
+
+A pool and a key each hold one ordered list of rules, and a request's model is judged against the key's
+processed list: the key's own entries first, then the pool's when the key's `model_rules_mode` is `extend` (the
+default), or the key's own entries alone under `replace`. Evaluation runs top to bottom and the first matching
+entry decides: a plain entry allows the model, a `not` entry denies it, and a model no entry matches is allowed.
+Both lists start empty, so nothing is excluded until an operator writes an entry. The list is first-match-wins
+and nothing else, so an allowlist is a list that names what it allows and ends in a catch-all denial:
+
+- `[claude-opus-5, NOT *]` allows the one model and blocks the rest;
+- `[NOT *]` alone blocks everything.
+
+A rule's subject is the canonical id: the request's model with the `[1m]` suffix removed, ASCII case folded, and
+the dated id the catalog lists substituted once the router has resolved the spelling. One entry therefore
+covers a model and its `[1m]` twin, and an entry for a model the API lists under a dated id is written as a
+glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of
+either. A model the list denies answers `404 model_not_allowed` without reaching an upstream.
+
+The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?`
+one character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches
+its own text alone. Anthropic's ids carry no slash, which is why `NOT *` reads as the catch-all above; `NOT **`
+is the entry that also covers a name with a slash. The request log's client patterns
+([statistics](statistics.md#analytics)) are another grammar, where `*` crosses everything. A pattern is refused
+at save time when it is empty, longer than 256 characters, ends in an unquoted backslash, or holds three stars
+in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
 ## Selection
 

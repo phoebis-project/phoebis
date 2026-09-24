@@ -895,7 +895,7 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 overage_policy: phoebis_store::OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
-                default_allowed_models: None,
+                model_rules: Vec::new(),
                 keepalive_json: serde_json::to_string(&KeepalivePolicy {
                     probe_cost_cap_usd_per_day: Some(0.0003),
                     ..RigSpec::default().policy

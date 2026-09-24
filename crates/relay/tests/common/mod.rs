@@ -19,8 +19,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    Secret, StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, ModelRule, NewBundle,
+    OveragePolicy, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::{FakeUpstream, Respond};
@@ -87,10 +87,10 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
 
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
-    pub allowed_models: Option<Vec<&'static str>>,
     pub cache_diagnostics: Option<bool>,
     pub cache_ttl: &'static str,
     pub migrate_above_utilization: Option<f64>,
+    pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
     pub strategy: Strategy,
 }
@@ -99,14 +99,31 @@ impl Default for PoolSpec {
     fn default() -> Self {
         PoolSpec {
             affinity_ttl_seconds: 3600,
-            allowed_models: None,
             cache_diagnostics: None,
             cache_ttl: "{}",
             migrate_above_utilization: None,
+            model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::PriorityRandom,
         }
     }
+}
+
+/// `"NOT x"` builds a negated entry, anything else a plain one: the shorthand the pages use for a list.
+pub fn rules(entries: &[&str]) -> Vec<ModelRule> {
+    entries
+        .iter()
+        .map(|entry| match entry.strip_prefix("NOT ") {
+            Some(pattern) => ModelRule {
+                pattern: pattern.into(),
+                not: true,
+            },
+            None => ModelRule {
+                pattern: (*entry).into(),
+                not: false,
+            },
+        })
+        .collect()
 }
 
 pub struct Harness {
@@ -202,7 +219,7 @@ pub async fn harness_restricted_to(up: &FakeUpstream, model: &'static str) -> Ha
         up,
         &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
         PoolSpec {
-            allowed_models: Some(vec![model]),
+            model_rules: rules(&[model, "NOT *"]),
             ..PoolSpec::default()
         },
     )
@@ -412,9 +429,7 @@ async fn build(
                     overage_policy: pool.overage_policy,
                     migrate_above_utilization: pool.migrate_above_utilization,
                     select_below_utilization: None,
-                    default_allowed_models: pool
-                        .allowed_models
-                        .map(|l| l.into_iter().map(String::from).collect()),
+                    model_rules: pool.model_rules,
                     keepalive_json: "{}".into(),
                     body_capture_hours: 0,
                     prefer_subscription: false,
@@ -447,7 +462,9 @@ async fn build(
                     enabled: true,
                     revoked_at: None,
                     expires_at: None,
-                    allowed_models: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: RulesMode::Extend,
+                    long_context_twins: true,
                     keepalive_opt_out: false,
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY).to_vec(),

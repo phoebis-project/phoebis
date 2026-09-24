@@ -1395,7 +1395,7 @@ mod tests {
             overage_policy: OveragePolicy::Allow,
             migrate_above_utilization: None,
             select_below_utilization: None,
-            default_allowed_models: None,
+            model_rules: Vec::new(),
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: false,

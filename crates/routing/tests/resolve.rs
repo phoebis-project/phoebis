@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
-    PoolRow, RegistryLoad, ServedModel, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, ModelSource, OveragePolicy,
+    PoolMember, PoolRow, RegistryLoad, RulesMode, ServedModel, Strategy, SubStrategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -20,12 +20,7 @@ fn account(id: &str) -> AccountRow {
     }
 }
 
-fn pool(
-    id: &str,
-    enabled: bool,
-    default_allowed: Option<Vec<&str>>,
-    body_capture_hours: u32,
-) -> PoolRow {
+fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32) -> PoolRow {
     PoolRow {
         id: id.into(),
         label: id.into(),
@@ -35,7 +30,7 @@ fn pool(
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
         select_below_utilization: None,
-        default_allowed_models: default_allowed.map(|l| l.into_iter().map(String::from).collect()),
+        model_rules: rules,
         keepalive_json: "{}".into(),
         body_capture_hours,
         prefer_subscription: false,
@@ -47,7 +42,7 @@ fn pool(
     }
 }
 
-fn key(id: &str, pool_id: &str, secret: &str, allowed: Option<Vec<&str>>) -> ApiKeyRow {
+fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: RulesMode) -> ApiKeyRow {
     ApiKeyRow {
         id: id.into(),
         label: id.into(),
@@ -56,7 +51,9 @@ fn key(id: &str, pool_id: &str, secret: &str, allowed: Option<Vec<&str>>) -> Api
         enabled: true,
         revoked_at: None,
         expires_at: None,
-        allowed_models: allowed.map(|l| l.into_iter().map(String::from).collect()),
+        model_rules: rules,
+        model_rules_mode: mode,
+        long_context_twins: true,
         keepalive_opt_out: false,
         body_capture_hours: None,
         secret_digest: phoebis_store::digest_with(&DIGEST_KEY, secret.as_bytes()).to_vec(),
@@ -86,30 +83,70 @@ fn snapshot() -> RegistrySnapshot {
         accounts: vec![account("a"), account("b"), account("f")],
         credential_generations: Vec::new(),
         keys: vec![
-            key("desktop", "main", "phoebis-desktopsecret0000", None),
+            key(
+                "desktop",
+                "main",
+                "phoebis-desktopsecret0000",
+                Vec::new(),
+                RulesMode::Extend,
+            ),
             ApiKeyRow {
                 body_capture_hours: Some(6),
                 ..key(
                     "laptop",
                     "main",
                     "phoebis-laptopsecret00000",
-                    Some(vec!["claude-opus-5"]),
+                    vec![
+                        ModelRule {
+                            pattern: "claude-opus-5".into(),
+                            not: false,
+                        },
+                        ModelRule {
+                            pattern: "*".into(),
+                            not: true,
+                        },
+                    ],
+                    RulesMode::Replace,
                 )
             },
             ApiKeyRow {
                 body_capture_hours: Some(0),
-                ..key("quiet", "main", "phoebis-quietsecret000000", None)
+                ..key(
+                    "quiet",
+                    "main",
+                    "phoebis-quietsecret000000",
+                    Vec::new(),
+                    RulesMode::Extend,
+                )
             },
             ApiKeyRow {
                 revoked_at: Some(1),
                 enabled: false,
-                ..key("gone", "main", "phoebis-gonesecret0000000", None)
+                ..key(
+                    "gone",
+                    "main",
+                    "phoebis-gonesecret0000000",
+                    Vec::new(),
+                    RulesMode::Extend,
+                )
             },
             ApiKeyRow {
                 expires_at: Some(500),
-                ..key("old", "main", "phoebis-oldsecret00000000", None)
+                ..key(
+                    "old",
+                    "main",
+                    "phoebis-oldsecret00000000",
+                    Vec::new(),
+                    RulesMode::Extend,
+                )
             },
-            key("dark", "off", "phoebis-darksecret0000000", None),
+            key(
+                "dark",
+                "off",
+                "phoebis-darksecret0000000",
+                Vec::new(),
+                RulesMode::Extend,
+            ),
         ],
         members: vec![
             PoolMember {
@@ -139,10 +176,13 @@ fn snapshot() -> RegistrySnapshot {
             pool(
                 "main",
                 true,
-                Some(vec!["claude-sonnet-5", "claude-opus-5", "vendor/model-a"]),
+                vec![ModelRule {
+                    pattern: "claude-haiku-4-5*".into(),
+                    not: true,
+                }],
                 24,
             ),
-            pool("off", false, None, 0),
+            pool("off", false, Vec::new(), 0),
         ],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -205,7 +245,7 @@ fn body_capture_hours_is_the_key_override_else_the_pool_value() {
 }
 
 #[test]
-fn the_key_list_overrides_the_pool_list_and_unserved_models_are_refused() {
+fn the_processed_list_refuses_a_model_and_the_served_gate_still_holds() {
     let s = snapshot();
     let desktop = s.key("desktop").unwrap();
     let laptop = s.key("laptop").unwrap();
@@ -226,16 +266,19 @@ fn the_key_list_overrides_the_pool_list_and_unserved_models_are_refused() {
         [("a".to_string(), 0, "claude-opus-5".to_string())],
         "b's row is not selected"
     );
-    assert!(matches!(
-        resolve(&s, laptop, "claude-sonnet-5"),
-        Err(ResolveError::ModelNotAllowed)
-    ));
+    assert!(
+        matches!(
+            resolve(&s, laptop, "claude-sonnet-5"),
+            Err(ResolveError::ModelNotAllowed)
+        ),
+        "laptop's own list refuses what it does not name"
+    );
     assert!(
         matches!(
             resolve(&s, desktop, "claude-haiku-4-5"),
             Err(ResolveError::ModelNotAllowed)
         ),
-        "the pool list applies when the key has none"
+        "the pool's entry applies when the key holds none of its own"
     );
     assert!(
         matches!(resolve(&s, desktop, "vendor/model-a"), Ok(ref c) if c.len() == 1 && c[0].upstream_model == "Vendor/Model-A"),
@@ -243,7 +286,10 @@ fn the_key_list_overrides_the_pool_list_and_unserved_models_are_refused() {
     );
     let open = RegistrySnapshot::from_load(
         RegistryLoad {
-            pools: vec![pool("main", true, None, 24), pool("off", false, None, 0)],
+            pools: vec![
+                pool("main", true, Vec::new(), 24),
+                pool("off", false, Vec::new(), 0),
+            ],
             retired_secrets: Vec::new(),
             ..load_of(&snapshot())
         },

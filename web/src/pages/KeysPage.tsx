@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/api';
-import type { ApiKey, CreatedApiKey, KeyStatus, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { MultiSelect } from '@/components/ui/MultiSelect';
-import { IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { keyFormOf, keyInputOf, type CaptureMode } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -20,7 +19,6 @@ const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previou
 export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
-  const catalog = useAsync(() => api.listCatalog(), []);
   const now = useNow();
   const ink = useChartInk();
   const { canMutate } = useAppSettings();
@@ -165,7 +163,7 @@ export function KeysPage() {
                         </td>
                         <td className="mono">{k.prefix}…</td>
                         <td className="mono">{k.poolId}</td>
-                        <td>{k.allowedModels ? <span className="mono" title={k.allowedModels.join(', ')}>{k.allowedModels.length === 1 ? k.allowedModels[0] : `${k.allowedModels.length} models`}</span> : <span className="muted">Pool default</span>}</td>
+                        <td>{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted">{k.modelRulesMode === 'replace' ? 'No rules' : 'Pool rules'}</span>}</td>
                         <td className="right num">
                           {fmtCompact(k.usage7d.tokens)} tok
                           <span className="sub">{fmtUsd(k.usage7d.cost)}</span>
@@ -250,7 +248,6 @@ export function KeysPage() {
         existing={dialog?.key ?? null}
         onClose={() => setDialog(null)}
         pools={poolList}
-        models={(catalog.data ?? []).map((m) => m.id)}
         onCreated={(c) => {
           setDialog(null);
           setCreated({ key: c, title: 'API key created' });
@@ -305,11 +302,12 @@ function Tile({ label, value }: { label: string; value: string | null }) {
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
  * inside a pool's own dialog.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; models: string[]; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: Pick<Pool, 'bodyCaptureHours' | 'id' | 'name'>[] }) {
+export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: Pick<Pool, 'bodyCaptureHours' | 'id' | 'name'>[] }) {
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
-  const [modelMode, setModelMode] = useState<'pool' | 'selected'>('pool');
-  const [selected, setSelected] = useState<string[]>([]);
+  const [longContextTwins, setLongContextTwins] = useState(true);
+  const [modelRules, setModelRules] = useState<ModelRule[]>([]);
+  const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
@@ -332,8 +330,9 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
     setName(form.name);
     setPoolId(form.poolId);
-    setModelMode(form.modelMode);
-    setSelected(form.selected);
+    setLongContextTwins(form.longContextTwins);
+    setModelRules(form.modelRules);
+    setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
@@ -355,7 +354,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, modelMode, name, notes, optOut, poolId, selected }, Date.now());
+    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId }, Date.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input);
@@ -436,40 +435,6 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
       ),
     },
     {
-      id: 'models',
-      label: 'Models',
-      body: (
-        <div className="field">
-          <span className="field__label">Allowed models</span>
-          <Segmented<'pool' | 'selected'>
-            ariaLabel="Allowed models"
-            value={modelMode}
-            onChange={setModelMode}
-            options={[
-              { value: 'pool', label: 'Pool default' },
-              { value: 'selected', label: 'Selected' },
-            ]}
-          />
-          {modelMode === 'selected' && (
-            <>
-              <div className="chips">
-                {selected.map((m) => (
-                  <span key={m} className="chip chip--removable mono">
-                    {m}
-                    <button type="button" aria-label={`Remove ${m}`} onClick={() => setSelected(selected.filter((x) => x !== m))}>
-                      <IconX size={11} />
-                    </button>
-                  </span>
-                ))}
-                {selected.length === 0 && <span className="muted">No models selected yet</span>}
-              </div>
-              <MultiSelect label="Models" options={models.map((m) => ({ label: m, value: m }))} value={selected} onChange={setSelected} searchable mono />
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
       id: 'keepalive',
       label: 'Cache warming',
       body: (
@@ -541,7 +506,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, models, 
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!name.trim() || !poolId || busy || (modelMode === 'selected' && selected.length === 0)} onClick={submit}>
+          <Button variant="primary" disabled={!name.trim() || !poolId || busy} onClick={submit}>
             {busy ? (existing ? 'Saving…' : 'Creating…') : existing ? 'Save' : 'Create'}
           </Button>
         </>

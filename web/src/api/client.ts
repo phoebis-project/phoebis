@@ -20,6 +20,8 @@ import type {
   KeepaliveRecipe,
   LifecycleDelivery,
   LiveEvent,
+  ModelRule,
+  ModelRulesMode,
   OveragePolicy,
   Overview,
   PairingInput,
@@ -45,12 +47,14 @@ import type {
 export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
 
 export interface KeyInput {
-  allowedModels: string[] | null;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
   keepaliveOptOut: boolean;
+  longContextTwins: boolean;
+  modelRules: ModelRule[];
+  modelRulesMode: ModelRulesMode;
   name: string;
   notes: string | null;
   poolId: string;
@@ -85,10 +89,10 @@ export interface PoolInput {
   bodyCaptureHours: number;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
-  defaultAllowedModels: string[] | null;
   keepalive: PoolKeepalive;
   members: { accountId: string; priority: number }[];
   migrateAboveUtilization: number | null;
+  modelRules: ModelRule[];
   name: string;
   overagePolicy: OveragePolicy;
   /** The operator's stored answer alone; the effective value is the route's to compute from it and the strategy. */

@@ -200,7 +200,7 @@ pub struct PoolRow {
     pub overage_policy: OveragePolicy,
     pub migrate_above_utilization: Option<f64>,
     pub select_below_utilization: Option<f64>,
-    pub default_allowed_models: Option<Vec<String>>,
+    pub model_rules: Vec<ModelRule>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
     /// Order the selection set by account kind before priority; forced on under the sample-driven strategies.
@@ -242,7 +242,10 @@ pub struct ApiKeyRow {
     pub enabled: bool,
     pub revoked_at: Option<i64>,
     pub expires_at: Option<i64>,
-    pub allowed_models: Option<Vec<String>>,
+    pub model_rules: Vec<ModelRule>,
+    pub model_rules_mode: RulesMode,
+    /// Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model.
+    pub long_context_twins: bool,
     pub keepalive_opt_out: bool,
     pub body_capture_hours: Option<u32>,
     pub secret_digest: Vec<u8>,
@@ -375,17 +378,12 @@ fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
-fn list_json(list: &Option<Vec<String>>) -> Result<Option<String>, StoreError> {
-    list.as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(StoreError::from)
+fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
+    serde_json::to_string(rules).map_err(StoreError::from)
 }
 
-fn json_list(raw: Option<String>) -> Result<Option<Vec<String>>, StoreError> {
-    raw.map(|s| serde_json::from_str(&s))
-        .transpose()
-        .map_err(StoreError::from)
+fn json_rules(raw: String) -> Result<Vec<ModelRule>, StoreError> {
+    serde_json::from_str(&raw).map_err(StoreError::from)
 }
 
 impl Store {
@@ -479,7 +477,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
             params![
                 row.id,
@@ -490,7 +488,7 @@ impl Store {
                 row.overage_policy,
                 row.migrate_above_utilization,
                 row.select_below_utilization,
-                list_json(&row.default_allowed_models)?,
+                rules_json(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -510,7 +508,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -520,7 +518,7 @@ impl Store {
                 row.overage_policy,
                 row.migrate_above_utilization,
                 row.select_below_utilization,
-                list_json(&row.default_allowed_models)?,
+                rules_json(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -656,8 +654,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -666,7 +664,9 @@ impl Store {
                 row.enabled,
                 row.revoked_at,
                 row.expires_at,
-                list_json(&row.allowed_models)?,
+                rules_json(&row.model_rules)?,
+                row.model_rules_mode,
+                row.long_context_twins,
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64),
                 row.secret_digest,
@@ -691,7 +691,7 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, allowed_models_json = ?7, keepalive_opt_out = ?8, body_capture_hours = ?9 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -699,7 +699,9 @@ impl Store {
                 row.pool_id,
                 row.enabled,
                 row.expires_at,
-                list_json(&row.allowed_models)?,
+                rules_json(&row.model_rules)?,
+                row.model_rules_mode,
+                row.long_context_twins,
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64)
             ],
@@ -1188,8 +1190,8 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1206,7 +1208,7 @@ fn all_keys(conn: &rusqlite::Connection) -> Result<Vec<ApiKeyRow>, StoreError> {
 }
 
 fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
-    let list: Option<String> = r.get(8)?;
+    let rules: String = r.get(8)?;
     Ok(PoolRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -1216,7 +1218,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         overage_policy: r.get(5)?,
         migrate_above_utilization: r.get(6)?,
         select_below_utilization: r.get(7)?,
-        default_allowed_models: json_list(list).map_err(|e| {
+        model_rules: json_rules(rules).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
         })?,
         keepalive_json: r.get(9)?,
@@ -1231,7 +1233,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
 }
 
 fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
-    let list: Option<String> = r.get(7)?;
+    let rules: String = r.get(15)?;
     Ok(ApiKeyRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -1240,17 +1242,19 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         enabled: r.get(4)?,
         revoked_at: r.get(5)?,
         expires_at: r.get(6)?,
-        allowed_models: json_list(list).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+        model_rules: json_rules(rules).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(15, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        keepalive_opt_out: r.get(8)?,
-        body_capture_hours: r.get::<_, Option<i64>>(9)?.map(|h| h as u32),
-        secret_digest: r.get(10)?,
-        prefix: r.get(11)?,
-        created_at: r.get(12)?,
-        rotated_at: r.get(13)?,
-        last_used_at: r.get(14)?,
-        retired_secret_last_used_at: r.get(15)?,
+        model_rules_mode: r.get(16)?,
+        long_context_twins: r.get(17)?,
+        keepalive_opt_out: r.get(7)?,
+        body_capture_hours: r.get::<_, Option<i64>>(8)?.map(|h| h as u32),
+        secret_digest: r.get(9)?,
+        prefix: r.get(10)?,
+        created_at: r.get(11)?,
+        rotated_at: r.get(12)?,
+        last_used_at: r.get(13)?,
+        retired_secret_last_used_at: r.get(14)?,
     })
 }
 
@@ -1276,7 +1280,7 @@ fn pool_diff(row: &PoolRow) -> String {
         "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization,
         "select_below_utilization": row.select_below_utilization,
-        "default_allowed_models": row.default_allowed_models,
+        "model_rules": row.model_rules,
         "body_capture_hours": row.body_capture_hours,
         "prefer_subscription": row.prefer_subscription,
         "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
@@ -1293,7 +1297,9 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "pool_id": row.pool_id,
         "enabled": row.enabled,
         "expires_at": row.expires_at,
-        "allowed_models": row.allowed_models,
+        "model_rules": row.model_rules,
+        "model_rules_mode": row.model_rules_mode.as_str(),
+        "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out,
         "body_capture_hours": row.body_capture_hours,
         "prefix": row.prefix,

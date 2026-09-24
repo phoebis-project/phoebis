@@ -1,5 +1,5 @@
 import type { KeyInput, PoolInput } from '@/api/client';
-import type { ApiKey, PoolKeepalive } from '@/api/types';
+import type { ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number ? K : never }[keyof PoolKeepalive];
 
@@ -53,12 +53,13 @@ export interface KeyForm {
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
   expiry: string;
-  modelMode: 'pool' | 'selected';
+  longContextTwins: boolean;
+  modelRules: ModelRule[];
+  modelRulesMode: ModelRulesMode;
   name: string;
   notes: string;
   optOut: boolean;
   poolId: string;
-  selected: string[];
 }
 
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
@@ -70,22 +71,25 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
-    modelMode: existing?.allowedModels ? 'selected' : 'pool',
+    longContextTwins: existing?.longContextTwins ?? true,
+    modelRules: existing?.modelRules ?? [],
+    modelRulesMode: existing?.modelRulesMode ?? 'extend',
     name: existing?.name ?? '',
     notes: existing?.notes ?? '',
     optOut: existing?.keepaliveOptOut ?? false,
     poolId: existing?.poolId ?? poolId,
-    selected: existing?.allowedModels ?? [],
   };
 }
 
 export function keyInputOf(form: KeyForm, now: number): KeyInput {
   return {
-    allowedModels: form.modelMode === 'selected' ? form.selected : null,
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),
     keepaliveOptOut: form.optOut,
+    longContextTwins: form.longContextTwins,
+    modelRules: form.modelRules,
+    modelRulesMode: form.modelRulesMode,
     name: form.name.trim(),
     notes: form.notes.trim() || null,
     poolId: form.poolId,

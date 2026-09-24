@@ -8,8 +8,8 @@ use phoebis_routing::{
     RouterConfig, SelectRequest, SelectResult, UtilizationSample,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy,
-    PoolRow, ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelRule,
+    OveragePolicy, PoolRow, RulesMode, ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
 };
 use fake_upstream::{stays_for, wait_for};
 
@@ -55,7 +55,7 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 overage_policy: OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
-                default_allowed_models: None,
+                model_rules: Vec::new(),
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
@@ -85,7 +85,9 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-secret").to_vec(),
@@ -210,7 +212,16 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
     );
     // The pool's policy changed under the request: the model is refused rather than routed.
     let mut pool = store.pool("p").unwrap().unwrap();
-    pool.default_allowed_models = Some(vec!["claude-opus-5".into()]);
+    pool.model_rules = vec![
+        ModelRule {
+            pattern: "claude-opus-5".into(),
+            not: false,
+        },
+        ModelRule {
+            pattern: "*".into(),
+            not: true,
+        },
+    ];
     store.update_pool(&pool, "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted.clone())).await.unwrap();
@@ -218,7 +229,7 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
         answer.result,
         SelectResult::Refused(ResolveError::ModelNotAllowed)
     ));
-    pool.default_allowed_models = None;
+    pool.model_rules = Vec::new();
     store.update_pool(&pool, "test").unwrap();
     store
         .put_served_models(
@@ -938,7 +949,9 @@ fn insert_key_k(store: &Store) {
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-reissued").to_vec(),

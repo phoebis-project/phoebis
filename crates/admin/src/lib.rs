@@ -11,6 +11,7 @@ mod pools;
 mod pricing;
 mod requests;
 mod routes;
+mod rules;
 mod session;
 mod sessions;
 mod settings;

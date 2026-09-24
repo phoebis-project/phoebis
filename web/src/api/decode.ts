@@ -1,6 +1,6 @@
 import type {
   Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
+  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode, Overview, PairingSession, Pool,
   PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, SessionLifecycleDetail, Settings, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
@@ -63,6 +63,11 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
 function decodeServedModel(m: Rec): ServedModel {
   const upstreamId = str(m.upstream_id);
   return { canonicalId: str(m.canonical_id, upstreamId), id: str(m.canonical_id, upstreamId), inCatalog: !bool(m.missing), isNew: bool(m.new), longContext: bool(m.long_context), manual: str(m.source) === 'manual', selected: bool(m.selected), upstreamId };
+}
+
+export function decodeModelRule(v: unknown): ModelRule {
+  const r = rec(v);
+  return { not: bool(r.not), pattern: str(r.pattern) };
 }
 
 // The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
@@ -148,7 +153,6 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
-    allowedModels: k.allowed_models === null || k.allowed_models === undefined ? null : strings(k.allowed_models),
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
@@ -157,6 +161,9 @@ export function decodeKey(v: unknown): ApiKey {
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
     lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
+    longContextTwins: bool(k.long_context_twins, true),
+    modelRules: list(k.model_rules).map(decodeModelRule),
+    modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
     name: str(k.label),
     notes: strOrNull(k.notes),
     poolId: str(k.pool_id),
@@ -170,6 +177,7 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 export const ELIGIBILITY_VALUES = ['cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
 export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
 export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
 export const POOL_STRATEGY_VALUES = ['earliest_refresh', 'least_utilized', 'priority_random', 'round_robin'] as const;
@@ -199,7 +207,6 @@ export function decodePool(v: unknown): Pool {
     cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
-    defaultAllowedModels: p.default_allowed_models === null || p.default_allowed_models === undefined ? null : strings(p.default_allowed_models),
     id: str(p.id),
     keepalive: {
       coldProbeLimit: num(k.cold_probe_limit), costCapUsdPerDay: numOrNull(k.probe_cost_cap_usd_per_day), enabled: bool(k.enabled), jitterSeconds1h: num(k.jitter_seconds_1h), jitterSeconds5m: num(k.jitter_seconds_5m),
@@ -209,6 +216,7 @@ export function decodePool(v: unknown): Pool {
     // A row from before the router reported eligibility reads as not servable rather than as servable.
     members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
+    modelRules: list(p.model_rules).map(decodeModelRule),
     name: str(p.label),
     overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
     preferSubscription: bool(p.prefer_subscription),
@@ -409,15 +417,18 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
   }
 }
 
+const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
+
 export const encodeKey = (i: KeyInput) => ({
-  allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
-  keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId,
+  keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
+  model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });
 export const encodePool = (i: PoolInput) => ({
   affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, in_overage: i.cacheTtl.inOverage, main: i.cacheTtl.main, models: i.cacheTtl.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: i.cacheTtl.subagent },
-  default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
+  enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
   // No `prefer_subscription_effective`: the route computes it from the stored flag and the strategy, and an input

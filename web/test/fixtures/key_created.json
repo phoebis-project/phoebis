@@ -8,14 +8,19 @@
     "enabled": true,
     "revoked_at": null,
     "expires_at": null,
-    "allowed_models": [
-      "claude-sonnet-5"
+    "model_rules": [
+      {
+        "pattern": "claude-opus-*",
+        "not": true
+      }
     ],
+    "model_rules_mode": "extend",
+    "long_context_twins": true,
     "keepalive_opt_out": false,
     "body_capture_hours": null,
     "effective_body_capture_hours": 24,
-    "prefix": "0RXT_FJW",
-    "created_at": 1790212659912,
+    "prefix": "hI9C8i7S",
+    "created_at": 1790234133438,
     "rotated_at": null,
     "last_used_at": null,
     "retired_secret_last_used_at": null,

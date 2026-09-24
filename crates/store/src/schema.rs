@@ -52,11 +52,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (20, V20),
     (21, V21),
     (22, V22),
+    (23, V23),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 22;
+pub const SCHEMA_VERSION: u32 = 23;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -288,4 +289,15 @@ ALTER TABLE credentials ADD COLUMN last_error TEXT;
 "#;
 
 const V22: &str = r#"
+"#;
+
+// Both whitelist columns are dropped rather than renamed, so no old list is ever read as a rule list; neither sits
+// in an index, a key, or a constraint. A fresh database replays the chain, so `V2` keeps the two columns this drops.
+const V23: &str = r#"
+ALTER TABLE pools DROP COLUMN default_allowed_models_json;
+ALTER TABLE pools ADD COLUMN model_rules_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE api_keys DROP COLUMN allowed_models_json;
+ALTER TABLE api_keys ADD COLUMN model_rules_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE api_keys ADD COLUMN model_rules_mode TEXT NOT NULL DEFAULT 'extend';
+ALTER TABLE api_keys ADD COLUMN long_context_twins INTEGER NOT NULL DEFAULT 1;
 "#;

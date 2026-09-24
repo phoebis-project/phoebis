@@ -317,7 +317,7 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            allowed_models: Some(vec!["claude-opus-5"]),
+            model_rules: rules(&["claude-opus-5", "NOT *"]),
             ..PoolSpec::default()
         },
     )
@@ -1038,7 +1038,7 @@ async fn a_pre_selection_refusal_carries_the_client_version() {
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            allowed_models: Some(vec!["claude-opus-5"]),
+            model_rules: rules(&["claude-opus-5", "NOT *"]),
             ..PoolSpec::default()
         },
     )

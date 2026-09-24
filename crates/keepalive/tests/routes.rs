@@ -4,7 +4,7 @@ mod common;
 use axum::body::Body;
 use axum::http::Request;
 use phoebis_keepalive::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
-use phoebis_store::ApiKeyRow;
+use phoebis_store::{ApiKeyRow, RulesMode};
 use common::*;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -92,7 +92,9 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: r.h.store.api_key_digest(OTHER_KEY).to_vec(),
@@ -184,7 +186,9 @@ async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: r.h.store.api_key_digest(OTHER_KEY).to_vec(),

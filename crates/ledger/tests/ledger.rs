@@ -152,7 +152,16 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
     h.store
         .update_api_key(
             &phoebis_store::ApiKeyRow {
-                allowed_models: Some(vec!["claude-sonnet-4-5".into()]),
+                model_rules: vec![
+                    phoebis_store::ModelRule {
+                        pattern: "claude-sonnet-4-5".into(),
+                        not: false,
+                    },
+                    phoebis_store::ModelRule {
+                        pattern: "*".into(),
+                        not: true,
+                    },
+                ],
                 ..h.store.api_key("desktop").unwrap().unwrap()
             },
             "test",

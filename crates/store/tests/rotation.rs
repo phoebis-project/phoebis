@@ -1,6 +1,6 @@
 use phoebis_store::{
-    ApiKeyRow, OveragePolicy, PoolRow, RetiredSecret, StorageKey, Store, Strategy, SubStrategy,
-    ROTATION_GRACE_MS,
+    ApiKeyRow, OveragePolicy, PoolRow, RetiredSecret, RulesMode, StorageKey, Store, Strategy,
+    SubStrategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -13,7 +13,7 @@ fn pool(id: &str) -> PoolRow {
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
         select_below_utilization: None,
-        default_allowed_models: None,
+        model_rules: Vec::new(),
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
         prefer_subscription: false,
@@ -34,7 +34,9 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         enabled: true,
         revoked_at: None,
         expires_at: None,
-        allowed_models: None,
+        model_rules: Vec::new(),
+        model_rules_mode: RulesMode::Extend,
+        long_context_twins: true,
         keepalive_opt_out: false,
         body_capture_hours: None,
         secret_digest: store.api_key_digest(secret).to_vec(),

@@ -107,7 +107,9 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   const [k] = fixture('keys').keys.map(d.decodeKey);
   assert.equal(k.name, 'Desktop');
   assert.equal(k.status, 'active');
-  assert.deepEqual(k.allowedModels, ['claude-sonnet-5']);
+  assert.deepEqual(k.modelRules, [{ not: true, pattern: 'claude-opus-*' }]);
+  assert.equal(k.modelRulesMode, 'extend');
+  assert.equal(k.longContextTwins, true);
   assert.equal(k.lifetime.requests, 3);
   assert.equal(k.usage7d.tokens > 0, true);
   assert.equal(typeof k.sessionsOnRetiredSecret, 'number');
@@ -125,6 +127,22 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal('secret' in d.decodeKey(fixture('key_created')), false);
 });
 
+test('a key row decodes its model rules or takes their defaults when the row carries none', () => {
+  const row = fixture('keys').keys[0];
+  const ruled = d.decodeKey({ ...row, model_rules: [{ pattern: 'claude-sonnet-5' }, { not: true, pattern: '*' }], model_rules_mode: 'replace', long_context_twins: false });
+  assert.deepEqual(ruled.modelRules, [{ not: false, pattern: 'claude-sonnet-5' }, { not: true, pattern: '*' }]);
+  assert.equal(ruled.modelRulesMode, 'replace');
+  assert.equal(ruled.longContextTwins, false);
+  const bare = { ...row };
+  delete bare.model_rules;
+  delete bare.model_rules_mode;
+  delete bare.long_context_twins;
+  const defaults = d.decodeKey(bare);
+  assert.deepEqual(defaults.modelRules, []);
+  assert.equal(defaults.modelRulesMode, 'extend');
+  assert.equal(defaults.longContextTwins, true);
+});
+
 test('a key keeps its enabled flag beside the status the flag folds into', () => {
   const row = fixture('keys').keys[0];
   assert.equal(d.decodeKey(row).enabled, true);
@@ -138,7 +156,7 @@ test('a key keeps its enabled flag beside the status the flag folds into', () =>
 });
 
 test('a key edit sends enabled every time and expires_at only when the dialog changed it', () => {
-  const input = { allowedModels: null, bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, name: 'batch', notes: null, poolId: 'codex' };
+  const input = { bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'codex' };
   const kept = d.encodeKey({ ...input, expiresAt: undefined });
   assert.equal(kept.enabled, false);
   assert.equal('expires_at' in kept, false, 'an absent expiry leaves the stored one alone');

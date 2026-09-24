@@ -1,5 +1,6 @@
 use phoebis_store::ApiKeyRow;
 
+use crate::rules::{allows, process};
 use crate::RegistrySnapshot;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
@@ -27,14 +28,9 @@ pub fn resolve(
     let pool = snapshot
         .pool(&key.pool_id)
         .ok_or(ResolveError::ModelUnserved)?;
-    let policy = key
-        .allowed_models
-        .as_ref()
-        .or(pool.default_allowed_models.as_ref());
-    if let Some(list) = policy {
-        if !list.iter().any(|allowed| allowed == canonical_model) {
-            return Err(ResolveError::ModelNotAllowed);
-        }
+    let processed = process(&key.model_rules, key.model_rules_mode, &pool.model_rules);
+    if !allows(&processed, canonical_model) {
+        return Err(ResolveError::ModelNotAllowed);
     }
     let candidates: Vec<Candidate> = snapshot
         .members(&pool.id)

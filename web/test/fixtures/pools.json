@@ -14,7 +14,12 @@
         "overage_policy": "prefer_plan",
         "migrate_above_utilization": null,
         "select_below_utilization": null,
-        "default_allowed_models": null,
+        "model_rules": [
+          {
+            "pattern": "claude-haiku-*",
+            "not": true
+          }
+        ],
         "keepalive": {
           "cold_probe_limit": 2,
           "enabled": true,
@@ -40,8 +45,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790212659909,
-        "updated_at": 1790212659909,
+        "created_at": 1790234133435,
+        "updated_at": 1790234133435,
         "members": [
           {
             "account_id": "business",
@@ -58,7 +63,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "0RXT_FJW",
+            "prefix": "hI9C8i7S",
             "enabled": true
           }
         ],

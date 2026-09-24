@@ -2,12 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
+import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
-import { MultiSelect } from '@/components/ui/MultiSelect';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
@@ -90,6 +89,7 @@ export function PoolsPage() {
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
+  // Feeds the cache TTL per-model override picker's options.
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
@@ -458,7 +458,6 @@ type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends num
 
 interface PoolForm {
   affinity: number;
-  allowed: string[];
   apiKeySubStrategy: ApiKeySubStrategy;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
@@ -471,6 +470,7 @@ interface PoolForm {
   members: Record<string, number>;
   migrate: number;
   migrateOn: boolean;
+  modelRules: ModelRule[];
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
@@ -486,7 +486,6 @@ const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === s
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
-  allowed: [],
   apiKeySubStrategy: 'priority_random',
   cacheDiagnostics: null,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
@@ -499,6 +498,7 @@ const blankForm = (): PoolForm => ({
   members: {},
   migrate: 90,
   migrateOn: false,
+  modelRules: [],
   name: '',
   overage: 'prefer_plan',
   preferSubscription: false,
@@ -512,7 +512,6 @@ const blankForm = (): PoolForm => ({
 
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
-  allowed: pool.defaultAllowedModels ?? [],
   apiKeySubStrategy: pool.apiKeySubStrategy,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) },
@@ -525,6 +524,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
   migrate: pool.migrateAboveUtilization === null ? 90 : Math.round(pool.migrateAboveUtilization * 100),
   migrateOn: pool.migrateAboveUtilization !== null,
+  modelRules: pool.modelRules,
   name: pool.name,
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
@@ -639,7 +639,6 @@ export function PoolDialog({
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
-    defaultAllowedModels: form.allowed.length ? form.allowed : null,
     // With warming off the block is hidden, so what it holds goes back as stored: an edit left in it can
     // neither reach the policy nor hold up the save.
     keepalive: warming
@@ -647,6 +646,7 @@ export function PoolDialog({
       : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => ({ accountId, priority })),
     migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
+    modelRules: form.modelRules,
     name: form.name.trim(),
     overagePolicy: form.overage,
     // The stored answer, not the toggle's state: a sample-driven strategy draws it on, and sending that back
@@ -680,7 +680,7 @@ export function PoolDialog({
 
   const moveKey = async () => {
     if (!moving || !moveTo) return;
-    await api.updateKey(moving.id, { allowedModels: moving.allowedModels, bodyCaptureHours: moving.bodyCaptureHours, enabled: moving.enabled, keepaliveOptOut: moving.keepaliveOptOut, name: moving.name, notes: moving.notes, poolId: moveTo });
+    await api.updateKey(moving.id, { bodyCaptureHours: moving.bodyCaptureHours, enabled: moving.enabled, keepaliveOptOut: moving.keepaliveOptOut, longContextTwins: moving.longContextTwins, modelRules: moving.modelRules, modelRulesMode: moving.modelRulesMode, name: moving.name, notes: moving.notes, poolId: moveTo });
     setMoved((prev) => new Set(prev).add(moving.id));
     setMoving(null);
     onKeysChanged();
@@ -812,9 +812,6 @@ export function PoolDialog({
               </Field>
             )}
           </div>
-          <Field label="Default allowed models" hint="Empty means every model the members serve.">
-            <MultiSelect label="Models" options={models} value={form.allowed} onChange={(v) => set('allowed', v)} searchable mono />
-          </Field>
         </>
       ),
     },
@@ -1169,7 +1166,6 @@ export function PoolDialog({
         open={keyOpen}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}
-        models={models.map((m) => m.value)}
         initialPoolId={pool ? pool.id : draftPoolId}
         lockPool
         onCreated={(c) => {
