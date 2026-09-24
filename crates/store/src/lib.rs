@@ -33,9 +33,9 @@ pub use credentials::{
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use pricing::PricingVersion;
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelSource, OveragePolicy, PoolMember,
-    PoolRow, RegistryChange, RegistryLoad, RetiredSecret, ServedModel, ServedModelWrite, Strategy,
-    SubStrategy, SyncDelta, ROTATION_GRACE_MS,
+    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelRule, ModelSource, OveragePolicy,
+    PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, ServedModel,
+    ServedModelWrite, Strategy, SubStrategy, SyncDelta, ROTATION_GRACE_MS,
 };
 pub use routing::{CooldownRow, OverageRow, PinRow, RoutingLoad};
 

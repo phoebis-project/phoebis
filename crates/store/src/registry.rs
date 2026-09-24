@@ -3,6 +3,7 @@
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::Ordering;
 
@@ -73,6 +74,52 @@ impl FromSql for SubStrategy {
 }
 
 impl ToSql for SubStrategy {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// One entry of a model rule list: a pattern over the folded canonical id, negated when `not` is set.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelRule {
+    pub pattern: String,
+    #[serde(default)]
+    pub not: bool,
+}
+
+/// How a key's own list meets its pool's: `Extend` appends the pool's entries after the key's own, `Replace`
+/// leaves them out. A pool has no mode: it inherits nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RulesMode {
+    #[default]
+    Extend,
+    Replace,
+}
+
+impl RulesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RulesMode::Extend => "extend",
+            RulesMode::Replace => "replace",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<RulesMode> {
+        match value {
+            "extend" => Some(RulesMode::Extend),
+            "replace" => Some(RulesMode::Replace),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for RulesMode {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        RulesMode::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for RulesMode {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(self.as_str().into())
     }

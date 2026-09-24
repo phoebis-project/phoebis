@@ -1,0 +1,422 @@
+{
+  "matcher": {
+    "a_backslash_quotes_the_next_character": [
+      {
+        "pattern": "claude\\*",
+        "name": "claude*",
+        "matches": true
+      },
+      {
+        "pattern": "claude\\*",
+        "name": "claude-opus-5",
+        "matches": false
+      },
+      {
+        "pattern": "a\\?b",
+        "name": "a?b",
+        "matches": true
+      },
+      {
+        "pattern": "a\\?b",
+        "name": "aXb",
+        "matches": false
+      },
+      {
+        "pattern": "a\\\\b",
+        "name": "a\\b",
+        "matches": true
+      }
+    ],
+    "a_double_star_crosses_slashes": [
+      {
+        "pattern": "**",
+        "name": "a/b/c",
+        "matches": true
+      },
+      {
+        "pattern": "**",
+        "name": "",
+        "matches": true
+      },
+      {
+        "pattern": "**/opus*",
+        "name": "vendor/team/opus-5",
+        "matches": true
+      },
+      {
+        "pattern": "**a*b",
+        "name": "xa/ab",
+        "matches": true
+      }
+    ],
+    "a_pattern_without_a_wildcard_matches_its_own_text_alone": [
+      {
+        "pattern": "claude-opus-5",
+        "name": "claude-opus-5",
+        "matches": true
+      },
+      {
+        "pattern": "claude-opus-5",
+        "name": "Claude-Opus-5",
+        "matches": true
+      },
+      {
+        "pattern": "claude-opus-5",
+        "name": "claude-opus-5-1",
+        "matches": false
+      },
+      {
+        "pattern": "claude-opus-5",
+        "name": "claude-opus",
+        "matches": false
+      }
+    ],
+    "a_question_mark_takes_one_character_other_than_a_slash": [
+      {
+        "pattern": "claude-opus-?",
+        "name": "claude-opus-5",
+        "matches": true
+      },
+      {
+        "pattern": "claude-opus-?",
+        "name": "claude-opus-",
+        "matches": false
+      },
+      {
+        "pattern": "claude-opus-?",
+        "name": "claude-opus/",
+        "matches": false
+      }
+    ],
+    "a_single_star_stops_at_a_slash": [
+      {
+        "pattern": "claude-*",
+        "name": "claude-opus-5",
+        "matches": true
+      },
+      {
+        "pattern": "claude-*",
+        "name": "claude-",
+        "matches": true
+      },
+      {
+        "pattern": "claude-*",
+        "name": "claude-x/y",
+        "matches": false
+      },
+      {
+        "pattern": "*",
+        "name": "a/b",
+        "matches": false
+      }
+    ]
+  },
+  "check": [
+    {
+      "pattern": "",
+      "error": "pattern is empty"
+    },
+    {
+      "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "error": "pattern is longer than 256 characters"
+    },
+    {
+      "pattern": "abc\\",
+      "error": "pattern ends in an unquoted backslash"
+    },
+    {
+      "pattern": "abc\\\\",
+      "error": null
+    },
+    {
+      "pattern": "a***b",
+      "error": "pattern holds three stars in a row"
+    },
+    {
+      "pattern": "a**b",
+      "error": null
+    },
+    {
+      "pattern": "a\\***b",
+      "error": null
+    }
+  ],
+  "evaluator": {
+    "a_keys_own_entry_is_ahead_of_the_pools": [
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          }
+        ],
+        "mode": "extend",
+        "pool": [
+          {
+            "pattern": "claude-opus*",
+            "not": true
+          }
+        ],
+        "name": "claude-opus-5",
+        "allowed": true,
+        "levels": [
+          "key",
+          "pool"
+        ]
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          }
+        ],
+        "mode": "extend",
+        "pool": [
+          {
+            "pattern": "claude-opus*",
+            "not": true
+          }
+        ],
+        "name": "claude-opus-4-8",
+        "allowed": false,
+        "levels": [
+          "key",
+          "pool"
+        ]
+      }
+    ],
+    "an_empty_list_at_both_levels_allows_everything": [
+      {
+        "key": [],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-opus-5",
+        "allowed": true
+      },
+      {
+        "key": [],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-5",
+        "allowed": true
+      }
+    ],
+    "first_match_wins_and_an_unmatched_name_is_allowed": [
+      {
+        "key": [
+          {
+            "pattern": "claude-opus*",
+            "not": true
+          },
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-opus-5",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-opus*",
+            "not": true
+          },
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-5",
+        "allowed": true
+      }
+    ],
+    "replace_drops_the_pools_list": [
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          }
+        ],
+        "mode": "replace",
+        "pool": [
+          {
+            "pattern": "claude-opus*",
+            "not": true
+          }
+        ],
+        "name": "claude-opus-4-8",
+        "allowed": true,
+        "levels": [
+          "key"
+        ]
+      }
+    ],
+    "the_dated_id_glob_covers_the_spelling_the_id_and_the_twin": [
+      {
+        "key": [
+          {
+            "pattern": "claude-sonnet-4-5*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-4-5",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-sonnet-4-5*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-4-5-20250929",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-sonnet-4-5*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-4-5[1m]",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-sonnet-4-5*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-4-5-20250929[1m]",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-sonnet-4-5*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-5",
+        "allowed": true
+      }
+    ],
+    "the_documented_examples_build_an_allowlist_and_a_blocklist": [
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          },
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-opus-5",
+        "allowed": true
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          },
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-5",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "claude-opus-5",
+            "not": false
+          },
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-opus-4-8",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-opus-5",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "claude-sonnet-5",
+        "allowed": false
+      },
+      {
+        "key": [
+          {
+            "pattern": "*",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "a/b",
+        "allowed": true
+      },
+      {
+        "key": [
+          {
+            "pattern": "**",
+            "not": true
+          }
+        ],
+        "mode": "extend",
+        "pool": [],
+        "name": "a/b",
+        "allowed": false
+      }
+    ]
+  }
+}
