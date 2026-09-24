@@ -40,6 +40,8 @@ const sessionSpec: {
   { keyId: 'laptop', accountId: 'business', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'personal', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
+  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
   { keyId: 'laptop', accountId: 'mail', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'console', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jumps to

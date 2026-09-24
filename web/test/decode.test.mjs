@@ -25,6 +25,11 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.ok(a.servedModels.some((m) => m.id === 'claude-sonnet-5' && m.selected));
   assert.equal(a.status, 'ready');
   assert.equal(a.email, 'test@example.invalid');
+  assert.deepEqual(
+    Object.keys(a).sort(),
+    ['catalogError', 'catalogSyncedAt', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'servedModels', 'status', 'subscription', 'windows'],
+    'an account decodes to the fields the console draws and nothing more',
+  );
 });
 
 test('an account decodes its catalog error, its quarantine flag, and the router\'s overage evidence', () => {
@@ -44,14 +49,6 @@ test('extra usage the provider switched off keeps the reason it gave', () => {
   const off = d.decodeAccount({ ...body, extra_usage: { ...body.extra_usage, disabled_reason: 'card declined', in_use: false, is_enabled: false } }).extraUsage;
   assert.deepEqual([off.enabled, off.inUse, off.disabledReason], [false, false, 'card declined'], 'the reason exists for exactly the account whose extra usage is off');
   assert.equal(d.decodeAccount({ ...body, extra_usage: null }).extraUsage, null);
-});
-
-test('an account carries extra headers only when the route answers an object of strings', () => {
-  const base = fixture('account');
-  assert.equal(d.decodeAccount(base).headers, null, 'a route that reports no headers answers none');
-  assert.equal(d.decodeAccount({ ...base, headers: {} }).headers, null, 'an empty object is no headers rather than an empty list');
-  assert.equal(d.decodeAccount({ ...base, headers: { 'x-retries': 3, 'x-team': 'core' } }).headers, null, 'one non-string value refuses the map instead of dropping that entry');
-  assert.deepEqual(d.decodeAccount({ ...base, headers: { 'x-team': 'core' } }).headers, { 'x-team': 'core' });
 });
 
 test('the account list folds state, enabled, and cooldowns onto one status', () => {

@@ -153,6 +153,7 @@ test('a new pool reads each member the way the pool route does', async () => {
   assert.deepEqual(await verdicts('first', 'never'), {
     business: 'eligible',
     console: 'eligible',
+    evals: 'eligible',
     mail: 'cooldown',
     personal: 'unavailable',
     spare: 'unavailable',

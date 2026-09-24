@@ -7,7 +7,7 @@ logs, analytics, sessions, alerts, and settings. Per view it waits for one eleme
 records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (pool chips, the caching controls, the select-below threshold, the compatibility
-card, the bootstrap cards, the Delete upstream button, the caching toggle, the alert rule dialog, the remaining cards,
+card, the bootstrap cards, the Delete upstream button, the upstream lines, the alert rule dialog, the remaining cards,
 the error state, the cost-cap rows, the live feed, the wasted-probe rows). The script exits non-zero with the list of
 failures when any of that does not hold.
 

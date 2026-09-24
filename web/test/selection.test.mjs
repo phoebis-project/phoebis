@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { sampleDriven, selectionOrder } from './dist/api.js';
 
 const account = (id, over = {}) => ({
-  baseUrl: null,
   catalogSyncedAt: null,
   cooldowns: [],
   credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },

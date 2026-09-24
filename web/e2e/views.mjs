@@ -444,6 +444,38 @@ async function deleteUpstreamButton(theme) {
   if (differs.length) say(`the Delete upstream button's ${differs.join(', ')} differs from the Disconnect button's`);
 }
 
+/**
+ * The line under an upstream's name on the dashboard, in the Upstreams list and head, and in the pool dialog's
+ * member picker reads its email: a blank line there
+ * reads as a value that failed to load.
+ */
+async function upstreamLines(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  if (path === '/pools') {
+    try {
+      await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+      await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    } catch (error) {
+      say(`the pool dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+      return;
+    }
+  }
+  const lines = await page.evaluate(() => {
+    const pair = (name, sub) => ({ name: name?.textContent?.trim() ?? '', sub: sub?.textContent?.trim() ?? '' });
+    return [
+      ...[...document.querySelectorAll('.account-mini')].map((c) => pair(c.querySelector('.account-mini__name'), c.querySelector('.account-mini__sub'))),
+      ...[...document.querySelectorAll('.account-row')].map((c) => pair(c.querySelector('.account-row__name'), c.querySelector('.account-row__sub'))),
+      ...[...document.querySelectorAll('dialog[open] .member-picker > li > label')].map((l) => pair(l.querySelector('span:nth-child(2)'), l.querySelector('span:nth-child(3)'))),
+    ];
+  });
+  if (lines.length === 0) say('no upstream line to read');
+  if (path === '/pools') {
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  }
+}
+
 /** The box a labelled input draws in the open dialog: the control itself, never the label around it. */
 const measureInput = (label) =>
   page.locator('dialog[open]').evaluate((el, text) => {
@@ -666,6 +698,7 @@ try {
         await remainingCards(theme);
         await errorStateBox(theme);
       }
+      if (['/', '/pools', '/upstreams'].includes(view.path)) await upstreamLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') await costCapRows(theme);
       if (view.path === '/pools') {

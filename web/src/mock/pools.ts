@@ -78,6 +78,7 @@ const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     defaultAllowedModels: ['claude-haiku-4-5-20251001'],
+    members: [{ accountId: 'evals', eligible: 'eligible', priority: 0 }],
     traffic24h: CODEX_TRAFFIC,
     requests24h: CODEX_TRAFFIC.reduce((s, b) => s + b.requests, 0),
     cost24h: 2.14,

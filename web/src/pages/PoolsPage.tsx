@@ -945,7 +945,7 @@ export function PoolDialog({
           <div className="capture">
             <Field
               label="Cache diagnostics"
-              hint="Forced diagnostics apply toward api.anthropic.com only, for key and subscription upstreams; a request to another host is never changed."
+              hint="Forced diagnostics apply to key and subscription upstreams alike."
             >
               <Select value={form.cacheDiagnostics === null ? 'inherit' : form.cacheDiagnostics ? 'on' : 'off'} onChange={(e) => set('cacheDiagnostics', e.target.value === 'inherit' ? null : e.target.value === 'on')}>
                 <option value="inherit">Inherit the bootstrap setting</option>

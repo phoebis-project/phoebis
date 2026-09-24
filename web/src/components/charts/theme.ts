@@ -49,6 +49,7 @@ export const ACCOUNT_SLOT: Record<string, number> = {
   mail: 1,
   personal: 2,
   console: 3,
+  evals: 4,
   team: 6,
 };
 

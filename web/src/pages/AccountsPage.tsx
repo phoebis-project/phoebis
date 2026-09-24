@@ -371,7 +371,10 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
       )}
 
       <div className="detail__pair">
-        <Card title="Identity" className="card--fill">
+        <Card
+          title="Identity"
+          className="card--fill"
+        >
           <KeyValue
             className="kv--spread"
             rows={
@@ -693,12 +696,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
     setBusy(true);
     setError(null);
     try {
-      const created = await api.createAccount({
-        id: id.trim(),
-        kind,
-        label: label.trim(),
-        secret: kind === 'api_key' ? secret : null,
-      });
+      const created = await api.createAccount({ id: id.trim(), kind, label: label.trim(), secret: kind === 'api_key' ? secret : null });
       onDone(kind, created);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -740,11 +738,9 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'work' : 'Console workspace'} />
       </Field>
       {kind === 'api_key' && (
-        <>
-          <Field label="API key">
-            <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
-          </Field>
-        </>
+        <Field label="API key">
+          <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
+        </Field>
       )}
       {kind === 'oauth' && <p className="secondary">Pairing opens the Claude.ai login in your browser and asks you to paste the address it lands on. The router stores the refresh token encrypted and renews the access token on its own.</p>}
       {error && (

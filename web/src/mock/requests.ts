@@ -55,6 +55,7 @@ export const LANES: Lane[] = [
   {
     keyId: 'ci',
     poolId: 'codex',
+    accountIds: ['evals'],
     models: [
       { value: 'claude-haiku-4-5-20251001', weight: 6 },
       { value: 'claude-sonnet-5', weight: 1 },

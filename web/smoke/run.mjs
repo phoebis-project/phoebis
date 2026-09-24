@@ -251,7 +251,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
+expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
@@ -298,14 +298,14 @@ expect('/quota', m.text(), ['6 credentials', '6 loaded', '2 need attention', 'Re
   api.listQuotaSnapshots = listQuotaSnapshots;
   results.push({
     name: '/quota Refresh all refreshes every subscription upstream, then reads every card again',
-    ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && reads > 0 && m.text().includes('6 loaded'),
+    ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && reads > 0 && m.text().includes('7 loaded'),
     missing: [refreshed.join(','), `reads ${reads}`, m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'],
   });
 }
 {
-  // The mock registry holds six, so the plural is what this can read; the singular is asserted by its absence.
+  // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
-  results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '6 credentials', missing: [count] });
+  results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '7 credentials', missing: [count] });
   // The route serves a cached snapshot inside the TTL, so the button says how young a snapshot it hands back as is.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh names the snapshot age the router serves as is', ok: hints.length > 1 && hints.every((t) => t === 'a snapshot younger than 60 seconds is served as is'), missing: [...new Set(hints)] });
@@ -407,6 +407,15 @@ expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Ide
   const kinds = [...(dlg?.querySelectorAll('[aria-label="Upstream type"] button') ?? [])];
   kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
+  const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
+  const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
+  const inputs = dlg?.querySelectorAll('input').length ?? 0;
+  const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
+  results.push({
+    name: '/upstreams the API-key form asks for an id, a label, and the key, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Upstream type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
+    missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
+  });
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
@@ -507,6 +516,13 @@ expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-son
     missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
+await m.navigate('/upstreams/console');
+expect('/upstreams/console', m.text(), ['Verify', 'does not report quota windows']);
+{
+  const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  results.push({ name: '/upstreams/console the identity card reads the type and draws no base URL row', ok: rows.includes('Type=API key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
+}
 await m.navigate('/upstreams/business');
 {
   const boxes = () => [...m.container.querySelectorAll('.served__list input[type=checkbox]')];
@@ -593,7 +609,7 @@ await m.navigate('/upstreams/spare');
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -804,7 +820,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
 
   {
     const memberLabels = () => [...(dlg?.querySelectorAll('.member-picker > li') ?? [])].map((li) => li.querySelector('label span:nth-child(2)')?.textContent);
-    results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'team']), missing: memberLabels() });
+    results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'Evals workspace', 'team']), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for business"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     setter.call(prio, '5');
@@ -813,7 +829,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: memberLabels()[0] === 'business', missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['mail', 'personal', 'Console workspace', 'business', 'team']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['mail', 'personal', 'Console workspace', 'business', 'Evals workspace', 'team']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for business"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
