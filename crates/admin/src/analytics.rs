@@ -54,7 +54,7 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
         kinds: list(q, "kinds"),
         user_agents: agent_list(q, "user_agents"),
         user_agent_groups: agent_list(q, "user_agent_groups"),
-        clients: Vec::new(),
+        clients: agent_list(q, "clients"),
         include_probes: flag(q, "include_probes"),
     }
 }
@@ -81,12 +81,13 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, effort, key, kind, model, pool, or user_agent",
+            "group_by is account, all, client, effort, key, kind, model, pool, or user_agent",
         ));
     }
     let filter = filter_of(q);
     if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
         || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
+        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
     {
         return Err(failure(
             StatusCode::BAD_REQUEST,

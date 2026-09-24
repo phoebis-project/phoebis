@@ -112,6 +112,7 @@ fn request(
         duration_ms: Some(900),
         error_code: (outcome != "succeeded").then(|| "upstream_error".into()),
         user_agent: Some("claude-cli/2.1.269 (external, cli)".into()),
+        client: Some("claude-code/cli".into()),
         effort: Some("high".into()),
         thinking_type: Some("enabled".into()),
         thinking_budget: Some(31_999),
@@ -266,6 +267,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             attempts: 2,
+            agent_type: Some("Explore".into()),
+            compaction: None,
+            context_compacted: Some("auto".into()),
+            prev_tool_ms: Some(1_235),
+            turn_origin: Some("human".into()),
             ..request(
                 key_generation,
                 "r-failover",

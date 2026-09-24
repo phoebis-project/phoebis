@@ -67,9 +67,9 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
     }
 }
 
-#[tokio::test]
-async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentiles() {
-    let parts = common::admin_parts_full().await;
+/// Six inference requests over two client builds, an agent type every third row, and a turn origin every
+/// other row, so a filter or a group-by on any of the three has more than one group to answer.
+fn seed_rollups(parts: &common::Full) {
     let now = common::NOW;
     for i in 0..6 {
         let at = now - (5 - i) * HOUR;
@@ -84,6 +84,16 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         );
         row.user_agent = Some(if i % 2 == 0 { SDK_CLI } else { NEWER_CLI }.into());
         row.effort = (i % 3 == 0).then(|| "high".into());
+        row.client = Some(
+            if i % 2 == 0 {
+                "claude-code/sdk-cli"
+            } else {
+                "claude-code/cli"
+            }
+            .into(),
+        );
+        row.agent_type = (i % 3 == 0).then(|| "Explore".into());
+        row.turn_origin = (i % 2 == 0).then(|| "human".into());
         parts
             .db
             .insert_request(
@@ -97,6 +107,13 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
             )
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentiles() {
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    seed_rollups(&parts);
     parts
         .db
         .insert_request(
@@ -546,6 +563,181 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         .await
         .status(),
         200
+    );
+}
+
+#[tokio::test]
+async fn the_request_log_answers_and_filters_the_client_the_agent_type_and_the_turn_origin() {
+    let parts = common::admin_parts_full().await;
+    seed_rollups(&parts);
+    let cookie = login(&parts.app, "admin-secret").await;
+    let all = json(get(&parts.app, "/admin/requests?limit=500", Some(&cookie)).await).await;
+    let rows = all["requests"].as_array().unwrap();
+    assert_eq!(rows.len(), 6);
+    for row in rows {
+        let row = row.as_object().unwrap();
+        for key in [
+            "client",
+            "agent_type",
+            "compaction",
+            "context_compacted",
+            "prev_tool_ms",
+            "turn_origin",
+        ] {
+            assert!(row.contains_key(key), "{key} is missing from a request row");
+        }
+    }
+    let by_pattern = json(
+        get(
+            &parts.app,
+            "/admin/requests?client=claude-code%2Fsdk*&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let by_exact = json(
+        get(
+            &parts.app,
+            "/admin/requests?client=claude-code%2Fsdk-cli&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        by_pattern["requests"].as_array().unwrap().len(),
+        3,
+        "the even rows carry the sdk-cli client alone"
+    );
+    assert_eq!(
+        by_pattern["requests"].as_array().unwrap().len(),
+        by_exact["requests"].as_array().unwrap().len(),
+        "the pattern and the exact spelling answer the same rows"
+    );
+    let by_agent_type = json(
+        get(
+            &parts.app,
+            "/admin/requests?agent_types=Explore&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        by_agent_type["requests"].as_array().unwrap().len(),
+        2,
+        "every third row drew the agent type"
+    );
+    let by_origin = json(
+        get(
+            &parts.app,
+            "/admin/requests?turn_origins=human&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(by_origin["requests"].as_array().unwrap().len(), 3);
+    let by_origins = json(
+        get(
+            &parts.app,
+            "/admin/requests?turn_origins=human,scheduled&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        by_origins["requests"].as_array().unwrap().len(),
+        3,
+        "an origin nothing matches leaves the count unchanged"
+    );
+    let too_long = get(
+        &parts.app,
+        &format!("/admin/requests?client={}&limit=500", "a".repeat(257)),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(too_long.status(), 400);
+    assert_eq!(
+        json(too_long).await["error"],
+        "user agent patterns are at most 256 characters, at most 32 of them"
+    );
+}
+
+#[tokio::test]
+async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
+    let parts = common::admin_parts_full().await;
+    seed_rollups(&parts);
+    let cookie = login(&parts.app, "admin-secret").await;
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=client",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let rows = breakdown["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["claude-code/cli", "claude-code/sdk-cli"],
+        "the two client builds the seed drew from"
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|r| r["requests"].as_u64().unwrap())
+            .sum::<u64>(),
+        6,
+        "every seeded request carries a client"
+    );
+    let narrowed = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=client&clients=claude-code%2Fsdk*",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        narrowed["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["claude-code/sdk-cli"],
+        "the clients pattern narrows the breakdown to the one build"
+    );
+    let bad_group = get(
+        &parts.app,
+        "/admin/analytics/breakdown?range=24h&group_by=nope",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad_group.status(), 400);
+    assert_eq!(
+        json(bad_group).await["error"],
+        "group_by is account, all, client, effort, key, kind, model, pool, or user_agent"
+    );
+    let too_many_clients = get(
+        &parts.app,
+        &format!(
+            "/admin/analytics/breakdown?range=24h&group_by=client&clients={}",
+            vec!["claude-code/cli"; 33].join("%0A")
+        ),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(too_many_clients.status(), 400);
+    assert_eq!(
+        json(too_many_clients).await["error"],
+        "user agent patterns are at most 256 characters, at most 32 of them"
     );
 }
 

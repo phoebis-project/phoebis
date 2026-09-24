@@ -23,7 +23,6 @@ const MAX_LIMIT: usize = 500;
 
 pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> Value {
     let last = attempts.last();
-    let tokens = |f: fn(&AttemptRecord) -> Option<u64>| last.and_then(f).unwrap_or(0);
     json!({
         "id": r.id, "at": r.received_at, "finished_at": r.finished_at, "key_id": r.key_id, "key_generation": r.key_generation, "pool_id": r.pool_id,
         "account_id": last.map(|a| a.account_id.clone()), "session_id": r.session_id, "agent_id": r.agent_id, "parent_agent_id": r.parent_agent_id,
@@ -32,18 +31,36 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
         "request_truncated": r.request_truncated, "response_truncated": r.response_truncated,
         "user_agent": r.user_agent,
-        "shape": {
-            "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),
-            "effort": r.effort, "max_tokens": r.max_tokens, "message_count": r.message_count,
-            "requested_service_tier": r.requested_service_tier, "requested_speed": r.requested_speed,
-            "system_blocks": r.system_blocks, "temperature": r.temperature, "thinking_budget": r.thinking_budget,
-            "thinking_type": r.thinking_type, "tool_count": r.tool_count,
-        },
-        "usage": { "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens), "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens), "output": tokens(|a| a.output_tokens), "thinking": tokens(|a| a.thinking_tokens), "web_fetch": tokens(|a| a.web_fetch_requests), "web_search": tokens(|a| a.web_search_requests) },
+        "client": r.client, "agent_type": r.agent_type, "compaction": r.compaction, "context_compacted": r.context_compacted, "prev_tool_ms": r.prev_tool_ms, "turn_origin": r.turn_origin,
+        "shape": shape_json(r),
+        "usage": usage_json(last),
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
+    })
+}
+
+/// Its own function, beside `attempt_json`, for the same reason: nested inline the object would overflow the
+/// `json!` macro's expansion depth now that `request_summary` carries six more top-level keys.
+fn shape_json(r: &RequestRecord) -> Value {
+    json!({
+        "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),
+        "effort": r.effort, "max_tokens": r.max_tokens, "message_count": r.message_count,
+        "requested_service_tier": r.requested_service_tier, "requested_speed": r.requested_speed,
+        "system_blocks": r.system_blocks, "temperature": r.temperature, "thinking_budget": r.thinking_budget,
+        "thinking_type": r.thinking_type, "tool_count": r.tool_count,
+    })
+}
+
+/// Its own function, beside `shape_json` and `attempt_json`, for the same reason.
+fn usage_json(last: Option<&AttemptRecord>) -> Value {
+    let tokens = |f: fn(&AttemptRecord) -> Option<u64>| last.and_then(f).unwrap_or(0);
+    json!({
+        "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens),
+        "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens),
+        "output": tokens(|a| a.output_tokens), "thinking": tokens(|a| a.thinking_tokens),
+        "web_fetch": tokens(|a| a.web_fetch_requests), "web_search": tokens(|a| a.web_search_requests),
     })
 }
 
@@ -125,16 +142,18 @@ pub(crate) async fn list(
         statuses,
         outcomes: list_param(&q, "outcomes"),
         user_agent: q.get("user_agent").cloned(),
-        client: None,
-        agent_types: Vec::new(),
-        turn_origins: Vec::new(),
+        client: q.get("client").cloned(),
+        agent_types: list_param(&q, "agent_types"),
+        turn_origins: list_param(&q, "turn_origins"),
         from,
         to,
         include_probes: q
             .get("include_probes")
             .is_some_and(|v| v == "true" || v == "1"),
     };
-    if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice()) {
+    if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
+        || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())
+    {
         return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
     }
     let limit = match q.get("limit") {

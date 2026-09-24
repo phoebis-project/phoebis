@@ -183,7 +183,7 @@
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1790212659912,
+        "key_generation": 1790235618177,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -208,6 +208,12 @@
         "request_truncated": false,
         "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": null,
+        "compaction": null,
+        "context_compacted": null,
+        "prev_tool_ms": null,
+        "turn_origin": null,
         "shape": {
           "context_edits": [
             "clear_thinking_20251015"
@@ -278,7 +284,7 @@
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1790212659912,
+        "key_generation": 1790235618177,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -303,6 +309,12 @@
         "request_truncated": false,
         "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": null,
+        "compaction": null,
+        "context_compacted": null,
+        "prev_tool_ms": null,
+        "turn_origin": null,
         "shape": {
           "context_edits": [
             "clear_thinking_20251015"
@@ -398,6 +410,12 @@
         "request_truncated": false,
         "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": null,
+        "compaction": null,
+        "context_compacted": null,
+        "prev_tool_ms": null,
+        "turn_origin": null,
         "shape": {
           "context_edits": [
             "clear_thinking_20251015"
@@ -468,7 +486,7 @@
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790212659912,
+        "key_generation": 1790235618177,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -493,6 +511,12 @@
         "request_truncated": false,
         "response_truncated": false,
         "user_agent": "claude-cli/2.1.269 (external, cli)",
+        "client": "claude-code/cli",
+        "agent_type": "Explore",
+        "compaction": null,
+        "context_compacted": "auto",
+        "prev_tool_ms": 1235,
+        "turn_origin": "human",
         "shape": {
           "context_edits": [
             "clear_thinking_20251015"
