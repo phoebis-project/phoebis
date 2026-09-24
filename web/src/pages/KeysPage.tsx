@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/api';
-import type { ApiKey, CreatedApiKey, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { keyFormOf, keyInputOf, type CaptureMode } from '@/lib/forms';
-import { useAsync, useNow } from '@/lib/hooks';
+import { keyFormOf, keyInputOf, modelRulesRefusal, type CaptureMode } from '@/lib/forms';
+import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
+const MODES: { label: string; value: ModelRulesMode }[] = [
+  { label: 'Extend pool rules', value: 'extend' },
+  { label: 'Replace pool rules', value: 'replace' },
+];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
 
 export function KeysPage() {
@@ -297,12 +302,15 @@ function Tile({ label, value }: { label: string; value: string | null }) {
   );
 }
 
+/** What the key dialog reads of a pool: its capture default, the rules a key inherits, and whose catalogs to suggest from. */
+export type KeyDialogPool = Pick<Pool, 'bodyCaptureHours' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
+
 /**
  * Create or edit an API key. `existing` switches the dialog to edit mode;
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
  * inside a pool's own dialog.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: Pick<Pool, 'bodyCaptureHours' | 'id' | 'name'>[] }) {
+export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
   const [longContextTwins, setLongContextTwins] = useState(true);
@@ -323,6 +331,9 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const poolHours = pool?.bodyCaptureHours ?? 0;
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
+  const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
+  const rulesRefusal = modelRulesRefusal(modelRules);
+  const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
   useEffect(() => {
     if (!open) return;
@@ -435,6 +446,42 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
       ),
     },
     {
+      id: 'models',
+      label: 'Models',
+      body: (
+        <>
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would flip the mode. */}
+          <div className="field">
+            <div className="field__control">
+              <span className="field__label">Model rules</span>
+              <div>
+                <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
+              </div>
+              <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
+            </div>
+            <p className="field__hint">
+              {modelRulesMode === 'extend' ? "Top to bottom, first match wins; the pool's rules, in grey, apply after this key's own." : "Top to bottom, first match wins; the pool's rules do not apply to this key."}
+            </p>
+          </div>
+          {rulesRefusal && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{rulesRefusal}</div>
+            </div>
+          )}
+          <div className="field--inline field">
+            <span className="field__text">
+              <span className="field__label">List [1m] twins in the models listing</span>
+              <p className="field__hint">Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.</p>
+            </span>
+            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+          </div>
+          {existing && <EffectiveList processed={processed} />}
+        </>
+      ),
+    },
+    {
       id: 'keepalive',
       label: 'Cache warming',
       body: (
@@ -506,12 +553,48 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!name.trim() || !poolId || busy} onClick={submit}>
+          <Button variant="primary" disabled={!name.trim() || !poolId || busy || rulesRefusal !== null} onClick={submit}>
             {busy ? (existing ? 'Saving…' : 'Creating…') : existing ? 'Save' : 'Create'}
           </Button>
         </>
       }
     />
+  );
+}
+
+/** The list the saved key is judged by, from the route rather than the form, so an unsaved edit does not show here. */
+function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
+  const rules = processed.stale ? null : processed.data?.rules;
+  return (
+    <div className="field">
+      <span className="field__label">Effective list</span>
+      <p className="field__hint">What the saved key is judged by, top to bottom, with the level each entry comes from.</p>
+      {processed.error ? (
+        <p className="muted">Could not load the effective list: {processed.error}</p>
+      ) : !rules ? (
+        <Skeleton height={28} />
+      ) : rules.length === 0 ? (
+        <p className="muted">No rules: every model the pool's upstreams serve is allowed.</p>
+      ) : (
+        <ol className="effective-rules">
+          {rules.map((r, i) => {
+            const cooling = new Set(r.cooldowns.map((c) => c.accountId)).size;
+            return (
+              <li key={i}>
+                <Badge tone={r.level === 'key' ? 'accent' : 'neutral'}>{r.level}</Badge>
+                <span className="effective-rules__effect">{r.not ? 'Deny' : 'Allow'}</span>
+                <span className="mono">{r.pattern}</span>
+                {cooling > 0 && (
+                  <Badge tone="warning" title={r.cooldowns.map((c) => `${c.accountId}: ${c.scope.replace(/^model:/, '')}`).join(', ')}>
+                    {cooling} {cooling === 1 ? 'upstream' : 'upstreams'} cooling
+                  </Badge>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }
 

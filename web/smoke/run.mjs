@@ -612,7 +612,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule']);
   const nameInput = dlg?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -898,6 +898,62 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(200);
 }
 {
+  // The rule editor holds a pattern the route would refuse out of the save, in the route's words and under the
+  // index the route would name, and a pattern it takes saves into the pool.
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(600);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const routing = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Routing');
+  const editor = routing?.querySelector('.pattern-editor');
+  const patterns = () => [...(editor?.querySelectorAll('input[aria-label^="Rule "]') ?? [])];
+  const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+  const callout = () => routing?.querySelector('.callout--critical')?.textContent ?? '';
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  // An editor that never drew leaves nothing to type into, which the checks below then fail by name.
+  const type = async (input, value) => {
+    if (!input) return;
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+  };
+  const suggested = [...(editor?.querySelectorAll('datalist option') ?? [])].map((o) => o.value);
+  results.push({ name: "/pools the rule editor suggests the ids the members' catalogs hold", ok: ['claude-haiku-4-5-20251001', 'claude-sonnet-5'].every((id) => suggested.includes(id)), missing: suggested });
+  [...(editor?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add rule')?.click();
+  await m.settle(120);
+  const added = patterns().at(-1);
+  const focused = added !== undefined && dlg?.ownerDocument.activeElement === added;
+  await type(added, 'a***');
+  const asAdded = callout();
+  editor?.querySelector('button[aria-label="Move rule 2 up"]')?.click();
+  await m.settle(120);
+  const refused = editor?.querySelector('.pattern-editor__row.is-refused');
+  results.push({
+    name: "/pools a refused pattern holds the save and states the route's refusal",
+    ok:
+      focused &&
+      asAdded === 'model_rules[1]: pattern holds three stars in a row' &&
+      callout() === 'model_rules[0]: pattern holds three stars in a row' &&
+      refused === editor?.querySelector('.pattern-editor__row') &&
+      refused?.querySelector('.pattern-editor__refusal')?.textContent === 'pattern holds three stars in a row' &&
+      patterns()[0]?.getAttribute('aria-invalid') === 'true' &&
+      save()?.disabled === true,
+    missing: [focused ? '' : 'the added row does not hold the focus', asAdded, callout(), refused?.textContent ?? 'no refused row', String(save()?.disabled)],
+  });
+  await type(patterns()[0], 'claude-haiku-4-5*');
+  const freed = save()?.disabled === false && callout() === '';
+  save()?.click();
+  await m.settle(700);
+  const stored = (await api.listPools()).find((p) => p.id === 'all')?.modelRules;
+  results.push({
+    name: '/pools a rule saved in the dialog reads back from the pool',
+    ok: freed && JSON.stringify(stored) === JSON.stringify([{ not: false, pattern: 'claude-haiku-4-5*' }, { not: true, pattern: 'claude-3*' }]) && !m.container.querySelector('dialog[open]'),
+    missing: [String(freed), JSON.stringify(stored)],
+  });
+  // The story's own pool back, status and list, so the key dialogs below read the pool the fixture holds.
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, priority: x.priority })) });
+}
+{
   // A key is posted against a pool id, so the create dialog offers none until the pool has been saved.
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
   await m.settle(300);
@@ -1019,7 +1075,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing']);
   results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
   {
     const poolSelect = dlg?.querySelector('select');
@@ -1033,9 +1089,28 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   }
   {
     const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Cache warming', 'Capture']), missing: nav });
+    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Models', 'Cache warming', 'Capture']), missing: nav });
     const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
     results.push({ name: '/keys dialog body repeats the sections', ok: JSON.stringify(headings) === JSON.stringify(nav), missing: headings });
+  }
+  {
+    // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
+    const models = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Models');
+    const grey = () => [...(models?.querySelectorAll('.pattern-editor__row--inherited') ?? [])].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
+    const mode = (label) => [...(models?.querySelectorAll('.segmented button') ?? [])].find((b) => b.textContent?.trim() === label);
+    const extended = grey();
+    const twins = models?.querySelector('button[role="switch"][aria-label="List [1m] twins in the models listing"]')?.getAttribute('aria-checked');
+    mode('Replace pool rules')?.click();
+    await m.settle(120);
+    const replaced = grey();
+    const hint = models?.querySelector('.field__hint')?.textContent ?? '';
+    mode('Extend pool rules')?.click();
+    await m.settle(120);
+    results.push({
+      name: "/keys the pool's rules show in grey under extend and go under replace",
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint.includes('do not apply') && grey().length === 1,
+      missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
+    });
   }
   const nameInput = dlg?.querySelector('input[placeholder="workstation"]');
   if (nameInput) {
@@ -1153,6 +1228,59 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     missing: [String(lock?.disabled), String(lock?.getAttribute('aria-checked')), lock?.parentElement?.getAttribute('title') ?? 'no title'],
   });
   foot(ci, 'Cancel')?.click();
+  await m.settle(200);
+}
+{
+  // The pool checks moved laptop to codex. Its own dialog moves it back, drawing the grey rows of the pool the
+  // select names before the save; reopened, the list the route processes puts its own rows ahead of the pool's.
+  const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const editLaptop = async () => {
+    rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
+    await m.settle(120);
+    [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await m.settle(400);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const parts = (li) => [...li.children].map((c) => c.textContent?.trim()).join(' ');
+  const greyOf = (dlg) => [...(dlg?.querySelectorAll('.pattern-editor__row--inherited') ?? [])].map(parts);
+  const greyRules = (rules) => rules.map((r) => `${r.not ? 'Deny' : 'Allow'} ${r.pattern} from pool`);
+  const poolRules = async (id) => (await api.listPools()).find((p) => p.id === id)?.modelRules ?? [];
+  const from = (await api.listKeys()).find((k) => k.id === 'laptop')?.poolId ?? 'absent';
+  let dlg = await editLaptop();
+  const before = greyOf(dlg);
+  const select = dlg?.querySelector('select');
+  if (select) {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'all');
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await m.settle(150);
+  }
+  const after = greyOf(dlg);
+  results.push({
+    name: '/keys the grey rows follow the pool the dialog names',
+    ok: from === 'codex' && JSON.stringify(before) === JSON.stringify(greyRules(await poolRules('codex'))) && JSON.stringify(after) === JSON.stringify(greyRules(await poolRules('all'))),
+    missing: [from, JSON.stringify(before), JSON.stringify(after)],
+  });
+  foot(dlg, 'Save')?.click();
+  await m.settle(700);
+  dlg = await editLaptop();
+  await m.settle(300);
+  const drawn = [...(dlg?.querySelectorAll('.effective-rules li') ?? [])].map(parts);
+  const answer = (await api.getKeyModels('laptop')).rules;
+  const cooling = (r) => new Set(r.cooldowns.map((c) => c.accountId)).size;
+  const expected = answer.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, ...(cooling(r) ? [`${cooling(r)} ${cooling(r) === 1 ? 'upstream' : 'upstreams'} cooling`] : [])].join(' '));
+  const own = (await api.listKeys()).find((k) => k.id === 'laptop')?.modelRules ?? [];
+  results.push({
+    name: "/keys the effective list puts the key's own entries ahead of the pool's, cooling marked",
+    ok:
+      (dlg?.textContent ?? '').includes('Effective list') &&
+      JSON.stringify(answer.map((r) => [r.level, r.pattern])) === JSON.stringify([...own.map((r) => ['key', r.pattern]), ...(await poolRules('all')).map((r) => ['pool', r.pattern])]) &&
+      own.length === 3 &&
+      answer.some((r) => cooling(r) > 0) &&
+      JSON.stringify(drawn) === JSON.stringify(expected),
+    missing: [JSON.stringify(drawn), JSON.stringify(expected)],
+  });
+  foot(dlg, 'Cancel')?.click();
   await m.settle(200);
 }
 {

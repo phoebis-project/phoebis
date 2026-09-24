@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -86,6 +86,13 @@ const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to
 // `qs` joins a list with commas, which a pattern may hold; every pattern list travels joined by newline instead.
 const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: q.clients?.join('\n'), group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
 
+/** Each model once, the first catalog naming an id answering for it, in id order; a fetch that failed adds nothing. */
+export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[] => {
+  const out = new Map<string, CatalogModel>();
+  for (const c of catalogs) for (const m of c?.models ?? []) if (!out.has(m.id)) out.set(m.id, m);
+  return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
+};
+
 export class HttpApi implements Api {
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);
   clearCooldown = (accountId: string, scope: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/cooldowns/${enc(scope)}`);
@@ -152,11 +159,9 @@ export class HttpApi implements Api {
     // The decoded status folds a disconnected upstream into 'unpaired' along with one never paired; both are
     // the accounts a catalog fetch has nothing to ask.
     const accounts = (await this.listAccounts()).filter((a) => a.status !== 'unpaired');
-    const catalogs = await Promise.all(accounts.map((a) => this.getAccountCatalog(a.id).catch(() => null)));
-    const out = new Map<string, CatalogModel>();
-    for (const c of catalogs) for (const m of c?.models ?? []) if (!out.has(m.id)) out.set(m.id, m);
-    return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
+    return this.listCatalogOf(accounts.map((a) => a.id));
   };
+  listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
   listLifecycleDeliveries = async (kind?: AlertKind) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/deliveries${qs({ kind })}`)).deliveries.map(d.decodeLifecycleDelivery);

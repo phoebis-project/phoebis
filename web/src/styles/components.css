@@ -730,6 +730,103 @@ textarea.input {
   color: var(--critical-ink);
 }
 
+/* Pattern editor: one bordered row per rule, the inherited rows after them in the muted ink */
+.pattern-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pattern-editor__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.pattern-editor__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.pattern-editor__row.is-refused {
+  border-color: var(--critical-border);
+}
+
+.pattern-editor__line {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.pattern-editor__line .segmented,
+.pattern-editor__actions {
+  flex: none;
+}
+
+/* Equal halves, so the inherited rows' effect column below can take the control's exact width. */
+.pattern-editor__line .segmented button {
+  justify-content: center;
+  width: 56px;
+}
+
+.pattern-editor__line .input {
+  flex: 1;
+}
+
+.pattern-editor__actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.pattern-editor__up svg {
+  transform: rotate(180deg);
+}
+
+.pattern-editor__refusal {
+  margin: 0;
+  font-size: 12px;
+  color: var(--critical-ink);
+}
+
+.pattern-editor__row--inherited {
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  color: var(--ink-3);
+  background: var(--surface-2);
+}
+
+/* The width of the two-button control plus its padding, and the input's inset, so an inherited pattern starts
+   under the patterns typed above it. */
+.pattern-editor__effect {
+  flex: none;
+  width: 116px;
+  padding-left: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.pattern-editor__pattern {
+  flex: 1;
+  min-width: 0;
+  padding-left: 11px;
+  overflow-wrap: anywhere;
+}
+
+.pattern-editor__source {
+  flex: none;
+  font-size: 12px;
+}
+
 /* Dialog */
 .dialog {
   padding: 0;

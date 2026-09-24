@@ -1,5 +1,6 @@
 import type { KeyInput, PoolInput } from '@/api/client';
 import type { ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import { checkPattern } from './patterns';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number ? K : never }[keyof PoolKeepalive];
 
@@ -19,6 +20,22 @@ export const KEEPALIVE_BOUNDS: Record<NumericKeepaliveKey, { max: number; min: n
   retryMaxSeconds: { max: 604_800, min: 1 },
   retrySeconds: { max: 3_600, min: 1 },
 };
+
+/** The most entries one level's list holds, the route's own bound. */
+const MAX_MODEL_RULES = 256;
+
+/**
+ * What the pool and key routes would answer a model rule list with, or null: the entry bound first, then the
+ * first entry whose pattern `checkPattern` refuses, named by its index as the route names it.
+ */
+export function modelRulesRefusal(rules: ModelRule[]): string | null {
+  if (rules.length > MAX_MODEL_RULES) return `model_rules holds at most ${MAX_MODEL_RULES} entries`;
+  for (const [i, rule] of rules.entries()) {
+    const refusal = checkPattern(rule.pattern);
+    if (refusal) return `model_rules[${i}]: ${refusal}`;
+  }
+  return null;
+}
 
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const ratio = (v: number | null, min: number) => v === null || (v >= min && v <= 1);
@@ -40,7 +57,8 @@ export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<stri
     tuned &&
     k.retryMaxSeconds >= k.retrySeconds &&
     (k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0)) &&
-    (!k.enabled || affinity >= 300)
+    (!k.enabled || affinity >= 300) &&
+    modelRulesRefusal(input.modelRules) === null
   );
 }
 

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
 
-const { allowsModel, matchesPattern, processRules } = d.modelPatterns;
+const { allowsModel, checkPattern, matchesPattern, processRules } = d.modelPatterns;
 
 const CASES = JSON.parse(readFileSync(new URL('../../crates/routing/tests/fixtures/model_rules_cases.json', import.meta.url), 'utf8'));
 
@@ -33,6 +33,11 @@ test('the matcher answers no match past its bounds', () => {
   assert.equal(matchesPattern(overPattern, withinName), false, 'a pattern past the bound answers no match');
   const overName = 'a'.repeat(257);
   assert.equal(matchesPattern(withinPattern, overName), false, 'a name past the bound answers no match');
+});
+
+// A flat list rather than named groups: each row is one refusal, or null for a pattern the route accepts.
+test('the pattern check answers what the route answers, in its words', () => {
+  for (const row of CASES.check) assert.equal(checkPattern(row.pattern), row.error, JSON.stringify(row.pattern));
 });
 
 function assertEvaluatorCase(c) {

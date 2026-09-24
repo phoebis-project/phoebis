@@ -6,12 +6,13 @@ import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeySt
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
+import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
-import { KEEPALIVE_BOUNDS, validatePoolInput } from '@/lib/forms';
+import { KEEPALIVE_BOUNDS, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STRATEGY_LABEL, STRATEGY_RULE, SUB_STRATEGY_LABEL, kindOrdered, sampleDriven } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -624,9 +625,14 @@ export function PoolDialog({
   // Memoized so the key dialog's reset effect does not fire on every keystroke in this form.
   const draftCaptureHours = form.capture ? form.captureHours : 0;
   const keyDialogPools = useMemo(
-    () => (pool || pools.some((p) => p.id === draftPoolId) ? pools : [...pools, { bodyCaptureHours: draftCaptureHours, id: draftPoolId, name: draftName }]),
-    [pool, pools, draftCaptureHours, draftPoolId, draftName],
+    () =>
+      pool || pools.some((p) => p.id === draftPoolId)
+        ? pools
+        : [...pools, { bodyCaptureHours: draftCaptureHours, id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
+    [pool, pools, draftCaptureHours, draftPoolId, draftName, form.members, form.modelRules],
   );
+  const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
+  const rulesRefusal = modelRulesRefusal(form.modelRules);
   // Read from the strategy the form holds, so switching the select moves the toggle with it.
   const forced = sampleDriven(form.strategy);
   // Below five minutes a pin expires before the probe it scheduled can help.
@@ -812,6 +818,21 @@ export function PoolDialog({
               </Field>
             )}
           </div>
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would press Add rule or flip the first row. */}
+          <div className="field">
+            <div className="field__control">
+              <span className="field__label">Model rules</span>
+              <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
+            </div>
+            <p className="field__hint">Top to bottom, first match wins; a model no rule names is allowed. Deny * at the end turns the list into an allowlist.</p>
+          </div>
+          {rulesRefusal && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{rulesRefusal}</div>
+            </div>
+          )}
         </>
       ),
     },

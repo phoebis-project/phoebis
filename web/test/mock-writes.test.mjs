@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
@@ -52,7 +52,7 @@ const WRITES = [
 const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
   'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getKeyModels', 'getModelsState', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
-  'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
+  'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listCatalogOf', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
   'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
 ];
 
@@ -163,6 +163,54 @@ test('a new pool reads each member the way the pool route does', async () => {
   const second = await verdicts('second', 'never');
   assert.deepEqual([second.personal, second.business], ['overage', 'unavailable'], 'a paused upstream is unavailable like a flagged one');
   assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
+});
+
+test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
+  const api = await as('admin');
+  const all = await storyPool(api);
+  const laptop = { ...keyInput, name: 'laptop' };
+  const stored = async () => [(await api.listPools()).map((p) => p.modelRules), (await api.listKeys()).map((k) => [k.modelRules, k.modelRulesMode])];
+  const before = await stored();
+  const writes = (modelRules) => [
+    () => api.createPool({ ...all, modelRules, name: 'ruled' }),
+    () => api.updatePool('all', { ...all, modelRules }),
+    () => api.createKey({ ...keyInput, modelRules }),
+    () => api.updateKey('laptop', { ...laptop, modelRules }),
+  ];
+  const stars = [{ not: false, pattern: 'claude-*' }, { not: true, pattern: 'a***' }];
+  for (const write of writes(stars)) await assert.rejects(write, refusedAs(400, 'model_rules[1]: pattern holds three stars in a row'));
+  const long = Array.from({ length: 257 }, () => ({ not: false, pattern: '' }));
+  for (const write of writes(long)) await assert.rejects(write, refusedAs(400, 'model_rules holds at most 256 entries'), 'the bound is checked before any entry');
+  const mode = refusedAs(400, 'model_rules_mode is extend or replace');
+  await assert.rejects(() => api.createKey({ ...keyInput, modelRulesMode: 'merge' }), mode);
+  await assert.rejects(() => api.updateKey('laptop', { ...laptop, modelRulesMode: 'merge' }), mode);
+  await assert.rejects(() => api.updateKey('laptop', { ...laptop, modelRules: stars, modelRulesMode: 'merge' }), refusedAs(400, 'model_rules[1]: pattern holds three stars in a row'), 'the list is read before the mode');
+  assert.deepEqual(await stored(), before, 'a refused write stores nothing');
+  const bound = Array.from({ length: 256 }, () => ({ not: false, pattern: '*' }));
+  assert.equal((await api.updatePool('all', { ...all, modelRules: bound })).modelRules.length, 256, 'the bound admits 256 entries');
+});
+
+test('a key write without the model fields takes the route\'s defaults on create and keeps the stored ones on edit', async () => {
+  const api = await as('admin');
+  const { longContextTwins: _t, modelRules: _r, modelRulesMode: _m, ...bare } = keyInput;
+  const { key } = await api.createKey({ ...bare, name: 'bare' });
+  assert.deepEqual([key.modelRules, key.modelRulesMode, key.longContextTwins], [[], 'extend', true]);
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  const edited = await api.updateKey('laptop', { ...bare, name: 'laptop' });
+  assert.deepEqual([edited.modelRules, edited.modelRulesMode, edited.longContextTwins], [laptop.modelRules, laptop.modelRulesMode, laptop.longContextTwins]);
+  const { modelRules: _p, ...unruled } = await storyPool(api);
+  const pool = await api.createPool({ ...unruled, name: 'unruled' });
+  assert.deepEqual(pool.modelRules, [], 'a pool created without a list starts with none');
+});
+
+test('the catalog union names each model once and a failed fetch contributes nothing', async () => {
+  const api = await as('viewer');
+  const ids = (models) => models.map((m) => m.id);
+  const business = ids((await api.getAccountCatalog('business')).models);
+  assert.ok(business.length > 0, 'the story has a catalog to union');
+  assert.deepEqual(ids(await api.listCatalogOf(['business', 'console', 'personal', 'nobody'])), [...business].sort(), 'the failing upstream and the unknown one add nothing');
+  assert.deepEqual(await api.listCatalogOf(['personal']), []);
+  assert.deepEqual(await api.listCatalogOf([]), []);
 });
 
 test('a refusal never carries an error code, which the router sets for an unavailable registry alone', async () => {

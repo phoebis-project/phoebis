@@ -1,14 +1,14 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
-import { ApiError, slug } from '@/api/http';
+import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
-  ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
 import type { NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
-import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
+import { checkPattern, matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
@@ -57,10 +57,32 @@ const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
   ['netNegativeGraceProbes', 'net_negative_grace_probes', 0, 100],
 ];
 
-/** The affinity floor and the keepalive policy's refusals, first one first, as the pool routes answer them. */
+/**
+ * The rule list's refusals in the routes' order and wording: the entry bound, then each pattern through the
+ * grammar's check. A list the body leaves out is the routes' "keep what is stored", never a refusal.
+ */
+const rulesRefusal = (rules: ModelRule[] | undefined): string | null => {
+  if (rules === undefined) return null;
+  if (rules.length > 256) return 'model_rules holds at most 256 entries';
+  for (const [i, rule] of rules.entries()) {
+    const refusal = checkPattern(rule.pattern);
+    if (refusal) return `model_rules[${i}]: ${refusal}`;
+  }
+  return null;
+};
+
+/** The key routes read the list before the mode, so a body wrong in both is refused for its list. */
+const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
+  const mode = input.modelRulesMode;
+  return rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
+};
+
+/** The affinity floor, the rule list, and the keepalive policy's refusals, first one first, as the pool routes answer them. */
 const poolRefusal = (input: PoolInput): string | null => {
   const affinity = input.affinityTtlSeconds;
   if (affinity !== 0 && affinity < 60) return 'affinity_ttl_seconds is 0 or at least 60';
+  const rules = rulesRefusal(input.modelRules);
+  if (rules) return rules;
   const k = input.keepalive;
   for (const [key, field, min, max] of KEEPALIVE_RANGES) {
     const value = k[key];
@@ -346,6 +368,8 @@ export class MockApi implements Api {
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
+    const refusal = keyRulesRefusal(input);
+    if (refusal) throw new ApiError(400, refusal, null);
     const body = this.token(40);
     const secret = `phoebis-${body}`;
     const key: ApiKey = {
@@ -354,9 +378,10 @@ export class MockApi implements Api {
       name: input.name,
       prefix: secret.slice(0, 8),
       poolId: input.poolId,
-      longContextTwins: input.longContextTwins,
-      modelRules: input.modelRules,
-      modelRulesMode: input.modelRulesMode,
+      // The route's defaults for a body that leaves the model fields out, which a caller outside the console may.
+      longContextTwins: input.longContextTwins ?? true,
+      modelRules: input.modelRules ?? [],
+      modelRulesMode: input.modelRulesMode ?? 'extend',
       status: 'active',
       createdAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
@@ -385,6 +410,8 @@ export class MockApi implements Api {
       cost24h: 0,
       id,
       members: input.members.map((m) => ({ ...m, eligible: eligibilityOf(this.accounts.find((a) => a.id === m.accountId), input.overagePolicy) })),
+      // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
+      modelRules: input.modelRules ?? [],
       // The input carries the operator's flag alone, so the route resolves it against the strategy here.
       preferSubscriptionEffective: effectiveSubscriptionPreference(input),
       requests24h: 0,
@@ -583,6 +610,19 @@ export class MockApi implements Api {
     return latency(CATALOG);
   }
 
+  async listCatalogOf(accountIds: string[]): Promise<CatalogModel[]> {
+    const fetched = await Promise.all(
+      accountIds.map(async (id) => {
+        try {
+          return await this.getAccountCatalog(id);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return catalogUnion(fetched);
+  }
+
   listKeepaliveRecipes() {
     return latency(RECIPES);
   }
@@ -748,6 +788,8 @@ export class MockApi implements Api {
     this.mutation();
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
+    const refusal = keyRulesRefusal(input);
+    if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const { expiresAt: expiry, ...rest } = input;
     const current = this.keys[idx];
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;

@@ -38,6 +38,31 @@ function tokenize(pattern: string): Token[] {
   return tokens;
 }
 
+/** The refusal text the route answers for a pattern, or null: empty, longer than 256 characters, an unquoted
+ *  trailing backslash, three stars in a row. The same four checks, the same words. */
+export function checkPattern(pattern: string): string | null {
+  const chars = [...pattern];
+  if (chars.length === 0) return 'pattern is empty';
+  if (chars.length > MAX_PATTERN_CHARS) return 'pattern is longer than 256 characters';
+  // An odd run of trailing backslashes leaves the last one with nothing to quote.
+  let trailing = 0;
+  while (trailing < chars.length && chars[chars.length - 1 - trailing] === '\\') trailing += 1;
+  if (trailing % 2 === 1) return 'pattern ends in an unquoted backslash';
+  let run = 0;
+  for (let i = 0; i < chars.length; i += 1) {
+    if (chars[i] === '\\') {
+      i += 1;
+      run = 0;
+    } else if (chars[i] === '*') {
+      run += 1;
+      if (run >= 3) return 'pattern holds three stars in a row';
+    } else {
+      run = 0;
+    }
+  }
+  return null;
+}
+
 /**
  * The path-style grammar of the model rules over a folded name: `*` stops at a slash, `**` crosses it, `?`
  * takes one character other than a slash, a backslash quotes the next; ASCII case folds. The table walk of the

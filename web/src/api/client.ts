@@ -142,6 +142,8 @@ export interface Api {
   listAlertEvents(state?: 'open' | 'resolved'): Promise<AlertEvent[]>;
   listAlertRules(): Promise<AlertRule[]>;
   listCatalog(): Promise<CatalogModel[]>;
+  /** The union by id of the named accounts' live catalogs; a failed fetch contributes nothing. */
+  listCatalogOf(accountIds: string[]): Promise<CatalogModel[]>;
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
   /** The session events as they were posted; a lifecycle rule opens no event, so this log is all there is to read. */

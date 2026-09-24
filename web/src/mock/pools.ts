@@ -49,7 +49,7 @@ const POOL_ROWS: Omit<Pool, 'preferSubscriptionEffective'>[] = [
       models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }],
     },
     bodyCaptureHours: 24,
-    modelRules: [],
+    modelRules: [{ not: true, pattern: 'claude-3*' }],
     members: [
       { accountId: 'business', eligible: 'eligible', priority: 0 },
       { accountId: 'mail', eligible: 'cooldown', priority: 0 },

@@ -16,6 +16,7 @@ const input = {
   keepalive: pool.keepalive,
   members: pool.members.map((m) => ({ accountId: m.accountId, priority: m.priority })),
   migrateAboveUtilization: pool.migrateAboveUtilization,
+  modelRules: pool.modelRules,
   name: pool.name,
   overagePolicy: pool.overagePolicy,
   preferSubscription: pool.preferSubscription,
@@ -114,4 +115,30 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   assert.equal(d.keyInputOf({ ...form, enabled: false }, NOW).enabled, false);
   const fresh = d.keyFormOf(null, 'all');
   assert.deepEqual([fresh.enabled, fresh.expiry, fresh.poolId, fresh.captureMode], [true, 'never', 'all', 'inherit'], 'a new key starts on, with no expiry, in the pool it was opened from');
+});
+
+const rules = (...patterns) => patterns.map((p) => (p.startsWith('NOT ') ? { not: true, pattern: p.slice(4) } : { not: false, pattern: p }));
+
+test('a model rule list is refused in the route\'s order and words, and the refusal holds a pool save', () => {
+  assert.equal(d.modelRulesRefusal([]), null);
+  assert.equal(d.modelRulesRefusal(rules('claude-haiku-4-5*', 'NOT *')), null);
+  assert.equal(d.modelRulesRefusal(rules('claude-*', 'NOT a***', '')), 'model_rules[1]: pattern holds three stars in a row', 'the first refused entry is named');
+  assert.equal(d.modelRulesRefusal(rules('')), 'model_rules[0]: pattern is empty');
+  assert.equal(d.modelRulesRefusal(rules(...Array(256).fill('*'))), null, 'the bound admits 256 entries');
+  assert.equal(d.modelRulesRefusal(rules(...Array(257).fill(''))), 'model_rules holds at most 256 entries', 'the bound is checked before any entry');
+  assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*') }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*', 'a***') }, accounts), false);
+});
+
+test('the key dialog carries the rules, the mode, and the twins switch from the stored key to the body', () => {
+  const own = rules('claude-sonnet-5', 'NOT *');
+  const stored = d.decodeKey({ ...fixture('keys').keys[0], long_context_twins: false, model_rules: own, model_rules_mode: 'replace' });
+  const form = d.keyFormOf(stored, 'unused');
+  assert.deepEqual([form.modelRules, form.modelRulesMode, form.longContextTwins], [own, 'replace', false]);
+  const body = d.encodeKey(d.keyInputOf(form, NOW));
+  assert.deepEqual([body.model_rules, body.model_rules_mode, body.long_context_twins], [own, 'replace', false]);
+  const back = d.decodeKey({ ...fixture('keys').keys[0], ...body });
+  assert.deepEqual([back.modelRules, back.modelRulesMode, back.longContextTwins], [own, 'replace', false], 'the route answers the body back as it was sent');
+  const fresh = d.keyInputOf(d.keyFormOf(null, 'all'), NOW);
+  assert.deepEqual([fresh.modelRules, fresh.modelRulesMode, fresh.longContextTwins], [[], 'extend', true], 'a new key starts where the route defaults one');
 });
