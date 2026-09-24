@@ -1,11 +1,11 @@
 use phoebis_routing::{
     release_reasons, resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence,
     PinRef, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, MIGRATE_DWELL_MS,
+    UtilizationSample, MIGRATE_DWELL_MS, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelSource, OveragePolicy,
-    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, ServedModel, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolMember,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, Strategy, SubStrategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -25,7 +25,6 @@ struct Pool {
     prefer_subscription: bool,
     sub_strategy: SubStrategy,
     kinds: Vec<(&'static str, AccountKind)>,
-    only: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for Pool {
@@ -40,7 +39,6 @@ impl Default for Pool {
             prefer_subscription: false,
             sub_strategy: SubStrategy::PriorityRandom,
             kinds: vec![],
-            only: vec![],
         }
     }
 }
@@ -75,16 +73,6 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             state,
         }
     };
-    let served = |a: &str, m: &str| ServedModel {
-        account_id: a.into(),
-        upstream_id: m.into(),
-        canonical_id: m.into(),
-        selected: true,
-        source: ModelSource::Discovered,
-        long_context: false,
-        missing: false,
-        is_new: false,
-    };
     let load = RegistryLoad {
         accounts: ["a", "b", "c"].map(account).to_vec(),
         credential_generations: Vec::new(),
@@ -117,21 +105,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
                 priority: *p,
             })
             .collect(),
-        models: ["a", "b", "c"]
-            .iter()
-            .flat_map(|a| {
-                [
-                    served(a, "claude-fable-5-1"),
-                    served(a, "claude-opus-5"),
-                    served(a, "claude-sonnet-5"),
-                ]
-            })
-            .filter(|m| {
-                pool.only
-                    .iter()
-                    .all(|(model, owner)| m.canonical_id != *model || m.account_id == *owner)
-            })
-            .collect(),
+        models: Vec::new(),
         pools: vec![PoolRow {
             id: "p".into(),
             label: "p".into(),
@@ -157,24 +131,19 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
-/// `s` rebuilt with `id` entirely missing from `accounts`, the way a deleted account leaves the registry. The
-/// remaining accounts keep the served models `snapshot_with` gave them, so a candidate list built through
-/// `resolve` still finds them.
+/// `s` rebuilt with `id` entirely missing from `accounts` and from every pool's membership, the way a deleted
+/// account leaves the registry.
 fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
     let load = RegistryLoad {
         accounts: s.accounts().filter(|a| a.id != id).cloned().collect(),
         credential_generations: Vec::new(),
         keys: s.keys().cloned().collect(),
-        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
-        models: s
-            .accounts()
-            .filter(|a| a.id != id)
-            .flat_map(|a| {
-                ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
-                    .into_iter()
-                    .filter_map(|m| s.served(&a.id, m).cloned())
-            })
+        members: s
+            .pools()
+            .flat_map(|p| s.members(&p.id).to_vec())
+            .filter(|m| m.account_id != id)
             .collect(),
+        models: Vec::new(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -199,14 +168,7 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
             })
             .collect(),
         members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
-        models: s
-            .accounts()
-            .flat_map(|a| {
-                ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
-                    .into_iter()
-                    .filter_map(|m| s.served(&a.id, m).cloned())
-            })
-            .collect(),
+        models: Vec::new(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -227,7 +189,7 @@ fn request(
         key_generation: s.key("k").unwrap().created_at,
         session_id: session.map(String::from),
         canonical_model: model.into(),
-        candidates: resolve(s, s.key("k").unwrap(), model).unwrap(),
+        candidates: resolve(s, s.key("k").unwrap(), model, model).unwrap(),
         portable,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
@@ -236,13 +198,13 @@ fn request(
     }
 }
 
-fn cooled(account: &str, scope: &str, until: i64, window: &str) -> CooldownRow {
+fn cooled(account: &str, scope: &str, until: i64, window: &str, reason: &str) -> CooldownRow {
     CooldownRow {
         account_id: account.into(),
         scope: scope.into(),
         until,
         set_at: 0,
-        reason: "rate_limit".into(),
+        reason: reason.into(),
         window: window.into(),
         source_request_id: None,
         incarnation: 1,
@@ -327,7 +289,13 @@ fn priority_zero_wins_until_every_priority_zero_account_is_ineligible_and_a_pin_
         ),
         "a"
     );
-    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     let (result, writes) = select(
         &mut st,
         &s,
@@ -455,8 +423,20 @@ fn least_utilized_picks_the_lowest_five_hour_sample_and_random_without_samples()
         "b",
         "the oauth group orders under least_utilized ahead of the api_key group"
     );
-    oauth_first.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
-    oauth_first.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    oauth_first.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    oauth_first.record_cooldown(cooled(
+        "b",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     assert_eq!(
         picked(
             &select(
@@ -844,7 +824,13 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
         (sel.account.id.as_str(), sel.migrated),
         ("b", Some(MigrateReason::Overage))
     );
-    st.record_cooldown(cooled("b", "account", 2_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     assert_eq!(
         picked(
             &select(
@@ -878,7 +864,13 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
         "b",
         "never skips the overage account"
     );
-    st2.record_cooldown(cooled("b", "account", 2_000 + HOUR, "five_hour"));
+    st2.record_cooldown(cooled(
+        "b",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     let (result, _) = select(
         &mut st2,
         &never,
@@ -1093,7 +1085,13 @@ fn a_non_portable_request_with_a_blocked_pin_gets_that_accounts_exhaustion_and_s
         .0,
     )
     .to_string();
-    st.record_cooldown(cooled(&first, "account", 1_000 + HOUR, "seven_day"));
+    st.record_cooldown(cooled(
+        &first,
+        "account",
+        1_000 + HOUR,
+        "seven_day",
+        "rate_limit",
+    ));
     let (result, writes) = select(
         &mut st,
         &s,
@@ -1132,9 +1130,15 @@ fn a_non_portable_request_with_a_blocked_pin_gets_that_accounts_exhaustion_and_s
 fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_operator_can_clear_it() {
     let s = snapshot(Pool::default());
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_cooldown(cooled("a", "account", 5_000, "five_hour"));
-    st.record_cooldown(cooled("b", "model:claude-sonnet-5", 4_000, "seven_day"));
-    st.record_cooldown(cooled("c", "account", 6_000, "retry_after"));
+    st.record_cooldown(cooled("a", "account", 5_000, "five_hour", "rate_limit"));
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-sonnet-5",
+        4_000,
+        "seven_day",
+        "rate_limit",
+    ));
+    st.record_cooldown(cooled("c", "account", 6_000, "retry_after", "rate_limit"));
     let (result, _) = select(
         &mut st,
         &s,
@@ -1181,7 +1185,7 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
         ],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
-    st2.record_cooldown(cooled("c", "account", 7_000, "five_hour"));
+    st2.record_cooldown(cooled("c", "account", 7_000, "five_hour", "rate_limit"));
     let (result, _) = select(
         &mut st2,
         &mixed,
@@ -1348,11 +1352,16 @@ fn a_non_portable_pin_survives_member_removal_and_model_deselection_and_answers_
     )
     .to_string();
     // The pinned account is no longer a candidate: the caller's candidates come from a snapshot without it.
-    let without: Vec<phoebis_routing::Candidate> = resolve(&s, s.key("k").unwrap(), "claude-sonnet-5")
-        .unwrap()
-        .into_iter()
-        .filter(|c| c.account_id != first)
-        .collect();
+    let without: Vec<phoebis_routing::Candidate> = resolve(
+        &s,
+        s.key("k").unwrap(),
+        "claude-sonnet-5",
+        "claude-sonnet-5",
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|c| c.account_id != first)
+    .collect();
     let req = SelectRequest {
         candidates: without.clone(),
         ..request(&s, Some("s1"), "claude-sonnet-5", false, &[], 2_000)
@@ -1364,7 +1373,13 @@ fn a_non_portable_pin_survives_member_removal_and_model_deselection_and_answers_
     );
     assert!(writes.is_empty(), "the pin is kept for the fence");
     assert_eq!(st.pins()[0].account_id, first);
-    st.record_cooldown(cooled(&first, "model:claude-sonnet-5", 9_000, "seven_day"));
+    st.record_cooldown(cooled(
+        &first,
+        "model:claude-sonnet-5",
+        9_000,
+        "seven_day",
+        "rate_limit",
+    ));
     let (result, _) = select(&mut st, &s, &req, &mut r);
     assert!(
         matches!(
@@ -1456,9 +1471,9 @@ fn a_paused_account_serves_no_request() {
 fn an_attempted_account_still_dates_the_exhaustion_with_its_cooldown() {
     let s = snapshot(Pool::default());
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_cooldown(cooled("a", "account", 8_000, "five_hour"));
-    st.record_cooldown(cooled("b", "account", 5_000, "seven_day"));
-    st.record_cooldown(cooled("c", "account", 6_000, "retry_after"));
+    st.record_cooldown(cooled("a", "account", 8_000, "five_hour", "rate_limit"));
+    st.record_cooldown(cooled("b", "account", 5_000, "seven_day", "rate_limit"));
+    st.record_cooldown(cooled("c", "account", 6_000, "retry_after", "rate_limit"));
     let all = &["a", "b", "c"];
     let (result, _) = select(
         &mut st,
@@ -1577,8 +1592,20 @@ fn round_robin_serves_the_first_tier_in_turn_and_a_tier_change_starts_its_own_ro
         ],
         ["a", "b", "a"]
     );
-    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
-    st.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     assert_eq!(
         pick(&mut st, &mut r, 4),
         "c",
@@ -1595,15 +1622,29 @@ fn round_robin_serves_the_first_tier_in_turn_and_a_tier_change_starts_its_own_ro
 
 #[test]
 fn a_singleton_models_round_does_not_move_a_three_account_models_round() {
-    // `resolve` builds a candidate list per model, so one pool and one tier hold two cohorts. A cursor
-    // shared by both would be reset to 1 by every opus request and `c` would never serve a sonnet one.
+    // A live cooldown narrows one model's eligible set to a single account while the other model's stays at
+    // three, so one pool and one tier hold two cohorts. A cursor shared by both would be reset to 1 by every
+    // opus request and `c` would never serve a sonnet one.
     let s = snapshot(Pool {
         strategy: Strategy::RoundRobin,
         members: vec![("a", 0), ("b", 0), ("c", 0)],
-        only: vec![("claude-opus-5", "a")],
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        100 * HOUR,
+        "seven_day",
+        "rate_limit",
+    ));
+    st.record_cooldown(cooled(
+        "c",
+        "model:claude-opus-5",
+        100 * HOUR,
+        "seven_day",
+        "rate_limit",
+    ));
     let mut r = rng();
     let pick = |st: &mut RoutingState, r: &mut StdRng, model: &str, i: i64| {
         picked(&select(st, &s, &request(&s, None, model, true, &[], i), r).0).to_string()
@@ -1650,7 +1691,13 @@ fn prefer_subscription_orders_plan_oauth_then_overage_oauth_then_api_keys_across
         "a",
         "plan quota wins across the priority tiers"
     );
-    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     assert_eq!(
         picked(
             &select(
@@ -1664,7 +1711,13 @@ fn prefer_subscription_orders_plan_oauth_then_overage_oauth_then_api_keys_across
         "b",
         "overage oauth before any api_key"
     );
-    st.record_cooldown(cooled("b", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     assert_eq!(
         picked(
             &select(
@@ -1706,7 +1759,13 @@ fn the_sample_driven_strategies_force_the_kind_order_and_the_api_key_group_takes
         "a",
         "an oauth account at 0.9 still beats the unsampled api keys"
     );
-    st.record_cooldown(cooled("a", "account", 1_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     let two = [
         picked(
             &select(
@@ -2225,7 +2284,13 @@ fn a_spent_pin_stays_when_its_only_sibling_is_cooled() {
     // the spent block looks for a destination.
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_cooldown(cooled("b", "account", 2_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     let (result, writes) = pick(&mut st, 2_000);
     let SelectResult::Selected(sel) = result else {
         panic!()
@@ -2259,7 +2324,13 @@ fn a_pin_on_a_cooled_account_whose_window_is_spent_still_moves_with_reason_spent
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    st.record_cooldown(cooled("a", "account", 2_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
@@ -2292,7 +2363,13 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
         vec!["released"],
         "nothing stands against a live pin on a serving account"
     );
-    st.record_cooldown(cooled("a", "account", 2_000 + HOUR, "five_hour"));
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     assert_eq!(
         release_reasons(&st, &s, &pin, &req(2_000, &[])),
@@ -2564,5 +2641,300 @@ fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_
         served.len(),
         2,
         "the recovered account shares the first group again: {served:?}"
+    );
+}
+
+#[test]
+fn every_candidate_cooled_for_a_rejection_reports_model_rejected() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-4-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(result, SelectResult::Exhausted(Exhaustion::ModelRejected));
+    let (other, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert!(
+        matches!(other, SelectResult::Selected(_)),
+        "the rejection is scoped to the other model, so both siblings are still eligible"
+    );
+}
+
+#[test]
+fn a_rejection_beside_a_rate_limit_reports_the_rate_limits_deadline_and_window() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let scenario = |rejection_until: i64| {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_cooldown(cooled(
+            "a",
+            "model:claude-sonnet-4-5",
+            rejection_until,
+            "model_rejection",
+            MODEL_REJECTED_REASON,
+        ));
+        st.record_cooldown(cooled(
+            "b",
+            "account",
+            1_000 + 2 * HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+        select(
+            &mut st,
+            &s,
+            &request(&s, None, "claude-sonnet-4-5", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0
+    };
+    assert!(
+        matches!(scenario(1_000 + 3 * HOUR), SelectResult::Exhausted(Exhaustion::Timed { deadline, ref window }) if deadline == 1_000 + 2 * HOUR && window == "five_hour"),
+        "the account's own rate limit is the wait, whatever the rejection's own deadline"
+    );
+    assert!(
+        matches!(scenario(1_000 + HOUR), SelectResult::Exhausted(Exhaustion::Timed { deadline, ref window }) if deadline == 1_000 + 2 * HOUR && window == "five_hour"),
+        "the rejection expiring first never dates the answer or names its own window"
+    );
+}
+
+#[test]
+fn a_paused_member_beside_a_rejection_still_reports_model_rejected() {
+    let s = snapshot_with(
+        Pool {
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        &[("b", false, AccountState::Ready)],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-4-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(result, SelectResult::Exhausted(Exhaustion::ModelRejected));
+}
+
+#[test]
+fn a_non_portable_request_whose_pinned_member_is_cooling_for_a_rejection_reports_model_rejected() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let first = picked(
+        &select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-4-5", false, &[], 1_000),
+            &mut r,
+        )
+        .0,
+    )
+    .to_string();
+    st.record_cooldown(cooled(
+        &first,
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-4-5", false, &[], 2_000),
+        &mut r,
+    );
+    assert_eq!(result, SelectResult::Exhausted(Exhaustion::ModelRejected));
+    assert!(
+        writes.is_empty(),
+        "the pin stays, the same as any other blocked pin"
+    );
+    st.record_cooldown(cooled(
+        &first,
+        "account",
+        3_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-4-5", false, &[], 3_000),
+        &mut r,
+    );
+    assert!(
+        matches!(result, SelectResult::Exhausted(Exhaustion::Timed { deadline, ref window }) if deadline == 3_000 + HOUR && window == "five_hour"),
+        "a rate limit on the pinned account is still a wait the caller can arm on"
+    );
+}
+
+#[test]
+fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_after_the_resolution() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let SelectResult::Selected(opening) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-4-5", true, &[], 1_000),
+        &mut r,
+    )
+    .0
+    else {
+        panic!()
+    };
+    assert_eq!(opening.account.id, "a");
+    let epoch = opening.pin.unwrap().epoch;
+    let writes = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+    assert!(
+        writes.iter().any(
+            |w| matches!(w, StateWrite::DeletePin(k, sess, m) if k == "k" && sess == "s1" && m == "claude-sonnet-4-5")
+        ),
+        "the pin under the folded spelling is dropped: {writes:?}"
+    );
+    assert!(
+        writes.iter().any(
+            |w| matches!(w, StateWrite::UpsertPin(p) if p.model == "claude-sonnet-4-5-20250929")
+        ),
+        "and re-written under the dated id: {writes:?}"
+    );
+    assert!(
+        writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertResolution(_))),
+        "and the resolution itself is persisted: {writes:?}"
+    );
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(
+            &s,
+            Some("s1"),
+            "claude-sonnet-4-5-20250929",
+            false,
+            &[],
+            3_000,
+        ),
+        &mut r,
+    )
+    .0
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.migrated,
+            sel.pin.unwrap().epoch
+        ),
+        ("a", None, epoch),
+        "the pin renews under the dated id rather than starting over"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-4-5", false, &[], 4_000),
+                &mut r,
+            )
+            .0
+        ),
+        "a",
+        "the folded spelling still finds the same pin"
+    );
+}
+
+#[test]
+fn a_rejection_cooldown_under_the_folded_spelling_still_excludes_the_member_under_the_dated_id() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 500);
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-4-5-20250929", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(picked(&result), "b");
+    let solo = SelectRequest {
+        candidates: resolve(
+            &s,
+            s.key("k").unwrap(),
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5-20250929",
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.account_id != "b")
+        .collect(),
+        ..request(&s, None, "claude-sonnet-4-5-20250929", true, &[], 1_000)
+    };
+    let (result, _) = select(&mut st, &s, &solo, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::ModelRejected),
+        "no second attempt on the cooled member"
+    );
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-4-5",
+        2_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    assert_eq!(
+        st.cooldown("a", "claude-sonnet-4-5-20250929", 1_000)
+            .map(|c| c.until),
+        Some(2_000 + HOUR),
+        "a cooldown recorded under the folded scope after the landing is stored under the dated scope"
     );
 }

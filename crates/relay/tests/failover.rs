@@ -1,7 +1,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_store::{AccountState, ServedModelWrite};
+use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -307,7 +307,7 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
 }
 
 #[tokio::test]
-async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
+async fn a_model_outside_the_rules_is_refused_and_any_other_reaches_the_upstream() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -342,6 +342,7 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
     let body: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["error"]["message"], "model not allowed for this key");
+    assert!(up.requests().is_empty());
     let open = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let resp = open
         .app
@@ -349,18 +350,10 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
         .oneshot(request_for(KEY, "claude-haiku-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(
-        (
-            resp.status().as_u16(),
-            resp.headers()
-                .get("x-phoebis-error-code")
-                .unwrap()
-                .to_str()
-                .unwrap()
-        ),
-        (404, "model_unserved")
-    );
-    assert!(up.requests().is_empty());
+    assert_eq!(resp.status().as_u16(), 200);
+    let requests = up.requests();
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["model"], "claude-haiku-4-5");
     up.shutdown().await;
 }
 
@@ -699,40 +692,6 @@ async fn a_member_removed_under_a_non_portable_session_answers_that_accounts_exh
         "the removed member's exhaustion"
     );
     assert_eq!(credentials_seen(&up), [A], "b was never reached");
-    h.store
-        .set_pool_members("main", &[("a".into(), 0), ("b".into(), 1)], "test")
-        .unwrap();
-    h.store
-        .put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "claude-sonnet-4-5".into(),
-                    selected: false,
-                    long_context: false,
-                },
-                ServedModelWrite {
-                    upstream_id: "claude-opus-5".into(),
-                    selected: true,
-                    long_context: false,
-                },
-            ],
-            "test",
-        )
-        .unwrap();
-    h.router.reload().await.unwrap();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(non_portable_request(KEY, "s1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        503,
-        "a deselected model on the pinned account is the same fence"
-    );
-    assert_eq!(credentials_seen(&up), [A]);
     up.shutdown().await;
 }
 

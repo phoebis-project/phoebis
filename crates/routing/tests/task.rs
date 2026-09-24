@@ -9,9 +9,9 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelRule,
-    OveragePolicy, PoolRow, RulesMode, ServedModelWrite, StorageKey, Store, Strategy, SubStrategy,
+    OveragePolicy, PoolRow, RulesMode, StorageKey, Store, Strategy, SubStrategy,
 };
-use fake_upstream::{stays_for, wait_for};
+use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 const HOUR: i64 = 3_600_000;
 
@@ -115,7 +115,13 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         key_generation: s.key("k").unwrap().created_at,
         session_id: session.map(String::from),
         canonical_model: "claude-sonnet-5".into(),
-        candidates: resolve(&s, s.key("k").unwrap(), "claude-sonnet-5").unwrap(),
+        candidates: resolve(
+            &s,
+            s.key("k").unwrap(),
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+        )
+        .unwrap(),
         portable: true,
         attempted: vec![],
         now,
@@ -229,28 +235,6 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
         answer.result,
         SelectResult::Refused(ResolveError::ModelNotAllowed)
     ));
-    pool.model_rules = Vec::new();
-    store.update_pool(&pool, "test").unwrap();
-    store
-        .put_served_models(
-            "b",
-            &[ServedModelWrite {
-                upstream_id: "claude-sonnet-5".into(),
-                selected: false,
-                long_context: false,
-            }],
-            "test",
-        )
-        .unwrap();
-    handle.reload().await.unwrap();
-    let answer = handle.select(stale(admitted.clone())).await.unwrap();
-    assert!(
-        matches!(
-            answer.result,
-            SelectResult::Refused(ResolveError::ModelUnserved)
-        ),
-        "a model deselected after admission is unserved"
-    );
     store.revoke_api_key("k", 2, "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted)).await.unwrap();
@@ -491,6 +475,97 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
             .result,
         SelectResult::Selected(_)
     ));
+}
+
+#[tokio::test]
+async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_refresh() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let req = |handle: &phoebis_routing::RouterHandle, now: i64| {
+        let s = handle.snapshot();
+        SelectRequest {
+            key_id: "k".into(),
+            key_generation: s.key("k").unwrap().created_at,
+            session_id: Some("s1".into()),
+            canonical_model: "claude-sonnet-4-5".into(),
+            candidates: resolve(
+                &s,
+                s.key("k").unwrap(),
+                "claude-sonnet-4-5",
+                "claude-sonnet-4-5",
+            )
+            .unwrap(),
+            portable: true,
+            attempted: vec![],
+            now,
+            fallback_ms: 60_000,
+            revision: s.revision,
+        }
+    };
+    let epoch;
+    {
+        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let answer = handle.select(req(&handle, 1_000)).await.unwrap();
+        let SelectResult::Selected(selection) = answer.result else {
+            panic!("expected a selection")
+        };
+        assert_eq!(selection.account.id, "a");
+        epoch = selection.pin.unwrap().epoch;
+        handle.report(Report::Resolved {
+            spelling: "claude-sonnet-4-5".into(),
+            dated_id: "claude-sonnet-4-5-20250929".into(),
+            at: 1_500,
+        });
+        wait_for(WRITTEN, || {
+            let load = store.load_routing().unwrap();
+            let resolved = load.resolutions.iter().any(|r| {
+                r.spelling == "claude-sonnet-4-5" && r.dated_id == "claude-sonnet-4-5-20250929"
+            });
+            let moved = load
+                .pins
+                .iter()
+                .any(|p| p.model == "claude-sonnet-4-5-20250929");
+            (resolved && moved).then_some(())
+        })
+        .await;
+    }
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let answer = handle.select(req(&handle, 2_000)).await.unwrap();
+    let SelectResult::Selected(selection) = answer.result else {
+        panic!("expected a selection")
+    };
+    assert_eq!(
+        (selection.account.id.as_str(), selection.pin.unwrap().epoch),
+        ("a", epoch),
+        "the pin renews under the dated id rather than starting over"
+    );
+    handle.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-4-5".into(),
+            until: 2_000 + HOUR,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    let cooled = wait_for_async(WRITTEN, || async {
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+    })
+    .await;
+    assert_eq!(cooled.until, 2_000 + HOUR);
 }
 
 #[tokio::test]

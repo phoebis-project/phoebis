@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use phoebis_store::{
-    digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, ServedModel,
-};
+use phoebis_store::{digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad};
 use subtle::ConstantTimeEq;
 
 /// Which secret the caller presented: the key's live one, or the one a rotation retired and the grace still
@@ -44,7 +42,6 @@ pub struct RegistrySnapshot {
     pub loaded_at: i64,
     pub revision: u64,
     members: HashMap<String, Vec<PoolMember>>,
-    models: HashMap<String, HashMap<String, ServedModel>>,
     pools: HashMap<String, PoolRow>,
     /// Retired secrets by digest, with the key each belonged to and the end of its grace; consulted only after
     /// the current digests miss.
@@ -78,13 +75,6 @@ impl RegistrySnapshot {
                     .then_with(|| a.account_id.cmp(&b.account_id))
             });
         }
-        let mut models: HashMap<String, HashMap<String, ServedModel>> = HashMap::new();
-        for model in load.models.into_iter().filter(|m| m.selected) {
-            models
-                .entry(model.account_id.clone())
-                .or_default()
-                .insert(model.canonical_id.clone(), model);
-        }
         let mut retired_by_digest = HashMap::with_capacity(load.retired_secrets.len());
         for retired in &load.retired_secrets {
             if let Ok(digest) = <[u8; 32]>::try_from(retired.secret_digest.as_slice()) {
@@ -104,7 +94,6 @@ impl RegistrySnapshot {
             loaded_at,
             members,
             revision,
-            models,
             pools: load.pools.into_iter().map(|p| (p.id.clone(), p)).collect(),
             retired_by_digest,
         }
@@ -189,9 +178,6 @@ impl RegistrySnapshot {
     }
     pub fn members(&self, pool_id: &str) -> &[PoolMember] {
         self.members.get(pool_id).map(Vec::as_slice).unwrap_or(&[])
-    }
-    pub fn served(&self, account_id: &str, canonical_id: &str) -> Option<&ServedModel> {
-        self.models.get(account_id)?.get(canonical_id)
     }
     pub fn body_capture_hours(&self, key: &ApiKeyRow) -> u32 {
         key.body_capture_hours.unwrap_or_else(|| {

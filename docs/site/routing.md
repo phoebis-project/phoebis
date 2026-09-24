@@ -294,6 +294,11 @@ operator can clear, such as a pool whose accounts are all paused, `phoebis` answ
 admitted under a key that was deleted and created again before it was routed is answered the same way, since
 the registry it was admitted against no longer holds its key.
 
+A model every account in the pool has rejected within the rejection window answers `404` with error code
+`model_rejected` and the message `every account in this pool rejected the model`; the
+[cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers
+`503 accounts_unavailable`, since only an operator can add one.
+
 Claude Code 2.1.269 resumes a subscriber session on its own, after a usage-limit reset, only when the `429`
 carried all three of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix
 seconds), and `anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `seven_day`,

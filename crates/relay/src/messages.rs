@@ -43,7 +43,7 @@ use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::BodyFacts;
@@ -876,24 +876,20 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
-        let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
+        // Nothing here yet tells the folded spelling from a dated id the live catalog might resolve it to,
+        // so the same spelling stands for both.
+        let candidates = match resolve(
+            &snapshot,
+            &key,
+            &identity.canonical_model,
+            &identity.canonical_model,
+        ) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
                 return self
                     .refused(
                         &trace,
                         MODEL_NOT_ALLOWED,
-                        Some(&key),
-                        Some(&identity),
-                        client_version.as_deref(),
-                    )
-                    .await
-            }
-            Err(ResolveError::ModelUnserved) => {
-                return self
-                    .refused(
-                        &trace,
-                        MODEL_UNSERVED,
                         Some(&key),
                         Some(&identity),
                         client_version.as_deref(),
@@ -1081,19 +1077,9 @@ impl Relay {
                         )
                         .await
                 }
-                SelectResult::Refused(ResolveError::ModelUnserved) => {
-                    return self
-                        .refused(
-                            &trace,
-                            MODEL_UNSERVED,
-                            Some(&key),
-                            Some(&identity),
-                            admitted.client_version.as_deref(),
-                        )
-                        .await
-                }
                 SelectResult::Exhausted(exhaustion) => {
                     let code = match exhaustion {
+                        Exhaustion::ModelRejected => MODEL_REJECTED.code,
                         Exhaustion::Timed { .. } => "accounts_exhausted",
                         Exhaustion::Untimed => "accounts_unavailable",
                     };

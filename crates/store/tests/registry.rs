@@ -70,7 +70,8 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let path = dir.path().join("router.sqlite");
     // Every migration above the stored version runs again on the next open, and an `ALTER TABLE ADD COLUMN`
     // cannot run twice, so each older database below is rolled back past every column it would re-add.
-    const UNDO_V23: &str = "ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
+    const UNDO_V23: &str = "DROP TABLE model_resolutions; \
+         ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
          ALTER TABLE api_keys ADD COLUMN allowed_models_json TEXT; \
          ALTER TABLE api_keys DROP COLUMN model_rules_json; \
@@ -284,6 +285,17 @@ fn a_fresh_store_carries_the_rule_columns_and_neither_whitelist_column() {
         0,
         "the key's whitelist column is gone"
     );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('model_resolutions') \
+             WHERE name IN ('spelling', 'dated_id', 'resolved_at')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3,
+        "a fresh store carries the resolution table's three columns"
+    );
 }
 
 /// Both writes stamp themselves from the same clock, so a delete and the create that follows it can land in
@@ -346,7 +358,8 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
+        "DROP TABLE model_resolutions; \
+         ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
          ALTER TABLE api_keys ADD COLUMN allowed_models_json TEXT; \
          ALTER TABLE api_keys DROP COLUMN model_rules_json; \

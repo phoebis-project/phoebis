@@ -46,11 +46,21 @@ pub struct OverageRow {
     pub incarnation: u64,
 }
 
+/// A folded spelling and the dated id the API listed for it; the routing state keys that spelling's rows on
+/// the dated id from the moment the row exists, and a restart loads it before any probe runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolutionRow {
+    pub spelling: String,
+    pub dated_id: String,
+    pub resolved_at: i64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
     pub cooldowns: Vec<CooldownRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
+    pub resolutions: Vec<ResolutionRow>,
 }
 
 impl Store {
@@ -66,6 +76,9 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at, key_generation, incarnation FROM pins ORDER BY key_id, session_id, model")?
                 .query_map([], |r| Ok(PinRow { key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?, epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?, migrated_at: r.get(7)?, key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64 }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
+                .query_map([], |r| Ok(ResolutionRow { spelling: r.get(0)?, dated_id: r.get(1)?, resolved_at: r.get(2)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -130,5 +143,33 @@ impl Store {
              WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation",
             params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
         Ok(written > 0)
+    }
+
+    pub fn upsert_resolution(&self, row: &ResolutionRow) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.execute(
+            "INSERT INTO model_resolutions (spelling, dated_id, resolved_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(spelling) DO UPDATE SET dated_id = excluded.dated_id, resolved_at = excluded.resolved_at",
+            params![row.spelling, row.dated_id, row.resolved_at],
+        )?;
+        Ok(())
+    }
+
+    /// The persisted map on its own, for the catalog cache to seed its copy from at start.
+    pub fn resolutions(&self) -> Result<Vec<ResolutionRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let rows = conn
+            .prepare(
+                "SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling",
+            )?
+            .query_map([], |r| {
+                Ok(ResolutionRow {
+                    spelling: r.get(0)?,
+                    dated_id: r.get(1)?,
+                    resolved_at: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 }

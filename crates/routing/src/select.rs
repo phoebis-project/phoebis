@@ -50,9 +50,17 @@ pub struct Selection {
     pub in_overage: bool,
 }
 
+/// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
+pub const MODEL_REJECTED_REASON: &str = "model_rejected";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exhaustion {
-    Timed { deadline: i64, window: String },
+    /// No candidate is eligible, and every cooldown in the way is a rejection of the request's model.
+    ModelRejected,
+    Timed {
+        deadline: i64,
+        window: String,
+    },
     Untimed,
 }
 
@@ -69,7 +77,11 @@ pub enum SelectResult {
 /// Why a candidate is out of the eligible set. Only a cooldown carries a deadline the caller can wait for.
 enum Obstacle {
     Attempted,
-    Cooldown { until: i64, window: String },
+    Cooldown {
+        reason: String,
+        until: i64,
+        window: String,
+    },
     Operator,
 }
 
@@ -320,7 +332,10 @@ pub fn select(
             request.fallback_ms,
         );
         let exhaustion = match own {
-            Some(Obstacle::Cooldown { until, window }) => Exhaustion::Timed {
+            Some(Obstacle::Cooldown { reason, .. }) if reason == MODEL_REJECTED_REASON => {
+                Exhaustion::ModelRejected
+            }
+            Some(Obstacle::Cooldown { until, window, .. }) => Exhaustion::Timed {
                 deadline: until,
                 window,
             },
@@ -459,6 +474,7 @@ pub fn select(
                 .sample(&c.account_id)
                 .and_then(|s| s.fable_reset)
                 .map(|until| Obstacle::Cooldown {
+                    reason: "spent".into(),
                     until,
                     window: FABLE_WINDOW.to_string(),
                 })
@@ -546,6 +562,7 @@ fn obstacle(
     }
     if let Some(cooldown) = state.cooldown(&candidate.account_id, model, now) {
         return Some(Obstacle::Cooldown {
+            reason: cooldown.reason.clone(),
             until: cooldown.until,
             window: cooldown.window.clone(),
         });
@@ -556,6 +573,7 @@ fn obstacle(
             .filter(|d| *d > now)
         {
             return Some(Obstacle::Cooldown {
+                reason: "overage".into(),
                 until: deadline,
                 window: "overage".into(),
             });
@@ -717,13 +735,27 @@ fn choose<'a>(
 }
 
 fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
-    obstacles
+    let cooldowns: Vec<(i64, String, String)> = obstacles
         .into_iter()
         .filter_map(|o| match o {
-            Obstacle::Cooldown { until, window } => Some((until, window)),
+            Obstacle::Cooldown {
+                until,
+                window,
+                reason,
+            } => Some((until, window, reason)),
             _ => None,
         })
-        .min_by_key(|(until, _)| *until)
-        .map(|(deadline, window)| Exhaustion::Timed { deadline, window })
-        .unwrap_or(Exhaustion::Untimed)
+        .collect();
+    let timed = cooldowns
+        .iter()
+        .filter(|(_, _, reason)| reason != MODEL_REJECTED_REASON)
+        .min_by_key(|(until, _, _)| *until);
+    match timed {
+        Some((deadline, window, _)) => Exhaustion::Timed {
+            deadline: *deadline,
+            window: window.clone(),
+        },
+        None if !cooldowns.is_empty() => Exhaustion::ModelRejected,
+        None => Exhaustion::Untimed,
+    }
 }

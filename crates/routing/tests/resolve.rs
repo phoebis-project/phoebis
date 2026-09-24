@@ -1,7 +1,7 @@
-use phoebis_routing::{resolve, KeyRefusal, RegistrySnapshot, ResolveError};
+use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, ModelSource, OveragePolicy,
-    PoolMember, PoolRow, RegistryLoad, RulesMode, ServedModel, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, OveragePolicy, PoolMember,
+    PoolRow, RegistryLoad, RulesMode, Strategy, SubStrategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -62,19 +62,6 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-    }
-}
-
-fn served(account: &str, upstream: &str, selected: bool) -> ServedModel {
-    ServedModel {
-        account_id: account.into(),
-        upstream_id: upstream.into(),
-        canonical_id: phoebis_store::canonical_id(upstream),
-        selected,
-        source: ModelSource::Discovered,
-        long_context: false,
-        missing: false,
-        is_new: false,
     }
 }
 
@@ -147,6 +134,13 @@ fn snapshot() -> RegistrySnapshot {
                 Vec::new(),
                 RulesMode::Extend,
             ),
+            key(
+                "solo",
+                "empty",
+                "phoebis-solosecret0000000",
+                Vec::new(),
+                RulesMode::Extend,
+            ),
         ],
         members: vec![
             PoolMember {
@@ -165,13 +159,7 @@ fn snapshot() -> RegistrySnapshot {
                 priority: 0,
             },
         ],
-        models: vec![
-            served("a", "claude-sonnet-5", true),
-            served("a", "claude-opus-5", true),
-            served("b", "claude-sonnet-5", true),
-            served("b", "claude-opus-5", false),
-            served("f", "Vendor/Model-A", true),
-        ],
+        models: Vec::new(),
         pools: vec![
             pool(
                 "main",
@@ -183,6 +171,7 @@ fn snapshot() -> RegistrySnapshot {
                 24,
             ),
             pool("off", false, Vec::new(), 0),
+            pool("empty", true, Vec::new(), 0),
         ],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -245,84 +234,65 @@ fn body_capture_hours_is_the_key_override_else_the_pool_value() {
 }
 
 #[test]
-fn the_processed_list_refuses_a_model_and_the_served_gate_still_holds() {
+fn every_member_is_a_candidate_in_priority_order_with_the_folded_spelling() {
     let s = snapshot();
     let desktop = s.key("desktop").unwrap();
-    let laptop = s.key("laptop").unwrap();
-    let ids = |c: Vec<phoebis_routing::Candidate>| {
+    let ids = |c: Vec<Candidate>| {
         c.into_iter()
             .map(|c| (c.account_id, c.priority, c.upstream_model))
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        ids(resolve(&s, desktop, "claude-sonnet-5").unwrap()),
+        ids(resolve(&s, desktop, "vendor/model-a", "vendor/model-a").unwrap()),
         [
-            ("a".to_string(), 0, "claude-sonnet-5".to_string()),
-            ("b".into(), 1, "claude-sonnet-5".into())
+            ("a".to_string(), 0, "vendor/model-a".to_string()),
+            ("f".to_string(), 0, "vendor/model-a".to_string()),
+            ("b".to_string(), 1, "vendor/model-a".to_string()),
         ]
     );
     assert_eq!(
-        ids(resolve(&s, desktop, "claude-opus-5").unwrap()),
-        [("a".to_string(), 0, "claude-opus-5".to_string())],
-        "b's row is not selected"
+        ids(resolve(
+            &s,
+            desktop,
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5"
+        )
+        .unwrap()),
+        [
+            ("a".to_string(), 0, "claude-sonnet-4-5".to_string()),
+            ("f".to_string(), 0, "claude-sonnet-4-5".to_string()),
+            ("b".to_string(), 1, "claude-sonnet-4-5".to_string()),
+        ]
     );
+}
+
+#[test]
+fn the_processed_list_refuses_a_model_before_any_member_is_named() {
+    let s = snapshot();
+    let laptop = s.key("laptop").unwrap();
+    let desktop = s.key("desktop").unwrap();
     assert!(
         matches!(
-            resolve(&s, laptop, "claude-sonnet-5"),
+            resolve(&s, laptop, "claude-sonnet-5", "claude-sonnet-5"),
             Err(ResolveError::ModelNotAllowed)
         ),
         "laptop's own list refuses what it does not name"
     );
     assert!(
         matches!(
-            resolve(&s, desktop, "claude-haiku-4-5"),
+            resolve(&s, desktop, "claude-haiku-4-5", "claude-haiku-4-5"),
             Err(ResolveError::ModelNotAllowed)
         ),
         "the pool's entry applies when the key holds none of its own"
     );
-    assert!(
-        matches!(resolve(&s, desktop, "vendor/model-a"), Ok(ref c) if c.len() == 1 && c[0].upstream_model == "Vendor/Model-A"),
-        "the provider's spelling travels with the candidate"
-    );
-    let open = RegistrySnapshot::from_load(
-        RegistryLoad {
-            pools: vec![
-                pool("main", true, Vec::new(), 24),
-                pool("off", false, Vec::new(), 0),
-            ],
-            retired_secrets: Vec::new(),
-            ..load_of(&snapshot())
-        },
-        DIGEST_KEY,
-        1,
-        2,
-    );
-    assert!(matches!(
-        resolve(&open, open.key("desktop").unwrap(), "claude-haiku-4-5"),
-        Err(ResolveError::ModelUnserved)
-    ));
 }
 
-/// Rebuilds the load a snapshot was made from, for the one test that varies a pool.
-fn load_of(s: &RegistrySnapshot) -> RegistryLoad {
-    RegistryLoad {
-        accounts: s.accounts().cloned().collect(),
-        credential_generations: s
-            .accounts()
-            .filter_map(|a| Some((a.id.clone(), s.credential_generation(&a.id)?)))
-            .collect(),
-        keys: s.keys().cloned().collect(),
-        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
-        models: s
-            .accounts()
-            .flat_map(|a| {
-                ["claude-sonnet-5", "claude-opus-5", "vendor/model-a"]
-                    .into_iter()
-                    .filter_map(|m| s.served(&a.id, m).cloned())
-            })
-            .collect(),
-        pools: s.pools().cloned().collect(),
-        retired_secrets: Vec::new(),
-        reused_key_ids: Vec::new(),
-    }
+#[test]
+fn a_pool_with_no_member_answers_an_empty_list() {
+    let s = snapshot();
+    let solo = s.key("solo").unwrap();
+    assert_eq!(
+        resolve(&s, solo, "claude-sonnet-5", "claude-sonnet-5").unwrap(),
+        Vec::new()
+    );
 }

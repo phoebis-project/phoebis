@@ -300,4 +300,9 @@ ALTER TABLE api_keys DROP COLUMN allowed_models_json;
 ALTER TABLE api_keys ADD COLUMN model_rules_json TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE api_keys ADD COLUMN model_rules_mode TEXT NOT NULL DEFAULT 'extend';
 ALTER TABLE api_keys ADD COLUMN long_context_twins INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE model_resolutions (
+    spelling TEXT PRIMARY KEY,
+    dated_id TEXT NOT NULL,
+    resolved_at INTEGER NOT NULL
+);
 "#;

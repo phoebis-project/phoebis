@@ -37,7 +37,7 @@ pub use registry::{
     PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, ServedModel,
     ServedModelWrite, Strategy, SubStrategy, SyncDelta, ROTATION_GRACE_MS,
 };
-pub use routing::{CooldownRow, OverageRow, PinRow, RoutingLoad};
+pub use routing::{CooldownRow, OverageRow, PinRow, ResolutionRow, RoutingLoad};
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's
 // on-disk state may be half-written, so continuing past that point is not safe.
