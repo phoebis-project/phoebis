@@ -1221,10 +1221,9 @@ impl Engine {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
             } else {
-                // A foreign host is a property of one attempt's network path and can differ on a retry, so
-                // the request's terminal verdict is the evidence one; the other four gates are pool, key, or
-                // credential-kind properties that do not vary between attempts of one request, so ending the
-                // observation must not recount a reason the request already carries.
+                // The four gates are pool, key, or credential-kind properties that do not vary between
+                // attempts of one request, so ending the observation must not recount a reason the request
+                // already carries.
                 match current {
                     Some(
                         Reason::KeepaliveOff

@@ -135,7 +135,7 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
 }
 
 #[tokio::test]
-async fn only_api_key_and_verified_oauth_accounts_retain() {
+async fn an_unverified_oauth_account_waits_but_a_measured_one_retains() {
     let oauth_spec = || RigSpec {
         accounts: vec![oauth("o", "sk-ant-oat01-OOOO", 0)],
         ..RigSpec::default()

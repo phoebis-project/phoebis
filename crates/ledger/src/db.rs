@@ -596,7 +596,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 14);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 15);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -682,7 +682,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 14, "and answered what the connection holds");
+        assert_eq!(version, 15, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -697,7 +697,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            14,
+            15,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }

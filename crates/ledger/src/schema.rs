@@ -476,4 +476,5 @@ ALTER TABLE requests ADD COLUMN response_truncated INTEGER NOT NULL DEFAULT 0;",
         14,
         "CREATE TABLE IF NOT EXISTS cooldown_segments (account_id TEXT NOT NULL, scope TEXT NOT NULL, hour INTEGER NOT NULL, seconds INTEGER NOT NULL, PRIMARY KEY (account_id, scope, hour));",
     ),
+    (15, ""),
 ];

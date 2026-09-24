@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790077115319,
+        "key_generation": 1790212659912,
         "session_id": "s1",
         "model": "claude-sonnet-5",
         "account_id": "business",
@@ -18,14 +18,14 @@
         "companion_since": null,
         "agents": 1,
         "keepalive": {
-          "next_probe_at": 1235275,
+          "next_probe_at": 1237937,
           "state": "busy"
         },
         "historical": false
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790077115319,
+        "key_generation": 1790212659912,
         "session_id": "s2",
         "model": "claude-sonnet-5",
         "account_id": "business",
