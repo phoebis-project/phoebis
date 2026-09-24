@@ -36,6 +36,7 @@ url = { workspace = true }
 [dev-dependencies]
 boring = { workspace = true }
 phoebis-bus = { path = "../bus" }
+phoebis-ledger = { path = "../ledger" }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }

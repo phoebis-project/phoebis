@@ -473,6 +473,10 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
         Some("account_cancelled") => Outcome::Canceled,
         Some("accounts_exhausted") | Some("accounts_unavailable") => Outcome::Exhausted,
+        // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
+        // selection) or after the last one (the budget's end): the account that answered it is
+        // conclusive either way, not a transport or upstream failure.
+        Some("model_rejected") => Outcome::Rejected,
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,

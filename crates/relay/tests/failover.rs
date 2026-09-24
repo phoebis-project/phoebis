@@ -1,6 +1,9 @@
 mod common;
 use std::time::Duration;
 
+use phoebis_bus::{Bus, Event};
+use phoebis_ledger::{Assembler, Record};
+use phoebis_relay::Limits;
 use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -11,6 +14,25 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const C: &str = "sk-ant-oat01-CCCC";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
+
+/// Waits for the bus to publish a completion and hands back every event seen up to and including it.
+async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<Event> {
+    let give_up = std::time::Instant::now() + Duration::from_secs(2);
+    let mut all = Vec::new();
+    loop {
+        while let Ok(e) = sub.events.try_recv() {
+            all.push(e);
+        }
+        if all.iter().any(|e| matches!(e, Event::RequestComplete(_))) {
+            return all;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "no completion was published"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
 
 async fn two_accounts(up: &FakeUpstream) -> Harness {
     harness(
@@ -413,6 +435,65 @@ async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_rejection_at_the_budgets_end_records_a_rejected_request_and_an_upstream_error_attempt() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        Limits {
+            max_attempts: 1,
+            ..default_limits()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "model_rejected",
+        "the budget is spent after the one rejected attempt"
+    );
+    let events = drain_until_complete(&mut sub).await;
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    let (request, attempts) = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Request {
+                request, attempts, ..
+            } => Some((request, attempts)),
+            _ => None,
+        })
+        .expect("the request lands a ledger row");
+    assert_eq!(
+        request.outcome, "rejected",
+        "a model rejection is a refusal, not a transport or upstream failure"
+    );
+    assert_eq!(
+        attempts.last().expect("the rejected attempt").outcome,
+        "upstream_error",
+        "the attempt itself still reads as the classification the head gave it"
+    );
     up.shutdown().await;
 }
 
