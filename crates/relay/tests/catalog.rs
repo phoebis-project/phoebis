@@ -735,9 +735,8 @@ async fn two_fills_landing_together_end_on_the_newer_snapshot_whichever_is_ackno
         // `listings_for` alone only proves the gated request was sent, not that its answer landed and
         // published; the lookup itself is the signal that the newer snapshot has actually moved.
         wait_for(Duration::from_secs(2), || {
-            (h.catalog.lookup("claude-sonnet-4-5").as_deref()
-                == Some("claude-sonnet-4-5-20250929"))
-            .then_some(())
+            (h.catalog.lookup("claude-sonnet-4-5").as_deref() == Some("claude-sonnet-4-5-20250929"))
+                .then_some(())
         })
         .await;
         assert_eq!(

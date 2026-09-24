@@ -401,7 +401,10 @@ impl CatalogService {
                     out.failed += 1;
                     self.spawn_retry(account);
                 }
-                Ok(Err(_)) => out.failed += 1,
+                Ok(Err(_)) => {
+                    out.failed += 1;
+                    self.spawn_retry(account);
+                }
                 Err(_) => out.pending += 1,
             }
         }

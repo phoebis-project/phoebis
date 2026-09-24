@@ -669,8 +669,8 @@ async fn build(
     ));
     let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
     // A separate connector, pool, and resolver from the relay's own: `PoolKey` is the account and the host
-    // with no address, so a shared pool would hand a catalog probe an inference connection into `up`, or an
-    // inference request a probe's connection into `catalog_up`.
+    // with no address, so a shared pool would hand a listing fetch an inference connection into `up`, or an
+    // inference request a listing fetch's connection into `catalog_up`.
     let catalog_up = match catalog_up {
         Some(catalog_up) => catalog_up,
         None => FakeUpstream::start(catalog_rules()).await,
