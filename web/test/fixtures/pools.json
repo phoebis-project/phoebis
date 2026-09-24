@@ -45,8 +45,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790255127135,
-        "updated_at": 1790255127135,
+        "created_at": 1790278825363,
+        "updated_at": 1790278825363,
         "members": [
           {
             "account_id": "business",
@@ -63,7 +63,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "nMEV2cKP",
+            "prefix": "KO17bRa4",
             "enabled": true
           }
         ],
