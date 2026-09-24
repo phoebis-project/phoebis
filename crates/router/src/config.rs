@@ -683,6 +683,13 @@ mod tests {
             ),
             "the registry blocks left the file"
         );
+        assert!(
+            matches!(
+                load(&file(dir.path(), "host", "upstream:\n  resolver: 1\n")),
+                Err(ConfigError::Syntax(_))
+            ),
+            "an unknown upstream key is refused"
+        );
     }
 
     #[test]

@@ -319,11 +319,11 @@ Refused with:
 - `profile`: `compatibility.profile {name} is not a profile this build carries`
 - `usage_entrypoint`: `compatibility.usage_entrypoint must be cli or sdk-cli, not {value}`
 
-With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07`
-beta and a `diagnostics.previous_message_id` naming the previous answer on the same key, session, agent, model,
-and upstream, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
-`cache_diagnostics`. The id follows the session memory: it
-survives a restart through the registry copy and starts at `null` on an upstream the session moved to.
+With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07` beta and
+a `diagnostics.previous_message_id` naming the previous answer on the same key, session, agent, model, and upstream, so
+the response's cache-miss reason lands in the request log. A pool overrides it with its own `cache_diagnostics`. The id
+follows the session memory: it survives a restart through the registry copy and starts at `null` on an upstream the
+session moved to.
 
 ### keepalive
 

@@ -1,4 +1,4 @@
-//! `phoebis check-config` warns about a wide key file mode.
+//! `phoebis check-config` warns about a wide key file mode and refuses a file that sets an unknown key.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -56,5 +56,22 @@ fn a_key_file_readable_by_group_or_other_warns_naming_the_path_and_0600() {
     assert!(
         warning.contains(&key.display().to_string()) && warning.contains("0600"),
         "{warning}"
+    );
+}
+
+#[test]
+fn an_unknown_upstream_key_fails_check_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "wide-host", "upstream:\n  resolver: 1\n");
+    let out = phoebis()
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("resolver"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

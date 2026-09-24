@@ -70,7 +70,7 @@ fn port_base() -> u16 {
 /// ephemeral ports from, so a concurrent test's outbound connection cannot take it between here and the bind
 /// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
 /// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
-/// process, one advance per draw and one per port a foreign listener holds.
+/// process, one advance per draw and one per port a fake upstream holds.
 ///
 /// Two processes whose pids are congruent modulo 100 share a slice, and a draw inside the probe-to-bind
 /// window can collide; the default cargo runner never runs two of these binaries at once, so the window is
@@ -88,7 +88,7 @@ fn free_port() -> u16 {
         let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert!(
             raw < PORT_SPAN,
-            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process; a test is drawing ports it never binds, foreign listeners are filling the slice, or the slice must grow"
+            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process; a test is drawing ports it never binds, another process's listeners are filling the slice, or the slice must grow"
         );
         let port = base + raw;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
