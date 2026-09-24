@@ -288,7 +288,7 @@ async fn a_rejected_replacement_secret_leaves_the_original_credential_and_the_sn
 
 #[tokio::test]
 async fn a_paired_account_routes_its_discovered_models_without_a_manual_sync() {
-    let (app, _up, store, router) = common::admin_parts().await;
+    let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let id = common::exchanged_session_for(&app, &cookie, "business").await;
     assert_eq!(
@@ -310,13 +310,8 @@ async fn a_paired_account_routes_its_discovered_models_without_a_manual_sync() {
             .any(|m| m.upstream_id == "claude-sonnet-4-5" && m.selected),
         "the confirm ran a sync"
     );
-    assert!(
-        router
-            .snapshot()
-            .served("business", "claude-sonnet-4-5")
-            .is_some(),
-        "and the snapshot routes it"
-    );
+    // No served-model gate stands between the catalog and routing any more: every enabled member of a
+    // pool is a candidate for a model the rules allow, whatever the account's catalog says.
 }
 
 #[tokio::test]
@@ -603,7 +598,7 @@ async fn creating_an_account_whose_catalog_carries_two_spellings_records_the_cla
 
 #[tokio::test]
 async fn a_sync_that_cannot_publish_answers_503_with_the_catalog_written() {
-    let (app, up, store, router) = common::admin_parts().await;
+    let (app, up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     up.set_rule_after(
         0,
@@ -635,18 +630,8 @@ async fn a_sync_that_cannot_publish_answers_503_with_the_catalog_written() {
             .any(|m| m.upstream_id == "claude-sonnet-4-5"),
         "the rows were written; only the publication failed"
     );
-    assert!(
-        router
-            .snapshot()
-            .served("direct", "claude-sonnet-4-5")
-            .is_none(),
-        "and routing still serves the catalog it had"
-    );
-    router.reload().await.unwrap();
-    assert!(router
-        .snapshot()
-        .served("direct", "claude-sonnet-4-5")
-        .is_some());
+    // No served-model gate stands between the catalog and routing any more, so a publish failure has
+    // nothing left to fence in the live snapshot.
 }
 
 #[tokio::test]

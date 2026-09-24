@@ -131,22 +131,17 @@ async fn a_sync_adds_new_ids_unselected_flags_vanished_ids_and_keeps_manual_rows
             vec!["claude-opus-5".to_string()]
         )
     );
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
-        .await
-        .unwrap();
     assert_eq!(
-        (
-            resp.status().as_u16(),
-            resp.headers()
-                .get("x-phoebis-error-code")
+        outcome(
+            &h.app
+                .clone()
+                .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
+                .await
                 .unwrap()
-                .to_str()
-                .unwrap()
-        ),
-        (404, "model_unserved")
+        )
+        .account_id,
+        "a",
+        "every pool member is a candidate for a newly discovered model too"
     );
     assert_eq!(
         outcome(
@@ -187,20 +182,25 @@ async fn a_sync_adds_new_ids_unselected_flags_vanished_ids_and_keeps_manual_rows
         default_limits(),
     )
     .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 404, "still unserved after the restart");
+    assert_eq!(
+        outcome(
+            &h.app
+                .clone()
+                .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
+                .await
+                .unwrap()
+        )
+        .account_id,
+        "a",
+        "still routes after the restart"
+    );
     assert_eq!(
         up.requests()
             .iter()
             .filter(|r| r.line.starts_with("POST /v1/messages"))
             .count(),
-        messages_before,
-        "no upstream call for an unselected model"
+        messages_before + 1,
+        "the newly discovered model reaches the upstream"
     );
     store
         .put_served_models(
