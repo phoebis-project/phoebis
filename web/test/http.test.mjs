@@ -230,3 +230,23 @@ test('deleting an upstream calls the account route, and a disconnect keeps to th
   await api.disconnectAccount('work seat');
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['DELETE', '/admin/accounts/work%20seat'], ['DELETE', '/admin/accounts/work%20seat/credentials']]);
 });
+
+test('listCatalogOf reads each named catalog once and answers the union by id, a failed read adding nothing', async () => {
+  const row = (id, displayName) => ({ created_at: '', display_name: displayName, id, max_input_tokens: null, max_tokens: null });
+  const catalogs = {
+    '/admin/accounts/alpha/catalog': answer(200, { error: null, fetched_at: 1_000_000, models: [row('claude-sonnet-5', 'Sonnet from alpha'), row('claude-haiku-4-5-20251001', 'Haiku')] }),
+    '/admin/accounts/beta/catalog': answer(200, { error: null, fetched_at: 1_000_000, models: [row('claude-opus-5', 'Opus'), row('claude-sonnet-5', 'Sonnet from beta')] }),
+    '/admin/accounts/gamma/catalog': answer(503, { error: 'the registry is unavailable' }),
+  };
+  let failures = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => undefined });
+  const calls = stub((url) => catalogs[url] ?? answer(404, { error: 'account not found' }));
+  const models = await new HttpApi().listCatalogOf(['alpha', 'beta', 'gamma']);
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/accounts/alpha/catalog'], ['GET', '/admin/accounts/beta/catalog'], ['GET', '/admin/accounts/gamma/catalog']]);
+  assert.deepEqual(models.map((m) => m.id), ['claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-sonnet-5'], 'a model two upstreams list appears once, in id order');
+  assert.equal(models.find((m) => m.id === 'claude-sonnet-5').displayName, 'Sonnet from alpha', 'the first catalog naming an id answers for it');
+  assert.equal(failures, 1, 'the failed read still reaches the toast while the union answers');
+  const none = stub(() => answer(500));
+  assert.deepEqual(await new HttpApi().listCatalogOf([]), []);
+  assert.equal(none.length, 0, 'no account named, no read');
+});
