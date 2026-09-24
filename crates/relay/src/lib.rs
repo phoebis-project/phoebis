@@ -34,7 +34,7 @@ pub use body::{
 pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
-    Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError, PROBES_IN_FLIGHT,
+    Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError, MAX_BODY, PROBES_IN_FLIGHT,
     RESOLUTION_CAPACITY,
 };
 pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};

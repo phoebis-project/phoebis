@@ -12,6 +12,9 @@ const MAX_NAME_CHARS = 256;
 
 type Token = { char: string; kind: 'literal' } | { kind: 'anyOne' } | { kind: 'anyPath' } | { kind: 'anyRun' };
 
+/** ASCII-only fold, matching the Rust matcher's `eq_ignore_ascii_case`: a non-ASCII letter keeps its case. */
+const foldAscii = (c: string): string => (c >= 'A' && c <= 'Z' ? String.fromCharCode(c.charCodeAt(0) + 32) : c);
+
 function tokenize(pattern: string): Token[] {
   const chars = [...pattern];
   const tokens: Token[] = [];
@@ -86,7 +89,7 @@ export function matchesPattern(pattern: string, name: string): boolean {
       } else if (token.kind === 'anyOne') {
         table[t][c] = next !== undefined && next !== '/' && table[t + 1][c + 1];
       } else {
-        table[t][c] = next !== undefined && next.toLowerCase() === token.char.toLowerCase() && table[t + 1][c + 1];
+        table[t][c] = next !== undefined && foldAscii(next) === foldAscii(token.char) && table[t + 1][c + 1];
       }
     }
   }

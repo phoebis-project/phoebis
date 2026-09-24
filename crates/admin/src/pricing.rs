@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{diff_against, parse_import, ImportFormat, ModelPrice, PriceTable};
 use phoebis_store::PricingVersion;
+use futures::future::join_all;
 use serde_json::{json, Value};
 
 use crate::routes::{failure, store_failure};
@@ -149,19 +150,20 @@ pub(crate) async fn import(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Ok(accounts) => accounts,
         Err(e) => return store_failure(e),
     };
-    let mut served = std::collections::BTreeSet::new();
-    for account in accounts.iter().filter(|a| a.enabled) {
-        served.extend(
-            state
-                .catalog
-                .fetch(account)
-                .await
-                .models
-                .into_iter()
-                .map(|m| m.id),
-        );
-    }
-    let served: Vec<String> = served.into_iter().collect();
+    // Concurrent, so one account's slow discovery timeout does not chain into the next one's.
+    let fetches = join_all(
+        accounts
+            .iter()
+            .filter(|a| a.enabled)
+            .map(|account| state.catalog.fetch(account)),
+    )
+    .await;
+    let served: Vec<String> = fetches
+        .into_iter()
+        .flat_map(|catalog| catalog.models.into_iter().map(|m| m.id))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let diff = diff_against(&state.pricing.current(), &parsed, &served);
     let now = (state.clock)();
     let token = format!("imp_{:032x}", rand::random::<u128>());

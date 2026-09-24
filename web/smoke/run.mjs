@@ -585,6 +585,13 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
     ok: quarantined?.classList.contains('badge--critical') === true && quarantined.getAttribute('title') === "the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it",
     missing: [quarantined ? `${quarantined.className} ${quarantined.getAttribute('title')}` : 'no quarantined badge'],
   });
+  const coolingCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cooling down');
+  const coolingSubtitle = coolingCard?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+  results.push({
+    name: '/upstreams/personal an upstream with no cooldowns reads Nothing cooling down',
+    ok: coolingSubtitle === 'Nothing cooling down',
+    missing: [coolingSubtitle],
+  });
 }
 {
   // A funding-flagged upstream never reads 'paused', so the header has to take the pause state off routing instead.
@@ -1443,6 +1450,29 @@ m = await mount('/models');
       name: '/models a row clears its upstream\'s model scope through the Upstreams view\'s confirm',
       ok: asked.includes('Clear cooldown') && asked.includes('The upstream becomes eligible immediately.') && JSON.stringify(calls) === JSON.stringify([[first?.accountId, first?.scope]]) && m.text().includes('Cooldown cleared'),
       missing: [asked.slice(0, 120) || 'no confirm', JSON.stringify(calls)],
+    });
+  }
+  {
+    // Held open rather than resolved at once, so the busy window between the confirm and the answer is
+    // observable instead of collapsing to nothing.
+    let resolveClear;
+    const original = api.clearCooldown;
+    api.clearCooldown = () => new Promise((resolve) => { resolveClear = resolve; });
+    [...(groups[0]?.querySelectorAll('tbody button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+    await m.settle(250);
+    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+    await m.settle(50);
+    const clearButtons = () => [...(groups[0]?.querySelectorAll('tbody button') ?? [])].filter((b) => b.textContent?.trim() === 'Clear');
+    const disabledWhileBusy = clearButtons().length > 0 && clearButtons().every((b) => b.disabled);
+    resolveClear?.(undefined);
+    await m.settle(400);
+    api.clearCooldown = original;
+    const reenabledAfter = clearButtons().length > 0 && clearButtons().every((b) => !b.disabled);
+    results.push({
+      name: '/models every Clear button in the block is disabled while a clear is in flight',
+      ok: disabledWhileBusy && reenabledAfter,
+      missing: [String(disabledWhileBusy), String(reenabledAfter)],
     });
   }
   const recent = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);

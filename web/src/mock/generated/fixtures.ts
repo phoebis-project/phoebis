@@ -3922,7 +3922,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "session_id": "s1",
           "model": "claude-haiku-4-5-20251001",
           "wire_model": "claude-haiku-4-5",
-          "request_id": "req-rejected"
+          "request_id": "r-failover",
+          "upstream_request_id": "req-rejected"
         }
       ],
       "permits": [
@@ -3933,7 +3934,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "session_id": "s1",
           "model": "claude-haiku-4-5-20251001",
           "wire_model": "claude-haiku-4-5",
-          "request_id": "req-permitted",
+          "request_id": "r-failover",
+          "upstream_request_id": "req-permitted",
           "rejected_by": [
             "business"
           ]

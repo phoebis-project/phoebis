@@ -213,11 +213,11 @@ async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_las
 
     assert_eq!(
         body["rejections"],
-        j!([{ "at": NOW - 500, "account_id": "business", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "req-1" }]),
+        j!([{ "at": NOW - 500, "account_id": "business", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "r-1", "upstream_request_id": "req-1" }]),
     );
     assert_eq!(
         body["permits"],
-        j!([{ "at": NOW - 100, "account_id": "direct", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "req-2", "rejected_by": ["business"] }]),
+        j!([{ "at": NOW - 100, "account_id": "direct", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "r-1", "upstream_request_id": "req-2", "rejected_by": ["business"] }]),
     );
 
     let viewer = login(&parts.app, "viewer-secret").await;

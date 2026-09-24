@@ -153,6 +153,8 @@ export interface ModelEvent {
   rejectedBy: string[];
   requestId: string | null;
   sessionId: string | null;
+  /** The upstream's own id for the attempt that was rejected or that permitted, `null` when it sent none. */
+  upstreamRequestId: string | null;
   wireModel: string;
 }
 

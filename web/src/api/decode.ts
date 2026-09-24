@@ -84,7 +84,7 @@ export function decodeKeyModels(v: unknown): KeyModels {
 
 export function decodeModelEvent(v: unknown): ModelEvent {
   const e = rec(v);
-  return { accountId: str(e.account_id), at: isoOr(e.at, epoch), keyId: strOrNull(e.key_id), model: str(e.model), rejectedBy: strings(e.rejected_by), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id), wireModel: str(e.wire_model) };
+  return { accountId: str(e.account_id), at: isoOr(e.at, epoch), keyId: strOrNull(e.key_id), model: str(e.model), rejectedBy: strings(e.rejected_by), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id), upstreamRequestId: strOrNull(e.upstream_request_id), wireModel: str(e.wire_model) };
 }
 
 export function decodeModelsState(v: unknown): ModelsState {

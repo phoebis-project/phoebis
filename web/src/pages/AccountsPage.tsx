@@ -437,6 +437,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
         <CoolingDown
           key={account.id}
           title="Cooling down"
+          busy={busy}
           now={now}
           rows={account.cooldowns.map((c) => ({ accountId: account.id, reason: c.reason, scope: c.scope, until: c.until }))}
           onClear={

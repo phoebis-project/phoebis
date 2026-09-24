@@ -187,12 +187,12 @@ test('the model state decodes the cooldowns grouped by model, and the rejections
   assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
   assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
   assert.deepEqual(
-    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.rejectedBy]),
-    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'req-rejected', []]],
+    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.upstreamRequestId, r.rejectedBy]),
+    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'r-failover', 'req-rejected', []]],
   );
   assert.deepEqual(
-    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.rejectedBy]),
-    [['direct', 'claude-haiku-4-5', 'req-permitted', ['business']]],
+    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.upstreamRequestId, p.rejectedBy]),
+    [['direct', 'claude-haiku-4-5', 'r-failover', 'req-permitted', ['business']]],
   );
   assert.ok(isIso(state.rejections[0].at) && isIso(state.permits[0].at));
 });

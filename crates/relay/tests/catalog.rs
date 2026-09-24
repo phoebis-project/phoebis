@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use phoebis_bus::{Bus, Event};
+use phoebis_relay::MAX_BODY;
 use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, RulesMode, Secret};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -125,6 +126,61 @@ async fn a_failed_fetch_stores_the_error_and_no_rows_for_the_window() {
         h.catalog_up.requests().len(),
         1,
         "a second call inside the window probes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_body_over_the_bound_fails_the_fetch_and_caches_no_rows() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: vec![b'a'; MAX_BODY + 1],
+        },
+    }])
+    .await;
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let fetched = h.catalog.fetch(&a).await;
+    assert!(fetched.models.is_empty());
+    assert_eq!(
+        fetched.error.as_deref(),
+        Some(
+            format!("the models response is malformed: response body exceeds {MAX_BODY} bytes")
+                .as_str()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_disconnected_accounts_fetch_answers_no_credential_without_reaching_the_catalog_fake() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: json_list(&["claude-sonnet-4-5-20250929"]),
+    }])
+    .await;
+    let h = harness_with_catalog(&up, catalog_up, &[], PoolSpec::default()).await;
+    let disconnected = test_account_row(&api_key("d", "unused", 0));
+    h.store.insert_account(&disconnected).unwrap();
+    let fetched = h.catalog.fetch(&disconnected).await;
+    assert!(fetched.models.is_empty());
+    assert_eq!(
+        fetched.error.as_deref(),
+        Some("the account has no credential")
+    );
+    assert_eq!(
+        h.catalog_up.requests().len(),
+        0,
+        "no credential means no request ever reaches the catalog fake"
     );
 }
 

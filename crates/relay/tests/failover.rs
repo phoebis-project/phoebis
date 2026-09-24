@@ -15,6 +15,13 @@ const B: &str = "sk-ant-oat01-BBBB";
 const C: &str = "sk-ant-oat01-CCCC";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
 
+fn probes_for(up: &FakeUpstream, prefix: &str) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with(&format!("GET {prefix}")))
+        .count()
+}
+
 async fn two_accounts(up: &FakeUpstream) -> Harness {
     harness(
         up,
@@ -508,9 +515,17 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "b")
     );
-    // The harness's catalog fake resolves this spelling to a dated id in the background; the scope this
-    // request's own cooldown lands under is re-keyed to it by the time the assertion below reads it.
-    let cooldowns = h.router.cooldowns().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+    let cooldowns = wait_for_async(Duration::from_secs(2), || async {
+        let rows = h.router.cooldowns().await.unwrap();
+        rows.iter()
+            .any(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+            .then_some(rows)
+    })
+    .await;
     assert_eq!(
         (
             cooldowns[0].scope.as_str(),
@@ -581,10 +596,18 @@ async fn cooldowns_are_partitioned_by_account_kind() {
         .await
         .unwrap();
     assert_eq!(outcome(&resp).account_id, "c", "k1 and b both failed over");
-    let c = h.router.cooldowns().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+    let c = wait_for_async(Duration::from_secs(2), || async {
+        let rows = h.router.cooldowns().await.unwrap();
+        rows.iter()
+            .any(|row| row.account_id == "k1" && row.scope == "model:claude-sonnet-4-5-20250929")
+            .then_some(rows)
+    })
+    .await;
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
-    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
-    // scope below to it.
     assert_eq!(
         (k1.scope.as_str(), k1.until),
         ("model:claude-sonnet-4-5-20250929", NOW + 30_000 + 1_000),

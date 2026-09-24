@@ -2,7 +2,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::LedgerConfig;
+use phoebis_ledger::{recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -246,4 +246,29 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
         "the diff is a value, not a string: {detail}"
     );
     up.shutdown().await;
+}
+
+#[test]
+fn recent_events_of_kind_answers_the_newest_first_and_stops_at_the_limit() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (at, account_id) in [(100, "a"), (200, "b"), (300, "c")] {
+        db.insert_event(&EventRecord {
+            at,
+            kind: "model_rejected".into(),
+            account_id: Some(account_id.into()),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    let newest_two = db
+        .read_blocking(|c| recent_events_of_kind(c, "model_rejected", 2))
+        .unwrap();
+    assert_eq!(
+        newest_two
+            .iter()
+            .map(|e| (e.at, e.account_id.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![(300, Some("c")), (200, Some("b"))],
+        "the newest two, newest first"
+    );
 }

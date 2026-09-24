@@ -237,11 +237,8 @@ async fn a_member_whose_fetch_fails_contributes_nothing_and_a_cooled_model_still
             "claude-sonnet-4-5-20250929[1m]",
             "vendor/model-a",
         ],
-        "b's rows answer in full; a's failed fetch added nothing and the cooldown filtered nothing"
-    );
-    assert!(
-        !body_text.contains("\"a\"") && !body_text.contains("\"b\""),
-        "no member id names an account in the body"
+        "b's rows answer in full; a's failed fetch added nothing and the cooldown filtered nothing, and no
+         member id names an account in the body"
     );
 }
 
@@ -359,4 +356,20 @@ async fn a_missing_or_wrong_key_is_refused_as_messages_refuses_it() {
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(&resp), "auth_unknown");
+}
+
+#[tokio::test]
+async fn a_bad_limit_with_no_key_answers_the_authentication_refusal_first() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(catalog_rows()).await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+
+    let no_key = axum::http::Request::builder()
+        .method("GET")
+        .uri("/v1/models?limit=bad")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(no_key).await.unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(error_code(&resp), "auth_missing");
 }

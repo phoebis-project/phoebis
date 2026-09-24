@@ -164,7 +164,10 @@ A rule's subject is the canonical id: the request's model with the `[1m]` suffix
 the dated id the catalog lists substituted once the router has resolved the spelling. One entry therefore
 covers a model and its `[1m]` twin, and an entry for a model the API lists under a dated id is written as a
 glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of
-either. A model the list denies answers `404 model_not_allowed` without reaching an upstream.
+either. An entry that spells an undated id exactly (`claude-sonnet-4-5`) matches only until the router
+resolves that spelling to its dated id, after which the canonical name no longer matches it, so an exact
+entry for an undated model is written as a glob (`claude-sonnet-4-5*`) too. A model the list denies answers
+`404 model_not_allowed` without reaching an upstream.
 
 The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?`
 one character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches

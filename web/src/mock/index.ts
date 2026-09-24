@@ -6,9 +6,9 @@ import type {
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
-import type { NumericKeepaliveKey } from '@/lib/forms';
+import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
-import { checkPattern, matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
+import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
@@ -58,18 +58,11 @@ const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
 ];
 
 /**
- * The rule list's refusals in the routes' order and wording: the entry bound, then each pattern through the
- * grammar's check. A list the body leaves out is the routes' "keep what is stored", never a refusal.
+ * The rule list's refusals in the routes' order and wording. A list the body leaves out is the routes' "keep
+ * what is stored", never a refusal; a list that is present is judged the way the form's own editor judges it.
  */
-const rulesRefusal = (rules: ModelRule[] | undefined): string | null => {
-  if (rules === undefined) return null;
-  if (rules.length > 256) return 'model_rules holds at most 256 entries';
-  for (const [i, rule] of rules.entries()) {
-    const refusal = checkPattern(rule.pattern);
-    if (refusal) return `model_rules[${i}]: ${refusal}`;
-  }
-  return null;
-};
+const rulesRefusal = (rules: ModelRule[] | undefined): string | null =>
+  rules === undefined ? null : modelRulesRefusal(rules);
 
 /** The key routes read the list before the mode, so a body wrong in both is refused for its list. */
 const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
@@ -112,13 +105,16 @@ const modelEvents = (kind: 'model_permitted' | 'model_rejected'): ModelEvent[] =
     .filter((e) => e.kind === kind)
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
     .map((e) => ({
-      accountId: e.accountId ?? '',
+      // Every model_rejected and model_permitted event this mock produces sets both fields: an unnamed
+      // account or model here is the fixture builder's own bug, worth a crash rather than a silent blank.
+      accountId: e.accountId!,
       at: e.at,
       keyId: e.keyId,
-      model: e.model ?? '',
+      model: e.model!,
       rejectedBy: Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [],
       requestId: typeof e.detail?.source_request_id === 'string' ? e.detail.source_request_id : null,
       sessionId: e.sessionId,
+      upstreamRequestId: typeof e.detail?.request_id === 'string' ? e.detail.request_id : null,
       wireModel: String(e.detail?.wire_model ?? ''),
     }));
 const MODEL_REJECTIONS = modelEvents('model_rejected');
@@ -504,7 +500,7 @@ export class MockApi implements Api {
     return this.accounts.flatMap((a) =>
       a.cooldowns
         .filter((c) => c.scope.startsWith(MODEL_SCOPE_PREFIX) && Date.parse(c.until) > Date.now())
-        .map((c) => ({ accountId: a.id, reason: c.reason, scope: c.scope, setAt: c.setAt, until: c.until, window: 'model_rejection' })),
+        .map((c) => ({ accountId: a.id, reason: c.reason, scope: c.scope, setAt: c.setAt, until: c.until, window: c.reason === 'model_rejected' ? 'model_rejection' : c.reason })),
     );
   }
 

@@ -46,6 +46,7 @@ export function ModelsPage() {
   const models = useAsync(() => (keyId === null ? Promise.resolve(null) : api.getKeyModels(keyId)), [keyId, tick]);
   const state = useAsync(() => api.getModelsState(), [tick]);
   const [pending, setPending] = useState<CoolingRow | null>(null);
+  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   // A switch leaves the previous key's answer in hand while the next one loads, and that list is never drawn under
   // this key's name.
@@ -53,14 +54,18 @@ export function ModelsPage() {
 
   const onConfirmClear = () => {
     if (!pending) return;
-    void api.clearCooldown(pending.accountId, pending.scope).then(
-      () => {
-        setToast('Cooldown cleared');
-        state.reload();
-        models.reload();
-      },
-      (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
-    );
+    setBusy(true);
+    void api
+      .clearCooldown(pending.accountId, pending.scope)
+      .then(
+        () => {
+          setToast('Cooldown cleared');
+          state.reload();
+          models.reload();
+        },
+        (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
+      )
+      .finally(() => setBusy(false));
   };
 
   const row = (content: ReactNode, muted = false) => (
@@ -141,7 +146,7 @@ export function ModelsPage() {
             <CoolingDown title="Cooling down" now={now} rows={[]} />
           ) : (
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
-            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} now={now} rows={g.rows} showUpstream onClear={canMutate ? setPending : undefined} />)
+            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showUpstream onClear={canMutate ? setPending : undefined} />)
           )}
           <RecentEvents title="Recent rejections" subtitle="The newest refusals of a model by an upstream" events={state.data?.rejections ?? null} empty="No upstream has refused a model." now={now} />
           <RecentEvents title="Recent permits" subtitle="The newest requests an upstream served after another refused the model" events={state.data?.permits ?? null} empty="No request was served after a refusal." now={now} permits />

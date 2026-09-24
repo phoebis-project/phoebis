@@ -1,13 +1,13 @@
 import type { CatalogModel, ModelPrice } from '@/api/types';
 
+// Stored out of id order, so a page that renders it verbatim rather than sorting it fails the smoke check
+// that reads the catalog popup as sorted by id.
 export const CATALOG: CatalogModel[] = [
   { id: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', createdAt: '2026-08-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
+  { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', createdAt: '2026-05-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
   { id: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4.5', createdAt: '2025-10-01', maxInputTokens: 200_000, maxTokens: 64_000 },
   { id: 'claude-opus-5', displayName: 'Claude Opus 5', createdAt: '2026-06-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
-  { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', createdAt: '2026-05-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
 ];
-
-export const CLAUDE_MODELS = CATALOG.map((m) => m.id);
 
 /**
  * The shipped Anthropic price table, USD per million tokens, grouped by model

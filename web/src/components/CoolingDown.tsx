@@ -18,7 +18,7 @@ export function scopeLabel(scope: string): string {
  * The rows an upstream (or a model group) is cooling under, with a clear button per row when `onClear` is given.
  * A model group's rows all share its scope, so `showUpstream` names the upstream each row belongs to.
  */
-export function CoolingDown({ now, onClear, rows, showUpstream = false, title }: { now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showUpstream?: boolean; title: string }): JSX.Element {
+export function CoolingDown({ busy = false, now, onClear, rows, showUpstream = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showUpstream?: boolean; title: string }): JSX.Element {
   // Null until the operator toggles, so a block that was empty when it mounted still opens once a row arrives.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const open = toggled ?? rows.length > 0;
@@ -71,7 +71,7 @@ export function CoolingDown({ now, onClear, rows, showUpstream = false, title }:
                       </td>
                       {onClear && (
                         <td className="right">
-                          <Button size="sm" onClick={() => onClear(r)}>
+                          <Button size="sm" disabled={busy} onClick={() => onClear(r)}>
                             Clear
                           </Button>
                         </td>

@@ -2881,6 +2881,56 @@ fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_afte
 }
 
 #[test]
+fn a_repeated_resolution_report_moves_nothing_twice() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let SelectResult::Selected(_) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-4-5", true, &[], 1_000),
+        &mut r,
+    )
+    .0
+    else {
+        panic!()
+    };
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    let first = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+    assert!(
+        first.iter().any(|w| matches!(w, StateWrite::UpsertPin(_))),
+        "the first report moves the pin: {first:?}"
+    );
+    assert!(
+        first
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertCooldown(_))),
+        "and the cooldown: {first:?}"
+    );
+    let second = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 3_000);
+    assert!(
+        !second.iter().any(|w| matches!(
+            w,
+            StateWrite::DeletePin(..)
+                | StateWrite::UpsertPin(_)
+                | StateWrite::DeleteCooldown(..)
+                | StateWrite::UpsertCooldown(_)
+        )),
+        "a repeated report moves nothing that already moved: {second:?}"
+    );
+}
+
+#[test]
 fn a_rejection_cooldown_under_the_folded_spelling_still_excludes_the_member_under_the_dated_id() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 0)],

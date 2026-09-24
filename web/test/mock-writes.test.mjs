@@ -203,6 +203,18 @@ test('a key write without the model fields takes the route\'s defaults on create
   assert.deepEqual(pool.modelRules, [], 'a pool created without a list starts with none');
 });
 
+test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
+  const api = await as('viewer');
+  const business = api.accounts.find((a) => a.id === 'business');
+  const sample = business.cooldowns[0];
+  business.cooldowns = [...business.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-test-permission' }];
+  const state = await api.getModelsState();
+  const permitted = state.cooldowns.find((g) => g.model === 'claude-test-permission');
+  assert.equal(permitted.rows[0].window, 'permission', 'a non-model_rejected reason reports its own text as the window');
+  const rejected = state.cooldowns.find((g) => g.model === 'claude-haiku-4-5-20251001');
+  assert.equal(rejected.rows[0].window, 'model_rejection', 'model_rejected still reports model_rejection');
+});
+
 test('the catalog union names each model once and a failed fetch contributes nothing', async () => {
   const api = await as('viewer');
   const ids = (models) => models.map((m) => m.id);

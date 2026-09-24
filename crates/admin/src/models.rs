@@ -159,7 +159,8 @@ fn rejection_json(event: &EventRecord) -> Value {
         "session_id": event.session_id,
         "model": event.model,
         "wire_model": detail.get("wire_model").cloned().unwrap_or(Value::Null),
-        "request_id": detail.get("request_id").cloned().unwrap_or(Value::Null),
+        "request_id": detail.get("source_request_id").cloned().unwrap_or(Value::Null),
+        "upstream_request_id": detail.get("request_id").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -172,7 +173,8 @@ fn permit_json(event: &EventRecord) -> Value {
         "session_id": event.session_id,
         "model": event.model,
         "wire_model": detail.get("wire_model").cloned().unwrap_or(Value::Null),
-        "request_id": detail.get("request_id").cloned().unwrap_or(Value::Null),
+        "request_id": detail.get("source_request_id").cloned().unwrap_or(Value::Null),
+        "upstream_request_id": detail.get("request_id").cloned().unwrap_or(Value::Null),
         "rejected_by": detail.get("rejected_by").cloned().unwrap_or_else(|| json!([])),
     })
 }

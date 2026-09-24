@@ -22,7 +22,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::dispatch::UPSTREAM_AUTHORITY;
 
 /// A models list is a few hundred short objects; anything past this is not one.
-const MAX_BODY: usize = 4 * 1024 * 1024;
+pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
 /// The most spellings the resolution map holds, cached and in flight together; a spelling past it is admitted
 /// under its folded spelling and probed once room returns. The API lists a dozen ids, so the bound is slack.
@@ -183,8 +183,9 @@ impl ResolutionMap {
         Admission::Probe
     }
 
-    /// Answers the dated id when this probe is the first to name it, or changes it: the caller reports that
-    /// case alone, since a repeat of the same answer moves nothing the routing state does not already hold.
+    /// Answers the dated id on every `Dated` probe, changed or not: a `Report::Resolved` the router drops on
+    /// a full queue is re-sent on the next probe rather than lost for good, and `apply_resolution` is
+    /// idempotent once the rows have moved, so a repeat costs nothing but the call.
     fn record(&mut self, spelling: &str, outcome: ProbeAnswer, now: i64) -> Option<String> {
         self.resolving.remove(spelling);
         let entry = self
@@ -199,13 +200,12 @@ impl ResolutionMap {
             });
         match outcome {
             ProbeAnswer::Dated(id) => {
-                let changed = entry.dated.as_deref() != Some(id.as_str());
                 entry.dated = Some(id.clone());
                 entry.last = Probe::Dated;
                 entry.failures = 0;
                 entry.at = now;
                 entry.retry_at = now + self.window_ms;
-                changed.then_some(id)
+                Some(id)
             }
             ProbeAnswer::Missing => {
                 entry.last = Probe::Missing;
@@ -293,10 +293,14 @@ impl CatalogService {
         account: &AccountRow,
         secret: Option<&Secret>,
     ) -> Result<Discovered, DiscoveryError> {
-        let headers = self.credential_headers(account, secret).await?;
-        let (status, body) = self
-            .send(account, MODELS_TARGET.to_string(), headers)
-            .await?;
+        // The credential step (an OAuth `acquire` that may refresh) shares the round trip's own bound, so
+        // the whole discovery is bounded by `self.timeout`, not just the network exchange.
+        let (status, body) = tokio::time::timeout(self.timeout, async {
+            let headers = self.credential_headers(account, secret).await?;
+            self.send(account, MODELS_TARGET.to_string(), headers).await
+        })
+        .await
+        .map_err(|_| DiscoveryError::Unreachable("timed out".into()))??;
         match status {
             200 => parse_models(&body),
             401 => Err(DiscoveryError::Unauthorized),
@@ -776,10 +780,10 @@ mod tests {
             Some("claude-s-1".to_string())
         );
         assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
-        // The same answer again reports no change: nothing new for the caller to publish.
+        // The same answer again is still reported: a dropped Report::Resolved gets another chance to land.
         assert_eq!(
             m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 100),
-            None
+            Some("claude-s-1".to_string())
         );
         assert_eq!(m.record("s", ProbeAnswer::Missing, 200), None);
         assert_eq!(

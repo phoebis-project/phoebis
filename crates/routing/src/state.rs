@@ -434,7 +434,9 @@ impl RoutingState {
     ///
     /// The rows here are found and moved by their raw stored key rather than through `pin`/`cooldown`'s own
     /// canonicalizing lookups: those rows were written under the literal `spelling` before this resolution
-    /// existed, so only a raw key finds them.
+    /// existed, so only a raw key finds them. A spelling re-pointed to a newer dated id moves only the rows
+    /// still keyed on the literal spelling; rows already moved under the previous dated id stay there, since
+    /// a new snapshot is a new model.
     pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> Vec<StateWrite> {
         let mut writes = Vec::new();
         self.resolutions

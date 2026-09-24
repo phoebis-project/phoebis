@@ -47,6 +47,11 @@
         "pattern": "**a*b",
         "name": "xa/ab",
         "matches": true
+      },
+      {
+        "pattern": "**/opus*",
+        "name": "vendor/team/sonnet-5",
+        "matches": false
       }
     ],
     "a_pattern_without_a_wildcard_matches_its_own_text_alone": [
@@ -68,6 +73,11 @@
       {
         "pattern": "claude-opus-5",
         "name": "claude-opus",
+        "matches": false
+      },
+      {
+        "pattern": "Σ",
+        "name": "σ",
         "matches": false
       }
     ],

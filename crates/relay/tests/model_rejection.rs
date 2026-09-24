@@ -1,6 +1,8 @@
 //! A 404 `not_found_error` naming the wire model: the account cools for that model alone, the request fails
 //! over, and everything else a 404 or a 400/422 can say reaches the client as it came.
 mod common;
+use std::time::Duration;
+
 use phoebis_bus::{Bus, Event};
 use phoebis_relay::Limits;
 use common::*;
@@ -16,6 +18,13 @@ fn status_and_body(r: &Respond) -> (u16, Vec<u8>) {
         Respond::Json { status, body, .. } => (*status, body.clone()),
         _ => panic!("expected a Json respond"),
     }
+}
+
+fn probes_for(up: &FakeUpstream, prefix: &str) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with(&format!("GET {prefix}")))
+        .count()
 }
 
 #[tokio::test]
@@ -45,9 +54,17 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     let o = outcome(&resp);
     assert_eq!((o.account_id.as_str(), o.attempt), ("b", 2));
     assert_eq!(credentials_seen(&up), [A, B]);
-    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
-    // scope below to it.
-    let cooldowns = h.router.cooldowns().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+    let cooldowns = wait_for_async(Duration::from_secs(2), || async {
+        let rows = h.router.cooldowns().await.unwrap();
+        rows.iter()
+            .any(|c| c.scope == "model:claude-sonnet-4-5-20250929")
+            .then_some(rows)
+    })
+    .await;
     assert_eq!(cooldowns.len(), 1);
     assert_eq!(
         (
@@ -302,9 +319,17 @@ async fn a_non_portable_request_keeps_the_upstreams_404_and_records_the_cooldown
     let got_body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(got_body.as_ref(), expected_body.as_slice());
     assert_eq!(credentials_seen(&up), [A, A]);
-    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
-    // scope below to it.
-    let cooldowns = h.router.cooldowns().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+    let cooldowns = wait_for_async(Duration::from_secs(2), || async {
+        let rows = h.router.cooldowns().await.unwrap();
+        rows.iter()
+            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-4-5-20250929")
+            .then_some(rows)
+    })
+    .await;
     assert!(cooldowns.iter().any(|c| c.account_id == "a"
         && c.scope == "model:claude-sonnet-4-5-20250929"
         && c.reason == "model_rejected"));
