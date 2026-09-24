@@ -144,6 +144,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
             {STATUS_LABEL[account.status]}
           </Badge>
         </div>
+        {account.email && <div className="account-row__sub mono muted">{account.email}</div>}
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
           <span className="muted">
@@ -224,6 +225,7 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
               </>
             )}
           </h2>
+          {account.email && <p className="detail__sub mono">{account.email}</p>}
           <div className="detail__badges">
             <Badge tone={STATUS_TONE[account.status]} dot>
               {STATUS_LABEL[account.status]}

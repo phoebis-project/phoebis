@@ -446,8 +446,9 @@ async function deleteUpstreamButton(theme) {
 
 /**
  * The line under an upstream's name on the dashboard, in the Upstreams list and head, and in the pool dialog's
- * member picker reads its email: a blank line there
- * reads as a value that failed to load.
+ * member picker is its email, and an upstream without one draws no line: its label a second time says nothing,
+ * and an empty line reads as a value that failed to load. The router's seed has one API-key upstream and no
+ * email, so every line is absent there; the mock's story has both kinds, so each view draws both.
  */
 async function upstreamLines(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
@@ -462,14 +463,22 @@ async function upstreamLines(theme, path) {
     }
   }
   const lines = await page.evaluate(() => {
-    const pair = (name, sub) => ({ name: name?.textContent?.trim() ?? '', sub: sub?.textContent?.trim() ?? '' });
+    const pair = (name, sub) => ({ name: name?.textContent?.trim() ?? '', sub: sub ? (sub.textContent ?? '').trim() : null });
     return [
       ...[...document.querySelectorAll('.account-mini')].map((c) => pair(c.querySelector('.account-mini__name'), c.querySelector('.account-mini__sub'))),
       ...[...document.querySelectorAll('.account-row')].map((c) => pair(c.querySelector('.account-row__name'), c.querySelector('.account-row__sub'))),
+      ...[...document.querySelectorAll('.detail__ident')].map((c) => pair(c.querySelector('.detail__title'), c.querySelector(':scope > .detail__sub.mono'))),
       ...[...document.querySelectorAll('dialog[open] .member-picker > li > label')].map((l) => pair(l.querySelector('span:nth-child(2)'), l.querySelector('span:nth-child(3)'))),
     ];
   });
   if (lines.length === 0) say('no upstream line to read');
+  for (const { name, sub } of lines) {
+    if (sub === null) continue;
+    if (sub === name) say(`the line under ${name} repeats its label`);
+    else if (!sub.includes('@')) say(`the line under ${name} reads ${JSON.stringify(sub)}, not an email`);
+  }
+  if (!mock && lines.some((l) => l.sub !== null)) say(`the seeded upstream has no email, yet a line is drawn under ${lines.filter((l) => l.sub !== null).map((l) => l.name).join(', ')}`);
+  if (mock && !(lines.some((l) => l.sub === null) && lines.some((l) => l.sub !== null))) say('the story has upstreams with and without an email, but the view does not draw both');
   if (path === '/pools') {
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));

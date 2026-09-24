@@ -148,7 +148,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'API key upstream'}>
           {account.kind === 'oauth' ? <IconAnthropic size={15} /> : <IconServer size={15} />}
         </span>
-        <span className="qcard__name mono" title={account.email ?? account.label}>
+        <span className="qcard__name mono" title={account.email ?? undefined}>
           {account.label}
         </span>
         <Badge tone={STATUS_TONE[account.status]} dot>

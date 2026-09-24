@@ -1076,6 +1076,7 @@ export function PoolDialog({
                       }}
                     />
                     <span>{a.label}</span>
+                    {a.email && <span className="muted mono">{a.email}</span>}
                   </label>
                   {on && (
                     <span className="member-picker__prio">

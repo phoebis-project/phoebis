@@ -66,6 +66,17 @@ function expect(name, text, needles) {
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
 
+/**
+ * `rows` pairs an upstream id with the line drawn under its name, or null where no line is drawn: the line is the
+ * upstream's email, and one without an email draws none rather than its label a second time.
+ */
+async function emailLines(name, rows) {
+  const emails = new Map((await api.listAccounts()).map((a) => [a.id, a.email]));
+  const wrong = rows.filter(([id, line]) => !emails.has(id) || line !== emails.get(id));
+  results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
+}
+const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
@@ -122,6 +133,7 @@ results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute
   results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
   results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
+  await emailLines('/ each upstream card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
 }
 m.unmount();
 
@@ -253,6 +265,10 @@ m.unmount();
 m = await mount('/quota');
 expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
+  const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
+  await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
+}
+{
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
   results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 3 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
@@ -335,6 +351,8 @@ results.push({
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
 expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max 20x', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
+await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
+await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
@@ -518,6 +536,7 @@ expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-son
 }
 await m.navigate('/upstreams/console');
 expect('/upstreams/console', m.text(), ['Verify', 'does not report quota windows']);
+await emailLines('/upstreams/console the head draws no line under the name of an upstream without an email', [['console', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
@@ -820,6 +839,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
 
   {
     const memberLabels = () => [...(dlg?.querySelectorAll('.member-picker > li') ?? [])].map((li) => li.querySelector('label span:nth-child(2)')?.textContent);
+    {
+      const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
+      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', [...(dlg?.querySelectorAll('.member-picker > li > label') ?? [])].map((l) => [byLabel.get(l.querySelector('span:nth-child(2)')?.textContent ?? '') ?? '', l.querySelector('span:nth-child(3)')?.textContent ?? null]));
+    }
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'Evals workspace', 'team']), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for business"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;

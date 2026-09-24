@@ -137,6 +137,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
           {STATUS_LABEL[account.status]}
         </Badge>
       </div>
+      {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
         {account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
