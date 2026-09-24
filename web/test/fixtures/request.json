@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1790251732111,
+      "key_generation": 1790255127137,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -169,6 +169,39 @@
             "cooldown",
             "spent"
           ]
+        }
+      },
+      {
+        "at": -2599700,
+        "kind": "model_rejected",
+        "account_id": "business",
+        "key_id": "desktop",
+        "session_id": "s1",
+        "model": "claude-haiku-4-5-20251001",
+        "actor": null,
+        "detail": {
+          "attempt": 1,
+          "request_id": "req-rejected",
+          "source_request_id": "r-failover",
+          "wire_model": "claude-haiku-4-5"
+        }
+      },
+      {
+        "at": -2599650,
+        "kind": "model_permitted",
+        "account_id": "direct",
+        "key_id": "desktop",
+        "session_id": "s1",
+        "model": "claude-haiku-4-5-20251001",
+        "actor": null,
+        "detail": {
+          "attempt": 2,
+          "rejected_by": [
+            "business"
+          ],
+          "request_id": "req-permitted",
+          "source_request_id": "r-failover",
+          "wire_model": "claude-haiku-4-5"
         }
       }
     ]

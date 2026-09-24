@@ -30,8 +30,8 @@ use phoebis_transport::response::ResponseHead;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, alerts, analytics, dashboard, keepalive, keys, live, pools, pricing, requests,
-    sessions, settings, AdminState, LoginError, Role,
+    accounts, alerts, analytics, dashboard, keepalive, keys, live, models, pools, pricing,
+    requests, sessions, settings, AdminState, LoginError, Role,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -94,6 +94,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/keepalive/recipes", get(keepalive::recipes))
         .route("/admin/keys", get(keys::list).post(keys::create))
         .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
+        .route("/admin/keys/{id}/models", get(models::key_models))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
         .route("/admin/keys/{id}/rotate", post(keys::rotate))
         .route("/admin/live", get(live::upgrade))
@@ -108,6 +109,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
             post(pairing_callback),
         )
         .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
+        .route("/admin/models/state", get(models::state))
         .route("/admin/pools", get(pools::list).post(pools::create))
         .route(
             "/admin/pools/{id}",

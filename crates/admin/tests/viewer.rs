@@ -20,7 +20,9 @@ const GETS: &[&str] = &[
     "/admin/keepalive/overview",
     "/admin/keepalive/recipes",
     "/admin/keys",
+    "/admin/keys/desktop/models",
     "/admin/live/snapshot",
+    "/admin/models/state",
     "/admin/pools",
     "/admin/pools/main/traffic?range=24h",
     "/admin/pricing",
@@ -270,7 +272,7 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
         .collect::<String>()
         .matches(".route(\"/admin/")
         .count();
-    assert_eq!(routed, 52, "a route joined the table; add it to this test");
+    assert_eq!(routed, 54, "a route joined the table; add it to this test");
     // The state the mutations would have changed is as the admin left it.
     assert_eq!(
         json(get(&parts.app, "/admin/keys", Some(&admin)).await).await["keys"]

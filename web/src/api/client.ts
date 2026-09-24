@@ -19,10 +19,12 @@ import type {
   Delivery,
   KeepaliveOverview,
   KeepaliveRecipe,
+  KeyModels,
   LifecycleDelivery,
   LiveEvent,
   ModelRule,
   ModelRulesMode,
+  ModelsState,
   OveragePolicy,
   Overview,
   PairingInput,
@@ -125,6 +127,8 @@ export interface Api {
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
+  getKeyModels(keyId: string): Promise<KeyModels>;
+  getModelsState(): Promise<ModelsState>;
   getOverview(): Promise<Overview>;
   getQuotaHistory(accountId: string): Promise<QuotaHistory[]>;
   /** Null for a request the ledger no longer holds. */

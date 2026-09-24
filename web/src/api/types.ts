@@ -118,6 +118,51 @@ export interface ModelRule {
 /** How a key's own list meets its pool's: `extend` appends the pool's entries after the key's own, `replace` leaves them out. */
 export type ModelRulesMode = 'extend' | 'replace';
 
+/** A live model-scoped cooldown on one of a pool's members, attached to the rule entry whose pattern covers it. */
+export interface RuleCooldown {
+  accountId: string;
+  reason: string;
+  scope: string;
+  setAt: string;
+  until: string;
+  window: string;
+}
+
+/** One entry of a key's processed rule list, with the level it came from and the live cooldowns it covers. */
+export interface ProcessedRule extends ModelRule {
+  cooldowns: RuleCooldown[];
+  level: 'key' | 'pool';
+}
+
+/** `GET /admin/keys/{id}/models`: the processed list a key is judged by, in the order it applies. */
+export interface KeyModels {
+  keyId: string;
+  longContextTwins: boolean;
+  modelRulesMode: ModelRulesMode;
+  poolId: string;
+  rules: ProcessedRule[];
+}
+
+/** One `model_rejected` or `model_permitted` ledger event, as `GET /admin/models/state` lists it. */
+export interface ModelEvent {
+  accountId: string;
+  at: string;
+  keyId: string | null;
+  model: string;
+  /** The accounts a permit's request failed over past; empty on a rejection. */
+  rejectedBy: string[];
+  requestId: string | null;
+  sessionId: string | null;
+  wireModel: string;
+}
+
+/** `GET /admin/models/state`: the live cooldowns grouped by model, and the newest rejections and permits. */
+export interface ModelsState {
+  cooldowns: { model: string; rows: RuleCooldown[] }[];
+  permits: ModelEvent[];
+  rejections: ModelEvent[];
+}
+
 export interface QuotaSample {
   at: string;
   utilization: number;

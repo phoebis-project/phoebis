@@ -23,7 +23,7 @@ export const ACCOUNTS: Account[] = [
     label: 'business',
     email: 'business@example.com',
     plan: 'Max 20x',
-    status: 'ready',
+    status: 'cooldown',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
@@ -38,7 +38,17 @@ export const ACCOUNTS: Account[] = [
     },
     subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'max_20x' },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
-    cooldowns: [],
+    // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
+    // scope alone) but which the Models view and this account's own status fold in like any other cooldown.
+    cooldowns: [
+      {
+        reason: 'model_rejected',
+        scope: 'model:claude-haiku-4-5-20251001',
+        setAt: ago(6 * MINUTE),
+        until: ahead(54 * MINUTE),
+        windowId: null,
+      },
+    ],
   },
   {
     ...ACCOUNT_SAMPLE,

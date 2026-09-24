@@ -1,7 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, Session, SessionLifecycleDetail, Settings, WindowId,
+  Delivery, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RuleCooldown, Session,
+  SessionLifecycleDetail, Settings, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
@@ -63,6 +64,36 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
 export function decodeModelRule(v: unknown): ModelRule {
   const r = rec(v);
   return { not: bool(r.not), pattern: str(r.pattern) };
+}
+
+export function decodeRuleCooldown(v: unknown): RuleCooldown {
+  const c = rec(v);
+  return { accountId: str(c.account_id), reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), window: str(c.window) };
+}
+
+export function decodeKeyModels(v: unknown): KeyModels {
+  const k = rec(v);
+  return {
+    keyId: str(k.key_id),
+    longContextTwins: bool(k.long_context_twins, true),
+    modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
+    poolId: str(k.pool_id),
+    rules: list(k.rules).map(rec).map((r) => ({ cooldowns: list(r.cooldowns).map(decodeRuleCooldown), level: str(r.level) === 'pool' ? 'pool' : 'key', not: bool(r.not), pattern: str(r.pattern) })),
+  };
+}
+
+export function decodeModelEvent(v: unknown): ModelEvent {
+  const e = rec(v);
+  return { accountId: str(e.account_id), at: isoOr(e.at, epoch), keyId: strOrNull(e.key_id), model: str(e.model), rejectedBy: strings(e.rejected_by), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id), wireModel: str(e.wire_model) };
+}
+
+export function decodeModelsState(v: unknown): ModelsState {
+  const s = rec(v);
+  return {
+    cooldowns: list(s.cooldowns).map(rec).map((g) => ({ model: str(g.model), rows: list(g.rows).map(decodeRuleCooldown) })),
+    permits: list(s.permits).map(decodeModelEvent),
+    rejections: list(s.rejections).map(decodeModelEvent),
+  };
 }
 
 // The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.

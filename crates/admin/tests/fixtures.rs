@@ -321,6 +321,45 @@ async fn every_route_is_captured_and_holds_its_shape() {
         actor: None,
         detail: Some(j!({ "reasons": ["cooldown", "spent"] }).to_string()),
     }));
+    // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
+    // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.
+    parts.router.report(phoebis_routing::Report::Cooldown {
+        account_id: "business".into(),
+        row: phoebis_store::CooldownRow {
+            account_id: "business".into(),
+            scope: "model:claude-haiku-4-5-20251001".into(),
+            until: now + 1_800_000,
+            set_at: 0,
+            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 300,
+        kind: "model_rejected".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-haiku-4-5-20251001".into()),
+        actor: None,
+        detail: Some(j!({ "attempt": 1, "request_id": "req-rejected", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+    }));
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 350,
+        kind: "model_permitted".into(),
+        account_id: Some("direct".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-haiku-4-5-20251001".into()),
+        actor: None,
+        detail: Some(j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-permitted", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+    }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
@@ -521,8 +560,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("dashboard", "/admin/dashboard"),
         ("keepalive_overview", "/admin/keepalive/overview"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
+        ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
         ("live_past", "/admin/live/snapshot"),
+        ("models_state", "/admin/models/state"),
         ("pool_traffic", "/admin/pools/main/traffic?range=24h"),
         ("pools", "/admin/pools"),
         ("pricing", "/admin/pricing"),

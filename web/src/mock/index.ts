@@ -2,12 +2,13 @@ import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, MemberEligibility, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool,
-  RequestDetail, RequestLog, RequestPage, RequestQuery, Role, Session, SessionInfo, Settings,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
+  ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
 import type { NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
+import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
@@ -76,6 +77,16 @@ const poolRefusal = (input: PoolInput): string | null => {
 // The registered redirect is a loopback port on the machine running Claude Code,
 // so the callback the operator pastes carries both halves of the exchange.
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
+
+const MODEL_SCOPE_PREFIX = 'model:';
+
+/** The Models view's newest rejections and permits; the state route's own live cooldowns come from the accounts. */
+const MODEL_REJECTIONS: ModelEvent[] = [
+  { accountId: 'business', at: ago(6 * MINUTE), keyId: 'desktop', model: 'claude-haiku-4-5-20251001', rejectedBy: [], requestId: 'req_9f21a0', sessionId: 'sess_a1f0', wireModel: 'claude-haiku-4-5' },
+];
+const MODEL_PERMITS: ModelEvent[] = [
+  { accountId: 'console', at: ago(5 * MINUTE), keyId: 'desktop', model: 'claude-haiku-4-5-20251001', rejectedBy: ['business'], requestId: 'req_2c88e1', sessionId: 'sess_a1f0', wireModel: 'claude-haiku-4-5' },
+];
 
 /**
  * The signed-in role, which outlives a reload the way the router's session cookie does: the smoke runner writes
@@ -445,6 +456,41 @@ export class MockApi implements Api {
 
   getKeepaliveOverview() {
     return latency(KEEPALIVE_OVERVIEW);
+  }
+
+  /** Every live model-scoped cooldown across the accounts, folded to the shape the two model routes answer. */
+  private modelCooldowns(): RuleCooldown[] {
+    return this.accounts.flatMap((a) =>
+      a.cooldowns
+        .filter((c) => c.scope.startsWith(MODEL_SCOPE_PREFIX) && Date.parse(c.until) > Date.now())
+        .map((c) => ({ accountId: a.id, reason: c.reason, scope: c.scope, setAt: c.setAt, until: c.until, window: 'model_rejection' })),
+    );
+  }
+
+  async getKeyModels(keyId: string): Promise<KeyModels> {
+    const key = this.keys.find((k) => k.id === keyId);
+    if (!key) throw new ApiError(404, 'key not found', null);
+    const pool = this.pools.find((p) => p.id === key.poolId);
+    const poolRules = pool?.modelRules ?? [];
+    const memberIds = new Set((pool?.members ?? []).map((m) => m.accountId));
+    const cooldowns = this.modelCooldowns().filter((c) => memberIds.has(c.accountId));
+    const rules = processRules(key.modelRules, key.modelRulesMode, poolRules).map((r) => ({
+      cooldowns: cooldowns.filter((c) => matchesModelPattern(r.pattern, c.scope.slice(MODEL_SCOPE_PREFIX.length))),
+      level: r.level,
+      not: r.not,
+      pattern: r.pattern,
+    }));
+    return latency({ keyId: key.id, longContextTwins: key.longContextTwins, modelRulesMode: key.modelRulesMode, poolId: key.poolId, rules });
+  }
+
+  getModelsState(): Promise<ModelsState> {
+    const byModel = new Map<string, RuleCooldown[]>();
+    for (const row of this.modelCooldowns()) {
+      const model = row.scope.slice(MODEL_SCOPE_PREFIX.length);
+      byModel.set(model, [...(byModel.get(model) ?? []), row]);
+    }
+    const cooldowns = [...byModel.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([model, rows]) => ({ model, rows }));
+    return latency({ cooldowns, permits: MODEL_PERMITS, rejections: MODEL_REJECTIONS });
   }
 
   getOverview() {

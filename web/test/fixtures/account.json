@@ -20,7 +20,15 @@
       "quarantined": false
     },
     "lifecycle_generation": 1,
-    "cooldowns": [],
+    "cooldowns": [
+      {
+        "scope": "model:claude-haiku-4-5-20251001",
+        "until": 2800000,
+        "reason": "model_rejected",
+        "window": "model_rejection",
+        "set_at": 1000000
+      }
+    ],
     "overage": null,
     "profile": {
       "billing_type": "stripe_subscription",

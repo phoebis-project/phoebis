@@ -7,6 +7,7 @@ mod dashboard;
 mod keepalive;
 mod keys;
 mod live;
+mod models;
 mod pools;
 mod pricing;
 mod requests;

@@ -22,7 +22,8 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
   assert.equal(a.requests.lifetime, 4);
-  assert.equal(a.status, 'ready');
+  // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
+  assert.equal(a.status, 'cooldown');
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
@@ -161,6 +162,39 @@ test('a key edit sends enabled every time and expires_at only when the dialog ch
   assert.equal(d.encodeKey({ ...input, expiresAt: null }).expires_at, null, 'null clears the expiry');
   assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: '2026-10-01T00:00:00.000Z' }).expires_at, Date.parse('2026-10-01T00:00:00.000Z'), 'the route takes milliseconds');
   assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: undefined }).enabled, true);
+});
+
+test('a key\'s processed rule list decodes with the level, the rule, and the cooldowns each entry covers', () => {
+  const km = d.decodeKeyModels(fixture('key_models'));
+  assert.equal(km.keyId, 'desktop');
+  assert.equal(km.poolId, 'main');
+  assert.equal(km.modelRulesMode, 'extend');
+  assert.equal(km.longContextTwins, true);
+  assert.deepEqual(
+    km.rules.map((r) => [r.level, r.pattern, r.not, r.cooldowns.length]),
+    [['key', 'claude-opus-*', true, 0], ['pool', 'claude-haiku-*', true, 1]],
+    'the opus entry matches no cooldown and the haiku entry carries the live one',
+  );
+  const cooldown = km.rules[1].cooldowns[0];
+  assert.equal(cooldown.accountId, 'business');
+  assert.equal(cooldown.scope, 'model:claude-haiku-4-5-20251001');
+  assert.equal(cooldown.reason, 'model_rejected');
+  assert.ok(isIso(cooldown.until) && isIso(cooldown.setAt));
+});
+
+test('the model state decodes the cooldowns grouped by model, and the rejections and permits with their detail lifted', () => {
+  const state = d.decodeModelsState(fixture('models_state'));
+  assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
+  assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
+  assert.deepEqual(
+    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.rejectedBy]),
+    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'req-rejected', []]],
+  );
+  assert.deepEqual(
+    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.rejectedBy]),
+    [['direct', 'claude-haiku-4-5', 'req-permitted', ['business']]],
+  );
+  assert.ok(isIso(state.rejections[0].at) && isIso(state.permits[0].at));
 });
 
 test('a pool decodes its policy, status, members, and traffic', () => {

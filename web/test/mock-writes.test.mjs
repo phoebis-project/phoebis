@@ -51,7 +51,7 @@ const WRITES = [
 /** The gate lets a viewer end its own session and refresh a usage snapshot; there is no session before a login. */
 const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
-  'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
+  'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getKeyModels', 'getModelsState', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
   'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
   'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
 ];

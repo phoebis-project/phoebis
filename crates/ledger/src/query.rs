@@ -371,6 +371,28 @@ pub fn request_events(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The newest `limit` events of one kind, newest first.
+pub fn recent_events_of_kind(
+    conn: &Connection,
+    kind: &str,
+    limit: usize,
+) -> Result<Vec<EventRecord>, LedgerError> {
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2")?;
+    let rows = stmt.query_map(params![kind, limit as i64], |r| {
+        Ok(EventRecord {
+            at: r.get(0)?,
+            kind: r.get(1)?,
+            account_id: r.get(2)?,
+            key_id: r.get(3)?,
+            session_id: r.get(4)?,
+            model: r.get(5)?,
+            actor: r.get(6)?,
+            detail: r.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TokenSplit {
     pub cache_read: u64,
