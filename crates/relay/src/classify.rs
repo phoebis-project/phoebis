@@ -1,6 +1,7 @@
 //! The cooldown classification table, partitioned by account kind, applied to every upstream head before any
 //! byte reaches the caller.
 
+use phoebis_routing::MODEL_REJECTED_REASON;
 use phoebis_store::{AccountKind, AccountState};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
@@ -11,6 +12,9 @@ use crate::ratelimit::{retry_after, UnifiedHeaders};
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
 const MARGIN_MS: i64 = 1_000;
 const PERMISSION_MS: i64 = 3_600_000;
+
+/// The window name a rejection row carries; the console shows it beside the deadline.
+pub const MODEL_REJECTION_WINDOW: &str = "model_rejection";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -55,6 +59,10 @@ pub struct HeadContext<'a> {
     /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
     /// not read here; the one-round rule is the only gate.
     pub can_strip: bool,
+    /// The spelling the body carried upstream, which a rejection's message names.
+    pub wire_model: &'a str,
+    /// `routing.model_rejection_seconds` in milliseconds.
+    pub model_rejection_ms: i64,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
@@ -77,6 +85,27 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
                 return Verdict::StripInjected(named);
             }
         }
+    }
+    // Ahead of the per-kind table, for either kind: a 404 naming the model the body carried is the upstream's word
+    // that it does not serve that model, a fact about the (account, model) pair alone. A 404 naming nothing, and
+    // every 400 and 422, are the client's own to read and fall through to `Commit`.
+    if head.status == 404
+        && ctx.body_prefix.is_some_and(|b| {
+            error_type(b).as_deref() == Some("not_found_error") && names_model(b, ctx.wire_model)
+        })
+    {
+        return Verdict::FailOver {
+            cooldown: Some(Cooldown {
+                scope: Scope::Model,
+                until: ctx
+                    .now
+                    .saturating_add(ctx.model_rejection_ms)
+                    .saturating_add(MARGIN_MS),
+                reason: MODEL_REJECTED_REASON,
+                window: MODEL_REJECTION_WINDOW.into(),
+            }),
+            mark: None,
+        };
     }
     match ctx.kind {
         AccountKind::Oauth if rate_limited => {
@@ -280,6 +309,29 @@ fn names_credit_balance(body: &[u8]) -> bool {
     std::str::from_utf8(body).is_ok_and(|t| t.to_ascii_lowercase().contains("credit balance"))
 }
 
+/// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
+/// absent (the message's ends) or a boundary, where a boundary is any byte that is neither ASCII alphanumeric
+/// nor `-` nor `.` (quotes, whitespace, `:`, `,`, and the rest of punctuation all bound). An empty `wire_model`
+/// never matches, since every message contains the empty string.
+fn names_model(body: &[u8], wire_model: &str) -> bool {
+    if wire_model.is_empty() {
+        return false;
+    }
+    let Some(message) = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_ascii_lowercase))
+    else {
+        return false;
+    };
+    let wire_model = wire_model.to_ascii_lowercase();
+    let boundary =
+        |c: Option<char>| c.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'));
+    message.match_indices(&wire_model).any(|(at, _)| {
+        boundary(message[..at].chars().next_back())
+            && boundary(message[at + wire_model.len()..].chars().next())
+    })
+}
+
 /// The names an upstream 400 refused, read off `error.message` alone (never the envelope, where a field such as
 /// `request_id` can spell any of these names by accident), each as a whole token: bounded on both sides by a
 /// character outside `[A-Za-z0-9_-]` or the string's edge.
@@ -334,6 +386,8 @@ mod tests {
             body_prefix: None,
             injected: &[],
             can_strip: false,
+            wire_model: "claude-opus-5",
+            model_rejection_ms: 3_600_000,
         }
     }
 
@@ -617,6 +671,14 @@ mod tests {
         .into_bytes()
     }
 
+    /// Built through `serde_json::json!` rather than a format string, so a message that itself quotes the
+    /// model still produces a valid body.
+    fn not_found(message: &str) -> Vec<u8> {
+        serde_json::json!({"type": "error", "error": {"type": "not_found_error", "message": message}})
+            .to_string()
+            .into_bytes()
+    }
+
     #[test]
     fn a_400_naming_one_or_two_injected_items_strips_exactly_those() {
         let one = refusal(
@@ -681,5 +743,66 @@ mod tests {
             refused_names(&period_boundary, &[Injected::Diagnostics]),
             vec![Injected::Diagnostics]
         );
+    }
+
+    #[test]
+    fn a_404_naming_the_wire_model_fails_over_with_a_model_scoped_rejection_cooldown() {
+        for kind in [AccountKind::Oauth, AccountKind::ApiKey] {
+            for message in [
+                "model: claude-opus-5",
+                r#"The model "claude-opus-5" does not exist."#,
+                "claude-opus-5 is not a model this endpoint serves.",
+            ] {
+                let body = not_found(message);
+                let mut ctx = context(kind);
+                ctx.body_prefix = Some(&body);
+                let c = cooldown_of(classify(&head(404, &[]), &ctx));
+                assert_eq!(
+                    (c.scope, c.until, c.reason, c.window.as_str()),
+                    (
+                        Scope::Model,
+                        NOW + 3_600_000 + 1_000,
+                        "model_rejected",
+                        "model_rejection"
+                    ),
+                    "{message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_404_naming_another_model_or_nothing_commits() {
+        for message in [
+            "model: claude-haiku-4-5",
+            "not found",
+            "model: claude-opus-5-1",
+        ] {
+            let body = not_found(message);
+            let mut ctx = context(AccountKind::Oauth);
+            ctx.body_prefix = Some(&body);
+            assert!(
+                matches!(classify(&head(404, &[]), &ctx), Verdict::Commit),
+                "{message}"
+            );
+        }
+        let mut ctx = context(AccountKind::Oauth);
+        ctx.wire_model = "claude-opus-5-1";
+        let body = not_found("model: claude-opus-5");
+        ctx.body_prefix = Some(&body);
+        assert!(
+            matches!(classify(&head(404, &[]), &ctx), Verdict::Commit),
+            "a longer wire model is not named by a message naming only its prefix"
+        );
+    }
+
+    #[test]
+    fn a_400_and_a_422_naming_the_model_commit() {
+        let mut ctx = context(AccountKind::Oauth);
+        let body = refusal("model: claude-opus-5");
+        ctx.body_prefix = Some(&body);
+        assert!(matches!(classify(&head(400, &[]), &ctx), Verdict::Commit));
+        ctx.body_prefix = Some(&body);
+        assert!(matches!(classify(&head(422, &[]), &ctx), Verdict::Commit));
     }
 }

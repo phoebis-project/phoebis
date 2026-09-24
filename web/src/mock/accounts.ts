@@ -1,26 +1,8 @@
-import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, ServedModel, WindowId } from '@/api/types';
+import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
-import { CLAUDE_MODELS } from './catalog';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, hoursAgo, iso } from './time';
-
-const claudeModels = (opts: { discovered?: string[]; syncedAgoHours: number; vanished?: string[] }): ServedModel[] =>
-  CLAUDE_MODELS.map((id) => {
-    const isNew = (opts.discovered ?? []).includes(id);
-    return {
-      canonicalId: id,
-      id,
-      inCatalog: !(opts.vanished ?? []).includes(id),
-      isNew,
-      longContext: id !== 'claude-haiku-4-5-20251001',
-      manual: false,
-      selected: !isNew,
-      upstreamId: id,
-    };
-  });
-
-const manualModel = (id: string): ServedModel => ({ canonicalId: id, id, inCatalog: false, isNew: false, longContext: false, manual: true, selected: true, upstreamId: id });
+import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
 function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000): RateLimitWindow {
   return {
@@ -47,9 +29,6 @@ export const ACCOUNTS: Account[] = [
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
-    servedModels: claudeModels({ syncedAgoHours: 6, discovered: ['claude-opus-5'] }),
-    catalogError: null,
-    catalogSyncedAt: hoursAgo(6),
     credential: {
       accessTokenExpiresAt: ahead(6 * HOUR + 22 * MINUTE),
       lastError: null,
@@ -74,8 +53,6 @@ export const ACCOUNTS: Account[] = [
     windows: [win('5h', 1, 1 * HOUR + 12 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,
-    servedModels: claudeModels({ syncedAgoHours: 6 }),
-    catalogSyncedAt: hoursAgo(6),
     credential: {
       accessTokenExpiresAt: ahead(3 * HOUR + 2 * MINUTE),
       lastError: null,
@@ -108,9 +85,6 @@ export const ACCOUNTS: Account[] = [
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
-    servedModels: claudeModels({ syncedAgoHours: 6, vanished: [] }).concat([manualModel('claude-sonnet-4-5-20250929')]),
-    catalogError: 'the models request answered 503',
-    catalogSyncedAt: hoursAgo(6),
     overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
@@ -136,8 +110,6 @@ export const ACCOUNTS: Account[] = [
     windows: [],
     fableWindow: null,
     extraUsage: null,
-    servedModels: claudeModels({ syncedAgoHours: 6 }),
-    catalogSyncedAt: hoursAgo(6),
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 41, last7d: 233, lifetime: 3_104 },
@@ -156,8 +128,6 @@ export const ACCOUNTS: Account[] = [
     windows: [],
     fableWindow: null,
     extraUsage: null,
-    servedModels: claudeModels({ syncedAgoHours: 1 }),
-    catalogSyncedAt: hoursAgo(1),
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 128, last7d: 902, lifetime: 6_517 },
@@ -176,8 +146,6 @@ export const ACCOUNTS: Account[] = [
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
     extraUsage: null,
-    servedModels: claudeModels({ syncedAgoHours: 51 }),
-    catalogSyncedAt: hoursAgo(51),
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
       lastError: 'refresh_token rejected: invalid_grant',
@@ -203,9 +171,6 @@ export const ACCOUNTS: Account[] = [
     windows: [],
     fableWindow: null,
     extraUsage: null,
-    servedModels: [],
-    catalogError: null,
-    catalogSyncedAt: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },

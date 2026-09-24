@@ -44,10 +44,11 @@ fn main() -> anyhow::Result<()> {
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!("profile {}", config.compatibility.profile);
             println!(
-                "routing: max_attempts {}, cooldown_fallback {}s, catalog sync every {}s",
+                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog cache {}s",
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
-                config.routing.catalog_sync_interval_seconds
+                config.routing.model_rejection_seconds,
+                config.routing.catalog_cache_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());
             let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };

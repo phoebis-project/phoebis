@@ -3,6 +3,7 @@
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::Ordering;
 
@@ -78,6 +79,52 @@ impl ToSql for SubStrategy {
     }
 }
 
+/// One entry of a model rule list: a pattern over the folded canonical id, negated when `not` is set.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelRule {
+    pub pattern: String,
+    #[serde(default)]
+    pub not: bool,
+}
+
+/// How a key's own list meets its pool's: `Extend` appends the pool's entries after the key's own, `Replace`
+/// leaves them out. A pool has no mode: it inherits nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RulesMode {
+    #[default]
+    Extend,
+    Replace,
+}
+
+impl RulesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RulesMode::Extend => "extend",
+            RulesMode::Replace => "replace",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<RulesMode> {
+        match value {
+            "extend" => Some(RulesMode::Extend),
+            "replace" => Some(RulesMode::Replace),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for RulesMode {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        RulesMode::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for RulesMode {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OveragePolicy {
     Allow,
@@ -112,37 +159,6 @@ impl ToSql for OveragePolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ModelSource {
-    Discovered,
-    Manual,
-}
-
-impl ModelSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ModelSource::Discovered => "discovered",
-            ModelSource::Manual => "manual",
-        }
-    }
-}
-
-impl FromSql for ModelSource {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "discovered" => Ok(ModelSource::Discovered),
-            "manual" => Ok(ModelSource::Manual),
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
-
-impl ToSql for ModelSource {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct PoolRow {
     pub id: String,
@@ -153,7 +169,7 @@ pub struct PoolRow {
     pub overage_policy: OveragePolicy,
     pub migrate_above_utilization: Option<f64>,
     pub select_below_utilization: Option<f64>,
-    pub default_allowed_models: Option<Vec<String>>,
+    pub model_rules: Vec<ModelRule>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
     /// Order the selection set by account kind before priority; forced on under the sample-driven strategies.
@@ -195,7 +211,10 @@ pub struct ApiKeyRow {
     pub enabled: bool,
     pub revoked_at: Option<i64>,
     pub expires_at: Option<i64>,
-    pub allowed_models: Option<Vec<String>>,
+    pub model_rules: Vec<ModelRule>,
+    pub model_rules_mode: RulesMode,
+    /// Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model.
+    pub long_context_twins: bool,
     pub keepalive_opt_out: bool,
     pub body_capture_hours: Option<u32>,
     pub secret_digest: Vec<u8>,
@@ -205,32 +224,6 @@ pub struct ApiKeyRow {
     pub last_used_at: Option<i64>,
     /// When the secret a rotation retired last authenticated; cleared by the next rotation.
     pub retired_secret_last_used_at: Option<i64>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ServedModel {
-    pub account_id: String,
-    pub upstream_id: String,
-    pub canonical_id: String,
-    pub selected: bool,
-    pub source: ModelSource,
-    pub long_context: bool,
-    pub missing: bool,
-    pub is_new: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct ServedModelWrite {
-    pub upstream_id: String,
-    pub selected: bool,
-    pub long_context: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct SyncDelta {
-    pub added: Vec<String>,
-    pub missing: Vec<String>,
-    pub first_sync: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -265,7 +258,6 @@ pub struct RegistryLoad {
     pub credential_generations: Vec<(String, u64)>,
     pub keys: Vec<ApiKeyRow>,
     pub members: Vec<PoolMember>,
-    pub models: Vec<ServedModel>,
     pub pools: Vec<PoolRow>,
     pub retired_secrets: Vec<RetiredSecret>,
     /// Live keys whose id was deleted with an earlier key before this one was created, in the order the
@@ -285,8 +277,6 @@ pub struct AccountUpdate<'a> {
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
-    pub catalog: Option<&'a [(String, bool)]>,
-    pub catalog_error: Option<&'a str>,
     pub state: AccountState,
     pub at: i64,
     pub actor: &'a str,
@@ -328,17 +318,12 @@ fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
-fn list_json(list: &Option<Vec<String>>) -> Result<Option<String>, StoreError> {
-    list.as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(StoreError::from)
+fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
+    serde_json::to_string(rules).map_err(StoreError::from)
 }
 
-fn json_list(raw: Option<String>) -> Result<Option<Vec<String>>, StoreError> {
-    raw.map(|s| serde_json::from_str(&s))
-        .transpose()
-        .map_err(StoreError::from)
+fn json_rules(raw: String) -> Result<Vec<ModelRule>, StoreError> {
+    serde_json::from_str(&raw).map_err(StoreError::from)
 }
 
 impl Store {
@@ -368,13 +353,6 @@ impl Store {
                 .query_map([], |r| {
                     Ok(PoolMember { pool_id: r.get(0)?, account_id: r.get(1)?, priority: r.get::<_, i64>(2)? as u32 })
                 })?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-            models: tx
-                .prepare(
-                    "SELECT account_id, upstream_id, canonical_id, selected, source, long_context, missing, is_new \
-                     FROM account_models ORDER BY account_id, upstream_id",
-                )?
-                .query_map([], row_to_model)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pools: all_pools(&tx)?,
             retired_secrets: tx
@@ -432,7 +410,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
             params![
                 row.id,
@@ -443,7 +421,7 @@ impl Store {
                 row.overage_policy,
                 row.migrate_above_utilization,
                 row.select_below_utilization,
-                list_json(&row.default_allowed_models)?,
+                rules_json(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -463,7 +441,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, default_allowed_models_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -473,7 +451,7 @@ impl Store {
                 row.overage_policy,
                 row.migrate_above_utilization,
                 row.select_below_utilization,
-                list_json(&row.default_allowed_models)?,
+                rules_json(&row.model_rules)?,
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
@@ -609,8 +587,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -619,7 +597,9 @@ impl Store {
                 row.enabled,
                 row.revoked_at,
                 row.expires_at,
-                list_json(&row.allowed_models)?,
+                rules_json(&row.model_rules)?,
+                row.model_rules_mode,
+                row.long_context_twins,
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64),
                 row.secret_digest,
@@ -644,7 +624,7 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, allowed_models_json = ?7, keepalive_opt_out = ?8, body_capture_hours = ?9 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -652,7 +632,9 @@ impl Store {
                 row.pool_id,
                 row.enabled,
                 row.expires_at,
-                list_json(&row.allowed_models)?,
+                rules_json(&row.model_rules)?,
+                row.model_rules_mode,
+                row.long_context_twins,
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64)
             ],
@@ -766,60 +748,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn served_models(&self, account_id: &str) -> Result<Vec<ServedModel>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(
-            "SELECT account_id, upstream_id, canonical_id, selected, source, long_context, missing, is_new \
-             FROM account_models WHERE account_id = ?1 ORDER BY upstream_id",
-        )?;
-        let rows = stmt.query_map(params![account_id], row_to_model)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(StoreError::from)
-    }
-
-    /// A manual row the discovery reports keeps its source and selection, but takes the discovery's
-    /// long-context flag.
-    ///
-    /// `expected_revision` is the revision discovery ran against, where the caller has one: a catalog
-    /// fetched from an endpoint the account no longer holds answers `Stale` instead of overwriting what the
-    /// replacement endpoint serves.
-    pub fn apply_catalog_sync(
-        &self,
-        account_id: &str,
-        discovered: &[(String, bool)],
-        expected_revision: Option<u64>,
-        at: i64,
-        actor: &str,
-    ) -> Result<SyncDelta, StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if let Some(expected) = expected_revision {
-            let current: Option<i64> = tx
-                .query_row(
-                    "SELECT revision FROM accounts WHERE id = ?1",
-                    params![account_id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match current {
-                None => return Err(StoreError::AccountNotFound(account_id.to_string())),
-                Some(current) if current as u64 != expected => return Err(StoreError::Stale),
-                Some(_) => {}
-            }
-        }
-        let delta = apply_catalog_in(&tx, account_id, discovered, at, actor)?;
-        tx.commit()?;
-        Ok(delta)
-    }
-
-    /// The row, its secret, and its first catalog together: a creation that verified its key against the
-    /// upstream must not leave a keyless row behind when a later statement fails.
+    /// The row and its secret together: a creation that verified its key against the upstream must not leave
+    /// a keyless row behind when the secret write fails.
     pub fn create_account(
         &self,
         row: &AccountRow,
         secret: Option<&Secret>,
-        catalog: Option<&[(String, bool)]>,
-        catalog_error: Option<&str>,
         at: i64,
         actor: &str,
     ) -> Result<(), StoreError> {
@@ -831,8 +765,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()?;
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, catalog_error, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?10, ?6, 1, ?7, ?8, ?9, ?9)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
             params![
                 row.id,
                 row.kind,
@@ -841,16 +775,12 @@ impl Store {
                 identity_json,
                 row.lifecycle_generation as i64,
                 row.state,
-                catalog_error,
                 at,
                 crate::accounts::next_incarnation(&tx, &row.id)? as i64,
             ],
         )?;
         if let Some(secret) = secret {
             store_api_key_secret(&tx, &self.key, &row.id, secret)?;
-        }
-        if let Some(catalog) = catalog {
-            apply_catalog_in(&tx, &row.id, catalog, at, actor)?;
         }
         record_change(
             &tx,
@@ -874,14 +804,13 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = ?3, catalog_error = ?4, \
-             revision = revision + 1, updated_at = ?5 \
-             WHERE id = ?1 AND lifecycle_generation = ?6 AND revision = ?7",
+            "UPDATE accounts SET label = ?2, state = ?3, \
+             revision = revision + 1, updated_at = ?4 \
+             WHERE id = ?1 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
                 u.id,
                 u.label,
                 u.state,
-                u.catalog_error,
                 u.at,
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
@@ -902,9 +831,6 @@ impl Store {
         if let Some(secret) = u.secret {
             store_api_key_secret(&tx, &self.key, u.id, secret)?;
         }
-        if let Some(catalog) = u.catalog {
-            apply_catalog_in(&tx, u.id, catalog, u.at, u.actor)?;
-        }
         record_change(
             &tx,
             u.at,
@@ -920,192 +846,6 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
-    }
-}
-
-/// The sync inside a caller's transaction, so a creation or a verified edit can carry its catalog.
-fn apply_catalog_in(
-    tx: &Transaction<'_>,
-    account_id: &str,
-    discovered: &[(String, bool)],
-    at: i64,
-    actor: &str,
-) -> Result<SyncDelta, StoreError> {
-    let existing: Vec<(String, ModelSource)> = tx
-        .prepare("SELECT upstream_id, source FROM account_models WHERE account_id = ?1")?
-        .query_map(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let first_sync = existing.is_empty();
-    let mut delta = SyncDelta {
-        first_sync,
-        ..SyncDelta::default()
-    };
-    for (upstream_id, long_context) in discovered {
-        let known = existing.iter().any(|(id, _)| id == upstream_id);
-        if known {
-            tx.execute(
-                "UPDATE account_models SET long_context = ?3, missing = 0 WHERE account_id = ?1 AND upstream_id = ?2",
-                params![account_id, upstream_id, long_context],
-            )?;
-            continue;
-        }
-        // A clash on canonical_id with an existing row of another spelling is the upstream's own doing; the
-        // sync records the error rather than silently dropping the id.
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO account_models (account_id, upstream_id, canonical_id, selected, source, long_context, missing, is_new) \
-             VALUES (?1, ?2, ?3, ?4, 'discovered', ?5, 0, ?6)",
-            params![account_id, upstream_id, canonical_id(upstream_id), first_sync, long_context, !first_sync],
-        )?;
-        if inserted == 0 {
-            return Err(StoreError::CanonicalClash {
-                account_id: account_id.to_string(),
-                canonical_id: canonical_id(upstream_id),
-            });
-        }
-        delta.added.push(upstream_id.clone());
-    }
-    for (upstream_id, source) in &existing {
-        if *source == ModelSource::Discovered && !discovered.iter().any(|(id, _)| id == upstream_id)
-        {
-            tx.execute(
-                "UPDATE account_models SET missing = 1 WHERE account_id = ?1 AND upstream_id = ?2",
-                params![account_id, upstream_id],
-            )?;
-            delta.missing.push(upstream_id.clone());
-        }
-    }
-    tx.execute(
-        "UPDATE accounts SET catalog_synced_at = ?2, catalog_error = NULL WHERE id = ?1",
-        params![account_id, at],
-    )?;
-    record_change(
-        tx,
-        at,
-        actor,
-        "catalog_synced",
-        account_id,
-        &serde_json::json!({ "added": delta.added, "missing": delta.missing }).to_string(),
-    )?;
-    Ok(delta)
-}
-
-impl Store {
-    /// Seeds a catalog that has nothing in it; returns whether anything was written.
-    pub fn seed_catalog(
-        &self,
-        account_id: &str,
-        ids: &[(String, bool)],
-        at: i64,
-        actor: &str,
-    ) -> Result<bool, StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM account_models WHERE account_id = ?1",
-            params![account_id],
-            |r| r.get(0),
-        )?;
-        if count > 0 {
-            return Ok(false);
-        }
-        for (upstream_id, long_context) in ids {
-            tx.execute(
-                "INSERT INTO account_models (account_id, upstream_id, canonical_id, selected, source, long_context, missing, is_new) \
-                 VALUES (?1, ?2, ?3, 1, 'discovered', ?4, 0, 0)",
-                params![account_id, upstream_id, canonical_id(upstream_id), long_context],
-            )?;
-        }
-        record_change(
-            &tx,
-            at,
-            actor,
-            "catalog_seeded",
-            account_id,
-            &serde_json::json!({ "count": ids.len() }).to_string(),
-        )?;
-        tx.commit()?;
-        Ok(true)
-    }
-
-    pub fn put_served_models(
-        &self,
-        account_id: &str,
-        rows: &[ServedModelWrite],
-        actor: &str,
-    ) -> Result<(), StoreError> {
-        let mut seen = std::collections::HashSet::new();
-        for row in rows {
-            if !seen.insert(canonical_id(&row.upstream_id)) {
-                return Err(StoreError::CanonicalClash {
-                    account_id: account_id.to_string(),
-                    canonical_id: canonical_id(&row.upstream_id),
-                });
-            }
-        }
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.query_row(
-            "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-            params![account_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
-            return Err(StoreError::AccountNotFound(account_id.to_string()));
-        }
-        let listed: Vec<&str> = rows.iter().map(|r| r.upstream_id.as_str()).collect();
-        let manual: Vec<String> = tx
-            .prepare("SELECT upstream_id FROM account_models WHERE account_id = ?1 AND source = 'manual'")?
-            .query_map(params![account_id], |r| r.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for id in manual.iter().filter(|id| !listed.contains(&id.as_str())) {
-            tx.execute(
-                "DELETE FROM account_models WHERE account_id = ?1 AND upstream_id = ?2",
-                params![account_id, id],
-            )?;
-        }
-        for row in rows {
-            let updated = tx.execute(
-                "UPDATE account_models SET selected = ?3, long_context = ?4, is_new = 0 WHERE account_id = ?1 AND upstream_id = ?2",
-                params![account_id, row.upstream_id, row.selected, row.long_context],
-            )?;
-            if updated == 0 {
-                let inserted = tx.execute(
-                    "INSERT OR IGNORE INTO account_models (account_id, upstream_id, canonical_id, selected, source, long_context, missing, is_new) \
-                     VALUES (?1, ?2, ?3, ?4, 'manual', ?5, 0, 0)",
-                    params![account_id, row.upstream_id, canonical_id(&row.upstream_id), row.selected, row.long_context],
-                )?;
-                if inserted == 0 {
-                    return Err(StoreError::CanonicalClash {
-                        account_id: account_id.to_string(),
-                        canonical_id: canonical_id(&row.upstream_id),
-                    });
-                }
-            }
-        }
-        record_change(
-            &tx,
-            now_ms(),
-            actor,
-            "models_put",
-            account_id,
-            &serde_json::json!({ "count": rows.len() }).to_string(),
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// The kind of the newest catalog change the account carries, which says whether what it serves now came
-    /// from a discovery or from the built-in seed. Scanning the change log from the oldest row instead would
-    /// read stale history once the log outgrows any fixed limit.
-    pub fn latest_catalog_change(&self, account_id: &str) -> Result<Option<String>, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        conn.query_row(
-            "SELECT kind FROM registry_changes WHERE target = ?1 AND kind IN ('catalog_seeded', 'catalog_synced') ORDER BY id DESC LIMIT 1",
-            params![account_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(StoreError::from)
     }
 
     /// Where a mirror starts: the newest change, read off the primary key rather than by loading a log
@@ -1141,8 +881,8 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, default_allowed_models_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, allowed_models_json, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1159,7 +899,7 @@ fn all_keys(conn: &rusqlite::Connection) -> Result<Vec<ApiKeyRow>, StoreError> {
 }
 
 fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
-    let list: Option<String> = r.get(8)?;
+    let rules: String = r.get(8)?;
     Ok(PoolRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -1169,7 +909,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         overage_policy: r.get(5)?,
         migrate_above_utilization: r.get(6)?,
         select_below_utilization: r.get(7)?,
-        default_allowed_models: json_list(list).map_err(|e| {
+        model_rules: json_rules(rules).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
         })?,
         keepalive_json: r.get(9)?,
@@ -1184,7 +924,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
 }
 
 fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
-    let list: Option<String> = r.get(7)?;
+    let rules: String = r.get(15)?;
     Ok(ApiKeyRow {
         id: r.get(0)?,
         label: r.get(1)?,
@@ -1193,30 +933,19 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         enabled: r.get(4)?,
         revoked_at: r.get(5)?,
         expires_at: r.get(6)?,
-        allowed_models: json_list(list).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+        model_rules: json_rules(rules).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(15, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        keepalive_opt_out: r.get(8)?,
-        body_capture_hours: r.get::<_, Option<i64>>(9)?.map(|h| h as u32),
-        secret_digest: r.get(10)?,
-        prefix: r.get(11)?,
-        created_at: r.get(12)?,
-        rotated_at: r.get(13)?,
-        last_used_at: r.get(14)?,
-        retired_secret_last_used_at: r.get(15)?,
-    })
-}
-
-fn row_to_model(r: &rusqlite::Row<'_>) -> rusqlite::Result<ServedModel> {
-    Ok(ServedModel {
-        account_id: r.get(0)?,
-        upstream_id: r.get(1)?,
-        canonical_id: r.get(2)?,
-        selected: r.get(3)?,
-        source: r.get(4)?,
-        long_context: r.get(5)?,
-        missing: r.get(6)?,
-        is_new: r.get(7)?,
+        model_rules_mode: r.get(16)?,
+        long_context_twins: r.get(17)?,
+        keepalive_opt_out: r.get(7)?,
+        body_capture_hours: r.get::<_, Option<i64>>(8)?.map(|h| h as u32),
+        secret_digest: r.get(9)?,
+        prefix: r.get(10)?,
+        created_at: r.get(11)?,
+        rotated_at: r.get(12)?,
+        last_used_at: r.get(13)?,
+        retired_secret_last_used_at: r.get(14)?,
     })
 }
 
@@ -1229,7 +958,7 @@ fn pool_diff(row: &PoolRow) -> String {
         "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization,
         "select_below_utilization": row.select_below_utilization,
-        "default_allowed_models": row.default_allowed_models,
+        "model_rules": row.model_rules,
         "body_capture_hours": row.body_capture_hours,
         "prefer_subscription": row.prefer_subscription,
         "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
@@ -1246,7 +975,9 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "pool_id": row.pool_id,
         "enabled": row.enabled,
         "expires_at": row.expires_at,
-        "allowed_models": row.allowed_models,
+        "model_rules": row.model_rules,
+        "model_rules_mode": row.model_rules_mode.as_str(),
+        "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out,
         "body_capture_hours": row.body_capture_hours,
         "prefix": row.prefix,

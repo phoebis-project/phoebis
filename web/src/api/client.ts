@@ -1,5 +1,6 @@
 import type {
   Account,
+  AccountCatalog,
   AccountInput,
   AccountRollup,
   AlertDeliveryTest,
@@ -20,6 +21,8 @@ import type {
   KeepaliveRecipe,
   LifecycleDelivery,
   LiveEvent,
+  ModelRule,
+  ModelRulesMode,
   OveragePolicy,
   Overview,
   PairingInput,
@@ -35,22 +38,22 @@ import type {
   RequestDetail,
   RequestPage,
   RequestQuery,
-  ServedModel,
   Session,
   SessionInfo,
   Settings,
-  SyncResult,
 } from './types';
 
 export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
 
 export interface KeyInput {
-  allowedModels: string[] | null;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
   keepaliveOptOut: boolean;
+  longContextTwins: boolean;
+  modelRules: ModelRule[];
+  modelRulesMode: ModelRulesMode;
   name: string;
   notes: string | null;
   poolId: string;
@@ -85,10 +88,10 @@ export interface PoolInput {
   bodyCaptureHours: number;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
-  defaultAllowedModels: string[] | null;
   keepalive: PoolKeepalive;
   members: { accountId: string; priority: number }[];
   migrateAboveUtilization: number | null;
+  modelRules: ModelRule[];
   name: string;
   overagePolicy: OveragePolicy;
   /** The operator's stored answer alone; the effective value is the route's to compute from it and the strategy. */
@@ -116,6 +119,8 @@ export interface Api {
   deletePool(id: string): Promise<void>;
   /** Deletes the credential; the upstream keeps its pool memberships and can be paired again. */
   disconnectAccount(accountId: string): Promise<void>;
+  /** `refresh` reads the upstream again before answering rather than the cache. */
+  getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog>;
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
@@ -156,11 +161,9 @@ export interface Api {
   startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
-  syncCatalog(accountId: string): Promise<SyncResult>;
   testAlertRule(id: string): Promise<AlertDeliveryTest>;
   updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule>;
   updateKey(id: string, input: KeyInput): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput): Promise<Pool>;
-  updateServedModels(accountId: string, models: ServedModel[]): Promise<Account>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

@@ -1,13 +1,12 @@
 use phoebis_store::ApiKeyRow;
 
+use crate::rules::{allows, process};
 use crate::RegistrySnapshot;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ResolveError {
     #[error("model not allowed for this key")]
     ModelNotAllowed,
-    #[error("no account in this pool serves the model")]
-    ModelUnserved,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,41 +18,34 @@ pub struct Candidate {
     pub upstream_model: String,
 }
 
+/// Every member of the key's pool, in priority order, once the key's processed list allows `canonical_model`;
+/// `upstream_model` is `folded_model`, the spelling the body carries upstream. No member is an empty list, which
+/// selection reports as untimed exhaustion.
 pub fn resolve(
     snapshot: &RegistrySnapshot,
     key: &ApiKeyRow,
     canonical_model: &str,
+    folded_model: &str,
 ) -> Result<Vec<Candidate>, ResolveError> {
-    let pool = snapshot
-        .pool(&key.pool_id)
-        .ok_or(ResolveError::ModelUnserved)?;
-    let policy = key
-        .allowed_models
-        .as_ref()
-        .or(pool.default_allowed_models.as_ref());
-    if let Some(list) = policy {
-        if !list.iter().any(|allowed| allowed == canonical_model) {
-            return Err(ResolveError::ModelNotAllowed);
-        }
+    // The key was authenticated against this same snapshot, so a missing pool is unreachable in practice; an
+    // empty candidate list is the same answer selection gives a pool with no member.
+    let Some(pool) = snapshot.pool(&key.pool_id) else {
+        return Ok(Vec::new());
+    };
+    let processed = process(&key.model_rules, key.model_rules_mode, &pool.model_rules);
+    if !allows(&processed, canonical_model) {
+        return Err(ResolveError::ModelNotAllowed);
     }
-    let candidates: Vec<Candidate> = snapshot
+    Ok(snapshot
         .members(&pool.id)
         .iter()
-        .filter_map(|member| {
-            snapshot
-                .served(&member.account_id, canonical_model)
-                .map(|row| Candidate {
-                    account_id: member.account_id.clone(),
-                    incarnation: snapshot
-                        .account(&member.account_id)
-                        .map_or(0, |account| account.incarnation),
-                    priority: member.priority,
-                    upstream_model: row.upstream_id.clone(),
-                })
+        .map(|member| Candidate {
+            account_id: member.account_id.clone(),
+            incarnation: snapshot
+                .account(&member.account_id)
+                .map_or(0, |account| account.incarnation),
+            priority: member.priority,
+            upstream_model: folded_model.to_string(),
         })
-        .collect();
-    if candidates.is_empty() {
-        return Err(ResolveError::ModelUnserved);
-    }
-    Ok(candidates)
+        .collect())
 }

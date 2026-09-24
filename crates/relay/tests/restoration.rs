@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::Request;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::{AccountKind, ApiKeyRow, StorageKey, Store};
+use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, StorageKey, Store};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -665,7 +665,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -705,7 +704,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -783,7 +781,9 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest(KEY).to_vec(),
@@ -844,7 +844,6 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -870,7 +869,6 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;

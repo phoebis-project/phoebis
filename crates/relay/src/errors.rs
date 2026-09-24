@@ -219,11 +219,11 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
     message: "model not allowed for this key",
 };
 
-pub(crate) const MODEL_UNSERVED: Failure = Failure {
+pub(crate) const MODEL_REJECTED: Failure = Failure {
     status: StatusCode::NOT_FOUND,
     error_type: "not_found_error",
-    code: "model_unserved",
-    message: "no account in this pool serves the model",
+    code: "model_rejected",
+    message: "every account in this pool rejected the model",
 };
 
 pub(crate) const NOT_FOUND: Failure = Failure {

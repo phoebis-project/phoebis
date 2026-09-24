@@ -147,6 +147,12 @@ pub enum Report {
         pin: PinRef,
         now: i64,
     },
+    /// A spelling the catalog cache resolved to the dated id the API lists.
+    Resolved {
+        spelling: String,
+        dated_id: String,
+        at: i64,
+    },
     Sample {
         account_id: String,
         sample: UtilizationSample,
@@ -490,6 +496,7 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
                 store.upsert_overage(&row)?;
             }
             StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
+            StateWrite::UpsertResolution(row) => store.upsert_resolution(&row)?,
         }
     }
     Ok(moved)
@@ -520,6 +527,10 @@ impl Task {
                     .read()
                     .expect("snapshot lock poisoned")
                     .clone();
+                // Keyed on the dated id from the first request after a resolution lands, so a fresh pin and a
+                // fresh cooldown never start a second life under the spelling the resolution just retired.
+                request.canonical_model =
+                    self.state.canonical(&request.canonical_model).to_string();
                 if request.revision < snapshot.revision {
                     // The registry moved after admission: the key, its policy, the pool, and the candidates are
                     // re-derived from what is current, and a request the current registry would refuse is refused.
@@ -540,7 +551,14 @@ impl Task {
                         });
                         return;
                     }
-                    match resolve(&snapshot, key, &request.canonical_model) {
+                    // The relay's `SelectRequest` carries no folded spelling of its own; the first admitted
+                    // candidate's is the closest thing on hand, since every candidate carries the same one.
+                    let folded = request
+                        .candidates
+                        .first()
+                        .map(|c| c.upstream_model.clone())
+                        .unwrap_or_else(|| request.canonical_model.clone());
+                    match resolve(&snapshot, key, &request.canonical_model, &folded) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
                             let _ = reply.send(SelectAnswer {
@@ -787,9 +805,12 @@ impl Task {
                     return;
                 }
                 // The router's own clock dates the row, so a sample is compared against the loop's timeline
-                // rather than the relay's.
+                // rather than the relay's. The scope is canonicalized here too, not only inside
+                // `record_cooldown`, so the write this pushes and the event it emits carry the same key the
+                // state now holds the row under, whichever spelling the report named.
                 row.set_at = (self.clock)();
                 row.incarnation = incarnation;
+                row.scope = self.state.canonical_scope(&row.scope);
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -803,7 +824,8 @@ impl Task {
                     });
                     writes.push(StateWrite::UpsertCooldown(row));
                 }
-                if let Some(pin) = pin {
+                if let Some(mut pin) = pin {
+                    pin.model = self.state.canonical(&pin.model).to_string();
                     if self.state.invalidate_pin(&pin, &account_id) {
                         self.invalidated.insert(
                             (
@@ -862,7 +884,7 @@ impl Task {
             }
             Report::PinInvalidated {
                 account_id,
-                pin,
+                mut pin,
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
@@ -875,6 +897,7 @@ impl Task {
                 ) {
                     return;
                 }
+                pin.model = self.state.canonical(&pin.model).to_string();
                 if self.state.invalidate_pin(&pin, &account_id) {
                     self.invalidated.insert(
                         (
@@ -891,7 +914,8 @@ impl Task {
                     )]);
                 }
             }
-            Report::PinRenewed { pin, now } => {
+            Report::PinRenewed { mut pin, now } => {
+                pin.model = self.state.canonical(&pin.model).to_string();
                 if let Some(current) = self
                     .state
                     .pin(&pin.key_id, &pin.session_id, &pin.model)
@@ -906,6 +930,33 @@ impl Task {
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
                 }
+            }
+            Report::Resolved {
+                spelling,
+                dated_id,
+                at,
+            } => {
+                let writes = self.state.apply_resolution(&spelling, &dated_id, at);
+                // A late invalidation from a request admitted under the retiring spelling must still land
+                // beside the moved pin rather than starting a fresh migration window under a key nothing
+                // selects on any more.
+                let keys: Vec<(String, String, String)> = self
+                    .invalidated
+                    .keys()
+                    .filter(|(_, _, model)| model == &spelling)
+                    .cloned()
+                    .collect();
+                for (key_id, session_id, _) in keys {
+                    if let Some(value) = self.invalidated.remove(&(
+                        key_id.clone(),
+                        session_id.clone(),
+                        spelling.clone(),
+                    )) {
+                        self.invalidated
+                            .insert((key_id, session_id, dated_id.clone()), value);
+                    }
+                }
+                self.write(writes);
             }
             Report::Sample {
                 account_id,
@@ -1395,7 +1446,7 @@ mod tests {
             overage_policy: OveragePolicy::Allow,
             migrate_above_utilization: None,
             select_below_utilization: None,
-            default_allowed_models: None,
+            model_rules: Vec::new(),
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: false,

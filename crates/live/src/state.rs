@@ -743,6 +743,7 @@ mod tests {
             owner_id: None,
             model: "claude-sonnet-5".into(),
             canonical_model: "claude-sonnet-5".into(),
+            wire_model: "claude-sonnet-5".into(),
             stream: true,
             headers: Vec::new(),
             body: Bytes::new(),

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use phoebis_store::{AccountState, CooldownRow, OverageRow, PinRow, RoutingLoad};
+use phoebis_store::{AccountState, CooldownRow, OverageRow, PinRow, ResolutionRow, RoutingLoad};
 
 use crate::RegistrySnapshot;
 
@@ -75,6 +75,7 @@ pub enum StateWrite {
     UpsertCooldown(CooldownRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
+    UpsertResolution(ResolutionRow),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -93,6 +94,9 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
+    /// A folded spelling to the dated id it resolved to, so every lookup below can key a model's rows on the
+    /// dated id once it is known, whichever spelling the caller names.
+    resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
@@ -134,6 +138,11 @@ impl RoutingState {
                 .into_iter()
                 .map(|p| ((p.key_id.clone(), p.session_id.clone(), p.model.clone()), p))
                 .collect(),
+            resolutions: load
+                .resolutions
+                .into_iter()
+                .map(|r| (r.spelling, r.dated_id))
+                .collect(),
             round_robin: HashMap::new(),
             sample_ttl_ms: DEFAULT_SAMPLE_TTL_MS,
             samples: HashMap::new(),
@@ -146,7 +155,24 @@ impl RoutingState {
         e
     }
 
+    /// The name the state keys a model's rows on: the dated id `model` resolved to, else `model` itself.
+    pub fn canonical<'a>(&'a self, model: &'a str) -> &'a str {
+        self.resolutions
+            .get(model)
+            .map(String::as_str)
+            .unwrap_or(model)
+    }
+
+    /// `canonical` applied to a cooldown scope: `model:{spelling}` becomes `model:{dated}`; `account` stays.
+    pub fn canonical_scope(&self, scope: &str) -> String {
+        match scope.strip_prefix("model:") {
+            Some(spelling) => format!("model:{}", self.canonical(spelling)),
+            None => scope.to_string(),
+        }
+    }
+
     pub fn pin(&self, key_id: &str, session_id: &str, model: &str) -> Option<&PinRow> {
+        let model = self.canonical(model);
         self.pins.get(&(
             key_id.to_string(),
             session_id.to_string(),
@@ -154,7 +180,8 @@ impl RoutingState {
         ))
     }
 
-    pub(crate) fn put_pin(&mut self, pin: PinRow) {
+    pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
+        pin.model = self.canonical(&pin.model).to_string();
         self.pins.insert(
             (
                 pin.key_id.clone(),
@@ -171,11 +198,9 @@ impl RoutingState {
         session_id: &str,
         model: &str,
     ) -> Option<PinRow> {
-        self.pins.remove(&(
-            key_id.to_string(),
-            session_id.to_string(),
-            model.to_string(),
-        ))
+        let model = self.canonical(model).to_string();
+        self.pins
+            .remove(&(key_id.to_string(), session_id.to_string(), model))
     }
 
     /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
@@ -193,7 +218,8 @@ impl RoutingState {
 
     /// The later deadline always wins, as in the store, and `set_at` advances on its own whenever the
     /// incoming rejection is the newer one. True when either moved, which is what puts the row on the writer.
-    pub fn record_cooldown(&mut self, row: CooldownRow) -> bool {
+    pub fn record_cooldown(&mut self, mut row: CooldownRow) -> bool {
+        row.scope = self.canonical_scope(&row.scope);
         let key = (row.account_id.clone(), row.scope.clone());
         let Some(current) = self.cooldowns.get_mut(&key) else {
             self.cooldowns.insert(key, row);
@@ -272,6 +298,7 @@ impl RoutingState {
         canonical_model: &str,
         now: i64,
     ) -> Option<&CooldownRow> {
+        let canonical_model = self.canonical(canonical_model);
         let account = self
             .cooldowns
             .get(&(account_id.to_string(), "account".to_string()))
@@ -388,7 +415,7 @@ impl RoutingState {
         let key = (
             pin.key_id.clone(),
             pin.session_id.clone(),
-            pin.model.clone(),
+            self.canonical(&pin.model).to_string(),
         );
         let matches = self
             .pins
@@ -398,6 +425,93 @@ impl RoutingState {
             self.pins.remove(&key);
         }
         matches
+    }
+
+    /// Records the resolution and moves every pin and every model cooldown keyed on `spelling` to `dated_id`
+    /// in one step, so nothing selects between the two halves: two rows that meet merge as the store merges
+    /// them (the later cooldown deadline wins, the pin with the newer `last_used_at` wins). The writes carry
+    /// the deletes under the old key, the upserts under the new one, and the resolution row itself.
+    ///
+    /// The rows here are found and moved by their raw stored key rather than through `pin`/`cooldown`'s own
+    /// canonicalizing lookups: those rows were written under the literal `spelling` before this resolution
+    /// existed, so only a raw key finds them.
+    pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> Vec<StateWrite> {
+        let mut writes = Vec::new();
+        self.resolutions
+            .insert(spelling.to_string(), dated_id.to_string());
+
+        let moved_pins: Vec<PinRow> = self
+            .pins
+            .values()
+            .filter(|p| p.model == spelling)
+            .cloned()
+            .collect();
+        for pin in moved_pins {
+            self.pins.remove(&(
+                pin.key_id.clone(),
+                pin.session_id.clone(),
+                pin.model.clone(),
+            ));
+            writes.push(StateWrite::DeletePin(
+                pin.key_id.clone(),
+                pin.session_id.clone(),
+                pin.model.clone(),
+            ));
+            let dated_key = (
+                pin.key_id.clone(),
+                pin.session_id.clone(),
+                dated_id.to_string(),
+            );
+            let keep_existing = self
+                .pins
+                .get(&dated_key)
+                .is_some_and(|existing| existing.last_used_at >= pin.last_used_at);
+            if !keep_existing {
+                let moved = PinRow {
+                    model: dated_id.to_string(),
+                    ..pin
+                };
+                self.pins.insert(dated_key, moved.clone());
+                writes.push(StateWrite::UpsertPin(moved));
+            }
+        }
+
+        let old_scope = format!("model:{spelling}");
+        let new_scope = format!("model:{dated_id}");
+        let moved_cooldowns: Vec<CooldownRow> = self
+            .cooldowns
+            .values()
+            .filter(|c| c.scope == old_scope)
+            .cloned()
+            .collect();
+        for row in moved_cooldowns {
+            self.cooldowns
+                .remove(&(row.account_id.clone(), row.scope.clone()));
+            writes.push(StateWrite::DeleteCooldown(
+                row.account_id.clone(),
+                row.scope.clone(),
+            ));
+            let account_id = row.account_id.clone();
+            let moved = CooldownRow {
+                scope: new_scope.clone(),
+                ..row
+            };
+            if self.record_cooldown(moved) {
+                let merged = self
+                    .cooldowns
+                    .get(&(account_id, new_scope.clone()))
+                    .cloned()
+                    .expect("record_cooldown just inserted or updated this row");
+                writes.push(StateWrite::UpsertCooldown(merged));
+            }
+        }
+
+        writes.push(StateWrite::UpsertResolution(ResolutionRow {
+            spelling: spelling.to_string(),
+            dated_id: dated_id.to_string(),
+            resolved_at: at,
+        }));
+        writes
     }
 
     pub fn release_session(

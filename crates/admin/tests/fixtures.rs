@@ -201,8 +201,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )
         .unwrap();
     parts.store.set_profile_json("business", r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x"}}"#).unwrap();
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"least_utilized","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24}"#, Some(&cookie)).await;
-    let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","allowed_models":["claude-sonnet-5"]}"#, Some(&cookie)).await).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"least_utilized","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
         .expect("a created key answers its secret once")
@@ -410,7 +410,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), client: phoebis_bus::ClientFacts::default(), presented_retired: false, rotation_at: None, received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), client: phoebis_bus::ClientFacts::default(), presented_retired: false, rotation_at: None, received_at: now }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -445,16 +445,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-5":{"input_cost_per_token":2e-06,"output_cost_per_token":1e-05,"cache_read_input_token_cost":2e-07,"cache_creation_input_token_cost":2.5e-06,"cache_creation_input_token_cost_above_1hr":4e-06}}"#.to_vec() } }]).await;
-    parts
-        .store
-        .apply_catalog_sync(
-            "business",
-            &[("claude-sonnet-5".into(), true)],
-            None,
-            now,
-            "test",
-        )
-        .unwrap();
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
         v["requests"].as_array().unwrap().len() == 4
     })
@@ -512,7 +502,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     );
     for (name, route) in [
         ("account", "/admin/accounts/business"),
-        ("account_models", "/admin/accounts/business/models"),
+        ("account_catalog", "/admin/accounts/business/catalog"),
         ("account_quota", "/admin/accounts/business/quota?range=7d"),
         ("account_usage", "/admin/accounts/business/usage"),
         ("accounts", "/admin/accounts"),
@@ -573,6 +563,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )
         .await,
     );
+    // The shipped table prices claude-sonnet-5, not the harness's own claude-sonnet-4-5, so the live catalog
+    // this preview reads is pointed at the id the price file and the fixture both name.
+    parts.up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-5"}]}"#.to_vec(),
+        },
+    );
     let preview = json(
         post(
             app,
@@ -591,21 +592,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "pricing_import",
         "POST /admin/pricing/import",
         preview,
-    );
-    hold(
-        &planted,
-        "account_sync",
-        "POST /admin/accounts/business/models/sync",
-        json(
-            post(
-                app,
-                "/admin/accounts/business/models/sync",
-                "",
-                Some(&cookie),
-            )
-            .await,
-        )
-        .await,
     );
     hold(
         &planted,
@@ -648,6 +634,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),

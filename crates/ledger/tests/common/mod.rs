@@ -18,7 +18,7 @@ use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    Secret, StorageKey, Store, Strategy, SubStrategy,
+    RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
@@ -140,19 +140,6 @@ pub async fn harness_on(
                     .set_api_key_secret(account.id, &Secret::new(account.secret))
                     .unwrap(),
             }
-            store
-                .apply_catalog_sync(
-                    account.id,
-                    &[
-                        ("claude-sonnet-4-5".into(), false),
-                        ("claude-opus-5".into(), false),
-                        ("gpt-5".into(), false),
-                    ],
-                    None,
-                    NOW,
-                    "test",
-                )
-                .unwrap();
         }
         store
             .insert_pool(
@@ -165,7 +152,7 @@ pub async fn harness_on(
                     overage_policy: OveragePolicy::PreferPlan,
                     migrate_above_utilization: None,
                     select_below_utilization: None,
-                    default_allowed_models: None,
+                    model_rules: Vec::new(),
                     keepalive_json: "{}".into(),
                     body_capture_hours: capture.0,
                     prefer_subscription: false,
@@ -198,7 +185,9 @@ pub async fn harness_on(
                     enabled: true,
                     revoked_at: None,
                     expires_at: None,
-                    allowed_models: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: RulesMode::Extend,
+                    long_context_twins: true,
                     keepalive_opt_out: false,
                     body_capture_hours: capture.1,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
@@ -264,7 +253,7 @@ pub async fn harness_on(
     ));
     let router_handle =
         spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
-    let _catalog = Arc::new(CatalogService::new(
+    let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
         pool.clone(),
@@ -272,6 +261,7 @@ pub async fn harness_on(
         router_handle.clone(),
         clock.clone(),
         Duration::from_secs(10),
+        Duration::from_secs(60),
     ));
     let bus = Bus::new();
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
@@ -295,6 +285,7 @@ pub async fn harness_on(
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     };
     let relay = Arc::new(
         Relay::new(
@@ -305,6 +296,7 @@ pub async fn harness_on(
             resolver,
             clock,
             limits,
+            catalog,
         )
         .with_bus(bus.clone()),
     );

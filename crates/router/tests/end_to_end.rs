@@ -362,7 +362,8 @@ usage:
         .unwrap();
     assert_eq!(sessions["sessions"][0]["account_id"], "console");
 
-    // Registry edits show in the next selection: no member, no candidate; a revoked key, a 401.
+    // Registry edits show in the next selection: no member, no candidate, nothing an operator has not caused;
+    // a revoked key, a 401.
     assert_eq!(
         client
             .put(admin("/pools/main/members"))
@@ -379,7 +380,7 @@ usage:
             unserved.status().as_u16(),
             unserved.headers()["x-phoebis-error-code"].to_str().unwrap()
         ),
-        (404, "model_unserved")
+        (503, "accounts_unavailable")
     );
     assert_eq!(
         client

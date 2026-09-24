@@ -145,15 +145,23 @@ pub(crate) async fn import(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Ok(p) => p,
         Err(e) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
     };
-    let served: Vec<String> = match state.store.load_registry() {
-        Ok(load) => {
-            let mut ids: Vec<String> = load.models.iter().map(|m| m.canonical_id.clone()).collect();
-            ids.sort();
-            ids.dedup();
-            ids
-        }
+    let accounts = match state.store.accounts() {
+        Ok(accounts) => accounts,
         Err(e) => return store_failure(e),
     };
+    let mut served = std::collections::BTreeSet::new();
+    for account in accounts.iter().filter(|a| a.enabled) {
+        served.extend(
+            state
+                .catalog
+                .fetch(account)
+                .await
+                .models
+                .into_iter()
+                .map(|m| m.id),
+        );
+    }
+    let served: Vec<String> = served.into_iter().collect();
     let diff = diff_against(&state.pricing.current(), &parsed, &served);
     let now = (state.clock)();
     let token = format!("imp_{:032x}", rand::random::<u128>());

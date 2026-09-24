@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { allowedModels: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
@@ -42,18 +42,16 @@ const WRITES = [
   ['revokeKey', (api) => api.revokeKey('laptop')],
   ['rotateKey', (api) => api.rotateKey('laptop')],
   ['startPairing', (api) => api.startPairing('team')],
-  ['syncCatalog', (api) => api.syncCatalog('business')],
   ['testAlertRule', (api) => api.testAlertRule('rule_7d')],
   ['updateAlertRule', async (api) => api.updateAlertRule('rule_7d', ruleInputOf((await api.listAlertRules()).find((r) => r.id === 'rule_7d')))],
   ['updateKey', (api) => api.updateKey('laptop', { ...keyInput, name: 'laptop', expiresAt: undefined })],
   ['updatePool', async (api) => api.updatePool('all', await storyPool(api))],
-  ['updateServedModels', (api) => api.updateServedModels('business', [])],
   ['verifyAccount', (api) => api.verifyAccount('business')],
 ];
 /** The gate lets a viewer end its own session and refresh a usage snapshot; there is no session before a login. */
 const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
-  'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
+  'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
   'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
   'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
 ];

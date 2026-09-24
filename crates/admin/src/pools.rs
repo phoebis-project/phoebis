@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::routes::{failure, reload_or_refuse, store_failure};
+use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
@@ -44,8 +45,8 @@ struct PoolInput {
     migrate_above_utilization: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
     select_below_utilization: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option")]
-    default_allowed_models: Option<Option<Vec<String>>>,
+    #[serde(default)]
+    model_rules: Option<Vec<RuleInput>>,
     #[serde(default)]
     keepalive: Option<Value>,
     #[serde(default)]
@@ -194,10 +195,8 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         }
         row.select_below_utilization = threshold;
     }
-    if let Some(list) = &input.default_allowed_models {
-        row.default_allowed_models = list
-            .as_ref()
-            .map(|l| l.iter().map(|m| phoebis_store::canonical_id(m)).collect());
+    if let Some(list) = &input.model_rules {
+        row.model_rules = parse_rules(list)?;
     }
     if let Some(keepalive) = &input.keepalive {
         let merged = merged_keepalive(row, keepalive);
@@ -290,7 +289,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
         select_below_utilization: None,
-        default_allowed_models: None,
+        model_rules: Vec::new(),
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
         prefer_subscription: false,
@@ -536,7 +535,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "prefer_subscription": row.prefer_subscription, "prefer_subscription_effective": row.kind_ordered(),
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
-        "default_allowed_models": row.default_allowed_models,
+        "model_rules": row.model_rules,
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,

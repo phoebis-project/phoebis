@@ -1,11 +1,9 @@
 mod common;
-use common::{
-    backing_off_parts, delete, get, json, login, patch, post, put, succeed_token_requests,
-};
+use common::{backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests};
 use fake_upstream::Respond;
 
 #[tokio::test]
-async fn creating_an_api_key_account_verifies_it_seeds_its_catalog_and_a_rejected_key_is_refused() {
+async fn creating_an_api_key_account_verifies_it_and_a_rejected_key_is_refused() {
     let (app, up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let created = post(
@@ -17,10 +15,7 @@ async fn creating_an_api_key_account_verifies_it_seeds_its_catalog_and_a_rejecte
     .await;
     assert_eq!(created.status(), 201);
     let body = json(created).await;
-    assert_eq!(
-        (body["state"].as_str(), body["served_models_count"].as_u64()),
-        (Some("ready"), Some(1))
-    );
+    assert_eq!(body["state"].as_str(), Some("ready"));
     assert!(body.get("secret").is_none() && !body.to_string().contains("sk-ant-api03-NEW"));
     let probe = up
         .requests()
@@ -287,8 +282,8 @@ async fn a_rejected_replacement_secret_leaves_the_original_credential_and_the_sn
 }
 
 #[tokio::test]
-async fn a_paired_account_routes_its_discovered_models_without_a_manual_sync() {
-    let (app, _up, store, router) = common::admin_parts().await;
+async fn a_paired_account_routes_without_a_catalog_fetch() {
+    let (app, up, store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let id = common::exchanged_session_for(&app, &cookie, "business").await;
     assert_eq!(
@@ -303,19 +298,20 @@ async fn a_paired_account_routes_its_discovered_models_without_a_manual_sync() {
         200
     );
     assert!(
-        store
-            .served_models("business")
-            .unwrap()
+        up.requests()
             .iter()
-            .any(|m| m.upstream_id == "claude-sonnet-4-5" && m.selected),
-        "the confirm ran a sync"
+            .all(|r| !r.line.starts_with("GET /v1/models")),
+        "the pairing confirm probes nothing"
+    );
+    // No served-model gate stands between the catalog and routing any more: every enabled member of a
+    // pool is a candidate for a model the rules allow, whatever the live catalog answers.
+    assert_eq!(
+        store.account("business").unwrap().unwrap().state,
+        phoebis_store::AccountState::Ready
     );
     assert!(
-        router
-            .snapshot()
-            .served("business", "claude-sonnet-4-5")
-            .is_some(),
-        "and the snapshot routes it"
+        router.snapshot().account("business").is_some(),
+        "a request routes"
     );
 }
 
@@ -375,65 +371,97 @@ async fn a_disconnect_between_the_exchange_and_the_confirm_answers_a_conflict() 
 }
 
 #[tokio::test]
-async fn served_models_are_listed_written_and_synced_and_a_clash_is_refused() {
+async fn the_catalog_route_answers_the_live_list_caches_it_and_refreshes_on_demand() {
     let (app, up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    up.set_rule_after(0, "/v1/models", Respond::Json { status: 200, headers: vec![], body: br#"{"data":[{"id":"claude-sonnet-4-5"},{"id":"claude-opus-5","max_input_tokens":1000000}]}"#.to_vec() });
-    let synced = post(
-        &app,
-        "/admin/accounts/direct/models/sync",
-        "",
-        Some(&cookie),
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::json!({
+                "data": [
+                    { "id": "claude-opus-5", "display_name": "Claude Opus 5", "created_at": "2025-11-01", "max_input_tokens": 1_000_000, "max_tokens": 64_000 },
+                    { "id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5", "created_at": "2025-09-29", "max_input_tokens": 1_000_000, "max_tokens": 128_000 },
+                ],
+            })
+            .to_string()
+            .into_bytes(),
+        },
+    );
+    let probes = || {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /v1/models"))
+            .count()
+    };
+    let listed = json(get(&app, "/admin/accounts/direct/catalog", Some(&cookie)).await).await;
+    let models = listed["models"].as_array().unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["claude-opus-5", "claude-sonnet-4-5"],
+        "sorted by id"
+    );
+    assert_eq!(models[0]["display_name"], "Claude Opus 5");
+    assert_eq!(models[0]["created_at"], "2025-11-01");
+    assert_eq!(models[0]["max_input_tokens"], 1_000_000);
+    assert_eq!(models[0]["max_tokens"], 64_000);
+    assert!(listed["error"].is_null());
+
+    let before = probes();
+    let second = json(get(&app, "/admin/accounts/direct/catalog", Some(&cookie)).await).await;
+    assert_eq!(
+        second["models"].as_array().unwrap().len(),
+        2,
+        "the cache answers"
+    );
+    assert_eq!(probes(), before, "a second GET adds no probe");
+
+    let refreshed = json(
+        get(
+            &app,
+            "/admin/accounts/direct/catalog?refresh=1",
+            Some(&cookie),
+        )
+        .await,
     )
     .await;
-    assert_eq!(synced.status(), 200);
-    assert_eq!(json(synced).await["added"].as_array().unwrap().len(), 2);
-    let listed = json(get(&app, "/admin/accounts/direct/models", Some(&cookie)).await).await;
-    assert_eq!(listed["models"].as_array().unwrap().len(), 2);
-    assert_eq!(listed["built_in"], false);
-    assert!(listed["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|m| m["upstream_id"] == "claude-opus-5" && m["long_context"] == true));
-    let written = put(&app, "/admin/accounts/direct/models", r#"{"models":[{"upstream_id":"claude-sonnet-4-5","selected":false},{"upstream_id":"claude-opus-5","selected":true},{"upstream_id":"Vendor/Model-A","selected":true}]}"#, Some(&cookie)).await;
-    assert_eq!(written.status(), 200);
-    let listed = json(written).await;
-    assert!(listed["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|m| m["upstream_id"] == "Vendor/Model-A" && m["source"] == "manual"));
-    assert_eq!(put(&app, "/admin/accounts/direct/models", r#"{"models":[{"upstream_id":"a/b","selected":true},{"upstream_id":"A/B","selected":true}]}"#, Some(&cookie)).await.status(), 409);
+    assert_eq!(refreshed["models"].as_array().unwrap().len(), 2);
+    assert_eq!(probes(), before + 1, "?refresh=1 adds one");
+
     let viewer = login(&app, "viewer-secret").await;
     assert_eq!(
-        get(&app, "/admin/accounts/direct/models", Some(&viewer))
+        get(&app, "/admin/accounts/direct/catalog", Some(&viewer))
             .await
             .status(),
-        200
+        200,
+        "a viewer may GET"
     );
-    assert_eq!(
-        post(
+
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let failed = json(
+        get(
             &app,
-            "/admin/accounts/direct/models/sync",
-            "",
-            Some(&viewer)
+            "/admin/accounts/direct/catalog?refresh=1",
+            Some(&cookie),
         )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        put(
-            &app,
-            "/admin/accounts/direct/models",
-            r#"{"models":[]}"#,
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
+        .await,
+    )
+    .await;
+    assert_eq!(failed["models"].as_array().unwrap().len(), 0);
+    assert_eq!(failed["error"], "the models endpoint answered 503");
 }
 
 #[tokio::test]
@@ -551,295 +579,6 @@ async fn a_second_slot_cannot_be_paired_to_an_upstream_account_the_first_holds()
         .as_str()
         .unwrap()
         .contains("already paired"));
-}
-
-#[tokio::test]
-async fn creating_an_account_whose_catalog_carries_two_spellings_records_the_clash() {
-    let (app, up, _store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"Vendor/Model-A"},{"id":"vendor/model-a"}]}"#.to_vec(),
-        },
-    );
-    let created = post(
-        &app,
-        "/admin/accounts",
-        r#"{"id":"vendor","kind":"api_key","label":"Vendor","secret":"vendor-secret"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(created.status(), 201);
-    let body = json(created).await;
-    assert_eq!(
-        (body["state"].as_str(), body["served_models_count"].as_u64()),
-        (Some("ready"), Some(0)),
-        "the row is stored with no catalog rows"
-    );
-    assert!(
-        body["catalog_error"]
-            .as_str()
-            .is_some_and(|e| e.contains("two spellings")),
-        "the clash is recorded: {}",
-        body["catalog_error"]
-    );
-    assert_eq!(
-        patch(
-            &app,
-            "/admin/accounts/vendor",
-            r#"{"label":"Vendor 2"}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        200,
-        "and the account can still be edited"
-    );
-}
-
-#[tokio::test]
-async fn a_sync_that_cannot_publish_answers_503_with_the_catalog_written() {
-    let (app, up, store, router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
-        },
-    );
-    store.debug_fail_next_load();
-    let refused = post(
-        &app,
-        "/admin/accounts/direct/models/sync",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 503);
-    assert_eq!(
-        refused.headers().get("x-phoebis-error-code").unwrap(),
-        "registry_unavailable"
-    );
-    assert!(
-        store
-            .served_models("direct")
-            .unwrap()
-            .iter()
-            .any(|m| m.upstream_id == "claude-sonnet-4-5"),
-        "the rows were written; only the publication failed"
-    );
-    assert!(
-        router
-            .snapshot()
-            .served("direct", "claude-sonnet-4-5")
-            .is_none(),
-        "and routing still serves the catalog it had"
-    );
-    router.reload().await.unwrap();
-    assert!(router
-        .snapshot()
-        .served("direct", "claude-sonnet-4-5")
-        .is_some());
-}
-
-#[tokio::test]
-async fn a_discovered_id_clashing_with_a_stored_spelling_is_recorded_as_a_catalog_error() {
-    let (app, up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    assert_eq!(
-        put(
-            &app,
-            "/admin/accounts/direct/models",
-            r#"{"models":[{"upstream_id":"Vendor/Model-A","selected":true}]}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        200
-    );
-    up.add_credential_rule(
-        "sk-ant-api03-NEW",
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"vendor/model-a"}]}"#.to_vec(),
-        },
-    );
-    let patched = patch(
-        &app,
-        "/admin/accounts/direct",
-        r#"{"secret":"sk-ant-api03-NEW"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(patched.status(), 200);
-    let listed = json(get(&app, "/admin/accounts/direct/models", Some(&cookie)).await).await;
-    assert!(
-        listed["catalog_error"]
-            .as_str()
-            .is_some_and(|e| e.contains("vendor/model-a")),
-        "the clash is recorded rather than rolling the edit back"
-    );
-    assert_eq!(
-        store
-            .served_models("direct")
-            .unwrap()
-            .iter()
-            .map(|m| m.upstream_id.clone())
-            .collect::<Vec<_>>(),
-        ["Vendor/Model-A"],
-        "the stored catalog is untouched"
-    );
-    assert_eq!(
-        store
-            .api_key_credential("direct")
-            .unwrap()
-            .unwrap()
-            .0
-            .expose(),
-        "sk-ant-api03-NEW",
-        "and the verified secret still committed"
-    );
-}
-
-#[tokio::test]
-async fn a_sync_that_cannot_publish_says_whether_the_registry_was_written() {
-    let (app, up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Gated(Box::new(Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
-        })),
-    );
-    let syncing = {
-        let app = app.clone();
-        let cookie = cookie.clone();
-        tokio::spawn(async move {
-            post(
-                &app,
-                "/admin/accounts/direct/models/sync",
-                "",
-                Some(&cookie),
-            )
-            .await
-        })
-    };
-    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        up.requests()
-            .iter()
-            .any(|r| r.line.starts_with("GET /v1/models"))
-            .then_some(())
-    })
-    .await;
-    // The row moves under the discovery, so the result is stale and nothing is written.
-    store
-        .update_account(
-            "direct",
-            store.account_revision("direct").unwrap().unwrap(),
-            "Direct (renamed)",
-            "test",
-        )
-        .unwrap();
-    store.debug_fail_next_load();
-    up.release();
-    let refused = syncing.await.unwrap();
-    assert_eq!(refused.status(), 503);
-    assert_eq!(
-        refused.headers().get("x-phoebis-error-code").unwrap(),
-        "registry_unavailable"
-    );
-    let body = json(refused).await;
-    assert_eq!(body["written"], false);
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("nothing was written"),
-        "{body}"
-    );
-    assert!(
-        store.served_models("direct").unwrap().is_empty(),
-        "the stale discovery wrote no rows"
-    );
-    // A discovery error: the error is recorded, no catalog row lands, and the body says so.
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Json {
-            status: 500,
-            headers: vec![],
-            body: b"{}".to_vec(),
-        },
-    );
-    store.debug_fail_next_load();
-    let refused = post(
-        &app,
-        "/admin/accounts/direct/models/sync",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    let body = json(refused).await;
-    assert_eq!(body["written"], false);
-    assert!(
-        body["error"].as_str().unwrap().contains("discovery failed"),
-        "{body}"
-    );
-}
-
-#[tokio::test]
-async fn a_sync_answers_404_for_an_account_deleted_while_discovery_was_running() {
-    let (app, up, store, _router) = common::admin_parts().await;
-    let cookie = login(&app, "admin-secret").await;
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Gated(Box::new(Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-4-5"}]}"#.to_vec(),
-        })),
-    );
-    let syncing = {
-        let app = app.clone();
-        let cookie = cookie.clone();
-        tokio::spawn(async move {
-            post(
-                &app,
-                "/admin/accounts/direct/models/sync",
-                "",
-                Some(&cookie),
-            )
-            .await
-        })
-    };
-    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
-        up.requests()
-            .iter()
-            .any(|r| r.line.starts_with("GET /v1/models"))
-            .then_some(())
-    })
-    .await;
-    store.delete_account("direct", "test").unwrap();
-    up.release();
-    let refused = syncing.await.unwrap();
-    assert_eq!(refused.status(), 404);
-    assert_eq!(
-        json(refused).await,
-        serde_json::json!({ "error": "account not found" })
-    );
 }
 
 #[tokio::test]
@@ -984,7 +723,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
         ),
         (Some(1), Some(2))
     );
-    assert!(listed["served_models"].is_array() && listed["profile"]["display_name"] == "Biz");
+    assert_eq!(listed["profile"]["display_name"], "Biz");
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert!(
         direct["profile"].is_null()

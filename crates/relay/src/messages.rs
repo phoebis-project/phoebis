@@ -21,7 +21,7 @@ use phoebis_bus::{
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
     resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Presented, Report,
-    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
@@ -39,11 +39,12 @@ use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
 use crate::casing::OriginalHead;
+use crate::catalog::CatalogService;
 use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -98,6 +99,8 @@ pub struct Limits {
     /// Upstream submissions one caller request may cost across every account it tries.
     pub max_attempts: u8,
     pub max_request_bytes: usize,
+    /// How long an account is skipped for a model it answered 404 for.
+    pub model_rejection: Duration,
 }
 
 /// What one relayed request cost and how it ended, attached to the response for the accounting layer that
@@ -155,6 +158,7 @@ pub struct Relay {
     bus: Option<Bus>,
     /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
     cache_diagnostics: bool,
+    catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
     drift: DriftGuard,
     pub(crate) limits: Limits,
@@ -176,11 +180,13 @@ impl Relay {
         resolver: Resolver,
         clock: Clock,
         limits: Limits,
+        catalog: Arc<CatalogService>,
     ) -> Relay {
         Relay {
             bodies: TaskTracker::new(),
             bus: None,
             cache_diagnostics: false,
+            catalog,
             clock,
             drift: DriftGuard,
             limits,
@@ -191,6 +197,10 @@ impl Relay {
             router,
             store,
         }
+    }
+
+    pub fn catalog(&self) -> &Arc<CatalogService> {
+        &self.catalog
     }
 
     /// Attaches the bus every relayed request is published to. Without one the relay publishes nothing.
@@ -361,6 +371,7 @@ impl Trace {
             canonical_model: identity
                 .map(|i| i.canonical_model.clone())
                 .unwrap_or_default(),
+            wire_model: identity.map(|i| i.folded_model.clone()).unwrap_or_default(),
             stream,
             headers: published_headers(headers),
             body,
@@ -489,6 +500,10 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
         Some("account_cancelled") => Outcome::Canceled,
         Some("accounts_exhausted") | Some("accounts_unavailable") => Outcome::Exhausted,
+        // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
+        // selection) or after the last one (the budget's end): the account that answered it is
+        // conclusive either way, not a transport or upstream failure.
+        Some("model_rejected") => Outcome::Rejected,
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
@@ -860,7 +875,7 @@ impl Relay {
                 )
                 .await;
         }
-        let identity = match identify(&parts.headers, &raw) {
+        let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
                 trace
@@ -888,6 +903,12 @@ impl Relay {
                     .await;
             }
         };
+        // A hit substitutes the resolved dated id as the canonical name before anything downstream reads it,
+        // so the observed event, the routing decision, and the ledger all agree on it from this point on; a
+        // miss leaves the folded spelling as canonical until a background probe lands one.
+        if let Some(dated) = self.catalog.canonical_for(&identity.folded_model) {
+            identity.canonical_model = dated;
+        }
         trace
             .observed(
                 Some(&key),
@@ -902,7 +923,12 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
-        let candidates = match resolve(&snapshot, &key, &identity.canonical_model) {
+        let candidates = match resolve(
+            &snapshot,
+            &key,
+            &identity.canonical_model,
+            &identity.folded_model,
+        ) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
                 return self
@@ -915,18 +941,10 @@ impl Relay {
                     )
                     .await
             }
-            Err(ResolveError::ModelUnserved) => {
-                return self
-                    .refused(
-                        &trace,
-                        MODEL_UNSERVED,
-                        Some(&key),
-                        Some(&identity),
-                        client_version.as_deref(),
-                    )
-                    .await
-            }
         };
+        // The request is admitted from here on, so a refused request above never reaches this: one
+        // background resolution for the spelling, off the request's own path.
+        self.catalog.request_resolution(&identity.folded_model);
         // Narrows what a probe starts the loop with; a registry write can move the revision before any
         // attempt, and then the router recomputes candidates from its own snapshot without this filter, so
         // `probe_eligible` runs again on every selection below to hold the same rule against the chosen row.
@@ -1106,19 +1124,9 @@ impl Relay {
                         )
                         .await
                 }
-                SelectResult::Refused(ResolveError::ModelUnserved) => {
-                    return self
-                        .refused(
-                            &trace,
-                            MODEL_UNSERVED,
-                            Some(&key),
-                            Some(&identity),
-                            admitted.client_version.as_deref(),
-                        )
-                        .await
-                }
                 SelectResult::Exhausted(exhaustion) => {
                     let code = match exhaustion {
+                        Exhaustion::ModelRejected => MODEL_REJECTED.code,
                         Exhaustion::Timed { .. } => "accounts_exhausted",
                         Exhaustion::Untimed => "accounts_unavailable",
                     };
@@ -1206,6 +1214,9 @@ impl Relay {
         };
         let memory_key = admitted.memory_key.as_ref();
         let canonical_model = &admitted.identity.canonical_model;
+        // Session memory tracks a repeat of the same wire spelling, not the resolved identity: a resolution
+        // landing between two requests for the same spelling must not make the second look like a fresh one.
+        let folded_model = &admitted.identity.folded_model;
         // A failover leg may follow a long first one; the key may have been evicted and saved meanwhile, and
         // `build` reads the map alone.
         if let Some(key) = memory_key {
@@ -1256,7 +1267,7 @@ impl Relay {
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
             let previous = memory_key
-                .map(|key| self.memory.previous(key, &account.id, canonical_model))
+                .map(|key| self.memory.previous(key, &account.id, folded_model))
                 .unwrap_or_default();
             let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
                 .then_some(previous.message_id.as_deref());
@@ -1613,7 +1624,7 @@ impl Relay {
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
         // already handed its connection back to the pool.
-        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 429) {
+        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
             let Some(drained) = until_cancelled(
                 drain_bounded(&mut reader, self.limits.idle_timeout),
                 ctx.cancel,
@@ -1736,6 +1747,8 @@ impl Relay {
                 body_prefix: decoded.as_deref(),
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
+                wire_model: &ctx.identity.folded_model,
+                model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -1839,7 +1852,9 @@ impl Relay {
                     let memory = self.memory.clone();
                     let key = key.clone();
                     let account_id = ctx.account.id.clone();
-                    let model = ctx.identity.canonical_model.clone();
+                    // The same wire-spelling key `previous` reads above, not the resolved identity: see its
+                    // comment.
+                    let model = ctx.identity.folded_model.clone();
                     let clock = self.clock.clone();
                     Box::new(move |id: String| {
                         // Awaited on the body task before the next piece goes out, so the caller's next
@@ -1864,12 +1879,27 @@ impl Relay {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
                         let fallback_ms = ctx.fallback_ms;
-                        let (router, clock, account_id, kind, model, pin, request_id) = (
+                        let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
+                        // Two spellings captured for two purposes that diverge once a resolution lands: the
+                        // canonical id is the cooldown's scope and `report_failover`'s model, the folded
+                        // spelling is the wire model `classify`'s rejection arm matches the upstream's own
+                        // words against.
+                        let (
+                            router,
+                            clock,
+                            account_id,
+                            kind,
+                            canonical_model,
+                            wire_model,
+                            pin,
+                            request_id,
+                        ) = (
                             self.router.clone(),
                             self.clock.clone(),
                             ctx.account.id.clone(),
                             ctx.account.kind,
                             ctx.identity.canonical_model.clone(),
+                            ctx.identity.folded_model.clone(),
                             ctx.portable.then(|| ctx.pin.cloned()).flatten(),
                             ctx.request_id.to_string(),
                         );
@@ -1887,7 +1917,7 @@ impl Relay {
                                 &head,
                                 &HeadContext {
                                     kind,
-                                    canonical_model: &model,
+                                    canonical_model: &canonical_model,
                                     now,
                                     fallback_ms,
                                     first_event: Some(&data),
@@ -1897,12 +1927,14 @@ impl Relay {
                                     // never reaches it.
                                     injected: &[],
                                     can_strip: false,
+                                    wire_model: &wire_model,
+                                    model_rejection_ms,
                                 },
                             ) {
                                 report_failover(
                                     &router,
                                     &account_id,
-                                    &model,
+                                    &canonical_model,
                                     cooldown,
                                     mark,
                                     pin,
@@ -1942,6 +1974,10 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
+        // Read before `report_failover` moves `cooldown` below.
+        let rejected = cooldown
+            .as_ref()
+            .is_some_and(|c| c.reason == MODEL_REJECTED_REASON);
         // A non-portable request keeps its pin: the failed response goes back to the client on the
         // account that holds its state, and only the cooldown is recorded.
         report_failover(
@@ -1980,12 +2016,29 @@ impl Relay {
                 .await,
             );
         }
-        // Every failover row the table produces answers 400, 401, 403, or 429, all of which were
+        // Every failover row the table produces answers 400, 401, 403, 404, or 429, all of which were
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
         if ctx.portable && ctx.spent < self.limits.max_attempts {
             return Next::FailOver;
+        }
+        // The budget is spent and this account's rejection was the last word: the caller gets the router's
+        // own refusal rather than a 404 that names an account it can never retry.
+        if ctx.portable && rejected {
+            let mut outcome = outcome;
+            outcome.error_code = Some(MODEL_REJECTED.code.to_string());
+            return Next::Respond(
+                self.answer(
+                    ctx.trace,
+                    MODEL_REJECTED.response(ctx.request_id),
+                    outcome,
+                    None,
+                    ResponseFacts::default(),
+                    None,
+                )
+                .await,
+            );
         }
         Next::Respond(
             self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)

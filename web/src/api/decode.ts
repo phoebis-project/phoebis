@@ -1,7 +1,7 @@
 import type {
-  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, SessionLifecycleDetail, Settings, WindowId,
+  Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode, Overview, PairingSession, Pool,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, Session, SessionLifecycleDetail, Settings, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
@@ -60,9 +60,9 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   return 'ready';
 }
 
-function decodeServedModel(m: Rec): ServedModel {
-  const upstreamId = str(m.upstream_id);
-  return { canonicalId: str(m.canonical_id, upstreamId), id: str(m.canonical_id, upstreamId), inCatalog: !bool(m.missing), isNew: bool(m.new), longContext: bool(m.long_context), manual: str(m.source) === 'manual', selected: bool(m.selected), upstreamId };
+export function decodeModelRule(v: unknown): ModelRule {
+  const r = rec(v);
+  return { not: bool(r.not), pattern: str(r.pattern) };
 }
 
 // The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
@@ -78,8 +78,6 @@ export function decodeAccount(v: unknown): Account {
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   return {
-    catalogError: strOrNull(a.catalog_error),
-    catalogSyncedAt: isoOrNull(a.catalog_synced_at),
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
@@ -94,7 +92,6 @@ export function decodeAccount(v: unknown): Account {
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     routingEnabled: bool(a.enabled, true),
-    servedModels: list(a.served_models).map(rec).map(decodeServedModel),
     status: accountStatus(a, cooldowns),
     subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier) } : null,
     windows: windows.filter((w) => w.id !== '7d_fable'),
@@ -109,11 +106,14 @@ export function planLabel(tier: string): string {
   return m[2] ? `${name} ${m[2]}x` : name;
 }
 
-export function decodeCatalog(accounts: Account[]): CatalogModel[] {
-  // The catalog is the union of what the accounts serve.
-  const out = new Map<string, CatalogModel>();
-  for (const a of accounts) for (const m of a.servedModels) if (!out.has(m.id)) out.set(m.id, { id: m.id, longContext: m.longContext });
-  return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
+export function decodeCatalogModel(v: unknown): CatalogModel {
+  const m = rec(v);
+  return { createdAt: str(m.created_at), displayName: str(m.display_name), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
+}
+
+export function decodeAccountCatalog(v: unknown): AccountCatalog {
+  const c = rec(v);
+  return { error: strOrNull(c.error), fetchedAt: isoOr(c.fetched_at, epoch), models: list(c.models).map(decodeCatalogModel) };
 }
 
 export function decodePairingSession(v: unknown): PairingSession {
@@ -148,7 +148,6 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
-    allowedModels: k.allowed_models === null || k.allowed_models === undefined ? null : strings(k.allowed_models),
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
@@ -157,6 +156,9 @@ export function decodeKey(v: unknown): ApiKey {
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
     lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
+    longContextTwins: bool(k.long_context_twins, true),
+    modelRules: list(k.model_rules).map(decodeModelRule),
+    modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
     name: str(k.label),
     notes: strOrNull(k.notes),
     poolId: str(k.pool_id),
@@ -170,6 +172,7 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 export const ELIGIBILITY_VALUES = ['cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
 export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
 export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
 export const POOL_STRATEGY_VALUES = ['earliest_refresh', 'least_utilized', 'priority_random', 'round_robin'] as const;
@@ -199,7 +202,6 @@ export function decodePool(v: unknown): Pool {
     cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
-    defaultAllowedModels: p.default_allowed_models === null || p.default_allowed_models === undefined ? null : strings(p.default_allowed_models),
     id: str(p.id),
     keepalive: {
       coldProbeLimit: num(k.cold_probe_limit), costCapUsdPerDay: numOrNull(k.probe_cost_cap_usd_per_day), enabled: bool(k.enabled), jitterSeconds1h: num(k.jitter_seconds_1h), jitterSeconds5m: num(k.jitter_seconds_5m),
@@ -209,6 +211,7 @@ export function decodePool(v: unknown): Pool {
     // A row from before the router reported eligibility reads as not servable rather than as servable.
     members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
+    modelRules: list(p.model_rules).map(decodeModelRule),
     name: str(p.label),
     overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
     preferSubscription: bool(p.prefer_subscription),
@@ -368,12 +371,11 @@ export function decodeSettings(v: unknown): Settings {
     // A router too old to answer the block behaves as the block's own defaults describe, and runs the profile the about card already shows.
     compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), outboundGzip: bool(c.outbound_gzip), profile: str(c.profile, str(rec(s.about).profile)), usageEntrypoint: str(c.usage_entrypoint, 'cli') },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
-    lastSyncAt: isoOrNull(s.last_sync_at),
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     pricing: decodePricing(s.pricing),
     quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
-    routing: { catalogSyncIntervalSeconds: num(route.catalog_sync_interval_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts) },
+    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
     usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },
@@ -409,15 +411,18 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
   }
 }
 
+const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
+
 export const encodeKey = (i: KeyInput) => ({
-  allowed_models: i.allowedModels, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
-  keepalive_opt_out: i.keepaliveOptOut, label: i.name, notes: i.notes, pool_id: i.poolId,
+  keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
+  model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });
 export const encodePool = (i: PoolInput) => ({
   affinity_ttl_seconds: i.affinityTtlSeconds, api_key_sub_strategy: i.apiKeySubStrategy, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, in_overage: i.cacheTtl.inOverage, main: i.cacheTtl.main, models: i.cacheTtl.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: i.cacheTtl.subagent },
-  default_allowed_models: i.defaultAllowedModels, enabled: i.status === 'active',
+  enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
   // No `prefer_subscription_effective`: the route computes it from the stored flag and the strategy, and an input

@@ -23,6 +23,10 @@ pub struct RequestIdentity {
     pub parent_agent_id: Option<String>,
     pub owner_id: Option<String>,
     pub model: String,
+    /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased: what the body carries
+    /// upstream, and the resolution map's own key.
+    pub folded_model: String,
+    /// `folded_model`, or the dated id the catalog cache resolved it to: the routing, ledger, and pricing key.
     pub canonical_model: String,
     /// `claude-code/<entrypoint>` or `other`: a log label, never a gate.
     pub client: String,
@@ -30,7 +34,7 @@ pub struct RequestIdentity {
 
 pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, RelayError> {
     let model = string_member(body, &["model"]).ok_or(RelayError::NoModel)?;
-    let canonical_model = {
+    let folded_model = {
         let lowered = model.to_ascii_lowercase();
         lowered
             .strip_suffix(LONG_CONTEXT_SUFFIX)
@@ -40,7 +44,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     // The model reaches log lines and ledger keys, so it is bounded and charset-checked here rather than
     // wherever it is printed. Unlike the identifiers below it cannot be dropped: a request without a usable
     // model has nothing to relay.
-    if !is_valid_model(&canonical_model) {
+    if !is_valid_model(&folded_model) {
         return Err(RelayError::InvalidModel);
     }
     // The header is the client's own statement of the session.
@@ -52,7 +56,8 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         parent_agent_id: header_id(headers, "x-claude-code-parent-agent-id"),
         owner_id: header_id(headers, "x-keepalive-owner-id"),
         model,
-        canonical_model,
+        canonical_model: folded_model.clone(),
+        folded_model,
         client: client_class(headers),
     })
 }
@@ -115,6 +120,7 @@ mod tests {
         let identity = identify(&HeaderMap::new(), BODY).expect("the body has a model");
         assert_eq!(identity.session_id, None);
         assert_eq!(identity.agent_id, "main");
+        assert_eq!(identity.folded_model, "claude-sonnet-4-5");
         assert_eq!(identity.canonical_model, "claude-sonnet-4-5");
         assert_eq!(identity.model, "claude-sonnet-4-5[1M]");
     }

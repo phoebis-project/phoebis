@@ -1,10 +1,10 @@
 import type { CatalogModel, ModelPrice } from '@/api/types';
 
 export const CATALOG: CatalogModel[] = [
-  { id: 'claude-fable-5-1', longContext: true },
-  { id: 'claude-haiku-4-5-20251001', longContext: false },
-  { id: 'claude-opus-5', longContext: true },
-  { id: 'claude-sonnet-5', longContext: true },
+  { id: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', createdAt: '2026-08-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
+  { id: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4.5', createdAt: '2025-10-01', maxInputTokens: 200_000, maxTokens: 64_000 },
+  { id: 'claude-opus-5', displayName: 'Claude Opus 5', createdAt: '2026-06-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
+  { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', createdAt: '2026-05-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
 ];
 
 export const CLAUDE_MODELS = CATALOG.map((m) => m.id);

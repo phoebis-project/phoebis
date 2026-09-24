@@ -21,8 +21,8 @@ use phoebis_ledger::{
 use phoebis_oauth::Clock;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, OveragePolicy, PoolRow, Secret,
-    StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, OveragePolicy, PoolRow,
+    RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 
 pub const NOW: i64 = 1_700_000_000_000;
@@ -185,7 +185,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 overage_policy: OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
-                default_allowed_models: None,
+                model_rules: Vec::new(),
                 keepalive_json: r#"{"enabled":true,"probe_cost_cap_usd_per_day":1.0}"#.into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
@@ -215,7 +215,9 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: Some(24),
                 secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
@@ -308,6 +310,7 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: Bytes::from_static(b"{}"),

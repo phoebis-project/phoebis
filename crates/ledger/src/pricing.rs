@@ -68,8 +68,12 @@ impl PriceTable {
         })
     }
 
+    /// The row for the id, else the row for the id with a trailing `-YYYYMMDD` removed: a dated id the
+    /// catalog lists prices as the undated id the table ships.
     pub fn price(&self, canonical_model: &str) -> Option<&ModelPrice> {
-        self.models.get(canonical_model)
+        self.models.get(canonical_model).or_else(|| {
+            phoebis_routing::listing::undated(canonical_model).and_then(|base| self.models.get(base))
+        })
     }
 
     /// The metrics label: a priced model keeps its id, everything else is one bucket, so a caller cannot grow
@@ -402,6 +406,51 @@ mod tests {
                 table.model_label("gpt-5")
             ),
             ("claude-opus-5", "other")
+        );
+    }
+
+    #[test]
+    fn a_dated_id_prices_as_its_undated_base_when_the_table_lacks_the_dated_row() {
+        let mut models = BTreeMap::new();
+        models.insert(
+            "claude-sonnet-4-5".to_string(),
+            ModelPrice {
+                input: 3.0,
+                cache_write_5m: 3.75,
+                cache_write_1h: 6.0,
+                cache_read: 0.3,
+                output: 15.0,
+            },
+        );
+        models.insert(
+            "claude-haiku-4-5-20251001".to_string(),
+            ModelPrice {
+                input: 1.0,
+                cache_write_5m: 1.25,
+                cache_write_1h: 2.0,
+                cache_read: 0.1,
+                output: 5.0,
+            },
+        );
+        let table = PriceTable {
+            version: "test".into(),
+            effective: "test".into(),
+            source: "test".into(),
+            models,
+        };
+        assert_eq!(
+            table.price("claude-sonnet-4-5-20250929").unwrap().input,
+            3.0,
+            "the dated id prices as its undated base"
+        );
+        assert_eq!(
+            table.price("claude-haiku-4-5-20251001").unwrap().cache_read,
+            0.1,
+            "a row of its own is used directly, never the fallback"
+        );
+        assert!(
+            table.price("claude-x-2025").is_none(),
+            "a four-digit suffix is not a date, so no fallback and no match"
         );
     }
 

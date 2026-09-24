@@ -13,7 +13,6 @@ const input = {
   bodyCaptureHours: pool.bodyCaptureHours,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: pool.cacheTtl,
-  defaultAllowedModels: pool.defaultAllowedModels,
   keepalive: pool.keepalive,
   members: pool.members.map((m) => ({ accountId: m.accountId, priority: m.priority })),
   migrateAboveUtilization: pool.migrateAboveUtilization,
@@ -106,7 +105,10 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   const form = d.keyFormOf(key, 'unused');
   assert.deepEqual([form.enabled, form.expiry, form.name, form.poolId], [true, 'keep', key.name, key.poolId]);
   const input = d.keyInputOf(form, NOW);
-  assert.deepEqual([input.enabled, input.expiresAt, input.allowedModels, input.bodyCaptureHours, input.notes], [true, undefined, key.allowedModels, key.bodyCaptureHours, key.notes]);
+  assert.deepEqual(
+    [input.enabled, input.expiresAt, input.modelRules, input.modelRulesMode, input.longContextTwins, input.bodyCaptureHours, input.notes],
+    [true, undefined, key.modelRules, key.modelRulesMode, key.longContextTwins, key.bodyCaptureHours, key.notes],
+  );
   assert.equal(d.keyInputOf({ ...form, expiry: 'never' }, NOW).expiresAt, null, 'no expiration clears the stored one');
   assert.equal(d.keyInputOf({ ...form, expiry: '30' }, NOW).expiresAt, new Date(NOW + 30 * 86_400_000).toISOString());
   assert.equal(d.keyInputOf({ ...form, enabled: false }, NOW).enabled, false);

@@ -229,9 +229,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router_task.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
-    ));
-    let scheduler = catalog.clone().spawn_scheduler(Duration::from_secs(
-        config.routing.catalog_sync_interval_seconds,
+        Duration::from_secs(config.routing.catalog_cache_seconds),
     ));
     let relay = Arc::new(
         Relay::new(
@@ -249,7 +247,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 idle_timeout: IDLE_TIMEOUT,
                 max_attempts: config.routing.max_attempts,
                 max_request_bytes: MAX_REQUEST_BYTES,
+                model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
             },
+            catalog.clone(),
         )
         .with_bus(bus.clone())
         .with_cache_diagnostics(config.compatibility.cache_diagnostics)
@@ -351,12 +351,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin_origin: config.admin.origin.clone(),
             body_capture_max_hours: config.stats.body_capture_max_hours,
             cache_diagnostics: config.compatibility.cache_diagnostics,
-            catalog_sync_interval_seconds: config.routing.catalog_sync_interval_seconds,
+            catalog_cache_seconds: config.routing.catalog_cache_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
             max_attempts: config.routing.max_attempts,
             metrics_listen: config.stats.metrics_listen.to_string(),
+            model_rejection_seconds: config.routing.model_rejection_seconds,
             pricing_path: config
                 .stats
                 .pricing_path
@@ -556,7 +557,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     alert_inputs.abort();
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();
-    scheduler.abort();
     scheduler_tick.abort();
     sweeper.abort();
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.

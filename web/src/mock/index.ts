@@ -2,8 +2,8 @@ import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, slug } from '@/api/http';
 import type {
-  Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, MemberEligibility, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool,
-  RequestDetail, RequestLog, RequestPage, RequestQuery, Role, ServedModel, Session, SessionInfo, Settings, SyncResult,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CreatedApiKey, Delivery, LifecycleDelivery, LiveEvent, MemberEligibility, ModelPrice, PairingInput, PairingPreview, PairingSession, Pool,
+  RequestDetail, RequestLog, RequestPage, RequestQuery, Role, Session, SessionInfo, Settings,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
 import type { NumericKeepaliveKey } from '@/lib/forms';
@@ -301,7 +301,6 @@ export class MockApi implements Api {
     this.mutation();
     const account: Account = {
       ...ACCOUNT_SAMPLE,
-      catalogSyncedAt: null,
       cooldowns: [],
       credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
       email: null,
@@ -314,7 +313,6 @@ export class MockApi implements Api {
       pools: [],
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
       routingEnabled: true,
-      servedModels: [],
       status: input.kind === 'oauth' ? 'unpaired' : 'ready',
       subscription: null,
       windows: [],
@@ -345,7 +343,9 @@ export class MockApi implements Api {
       name: input.name,
       prefix: secret.slice(0, 8),
       poolId: input.poolId,
-      allowedModels: input.allowedModels,
+      longContextTwins: input.longContextTwins,
+      modelRules: input.modelRules,
+      modelRulesMode: input.modelRulesMode,
       status: 'active',
       createdAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
@@ -417,6 +417,15 @@ export class MockApi implements Api {
     // The route drops the credential and leaves the identity, so the row still says whose it was.
     this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
     return latency(undefined, 250);
+  }
+
+  /** `refresh` re-stamps `fetchedAt` rather than answering a fresh fixture; every account answers the same
+   * catalog except `personal`, whose live fetch has been failing. */
+  getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog> {
+    const a = this.account(accountId);
+    const fetchedAt = ago(refresh ? 0 : 40 * 1000);
+    if (a.id === 'personal') return latency({ error: 'the models request answered 503', fetchedAt, models: [] });
+    return latency({ error: null, fetchedAt, models: CATALOG });
   }
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
@@ -494,7 +503,7 @@ export class MockApi implements Api {
   }
 
   getSettings() {
-    return latency({ ...this.settings, lastSyncAt: ago(40 * 1000) });
+    return latency(this.settings);
   }
 
   listAccountRollups(from: string, to: string) {
@@ -666,13 +675,6 @@ export class MockApi implements Api {
     });
   }
 
-  async syncCatalog(accountId: string): Promise<SyncResult> {
-    this.mutation();
-    const a = this.account(accountId);
-    this.putAccount({ ...a, catalogSyncedAt: iso(NOW) });
-    return latency({ added: [], error: null, missing: a.servedModels.filter((m) => !m.inCatalog).map((m) => m.upstreamId), seeded: false }, 500);
-  }
-
   async testAlertRule(id: string): Promise<AlertDeliveryTest> {
     this.mutation();
     const rule = this.rules.find((r) => r.id === id);
@@ -731,11 +733,6 @@ export class MockApi implements Api {
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(next, 250);
-  }
-
-  async updateServedModels(accountId: string, models: ServedModel[]) {
-    this.mutation();
-    return latency(this.putAccount({ ...this.account(accountId), servedModels: models }), 250);
   }
 
   async verifyAccount(accountId: string) {

@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::pools::valid_slug;
 use crate::routes::{failure, reload_or_refuse, store_failure};
+use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
@@ -36,8 +37,12 @@ struct KeyInput {
     enabled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     expires_at: Option<Option<i64>>,
-    #[serde(default, deserialize_with = "double_option")]
-    allowed_models: Option<Option<Vec<String>>>,
+    #[serde(default)]
+    model_rules: Option<Vec<RuleInput>>,
+    #[serde(default)]
+    model_rules_mode: Option<String>,
+    #[serde(default)]
+    long_context_twins: Option<bool>,
     #[serde(default)]
     keepalive_opt_out: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
@@ -85,10 +90,14 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
     if let Some(expires_at) = input.expires_at {
         row.expires_at = expires_at;
     }
-    if let Some(list) = &input.allowed_models {
-        row.allowed_models = list
-            .as_ref()
-            .map(|l| l.iter().map(|m| phoebis_store::canonical_id(m)).collect());
+    if let Some(list) = &input.model_rules {
+        row.model_rules = parse_rules(list)?;
+    }
+    if let Some(mode) = &input.model_rules_mode {
+        row.model_rules_mode = parse_mode(mode)?;
+    }
+    if let Some(twins) = input.long_context_twins {
+        row.long_context_twins = twins;
     }
     if let Some(opt_out) = input.keepalive_opt_out {
         row.keepalive_opt_out = opt_out;
@@ -239,7 +248,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         enabled: true,
         revoked_at: None,
         expires_at: None,
-        allowed_models: None,
+        model_rules: Vec::new(),
+        model_rules_mode: phoebis_store::RulesMode::Extend,
+        long_context_twins: true,
         keepalive_opt_out: false,
         body_capture_hours: None,
         secret_digest: state.store.api_key_digest(&secret).to_vec(),
@@ -396,7 +407,8 @@ fn key_json(
     );
     Ok(json!({
         "id": row.id, "label": row.label, "notes": row.notes, "pool_id": row.pool_id, "enabled": row.enabled,
-        "revoked_at": row.revoked_at, "expires_at": row.expires_at, "allowed_models": row.allowed_models,
+        "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
+        "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,

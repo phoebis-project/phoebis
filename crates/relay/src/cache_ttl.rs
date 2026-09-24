@@ -111,6 +111,10 @@ impl CacheTtlPolicy {
             .models
             .iter()
             .find(|m| m.model == canonical_model)
+            .or_else(|| {
+                phoebis_routing::listing::undated(canonical_model)
+                    .and_then(|base| self.models.iter().find(|m| m.model == base))
+            })
             .map_or((self.main, self.subagent), |m| (m.main, m.subagent));
         Some(if main_agent { main } else { subagent })
     }
@@ -193,6 +197,26 @@ mod tests {
         assert_eq!(
             CacheTtlPolicy::default().ttl_for("claude-opus-5", true, true),
             None
+        );
+    }
+
+    #[test]
+    fn a_models_override_written_as_the_undated_id_keeps_applying_once_the_canonical_id_is_dated() {
+        let policy = CacheTtlPolicy::parse(&serde_json::json!({ "enabled": true, "models": [{ "model": "claude-sonnet-4-5", "main": "5m", "subagent": "5m" }] })).unwrap();
+        assert_eq!(
+            policy.ttl_for("claude-sonnet-4-5-20250929", true, false),
+            Some(CacheTtl::FiveMinutes),
+            "the override written as the undated id still finds the dated one"
+        );
+        assert_eq!(
+            policy.ttl_for("claude-sonnet-4-5", true, false),
+            Some(CacheTtl::FiveMinutes),
+            "the undated spelling itself still matches directly"
+        );
+        assert_eq!(
+            policy.ttl_for("claude-x-2025", true, false),
+            Some(CacheTtl::OneHour),
+            "a four-digit suffix is not a date, so no fallback and no match"
         );
     }
 }

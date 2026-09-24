@@ -1,7 +1,7 @@
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, MemoryKey,
-    MemoryRecord, MemoryStore, ModelSource, OveragePolicy, PoolRow, Secret, ServedModelWrite,
-    StorageKey, Store, StoreError, Strategy, SubStrategy,
+    MemoryRecord, MemoryStore, ModelRule, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
+    Store, StoreError, Strategy, SubStrategy,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -28,7 +28,7 @@ fn pool(id: &str) -> PoolRow {
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
         select_below_utilization: None,
-        default_allowed_models: None,
+        model_rules: Vec::new(),
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
         prefer_subscription: false,
@@ -49,7 +49,9 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         enabled: true,
         revoked_at: None,
         expires_at: None,
-        allowed_models: None,
+        model_rules: Vec::new(),
+        model_rules_mode: RulesMode::Extend,
+        long_context_twins: true,
         keepalive_opt_out: false,
         body_capture_hours: None,
         secret_digest: store.api_key_digest(secret).to_vec(),
@@ -68,6 +70,22 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let path = dir.path().join("router.sqlite");
     // Every migration above the stored version runs again on the next open, and an `ALTER TABLE ADD COLUMN`
     // cannot run twice, so each older database below is rolled back past every column it would re-add.
+    const UNDO_V23: &str = "DROP TABLE model_resolutions; \
+         ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
+         ALTER TABLE pools DROP COLUMN model_rules_json; \
+         ALTER TABLE api_keys ADD COLUMN allowed_models_json TEXT; \
+         ALTER TABLE api_keys DROP COLUMN model_rules_json; \
+         ALTER TABLE api_keys DROP COLUMN model_rules_mode; \
+         ALTER TABLE api_keys DROP COLUMN long_context_twins; \
+         CREATE TABLE account_models ( \
+           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, upstream_id TEXT NOT NULL, canonical_id TEXT NOT NULL, \
+           selected INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL, \
+           long_context INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0, is_new INTEGER NOT NULL DEFAULT 0, \
+           PRIMARY KEY (account_id, upstream_id), \
+           UNIQUE (account_id, canonical_id) \
+         ); \
+         ALTER TABLE accounts ADD COLUMN catalog_synced_at INTEGER; \
+         ALTER TABLE accounts ADD COLUMN catalog_error TEXT;";
     const UNDO_V22: &str = "";
     const UNDO_V21: &str = "ALTER TABLE credentials DROP COLUMN last_error;";
     const UNDO_V20: &str = "ALTER TABLE pins DROP COLUMN key_generation; ALTER TABLE pins DROP COLUMN incarnation; \
@@ -83,12 +101,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 22);
+    assert_eq!(store.schema_version().unwrap(), 23);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        22,
+        23,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -102,7 +120,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -111,7 +129,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        22,
+        23,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -140,14 +158,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        22,
+        23,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -166,14 +184,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        22,
+        23,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -185,14 +203,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        22,
+        23,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -204,7 +222,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "DROP INDEX registry_changes_target; {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "DROP INDEX registry_changes_target; {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -212,7 +230,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        22,
+        23,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -226,6 +244,87 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         .unwrap(),
         1,
         "and the index it was missing is there"
+    );
+}
+
+#[test]
+fn a_fresh_store_carries_the_rule_columns_and_neither_whitelist_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    Store::open(&path, &StorageKey::generate()).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('pools') WHERE name = 'model_rules_json'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "a fresh store carries the pool's rule column"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('api_keys') \
+             WHERE name IN ('model_rules_json', 'model_rules_mode', 'long_context_twins')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3,
+        "a fresh store carries the key's three rule columns"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('pools') WHERE name = 'default_allowed_models_json'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "the pool's whitelist column is gone"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('api_keys') WHERE name = 'allowed_models_json'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "the key's whitelist column is gone"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('model_resolutions') \
+             WHERE name IN ('spelling', 'dated_id', 'resolved_at')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3,
+        "a fresh store carries the resolution table's three columns"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'account_models'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "a fresh store carries no catalog table"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') \
+             WHERE name IN ('catalog_synced_at', 'catalog_error')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "a fresh store carries neither catalog column"
     );
 }
 
@@ -289,7 +388,23 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL); \
+        "DROP TABLE model_resolutions; \
+         ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
+         ALTER TABLE pools DROP COLUMN model_rules_json; \
+         ALTER TABLE api_keys ADD COLUMN allowed_models_json TEXT; \
+         ALTER TABLE api_keys DROP COLUMN model_rules_json; \
+         ALTER TABLE api_keys DROP COLUMN model_rules_mode; \
+         ALTER TABLE api_keys DROP COLUMN long_context_twins; \
+         CREATE TABLE account_models ( \
+           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, upstream_id TEXT NOT NULL, canonical_id TEXT NOT NULL, \
+           selected INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL, \
+           long_context INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0, is_new INTEGER NOT NULL DEFAULT 0, \
+           PRIMARY KEY (account_id, upstream_id), \
+           UNIQUE (account_id, canonical_id) \
+         ); \
+         ALTER TABLE accounts ADD COLUMN catalog_synced_at INTEGER; \
+         ALTER TABLE accounts ADD COLUMN catalog_error TEXT; \
+         CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL); \
          INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES ('old', 1); \
          ALTER TABLE api_keys DROP COLUMN retired_secret_last_used_at; \
          ALTER TABLE pins DROP COLUMN key_generation; ALTER TABLE pins DROP COLUMN incarnation; \
@@ -301,7 +416,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 22);
+    assert_eq!(migrated.schema_version().unwrap(), 23);
     migrated
         .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
         .unwrap();
@@ -389,49 +504,6 @@ fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation()
 }
 
 #[test]
-fn the_newest_catalog_change_is_what_the_account_serves_now() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::Oauth))
-        .unwrap();
-    store
-        .insert_account(&account("b", AccountKind::Oauth))
-        .unwrap();
-    assert_eq!(store.latest_catalog_change("a").unwrap(), None);
-    assert!(store
-        .seed_catalog("a", &[("claude-sonnet-4-5".into(), false)], 1, "test")
-        .unwrap());
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_seeded")
-    );
-    store
-        .apply_catalog_sync("a", &[("claude-opus-4-1".into(), false)], None, 2, "test")
-        .unwrap();
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_synced"),
-        "a discovery replaces the seed as what the account serves"
-    );
-    // A discovery that answered an empty list leaves nothing to serve, which is the one case a later seed
-    // still fills.
-    store.apply_catalog_sync("b", &[], None, 3, "test").unwrap();
-    assert!(store
-        .seed_catalog("b", &[("claude-sonnet-4-5".into(), false)], 4, "test")
-        .unwrap());
-    assert_eq!(
-        store.latest_catalog_change("b").unwrap().as_deref(),
-        Some("catalog_seeded"),
-        "and a seed after a sync is what it serves in turn"
-    );
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_synced"),
-        "each account reads its own log"
-    );
-}
-
-#[test]
 fn two_slots_cannot_bind_one_upstream_account() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
@@ -474,12 +546,27 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         store.api_key("desktop").unwrap().unwrap().prefix,
         "01234567"
     );
+    let pool_rules = vec![
+        ModelRule {
+            pattern: "claude-opus-5".into(),
+            not: false,
+        },
+        ModelRule {
+            pattern: "*".into(),
+            not: true,
+        },
+    ];
+    let key_rules = vec![ModelRule {
+        pattern: "claude-sonnet-5".into(),
+        not: false,
+    }];
     store
         .update_pool(
             &PoolRow {
                 body_capture_hours: 24,
                 strategy: Strategy::EarliestRefresh,
                 select_below_utilization: Some(0.8),
+                model_rules: pool_rules.clone(),
                 ..pool("main")
             },
             "test",
@@ -489,24 +576,37 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         .update_api_key(
             &ApiKeyRow {
                 body_capture_hours: Some(6),
+                model_rules: key_rules.clone(),
+                model_rules_mode: RulesMode::Replace,
+                long_context_twins: false,
                 ..k.clone()
             },
             "test",
         )
         .unwrap();
     let updated = store.pool("main").unwrap().unwrap();
+    let updated_key = store.api_key("desktop").unwrap().unwrap();
     assert_eq!(
         (
             updated.body_capture_hours,
             updated.strategy,
             updated.select_below_utilization,
-            store
-                .api_key("desktop")
-                .unwrap()
-                .unwrap()
-                .body_capture_hours
+            updated.model_rules.clone(),
+            updated_key.body_capture_hours,
+            updated_key.model_rules.clone(),
+            updated_key.model_rules_mode,
+            updated_key.long_context_twins,
         ),
-        (24, Strategy::EarliestRefresh, Some(0.8), Some(6))
+        (
+            24,
+            Strategy::EarliestRefresh,
+            Some(0.8),
+            pool_rules,
+            Some(6),
+            key_rules,
+            RulesMode::Replace,
+            false,
+        )
     );
     assert_eq!(
         store
@@ -549,103 +649,6 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             "key_deleted",
             "pool_deleted"
         ]
-    );
-}
-
-#[test]
-fn a_catalog_sync_adds_new_ids_unselected_flags_vanished_ones_and_keeps_manual_rows() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    let first = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("claude-sonnet-5".into(), false),
-                ("claude-opus-5".into(), true),
-            ],
-            None,
-            10,
-            "catalog",
-        )
-        .unwrap();
-    assert!(first.first_sync);
-    assert!(store
-        .served_models("a")
-        .unwrap()
-        .iter()
-        .all(|m| m.selected && !m.is_new));
-    store
-        .put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "claude-sonnet-5".into(),
-                    selected: true,
-                    long_context: false,
-                },
-                ServedModelWrite {
-                    upstream_id: "claude-opus-5".into(),
-                    selected: false,
-                    long_context: true,
-                },
-                ServedModelWrite {
-                    upstream_id: "Vendor/Model-A".into(),
-                    selected: true,
-                    long_context: false,
-                },
-            ],
-            "admin",
-        )
-        .unwrap();
-    let second = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("claude-sonnet-5".into(), false),
-                ("claude-haiku-4-5".into(), false),
-            ],
-            None,
-            20,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(second.added, ["claude-haiku-4-5"]);
-    assert_eq!(second.missing, ["claude-opus-5"]);
-    let rows = store.served_models("a").unwrap();
-    let by_id = |id: &str| rows.iter().find(|m| m.upstream_id == id).unwrap();
-    assert!(!by_id("claude-haiku-4-5").selected && by_id("claude-haiku-4-5").is_new);
-    assert!(
-        by_id("claude-opus-5").missing && !by_id("claude-opus-5").selected,
-        "selected is left as the operator wrote it"
-    );
-    assert_eq!(by_id("Vendor/Model-A").source, ModelSource::Manual);
-    assert_eq!(by_id("Vendor/Model-A").canonical_id, "vendor/model-a");
-    assert!(matches!(
-        store.put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "Vendor/Model-A".into(),
-                    selected: true,
-                    long_context: false
-                },
-                ServedModelWrite {
-                    upstream_id: "vendor/model-a".into(),
-                    selected: true,
-                    long_context: false
-                },
-            ],
-            "admin"
-        ),
-        Err(StoreError::CanonicalClash { .. })
-    ));
-    assert!(
-        !store
-            .seed_catalog("a", &[("claude-fable-5-1".into(), true)], 30, "catalog")
-            .unwrap(),
-        "a seed never overwrites a populated catalog"
     );
 }
 
@@ -724,33 +727,23 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
 }
 
 #[test]
-fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() {
+fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
         .create_account(
             &account("a", AccountKind::ApiKey),
             Some(&Secret::new("k1")),
-            Some(&[("claude-sonnet-5".into(), false)]),
-            None,
             1,
             "admin",
         )
         .unwrap();
-    assert_eq!(
-        (
-            store.served_models("a").unwrap().len(),
-            store.api_key_credential("a").unwrap().unwrap().1
-        ),
-        (1, 1)
-    );
+    assert_eq!(store.api_key_credential("a").unwrap().unwrap().1, 1);
     let update = AccountUpdate {
         id: "a",
         expected_revision: 1,
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
-        catalog: Some(&[("gpt-5".into(), false)]),
-        catalog_error: None,
         state: AccountState::Ready,
         at: 5,
         actor: "admin",
@@ -761,11 +754,6 @@ fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() 
     assert_eq!(
         store.api_key_credential("a").unwrap().unwrap().0.expose(),
         "k2"
-    );
-    assert_eq!(
-        store.served_models("a").unwrap().len(),
-        2,
-        "the catalog was applied as a sync"
     );
     let stale = AccountUpdate {
         lifecycle_generation: 7,
@@ -820,40 +808,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
     assert_eq!(revision(), 4, "a secret rotation");
     store.set_state("a", AccountState::FundingRequired).unwrap();
     assert_eq!(revision(), 5, "a state change");
-    store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            6,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(
-        revision(),
-        5,
-        "a catalog sync changes no dispatch input, so it leaves the revision alone"
-    );
     assert_eq!(store.account_revision("nobody").unwrap(), None);
-}
-
-#[test]
-fn a_catalog_sync_verified_against_a_superseded_revision_is_refused() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    let discovered = [("claude-sonnet-5".into(), false)];
-    store.update_account("a", 1, "Renamed", "admin").unwrap();
-    assert!(matches!(
-        store.apply_catalog_sync("a", &discovered, Some(1), 10, "catalog"),
-        Err(StoreError::Stale)
-    ));
-    assert!(store.served_models("a").unwrap().is_empty());
-    store
-        .apply_catalog_sync("a", &discovered, Some(2), 10, "catalog")
-        .unwrap();
-    assert_eq!(store.served_models("a").unwrap().len(), 1);
 }
 
 #[test]
@@ -866,104 +821,18 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
     store
         .set_pool_members("main", &[("a".into(), 0)], "test")
         .unwrap();
-    store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            1,
-            "catalog",
-        )
-        .unwrap();
     let load = store.load_registry().unwrap();
     assert_eq!(
-        (
-            load.accounts.len(),
-            load.pools.len(),
-            load.members.len(),
-            load.models.len()
-        ),
-        (1, 1, 1, 1)
+        (load.accounts.len(), load.pools.len(), load.members.len()),
+        (1, 1, 1)
     );
     store.delete_account("a", "test").unwrap();
     let load = store.load_registry().unwrap();
-    assert_eq!(
-        (load.accounts.len(), load.members.len(), load.models.len()),
-        (0, 0, 0)
-    );
+    assert_eq!((load.accounts.len(), load.members.len()), (0, 0));
     assert!(matches!(
         store.delete_account("a", "test"),
         Err(StoreError::AccountNotFound(_))
     ));
-}
-
-#[test]
-fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    store
-        .put_served_models(
-            "a",
-            &[ServedModelWrite {
-                upstream_id: "Vendor/Model-A".into(),
-                selected: false,
-                long_context: false,
-            }],
-            "admin",
-        )
-        .unwrap();
-    let first = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("Vendor/Model-A".into(), true),
-                ("claude-sonnet-5".into(), false),
-            ],
-            None,
-            10,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(first.added, ["claude-sonnet-5"]);
-    let rows = store.served_models("a").unwrap();
-    let by_id = |id: &str| rows.iter().find(|m| m.upstream_id == id).unwrap();
-    let manual = by_id("Vendor/Model-A");
-    assert_eq!(manual.source, ModelSource::Manual);
-    assert!(
-        !manual.selected,
-        "the discovery reporting a manual row never changes its selection"
-    );
-    assert!(
-        manual.long_context,
-        "the discovery's long-context flag applies even to a manual row"
-    );
-    assert!(!manual.missing);
-    let new_row = by_id("claude-sonnet-5");
-    assert!(!new_row.selected && new_row.is_new);
-
-    let second = store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            20,
-            "catalog",
-        )
-        .unwrap();
-    assert!(
-        second.missing.is_empty(),
-        "a manual row omitted from a sync is never flagged missing"
-    );
-    assert!(
-        store
-            .served_models("a")
-            .unwrap()
-            .iter()
-            .any(|m| m.upstream_id == "Vendor/Model-A"),
-        "a manual row omitted from a sync is never removed"
-    );
 }
 
 #[test]
@@ -1038,7 +907,7 @@ fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     let row = account("vendor", AccountKind::ApiKey);
     store
-        .create_account(&row, Some(&Secret::new("k1")), None, None, 1, "admin")
+        .create_account(&row, Some(&Secret::new("k1")), 1, "admin")
         .unwrap();
     let built_from = store.account_revision("vendor").unwrap().unwrap();
     store

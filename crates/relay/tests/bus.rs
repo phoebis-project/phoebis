@@ -555,7 +555,7 @@ async fn refused_and_exhausted_requests_publish_an_observed_event_and_their_comp
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            allowed_models: Some(vec!["claude-sonnet-4-5"]),
+            model_rules: rules(&["claude-sonnet-4-5", "NOT *"]),
             ..PoolSpec::default()
         },
         bus,

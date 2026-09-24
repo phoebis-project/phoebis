@@ -19,14 +19,14 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    Secret, StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, ModelRule, NewBundle,
+    OveragePolicy, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
 };
 use phoebis_transport::request::parse_head;
-use fake_upstream::{FakeUpstream, Respond};
+use fake_upstream::{FakeUpstream, Respond, Rule};
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
 #[allow(unused_imports)]
-pub use fake_upstream::{stays_for, wait_for};
+pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 pub const KEY: &str = "phoebis-testkey";
@@ -87,10 +87,10 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
 
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
-    pub allowed_models: Option<Vec<&'static str>>,
     pub cache_diagnostics: Option<bool>,
     pub cache_ttl: &'static str,
     pub migrate_above_utilization: Option<f64>,
+    pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
     pub strategy: Strategy,
 }
@@ -99,24 +99,93 @@ impl Default for PoolSpec {
     fn default() -> Self {
         PoolSpec {
             affinity_ttl_seconds: 3600,
-            allowed_models: None,
             cache_diagnostics: None,
             cache_ttl: "{}",
             migrate_above_utilization: None,
+            model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::PriorityRandom,
         }
     }
 }
 
+/// `"NOT x"` builds a negated entry, anything else a plain one: the shorthand the pages use for a list.
+pub fn rules(entries: &[&str]) -> Vec<ModelRule> {
+    entries
+        .iter()
+        .map(|entry| match entry.strip_prefix("NOT ") {
+            Some(pattern) => ModelRule {
+                pattern: pattern.into(),
+                not: true,
+            },
+            None => ModelRule {
+                pattern: (*entry).into(),
+                not: false,
+            },
+        })
+        .collect()
+}
+
 pub struct Harness {
     pub app: axum::Router,
     pub catalog: Arc<CatalogService>,
+    /// The fake the catalog cache and the resolution map talk to, apart from `up` so a background probe never
+    /// lands in a test's `up.requests()`. It has its own connection pool and trusted CA: `PoolKey` is the
+    /// account and the host with no address, so a shared pool would hand either fake the other's connection.
+    pub catalog_up: FakeUpstream,
     pub clock: Arc<AtomicI64>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
+}
+
+/// The default catalog fake: `/v1/models?limit=1000` answers two rows (`claude-sonnet-4-5-20250929` at
+/// 1,000,000 input tokens and `claude-opus-5` at 1,000,000), `/v1/models/claude-sonnet-4-5` the dated row,
+/// every other `/v1/models/{id}` a 404 naming no model.
+pub fn catalog_rules() -> Vec<Rule> {
+    let sonnet = serde_json::json!({
+        "id": "claude-sonnet-4-5-20250929",
+        "display_name": "Claude Sonnet 4.5",
+        "created_at": "2025-09-29",
+        "max_input_tokens": 1_000_000,
+        "max_tokens": 128_000,
+    });
+    vec![
+        Rule {
+            path_prefix: "/v1/models?limit=1000".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: serde_json::json!({
+                    "data": [
+                        sonnet,
+                        {
+                            "id": "claude-opus-5",
+                            "display_name": "Claude Opus 5",
+                            "created_at": "2025-11-01",
+                            "max_input_tokens": 1_000_000,
+                            "max_tokens": 64_000,
+                        },
+                    ],
+                })
+                .to_string()
+                .into_bytes(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models/claude-sonnet-4-5".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: sonnet.to_string().into_bytes(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models/".into(),
+            respond: json_404_plain(),
+        },
+    ]
 }
 
 pub async fn relay_with(kind: AccountKind, up: &FakeUpstream) -> axum::Router {
@@ -177,7 +246,6 @@ pub async fn relay_with_limits(
             uuid: Some(ACCOUNT_UUID),
         }],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         limits,
     )
     .await
@@ -185,14 +253,7 @@ pub async fn relay_with_limits(
 }
 
 pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec) -> Harness {
-    harness_with(
-        up,
-        accounts,
-        pool,
-        &["claude-sonnet-4-5", "claude-opus-5"],
-        default_limits(),
-    )
-    .await
+    harness_with(up, accounts, pool, default_limits()).await
 }
 
 /// A harness whose pool is restricted to one model, for the tests that check a routing refusal against a
@@ -202,55 +263,46 @@ pub async fn harness_restricted_to(up: &FakeUpstream, model: &'static str) -> Ha
         up,
         &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
         PoolSpec {
-            allowed_models: Some(vec![model]),
+            model_rules: rules(&[model, "NOT *"]),
             ..PoolSpec::default()
         },
     )
     .await
 }
 
-/// Every account serves `models`; the key is `KEY` in pool `main`; the clock starts at `NOW` and is shared
-/// with the router task so a test can move time.
+/// The key is `KEY` in pool `main`; the clock starts at `NOW` and is shared with the router task so a test
+/// can move time. The catalog cache reads its own fake, started from `catalog_rules()`.
 pub async fn harness_with(
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
-    models: &[&str],
     limits: Limits,
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    harness_on(store, up, accounts, pool, models, limits).await
+    harness_on(store, up, accounts, pool, limits).await
 }
 
-/// `harness_with`, without naming a model list, for a case that only needs to override `Limits`.
+/// `harness_with`, named for the case that only needs to override `Limits`; kept as its own name since every
+/// caller already reads that way.
 pub async fn harness_with_limits(
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
     limits: Limits,
 ) -> Harness {
-    harness_with(
-        up,
-        accounts,
-        pool,
-        &["claude-sonnet-4-5", "claude-opus-5"],
-        limits,
-    )
-    .await
+    harness_with(up, accounts, pool, limits).await
 }
 
 /// The same builder over a store the caller already opened, so a test can reopen an on-disk store and see its
-/// rows survive. Seeding accounts, the pool, and the key is skipped once the store already has accounts, and
-/// the model seed is skipped when the caller wants a bare catalog for its own sync to fill in.
+/// rows survive. Seeding accounts, the pool, and the key is skipped once the store already has accounts.
 pub async fn harness_on(
     store: Arc<Store>,
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
-    models: &[&str],
     limits: Limits,
 ) -> Harness {
-    build(store, up, accounts, pool, models, limits, None, false, None).await
+    build(store, up, accounts, pool, limits, None, false, None, None).await
 }
 
 /// The same builder with the session memory held to `cap` entries, for the cases that need an eviction to
@@ -267,11 +319,11 @@ pub async fn harness_with_memory_cap(
         up,
         accounts,
         pool,
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
         None,
         false,
         Some(cap),
+        None,
     )
     .await
 }
@@ -290,10 +342,10 @@ pub async fn harness_with_cache_diagnostics_default(
         up,
         accounts,
         pool,
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
         None,
         cache_diagnostics,
+        None,
         None,
     )
     .await
@@ -323,11 +375,59 @@ pub async fn harness_with_bus_limits(
         up,
         accounts,
         pool,
-        &["claude-sonnet-4-5", "claude-opus-5"],
         limits,
         Some(bus),
         false,
         None,
+        None,
+    )
+    .await
+}
+
+/// The default harness whose catalog fake is the caller's own, for the tests that script it beyond the
+/// default `catalog_rules()` answers.
+pub async fn harness_with_catalog(
+    up: &FakeUpstream,
+    catalog_up: FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        false,
+        None,
+        Some(catalog_up),
+    )
+    .await
+}
+
+/// `harness_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
+/// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
+/// mid-test is not what the suite is about.
+pub async fn harness_with_bus_and_catalog(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    bus: Bus,
+    catalog_up: FakeUpstream,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        Some(bus),
+        false,
+        None,
+        Some(catalog_up),
     )
     .await
 }
@@ -338,11 +438,11 @@ async fn build(
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
-    models: &[&str],
     limits: Limits,
     bus: Option<Bus>,
     cache_diagnostics: bool,
     memory_cap: Option<usize>,
+    catalog_up: Option<FakeUpstream>,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -412,9 +512,7 @@ async fn build(
                     overage_policy: pool.overage_policy,
                     migrate_above_utilization: pool.migrate_above_utilization,
                     select_below_utilization: None,
-                    default_allowed_models: pool
-                        .allowed_models
-                        .map(|l| l.into_iter().map(String::from).collect()),
+                    model_rules: pool.model_rules,
                     keepalive_json: "{}".into(),
                     body_capture_hours: 0,
                     prefer_subscription: false,
@@ -447,7 +545,9 @@ async fn build(
                     enabled: true,
                     revoked_at: None,
                     expires_at: None,
-                    allowed_models: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: RulesMode::Extend,
+                    long_context_twins: true,
                     keepalive_opt_out: false,
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
@@ -460,22 +560,6 @@ async fn build(
                 "test",
             )
             .unwrap();
-    }
-    if !models.is_empty() {
-        for account in accounts {
-            store
-                .apply_catalog_sync(
-                    account.id,
-                    &models
-                        .iter()
-                        .map(|m| (m.to_string(), false))
-                        .collect::<Vec<_>>(),
-                    None,
-                    NOW,
-                    "test",
-                )
-                .unwrap();
-        }
     }
 
     let clock_cell = Arc::new(AtomicI64::new(NOW));
@@ -514,14 +598,34 @@ async fn build(
         Duration::from_secs(60),
     ));
     let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    // A separate connector, pool, and resolver from the relay's own: `PoolKey` is the account and the host
+    // with no address, so a shared pool would hand a catalog probe an inference connection into `up`, or an
+    // inference request a probe's connection into `catalog_up`.
+    let catalog_up = match catalog_up {
+        Some(catalog_up) => catalog_up,
+        None => FakeUpstream::start(catalog_rules()).await,
+    };
+    let mut catalog_cb =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
+    trust_fake_ca(&mut catalog_cb, &catalog_up);
+    let catalog_addr = catalog_up.addr();
+    let catalog_resolver: phoebis_transport::control::Resolver = Arc::new(move |_: &str| {
+        Box::pin(async move { Some(catalog_addr) }) as phoebis_transport::control::ResolveFuture
+    });
+    let catalog_pool = Arc::new(phoebis_transport::pool::Pool::new(
+        catalog_cb.build(),
+        4,
+        Duration::from_secs(60),
+    ));
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
-        pool.clone(),
-        resolver.clone(),
+        catalog_pool,
+        catalog_resolver,
         router_handle.clone(),
         clock.clone(),
         limits.head_timeout,
+        Duration::from_secs(60),
     ));
     let relay = Relay::new(
         store.clone(),
@@ -531,6 +635,7 @@ async fn build(
         resolver,
         clock,
         limits,
+        catalog.clone(),
     );
     let relay = relay.with_cache_diagnostics(cache_diagnostics);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
@@ -548,6 +653,7 @@ async fn build(
     Harness {
         app: router(relay.clone()),
         catalog,
+        catalog_up,
         clock: clock_cell,
         relay,
         router: router_handle,
@@ -573,6 +679,7 @@ pub fn default_limits() -> Limits {
         idle_timeout: Duration::from_secs(600),
         max_attempts: 3,
         max_request_bytes: 32 << 20,
+        model_rejection: Duration::from_secs(3_600),
     }
 }
 
@@ -700,6 +807,67 @@ pub fn json_200() -> Respond {
         status: 200,
         headers: vec![],
         body: b"{\"ok\":true}".to_vec(),
+    }
+}
+
+/// The headers a real Anthropic JSON error carries, so the pass-through test has something of the upstream's
+/// own to check survived the forward.
+fn error_headers() -> Vec<(String, String)> {
+    vec![
+        ("content-type".into(), "application/json".into()),
+        ("request-id".into(), "req_fake".into()),
+    ]
+}
+
+/// The answer `api.anthropic.com` gives for an id it does not serve.
+pub fn json_404_model(model: &str) -> Respond {
+    Respond::Json {
+        status: 404,
+        headers: error_headers(),
+        body: serde_json::json!({
+            "type": "error",
+            "error": { "type": "not_found_error", "message": format!("model: {model}") },
+            "request_id": "req_fake",
+        })
+        .to_string()
+        .into_bytes(),
+    }
+}
+
+/// A 404 that names no model, forwarded as it came.
+pub fn json_404_plain() -> Respond {
+    Respond::Json {
+        status: 404,
+        headers: error_headers(),
+        body: serde_json::json!({
+            "type": "error",
+            "error": { "type": "not_found_error", "message": "Not Found" },
+            "request_id": "req_fake",
+        })
+        .to_string()
+        .into_bytes(),
+    }
+}
+
+/// Waits for the bus to publish a completion and hands back every event seen up to and including it.
+pub async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<phoebis_bus::Event> {
+    let give_up = std::time::Instant::now() + Duration::from_secs(2);
+    let mut all = Vec::new();
+    loop {
+        while let Ok(e) = sub.events.try_recv() {
+            all.push(e);
+        }
+        if all
+            .iter()
+            .any(|e| matches!(e, phoebis_bus::Event::RequestComplete(_)))
+        {
+            return all;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "no completion was published"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 

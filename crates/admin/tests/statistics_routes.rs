@@ -69,16 +69,6 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     assert_eq!(current["models"][3]["input_per_m"].as_f64(), Some(2.0));
     // The registry serves claude-sonnet-4-5 (the harness's catalog); the file prices it and two others.
     let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-4-5":{"input_cost_per_token":3e-06,"cache_creation_input_token_cost":3.75e-06,"cache_read_input_token_cost":3e-07,"output_cost_per_token":1.5e-05},"claude-opus-5":{"input_cost_per_token":9e-06,"output_cost_per_token":4.5e-05},"gpt-5":{"input_cost_per_token":1e-06,"output_cost_per_token":8e-06}}"#.to_vec() } }, Rule { path_prefix: "/huge".into(), respond: Respond::Json { status: 200, headers: vec![], body: vec![b'x'; 17 << 20] } }]).await;
-    parts
-        .store
-        .apply_catalog_sync(
-            "business",
-            &[("claude-sonnet-4-5".into(), false)],
-            None,
-            now,
-            "test",
-        )
-        .unwrap();
     let label = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
     let url = format!("{label}?access_token=PLACEHOLDER-TOKEN");
     let preview = json(
@@ -299,16 +289,6 @@ async fn a_gzip_encoded_price_file_is_decoded_before_it_is_parsed() {
     .await;
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    parts
-        .store
-        .apply_catalog_sync(
-            "business",
-            &[("claude-sonnet-4-5".into(), false)],
-            None,
-            common::NOW,
-            "test",
-        )
-        .unwrap();
     let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
     let preview = json(
         post(
@@ -447,25 +427,6 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(3_600), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-09-08");
-    assert_eq!(
-        settings["last_sync_at"],
-        serde_json::Value::Null,
-        "a registry whose catalog was never synced answers no instant at all"
-    );
-    parts
-        .store
-        .set_catalog_status("business", Some(1_700_000_000_000), None)
-        .unwrap();
-    parts
-        .store
-        .set_catalog_status("direct", Some(1_600_000_000_000), None)
-        .unwrap();
-    assert_eq!(
-        json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await["last_sync_at"]
-            .as_i64(),
-        Some(1_700_000_000_000),
-        "the newest sync across the accounts is the router's last sync"
-    );
     let text = settings.to_string();
     assert!(
         !text.contains("admin-secret")
@@ -819,6 +780,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         owner_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
         stream: true,
         headers: vec![],
         body: bytes::Bytes::from_static(b"{}"),

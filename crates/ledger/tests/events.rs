@@ -155,23 +155,6 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
         kinds.contains(&"refresh_failed".to_string())
             && kinds.contains(&"reauth_required".to_string())
     );
-    h.store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-4-5".into(), false)],
-            None,
-            NOW,
-            "scheduler",
-        )
-        .unwrap();
-    wait_for_async(Duration::from_secs(5), || async {
-        h.db.events(0, i64::MAX, 100)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|e| e.kind == "catalog_synced" && e.account_id.as_deref() == Some("a"))
-    })
-    .await;
     up.shutdown().await;
 }
 

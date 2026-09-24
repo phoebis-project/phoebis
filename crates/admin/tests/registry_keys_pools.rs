@@ -129,17 +129,52 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         400,
         "capped by body_capture_max_hours"
     );
-    let patched = patch(&app, "/admin/pools/main", r#"{"affinity_ttl_seconds":0,"overage_policy":"never","default_allowed_models":["Claude-Opus-5"],"body_capture_hours":24}"#, Some(&cookie)).await;
+    let patched = patch(&app, "/admin/pools/main", r#"{"affinity_ttl_seconds":0,"overage_policy":"never","model_rules":[{"pattern":"claude-opus-5"},{"pattern":"*","not":true}],"body_capture_hours":24}"#, Some(&cookie)).await;
     assert_eq!(patched.status(), 200);
     let body = json(patched).await;
     assert_eq!(
         (
             body["affinity_ttl_seconds"].as_u64(),
             body["overage_policy"].as_str(),
-            body["default_allowed_models"][0].as_str(),
+            body["model_rules"][0]["pattern"].as_str(),
+            body["model_rules"][0]["not"].as_bool(),
+            body["model_rules"][1]["pattern"].as_str(),
+            body["model_rules"][1]["not"].as_bool(),
             body["body_capture_hours"].as_u64()
         ),
-        (Some(0), Some("never"), Some("claude-opus-5"), Some(24))
+        (
+            Some(0),
+            Some("never"),
+            Some("claude-opus-5"),
+            Some(false),
+            Some("*"),
+            Some(true),
+            Some(24)
+        )
+    );
+    let empty_pattern = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"model_rules":[{"pattern":""}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(empty_pattern.status(), 400);
+    assert_eq!(
+        json(empty_pattern).await["error"],
+        "model_rules[0]: pattern is empty"
+    );
+    let triple_star = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"model_rules":[{"pattern":"a***"}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(triple_star.status(), 400);
+    assert_eq!(
+        json(triple_star).await["error"],
+        "model_rules[0]: pattern holds three stars in a row"
     );
     let members = put(
         &app,
@@ -277,7 +312,7 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
         patch(
             &app,
             "/admin/keys/desktop",
-            r#"{"body_capture_hours":0,"allowed_models":["Claude-Sonnet-5"]}"#,
+            r#"{"body_capture_hours":0,"model_rules":[{"pattern":"claude-sonnet-5"}],"model_rules_mode":"replace","long_context_twins":false}"#,
             Some(&cookie),
         )
         .await,
@@ -287,9 +322,29 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
         (
             patched["body_capture_hours"].as_u64(),
             patched["effective_body_capture_hours"].as_u64(),
-            patched["allowed_models"][0].as_str()
+            patched["model_rules"][0]["pattern"].as_str(),
+            patched["model_rules_mode"].as_str(),
+            patched["long_context_twins"].as_bool(),
         ),
-        (Some(0), Some(0), Some("claude-sonnet-5"))
+        (
+            Some(0),
+            Some(0),
+            Some("claude-sonnet-5"),
+            Some("replace"),
+            Some(false)
+        )
+    );
+    let bad_mode = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"model_rules_mode":"other"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad_mode.status(), 400);
+    assert_eq!(
+        json(bad_mode).await["error"],
+        "model_rules_mode is extend or replace"
     );
     assert_eq!(
         patch(
@@ -623,7 +678,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 overage_policy: phoebis_store::OveragePolicy::Allow,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
-                default_allowed_models: None,
+                model_rules: Vec::new(),
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
@@ -646,7 +701,9 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 enabled: true,
                 revoked_at: None,
                 expires_at: None,
-                allowed_models: None,
+                model_rules: Vec::new(),
+                model_rules_mode: phoebis_store::RulesMode::Extend,
+                long_context_twins: true,
                 keepalive_opt_out: false,
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest(secret).to_vec(),

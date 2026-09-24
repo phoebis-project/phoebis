@@ -1,7 +1,10 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_store::{AccountState, ServedModelWrite};
+use phoebis_bus::Bus;
+use phoebis_ledger::{Assembler, Record};
+use phoebis_relay::Limits;
+use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -307,7 +310,7 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
 }
 
 #[tokio::test]
-async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
+async fn a_model_outside_the_rules_is_refused_and_any_other_reaches_the_upstream() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -317,7 +320,7 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            allowed_models: Some(vec!["claude-opus-5"]),
+            model_rules: rules(&["claude-opus-5", "NOT *"]),
             ..PoolSpec::default()
         },
     )
@@ -342,11 +345,50 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
     let body: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["error"]["message"], "model not allowed for this key");
+    assert!(up.requests().is_empty());
     let open = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let resp = open
         .app
         .clone()
         .oneshot(request_for(KEY, "claude-haiku-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let requests = up.requests();
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["model"], "claude-haiku-4-5");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_an_upstream_call() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.router.report(phoebis_routing::Report::Cooldown {
+        account_id: "a".into(),
+        row: phoebis_store::CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-4-5".into(),
+            until: NOW + 3_600_000,
+            set_at: 0,
+            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
     assert_eq!(
@@ -358,9 +400,81 @@ async fn key_policy_404s_carry_their_codes_and_reach_no_upstream() {
                 .to_str()
                 .unwrap()
         ),
-        (404, "model_unserved")
+        (404, "model_rejected")
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        body["error"]["message"],
+        "every account in this pool rejected the model"
     );
     assert!(up.requests().is_empty());
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-opus-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_rejection_at_the_budgets_end_records_a_rejected_request_and_an_upstream_error_attempt() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        Limits {
+            max_attempts: 1,
+            ..default_limits()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "model_rejected",
+        "the budget is spent after the one rejected attempt"
+    );
+    let events = drain_until_complete(&mut sub).await;
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    let (request, attempts) = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Request {
+                request, attempts, ..
+            } => Some((request, attempts)),
+            _ => None,
+        })
+        .expect("the request lands a ledger row");
+    assert_eq!(
+        request.outcome, "rejected",
+        "a model rejection is a refusal, not a transport or upstream failure"
+    );
+    assert_eq!(
+        attempts.last().expect("the rejected attempt").outcome,
+        "upstream_error",
+        "the attempt itself still reads as the classification the head gave it"
+    );
     up.shutdown().await;
 }
 
@@ -394,6 +508,8 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "b")
     );
+    // The harness's catalog fake resolves this spelling to a dated id in the background; the scope this
+    // request's own cooldown lands under is re-keyed to it by the time the assertion below reads it.
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert_eq!(
         (
@@ -402,7 +518,7 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
             cooldowns[0].until
         ),
         (
-            "model:claude-sonnet-4-5",
+            "model:claude-sonnet-4-5-20250929",
             "permission",
             NOW + 3_600_000 + 1_000
         )
@@ -467,9 +583,11 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     assert_eq!(outcome(&resp).account_id, "c", "k1 and b both failed over");
     let c = h.router.cooldowns().await.unwrap();
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
+    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
+    // scope below to it.
     assert_eq!(
         (k1.scope.as_str(), k1.until),
-        ("model:claude-sonnet-4-5", NOW + 30_000 + 1_000),
+        ("model:claude-sonnet-4-5-20250929", NOW + 30_000 + 1_000),
         "an api_key 429 with Retry-After cools the model"
     );
     assert!(
@@ -561,7 +679,6 @@ async fn a_fable_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec::default(),
-        &["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-5"],
         default_limits(),
     )
     .await;
@@ -699,40 +816,6 @@ async fn a_member_removed_under_a_non_portable_session_answers_that_accounts_exh
         "the removed member's exhaustion"
     );
     assert_eq!(credentials_seen(&up), [A], "b was never reached");
-    h.store
-        .set_pool_members("main", &[("a".into(), 0), ("b".into(), 1)], "test")
-        .unwrap();
-    h.store
-        .put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "claude-sonnet-4-5".into(),
-                    selected: false,
-                    long_context: false,
-                },
-                ServedModelWrite {
-                    upstream_id: "claude-opus-5".into(),
-                    selected: true,
-                    long_context: false,
-                },
-            ],
-            "test",
-        )
-        .unwrap();
-    h.router.reload().await.unwrap();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(non_portable_request(KEY, "s1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        503,
-        "a deselected model on the pinned account is the same fence"
-    );
-    assert_eq!(credentials_seen(&up), [A]);
     up.shutdown().await;
 }
 
@@ -844,14 +927,7 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
         max_attempts: 1,
         ..default_limits()
     };
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &["claude-sonnet-4-5"],
-        one,
-    )
-    .await;
+    let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), one).await;
     let resp = h
         .app
         .clone()
@@ -926,7 +1002,6 @@ async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
         &up,
         &[api_key("vendor", OLD_KEY, 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5"],
         default_limits(),
     )
     .await;
@@ -993,7 +1068,6 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
         &up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5"],
         default_limits(),
     )
     .await;
@@ -1038,7 +1112,7 @@ async fn a_pre_selection_refusal_carries_the_client_version() {
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            allowed_models: Some(vec!["claude-opus-5"]),
+            model_rules: rules(&["claude-opus-5", "NOT *"]),
             ..PoolSpec::default()
         },
     )

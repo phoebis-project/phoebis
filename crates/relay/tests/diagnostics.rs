@@ -506,18 +506,6 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
         .set_api_key_secret("acct", &phoebis_store::Secret::new(ACCT_SECRET))
         .unwrap();
     h.store
-        .apply_catalog_sync(
-            "acct",
-            &[
-                ("claude-sonnet-4-5".to_string(), false),
-                ("claude-opus-5".to_string(), false),
-            ],
-            None,
-            NOW,
-            "test",
-        )
-        .unwrap();
-    h.store
         .set_pool_members("main", &[("acct".to_string(), 0)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
@@ -668,7 +656,6 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
             cache_diagnostics: Some(true),
             ..Default::default()
         },
-        &["claude-sonnet-4-5", "claude-opus-5"],
         limits,
     )
     .await;
@@ -722,7 +709,6 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
             cache_diagnostics: Some(true),
             ..Default::default()
         },
-        &["claude-sonnet-4-5", "claude-opus-5"],
         limits2,
     )
     .await;

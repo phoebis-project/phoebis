@@ -60,12 +60,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
             delete(accounts::clear_cooldown),
         )
         .route("/admin/accounts/{id}/credentials", delete(disconnect))
-        .route(
-            "/admin/accounts/{id}/models",
-            get(accounts::models).put(accounts::put_models),
-        )
-        .route("/admin/accounts/{id}/models/sync", post(accounts::sync))
         .route("/admin/accounts/{id}/pause", post(pause))
+        .route("/admin/accounts/{id}/catalog", get(accounts::catalog))
         .route("/admin/accounts/{id}/quota", get(accounts::quota))
         .route("/admin/accounts/{id}/resume", post(resume))
         .route("/admin/accounts/{id}/usage", get(usage))
@@ -401,6 +397,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         }
         Err(error) => return store_failure(error),
     }
+    state.catalog.evict(&id);
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An API-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
@@ -757,12 +754,9 @@ async fn pairing_confirm(
     }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id);
-    // A slot that has just been paired serves its discovered models straight away, or the built-in seed when
-    // the models endpoint refuses a subscription token. A store failure here leaves the pairing standing: the
-    // credential is committed, and the scheduled sync will try again.
-    if let Err(error) = state.catalog.sync(&row.id, "pairing").await {
-        tracing::warn!(%error, account = %row.id, "a newly paired account could not sync its catalog");
-    }
+    // The credential just committed replaces whatever a slot under this id answered before, so the cached
+    // list (if any) is stale from this instant; the next read fetches fresh with the new one.
+    state.catalog.evict(&row.id);
     // The pairing is over, so the account's one-at-a-time slot is handed back. The credential is already
     // committed at this point, so a session that refuses to close costs the account nothing beyond the
     // wait for its own deadline.
@@ -996,13 +990,6 @@ pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Value 
 /// ledger once.
 async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Value {
     let overage = ctx.overages.get(&row.id);
-    let (catalog_synced_at, catalog_error) =
-        state.store.catalog_status(&row.id).unwrap_or_default();
-    let served_models_count = state
-        .store
-        .served_models(&row.id)
-        .map(|models| models.len())
-        .unwrap_or_default();
     let credential = state.store.credential_metadata(&row.id).ok().flatten();
     let attempt = state
         .store
@@ -1072,8 +1059,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
-        "catalog_error": catalog_error,
-        "catalog_synced_at": catalog_synced_at,
         "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
@@ -1087,13 +1072,11 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "reset": overage.reset,
             "observed_at": overage.observed_at,
         })),
-        "served_models_count": served_models_count,
         "profile": profile,
         "windows": ctx.quota.iter().filter(|q| q.account_id == row.id).map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 })).collect::<Vec<_>>(),
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
         "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
-        "served_models": accounts::models_json(state, &row.id).map(|m| m["models"].clone()).unwrap_or_else(|_| json!([])),
     })
 }
 

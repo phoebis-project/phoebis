@@ -120,7 +120,17 @@ pub async fn rig(spec: RigSpec) -> Rig {
     }
     let bus = Bus::new();
     let sub = bus.subscribe("test");
-    let h = relay_common::harness_with_bus(&up, &spec.accounts, spec.pool, bus.clone()).await;
+    // No rule answers the catalog fake here: this suite is about a session's pin and account continuity, and
+    // a spelling resolving to a dated id mid-test is not what it is testing.
+    let catalog_up = FakeUpstream::start(vec![]).await;
+    let h = relay_common::harness_with_bus_and_catalog(
+        &up,
+        &spec.accounts,
+        spec.pool,
+        bus.clone(),
+        catalog_up,
+    )
+    .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
     h.store.update_pool(&pool, "test").unwrap();
@@ -400,6 +410,7 @@ impl Rig {
             owner_id: None,
             model: model.clone(),
             canonical_model: model.to_ascii_lowercase(),
+            wire_model: model.to_ascii_lowercase(),
             stream: true,
             headers: vec![
                 ("anthropic-beta".into(), "test-beta".into()),

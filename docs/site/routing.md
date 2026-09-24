@@ -5,14 +5,23 @@ presents is placed on one account of that pool by a selection that honours the s
 and each account's quota. This page describes every field of an account, a pool, and a key, then the selection
 itself, and the answers a client gets when nothing can serve it.
 
-## Served models
+## Catalogs
 
-Creating an account also discovers the models it serves, and discovery repeats every
-`routing.catalog_sync_interval_seconds`. `GET /admin/accounts/{id}/models` lists what discovery found, and a
-`PUT` on the same path replaces the list by hand. Two upstream spellings that fold to the same canonical id, a
-plain id and its `[1m]` long-context variant among them, are refused: `409 two spellings of {canonical_id}`. Each
-served model carries a `long_context` flag, and the console marks one `missing` when discovery no longer reports
-it, `new` when nobody has reviewed it yet.
+An upstream's model list is read live from `GET /v1/models` on `api.anthropic.com` with the upstream's own
+credential, on demand, and held for `routing.catalog_cache_seconds` (sixty by default); the Upstreams view's
+catalog popup, the rule editors' suggestions, and the proxy's models listing all read that cache, and
+`GET /admin/accounts/{id}/catalog` answers it with `?refresh=1` to read again. Nothing about routing depends on
+it: every enabled member of a pool is a candidate for any model the rules allow, and an upstream that does not
+serve a model says so with a `404` the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An
+upstream whose fetch failed contributes nothing to a listing until the next fetch, and the popup shows the error.
+
+The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the
+undated one (`claude-sonnet-4-5`). The router resolves a spelling it has not seen through
+`GET /v1/models/{spelling}` in the background, never on the request's own path, and from then on the dated id
+is the canonical name the rules, the ledger, the pricing, the pins, and the cooldowns use for that spelling; the
+body toward the upstream keeps the client's spelling. Until a spelling's first resolution lands, the client's
+folded spelling is the canonical name, which is why a rule for such a model is written as a glob; a resolution
+is kept across restarts, and a later probe that fails or answers 404 never takes it back.
 
 ## Pools
 
@@ -38,7 +47,7 @@ Every field, in the order the request body takes them:
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1` |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
-| `default_allowed_models` | unset | a list of canonical model ids |
+| `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
@@ -123,7 +132,7 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `notes` | optional |
 | `enabled` | `true` by default |
 | `expires_at` | unset by default; Unix milliseconds |
-| `allowed_models` | unset means the pool's own default |
+| `model_rules`, `model_rules_mode`, `long_context_twins` | see Model rules and the client page's models listing |
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
 
@@ -137,6 +146,32 @@ the admin secret can read them."
 
 [kl]: assets/keys-light.png#only-light
 [kd]: assets/keys-dark.png#only-dark
+
+## Model rules
+
+A pool and a key each hold one ordered list of rules, and a request's model is judged against the key's
+processed list: the key's own entries first, then the pool's when the key's `model_rules_mode` is `extend` (the
+default), or the key's own entries alone under `replace`. Evaluation runs top to bottom and the first matching
+entry decides: a plain entry allows the model, a `not` entry denies it, and a model no entry matches is allowed.
+Both lists start empty, so nothing is excluded until an operator writes an entry. The list is first-match-wins
+and nothing else, so an allowlist is a list that names what it allows and ends in a catch-all denial:
+
+- `[claude-opus-5, NOT *]` allows the one model and blocks the rest;
+- `[NOT *]` alone blocks everything.
+
+A rule's subject is the canonical id: the request's model with the `[1m]` suffix removed, ASCII case folded, and
+the dated id the catalog lists substituted once the router has resolved the spelling. One entry therefore
+covers a model and its `[1m]` twin, and an entry for a model the API lists under a dated id is written as a
+glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of
+either. A model the list denies answers `404 model_not_allowed` without reaching an upstream.
+
+The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?`
+one character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches
+its own text alone. Anthropic's ids carry no slash, which is why `NOT *` reads as the catch-all above; `NOT **`
+is the entry that also covers a name with a slash. The request log's client patterns
+([statistics](statistics.md#analytics)) are another grammar, where `*` crosses everything. A pattern is refused
+at save time when it is empty, longer than 256 characters, ends in an unquoted backslash, or holds three stars
+in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
 ## Selection
 
@@ -223,6 +258,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 | 401, or 403 with `authentication_error`, Oauth | Refresh once, else `reauth_required` | Yes, post-refresh |
 | 401, or 403 with `authentication_error`, api_key | `reauth_required` now | Yes |
 | 403 `permission_error` | Model-scoped, one hour, reason permission; credential stays valid | Yes |
+| 404 `not_found_error` naming a model | Model-scoped, `routing.model_rejection_seconds`, reason model_rejected | Yes |
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
@@ -233,6 +269,11 @@ seconds up; anything non-finite, negative, malformed, or absent is invalid, and 
 account-wide fallback duration instead. An HTTP date is read against the upstream's own `Date` header when one
 is present, to reduce clock-skew error. A valid long delay is never shortened, and every deadline is an absolute
 time with a one-second margin that survives a restart.
+
+A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
+the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
+to the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the
+one that served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
 
 Each client request runs at most `routing.max_attempts` wire submissions; a same-account retry after a transport
 failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps
@@ -267,6 +308,11 @@ operator can clear, such as a pool whose accounts are all paused, `phoebis` answ
 `accounts_unavailable`, message `no account in this pool can serve requests`, and no `retry-after`. A request
 admitted under a key that was deleted and created again before it was routed is answered the same way, since
 the registry it was admitted against no longer holds its key.
+
+A model every account in the pool has rejected within the rejection window answers `404` with error code
+`model_rejected` and the message `every account in this pool rejected the model`; the
+[cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers
+`503 accounts_unavailable`, since only an operator can add one.
 
 Claude Code 2.1.269 resumes a subscriber session on its own, after a usage-limit reset, only when the `429`
 carried all three of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix

@@ -1,0 +1,16 @@
+{
+  "route": "GET /admin/accounts/business/catalog",
+  "body": {
+    "models": [
+      {
+        "id": "claude-sonnet-4-5",
+        "display_name": "",
+        "created_at": "",
+        "max_input_tokens": null,
+        "max_tokens": null
+      }
+    ],
+    "fetched_at": 1000000,
+    "error": null
+  }
+}

@@ -39,6 +39,10 @@ the five token counts, with the thinking share of the output and the web search 
 the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
 split across input, cache read, cache write, and output; and the pricing version the estimate used.
 
+A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
+spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
+drawer lists both.
+
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
 64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading
 the percentile, and the value carries the error of the bucket it falls in.
@@ -207,8 +211,8 @@ range, since they carry no session, and its subtitle says so.
 Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
 keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
 bootstrap file's quota, routing, storage, and usage blocks: the quota poll interval and sample retention, the
-catalog sync interval, cooldown fallback, and attempt limit, the ledger, pricing, and storage paths, and the usage
-cache TTL and refresh concurrency.
+catalog cache window, the cooldown fallback, the model rejection window, and the attempt limit, the ledger,
+pricing, and storage paths, and the usage cache TTL and refresh concurrency.
 
 ## Alerts
 

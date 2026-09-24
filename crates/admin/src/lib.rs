@@ -11,6 +11,7 @@ mod pools;
 mod pricing;
 mod requests;
 mod routes;
+mod rules;
 mod session;
 mod sessions;
 mod settings;
@@ -97,12 +98,13 @@ pub struct SettingsView {
     pub admin_origin: Option<String>,
     pub body_capture_max_hours: u32,
     pub cache_diagnostics: bool,
-    pub catalog_sync_interval_seconds: u64,
+    pub catalog_cache_seconds: u64,
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub max_attempts: u8,
     pub metrics_listen: String,
+    pub model_rejection_seconds: u64,
     pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,

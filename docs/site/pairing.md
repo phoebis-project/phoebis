@@ -131,7 +131,6 @@ The Upstreams view offers these actions, each calling its own route:
 | Disconnect | Removes the credential; request history stays in the ledger. |
 | Pair or Re-pair | Opens the pairing dialog described above. |
 | Pause and Resume | A paused account takes no traffic. |
-| Re-sync | Runs discovery again. |
 | Verify | `api_key` only; asks the account's host for its model list. |
 
 The console warns before Clear cooldown runs: "The upstream becomes eligible immediately. If the upstream is

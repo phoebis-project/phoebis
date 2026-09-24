@@ -276,7 +276,12 @@ pub struct RequestObserved {
     pub parent_agent_id: Option<String>,
     pub owner_id: Option<String>,
     pub model: String,
+    /// The name the router records the model under: the dated id the catalog lists once the router has
+    /// resolved the client's spelling, the folded spelling (the `[1m]` suffix removed, ASCII lowercased) until
+    /// then.
     pub canonical_model: String,
+    /// The spelling the body carries upstream: the client's `model` minus the `[1m]` suffix, ASCII lowercased.
+    pub wire_model: String,
     pub stream: bool,
     pub headers: Vec<(String, String)>,
     /// The body as received: refcounted, so publishing costs no copy.
