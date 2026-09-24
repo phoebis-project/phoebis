@@ -10,6 +10,7 @@ listener accepts from the client and what it refuses.
 ANTHROPIC_BASE_URL=https://<router host>
 CLAUDE_CODE_OAUTH_TOKEN=<key secret>
 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
+CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 DISABLE_TELEMETRY=1
 ```
 
@@ -28,23 +29,38 @@ automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all t
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
-Optional, and no longer needed for the wire shape. Set to `1`, it switches the client to the full first-party request
-shape and switches off gateway model discovery. Without it the client sends the reduced shape, and the router restores,
-toward `api.anthropic.com`, the fields the reduced shape lacks on the attribution line the client sent: the `cch`
-billing hash, `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when absent. A request that carries no
-attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router never writes a line the
-client did not. The previous request id and the prompt id come from the
-router's session memory, which survives a restart: they are kept on disk for `sessions.memory_retention_days`
-([installation](installation.md#sessions)). Two things are not restored, because the router cannot: the
-`advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true` selects it) and
-the global cache scope on the static system block. The restoration applies to a request whose `User-Agent` is
-`claude-cli/` followed by a version the client itself would spell (digits and dots, optionally `-` and a prerelease
-suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
-a keepalive probe replays a request as the client sent it. Two self-checks guard the
-restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
-`cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
-client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). The variable is an
-internal one that a later client build may drop.
+Optional, and worth setting. Under it the client sends the full first-party shape: the attribution line with every
+field, `x-client-request-id`, and the gateway hint headers, all by default, so the router restores nothing and the
+request log reads the turn origin and the hints as the client sent them. It also switches off gateway model discovery.
+Without it the client sends the reduced shape, and the router restores, toward `api.anthropic.com`, the fields the
+reduced shape lacks on the attribution line the client sent: the `cch` billing hash, `x-client-request-id`,
+`cc_prev_req`, and `cc_prompt_id`, each only when absent. A request that carries no attribution line, as under
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router never writes a line the client did not. The auto-mode
+classifier requests are the client's own: they keep the attribution block, the router fills them like any other line,
+and they carry the `auxiliary` request class in `x-claude-code-request-class`, which the request log shows once the
+router reads the header. The previous request id and the prompt id come from the router's session memory, which survives
+a restart: they are kept on disk for `sessions.memory_retention_days` ([installation](installation.md#sessions)). Three
+things are not restored, because the router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its
+tool search; `ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and
+`cc_turn_origin`, who started the turn, which the router records when the line carries it and never writes. The
+restoration applies to a request whose `User-Agent` is `claude-cli/` followed by a version the client itself would spell
+(digits and dots, optionally `-` and a prerelease suffix of letters, digits, dots, and hyphens) and to the client's own
+inference requests; a keepalive probe replays a request as the
+client sent it. Two self-checks guard the restoration against a client build the router was not pinned to: a stamped
+`cch` hash the router cannot reproduce, and a `cc_version` suffix that does not reproduce from the prompt and the
+client's version. Either refuses the request as client drift before anything is sent, and the request log names which
+(`hash` or `version_suffix`). The variable is an internal one that a later client build may drop.
+
+### CLAUDE_CODE_GATEWAY_HINT_HEADERS
+
+Optional, and worth setting in the reduced shape; under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` the headers
+arrive by default. Set to `1`, it makes the client send its gateway hint headers on a custom base URL:
+`x-claude-code-agent-type` (the subagent's type on its own turns), `x-claude-code-compaction` (on the summarization
+request), `x-claude-code-context-compacted` (once, on the first request after a compaction), and
+`x-claude-code-prev-tool-durations` (the tool calls of the turn before and their milliseconds). The router reads them
+for the request log and the analytics and nothing else: the row carries each value as sent, the tool durations as
+their sum, and the drawer shows them ([statistics](statistics.md#requests)). Every header is optional; a request
+without one is relayed the same way. `0` stops them on every connection.
 
 ### DISABLE_TELEMETRY
 
