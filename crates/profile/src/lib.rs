@@ -133,18 +133,4 @@ mod tests {
             80404
         );
     }
-
-    #[test]
-    fn the_built_in_catalog_is_sorted_and_names_the_fixture_model() {
-        let ids: Vec<&str> = catalog::BUILT_IN.iter().map(|m| m.id).collect();
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        assert_eq!(ids, sorted);
-        assert!(ids.contains(&"claude-sonnet-4-5"));
-        assert!(catalog::BUILT_IN
-            .iter()
-            .any(|m| m.id == "claude-fable-5-1" && m.long_context));
-        assert_eq!(catalog::built_in().len(), catalog::BUILT_IN.len());
-        assert_eq!(catalog::MODELS_TARGET, "/v1/models?limit=1000");
-    }
 }

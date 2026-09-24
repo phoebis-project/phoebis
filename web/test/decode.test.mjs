@@ -22,22 +22,20 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
   assert.equal(a.requests.lifetime, 4);
-  assert.ok(a.servedModels.some((m) => m.id === 'claude-sonnet-5' && m.selected));
   assert.equal(a.status, 'ready');
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['catalogError', 'catalogSyncedAt', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'servedModels', 'status', 'subscription', 'windows'],
+    ['cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
 
-test('an account decodes its catalog error, its quarantine flag, and the router\'s overage evidence', () => {
+test('an account decodes its quarantine flag and the router\'s overage evidence', () => {
   const body = fixture('account');
   const quiet = d.decodeAccount(body);
-  assert.deepEqual([quiet.catalogError, quiet.credential.quarantined, quiet.overage], [body.catalog_error, false, null]);
-  const loud = d.decodeAccount({ ...body, catalog_error: 'the models request answered 503', credential: { ...body.credential, quarantined: true }, overage: { in_use: true, observed_at: 3_000, reset: 9_000, since: 1_000 } });
-  assert.equal(loud.catalogError, 'the models request answered 503');
+  assert.deepEqual([quiet.credential.quarantined, quiet.overage], [false, null]);
+  const loud = d.decodeAccount({ ...body, credential: { ...body.credential, quarantined: true }, overage: { in_use: true, observed_at: 3_000, reset: 9_000, since: 1_000 } });
   assert.equal(loud.credential.quarantined, true);
   assert.deepEqual(loud.overage, { inUse: true, observedAt: d.iso(3_000), reset: d.iso(9_000), since: d.iso(1_000) });
   assert.deepEqual(d.decodeAccount({ ...body, overage: { in_use: false, observed_at: 3_000, reset: null, since: null } }).overage, { inUse: false, observedAt: d.iso(3_000), reset: null, since: null }, 'a sample reports no start, so the line under the badge has nothing to count from');
@@ -572,7 +570,7 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.deepEqual(s.quota, { pollIntervalSeconds: wire.quota.poll_interval_seconds, sampleRetentionDays: wire.quota.sample_retention_days });
-  assert.deepEqual(s.routing, { catalogSyncIntervalSeconds: wire.routing.catalog_sync_interval_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds });
+  assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
@@ -586,8 +584,6 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.keepalive.maxWorkers, 4);
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   assert.deepEqual(s.compatibility, { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' });
-  assert.ok(isIso(s.lastSyncAt), 'the route answers the newest catalog sync as milliseconds');
-  assert.equal(d.decodeSettings({ ...fixture('settings'), last_sync_at: null }).lastSyncAt, null, 'a registry that never synced answers no instant, and the strip says so');
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const preview = d.decodePriceImport(fixture('pricing_import'));
   // The imported file carries the one model the router serves, at the five prices the shipped table already
@@ -604,7 +600,15 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.ok(history.every((h) => h.samples.every((x) => isIso(x.at))));
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
   assert.equal(snapshot.status, 'success');
-  assert.deepEqual(d.decodeCatalog([d.decodeAccount(fixture('account'))]).map((m) => [m.id, m.longContext]), [['claude-sonnet-5', true]]);
+  assert.deepEqual(
+    d.decodeCatalogModel({ id: 'claude-opus-5', display_name: 'Opus', created_at: '2026-01-01', max_input_tokens: 1_000_000, max_tokens: 128_000 }),
+    { id: 'claude-opus-5', displayName: 'Opus', createdAt: '2026-01-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
+    'a catalog row decodes with its two numbers',
+  );
+  const catalog = d.decodeAccountCatalog(fixture('account_catalog'));
+  assert.deepEqual(catalog.models[0], { id: 'claude-sonnet-4-5', displayName: '', createdAt: '', maxInputTokens: null, maxTokens: null }, 'and without them');
+  assert.equal(catalog.error, null);
+  assert.ok(isIso(catalog.fetchedAt));
 });
 
 test('the live snapshot and every delta decode with ISO times and null-safe fields', () => {

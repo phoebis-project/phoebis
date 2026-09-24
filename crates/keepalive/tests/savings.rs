@@ -43,29 +43,9 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
 // resolve against the old one.
 const PRICED: &str = "claude-sonnet-5";
 
-async fn priced(r: &mut Rig) {
-    // A manual served row, selected: a sync after the harness's first one would add the id unselected, and an
-    // unselected id is not served.
-    let served = |id: &str| phoebis_store::ServedModelWrite {
-        upstream_id: id.into(),
-        selected: true,
-        long_context: false,
-    };
-    for account in ["a", "b"] {
-        r.h.store
-            .put_served_models(
-                account,
-                &[
-                    served("claude-sonnet-4-5"),
-                    served("claude-opus-5"),
-                    served(PRICED),
-                ],
-                "test",
-            )
-            .unwrap();
-    }
-    r.h.router.reload().await.unwrap();
-}
+// No served-model gate stands between a pool and a model any more: every enabled member routes for
+// anything the pool's and the key's rules allow, so pricing a model here needs no row written for it.
+async fn priced(_r: &mut Rig) {}
 
 fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)

@@ -34,9 +34,8 @@ quota:
   poll_interval_seconds: 3600
   sample_retention_days: 30
 routing:
-  # How often the router re-discovers each account's served models, jittered so accounts do not sync
-  # together.
-  catalog_sync_interval_seconds: 86400
+  # How long an upstream's model list is held before it is read again for the console and the models listing.
+  catalog_cache_seconds: 60
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3

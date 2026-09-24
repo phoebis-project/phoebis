@@ -140,19 +140,6 @@ pub async fn harness_on(
                     .set_api_key_secret(account.id, &Secret::new(account.secret))
                     .unwrap(),
             }
-            store
-                .apply_catalog_sync(
-                    account.id,
-                    &[
-                        ("claude-sonnet-4-5".into(), false),
-                        ("claude-opus-5".into(), false),
-                        ("gpt-5".into(), false),
-                    ],
-                    None,
-                    NOW,
-                    "test",
-                )
-                .unwrap();
         }
         store
             .insert_pool(
@@ -266,7 +253,7 @@ pub async fn harness_on(
     ));
     let router_handle =
         spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
-    let _catalog = Arc::new(CatalogService::new(
+    let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
         pool.clone(),
@@ -274,6 +261,7 @@ pub async fn harness_on(
         router_handle.clone(),
         clock.clone(),
         Duration::from_secs(10),
+        Duration::from_secs(60),
     ));
     let bus = Bus::new();
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
@@ -308,6 +296,7 @@ pub async fn harness_on(
             resolver,
             clock,
             limits,
+            catalog,
         )
         .with_bus(bus.clone()),
     );

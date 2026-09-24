@@ -200,16 +200,6 @@ pub fn spawn_event_mirror(
                                 }).to_string()),
                                 ..Default::default()
                             }));
-                            if change.kind == "catalog_synced" {
-                                ledger.record(Record::Event(EventRecord {
-                                    at: change.at,
-                                    kind: "catalog_synced".into(),
-                                    account_id: Some(change.target.clone()),
-                                    actor: Some(change.actor),
-                                    detail: Some(change.diff_json),
-                                    ..Default::default()
-                                }));
-                            }
                         }
                     }
                     if let Ok(attempts) = store.refresh_attempts_resolved_after(last_resolved.0, last_resolved.1, MIRROR_BATCH) {

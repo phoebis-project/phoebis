@@ -39,6 +39,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::billing::{entrypoint_of, restorable_version, Restore};
 use crate::casing::OriginalHead;
+use crate::catalog::CatalogService;
 use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
@@ -157,6 +158,7 @@ pub struct Relay {
     bus: Option<Bus>,
     /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
     cache_diagnostics: bool,
+    catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
     drift: DriftGuard,
     pub(crate) limits: Limits,
@@ -178,11 +180,13 @@ impl Relay {
         resolver: Resolver,
         clock: Clock,
         limits: Limits,
+        catalog: Arc<CatalogService>,
     ) -> Relay {
         Relay {
             bodies: TaskTracker::new(),
             bus: None,
             cache_diagnostics: false,
+            catalog,
             clock,
             drift: DriftGuard,
             limits,
@@ -193,6 +197,10 @@ impl Relay {
             router,
             store,
         }
+    }
+
+    pub fn catalog(&self) -> &Arc<CatalogService> {
+        &self.catalog
     }
 
     /// Attaches the bus every relayed request is published to. Without one the relay publishes nothing.
@@ -362,9 +370,7 @@ impl Trace {
             canonical_model: identity
                 .map(|i| i.canonical_model.clone())
                 .unwrap_or_default(),
-            wire_model: identity
-                .map(|i| i.canonical_model.clone())
-                .unwrap_or_default(),
+            wire_model: identity.map(|i| i.folded_model.clone()).unwrap_or_default(),
             stream,
             headers: published_headers(headers),
             body,
@@ -845,7 +851,7 @@ impl Relay {
                 )
                 .await;
         }
-        let identity = match identify(&parts.headers, &raw) {
+        let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
                 trace
@@ -872,6 +878,12 @@ impl Relay {
                     .await;
             }
         };
+        // A hit substitutes the resolved dated id as the canonical name before anything downstream reads it,
+        // so the observed event, the routing decision, and the ledger all agree on it from this point on; a
+        // miss leaves the folded spelling as canonical until a background probe lands one.
+        if let Some(dated) = self.catalog.canonical_for(&identity.folded_model) {
+            identity.canonical_model = dated;
+        }
         trace
             .observed(
                 Some(&key),
@@ -885,13 +897,11 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
-        // Nothing here yet tells the folded spelling from a dated id the live catalog might resolve it to,
-        // so the same spelling stands for both.
         let candidates = match resolve(
             &snapshot,
             &key,
             &identity.canonical_model,
-            &identity.canonical_model,
+            &identity.folded_model,
         ) {
             Ok(candidates) => candidates,
             Err(ResolveError::ModelNotAllowed) => {
@@ -906,6 +916,9 @@ impl Relay {
                     .await
             }
         };
+        // The request is admitted from here on, so a refused request above never reaches this: one
+        // background resolution for the spelling, off the request's own path.
+        self.catalog.request_resolution(&identity.folded_model);
         // Narrows what a probe starts the loop with; a registry write can move the revision before any
         // attempt, and then the router recomputes candidates from its own snapshot without this filter, so
         // `probe_eligible` runs again on every selection below to hold the same rule against the chosen row.
@@ -1176,6 +1189,9 @@ impl Relay {
         };
         let memory_key = admitted.memory_key.as_ref();
         let canonical_model = &admitted.identity.canonical_model;
+        // Session memory tracks a repeat of the same wire spelling, not the resolved identity: a resolution
+        // landing between two requests for the same spelling must not make the second look like a fresh one.
+        let folded_model = &admitted.identity.folded_model;
         // A failover leg may follow a long first one; the key may have been evicted and saved meanwhile, and
         // `build` reads the map alone.
         if let Some(key) = memory_key {
@@ -1226,7 +1242,7 @@ impl Relay {
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
             let previous = memory_key
-                .map(|key| self.memory.previous(key, &account.id, canonical_model))
+                .map(|key| self.memory.previous(key, &account.id, folded_model))
                 .unwrap_or_default();
             let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
                 .then_some(previous.message_id.as_deref());
@@ -1706,7 +1722,7 @@ impl Relay {
                 body_prefix: decoded.as_deref(),
                 injected: ctx.injected,
                 can_strip: ctx.can_strip,
-                wire_model: &ctx.identity.canonical_model,
+                wire_model: &ctx.identity.folded_model,
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
             },
         );
@@ -1811,7 +1827,9 @@ impl Relay {
                     let memory = self.memory.clone();
                     let key = key.clone();
                     let account_id = ctx.account.id.clone();
-                    let model = ctx.identity.canonical_model.clone();
+                    // The same wire-spelling key `previous` reads above, not the resolved identity: see its
+                    // comment.
+                    let model = ctx.identity.folded_model.clone();
                     let clock = self.clock.clone();
                     Box::new(move |id: String| {
                         // Awaited on the body task before the next piece goes out, so the caller's next
@@ -1837,12 +1855,26 @@ impl Relay {
                     Some(Held { bytes, inspect, .. }) => {
                         let fallback_ms = ctx.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
-                        let (router, clock, account_id, kind, model, pin, request_id) = (
+                        // Two spellings captured for two purposes that diverge once a resolution lands: the
+                        // canonical id is the cooldown's scope and `report_failover`'s model, the folded
+                        // spelling is the wire model `classify`'s rejection arm matches the upstream's own
+                        // words against.
+                        let (
+                            router,
+                            clock,
+                            account_id,
+                            kind,
+                            canonical_model,
+                            wire_model,
+                            pin,
+                            request_id,
+                        ) = (
                             self.router.clone(),
                             self.clock.clone(),
                             ctx.account.id.clone(),
                             ctx.account.kind,
                             ctx.identity.canonical_model.clone(),
+                            ctx.identity.folded_model.clone(),
                             ctx.portable.then(|| ctx.pin.cloned()).flatten(),
                             ctx.request_id.to_string(),
                         );
@@ -1860,7 +1892,7 @@ impl Relay {
                                 &head,
                                 &HeadContext {
                                     kind,
-                                    canonical_model: &model,
+                                    canonical_model: &canonical_model,
                                     now,
                                     fallback_ms,
                                     first_event: Some(&data),
@@ -1870,14 +1902,14 @@ impl Relay {
                                     // never reaches it.
                                     injected: &[],
                                     can_strip: false,
-                                    wire_model: &model,
+                                    wire_model: &wire_model,
                                     model_rejection_ms,
                                 },
                             ) {
                                 report_failover(
                                     &router,
                                     &account_id,
-                                    &model,
+                                    &canonical_model,
                                     cooldown,
                                     mark,
                                     pin,

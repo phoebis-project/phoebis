@@ -781,6 +781,7 @@ async fn app_with_webhook_policy(
         router_handle.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
+        Duration::from_secs(60),
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -819,6 +820,7 @@ async fn app_with_webhook_policy(
             resolver.clone(),
             clock.clone(),
             limits,
+            catalog.clone(),
         )
         .with_bus(bus.clone()),
     );
@@ -864,7 +866,7 @@ async fn app_with_webhook_policy(
         admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         cache_diagnostics: false,
-        catalog_sync_interval_seconds: 86_400,
+        catalog_cache_seconds: 60,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),

@@ -20,7 +20,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, Limits, Relay};
+use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
@@ -92,15 +92,6 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 refresh_expires_at: None,
                 scopes: "user:inference".into(),
             },
-        )
-        .unwrap();
-    store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-4-5".into(), false)],
-            None,
-            NOW,
-            "test",
         )
         .unwrap();
     store
@@ -186,6 +177,16 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     ));
     let router_handle =
         spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    let catalog = Arc::new(CatalogService::new(
+        store.clone(),
+        manager.clone(),
+        pool.clone(),
+        resolver.clone(),
+        router_handle.clone(),
+        clock.clone(),
+        Duration::from_secs(10),
+        Duration::from_secs(60),
+    ));
     let bus = Bus::new();
     // The shipped table prices `claude-sonnet-5`, not the fixture's `claude-sonnet-4-5`; the tests assert a cost.
     let mut table = PriceTable::shipped();
@@ -220,6 +221,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
             resolver,
             clock,
             limits,
+            catalog,
         )
         .with_bus(bus.clone()),
     );

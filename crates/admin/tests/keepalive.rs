@@ -791,18 +791,6 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    parts
-        .store
-        .put_served_models(
-            "direct",
-            &[phoebis_store::ServedModelWrite {
-                upstream_id: "claude-sonnet-4-5".into(),
-                selected: true,
-                long_context: false,
-            }],
-            "test",
-        )
-        .unwrap();
     parts.router.reload().await.unwrap();
     let created = json(
         post(

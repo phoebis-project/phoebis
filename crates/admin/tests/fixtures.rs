@@ -439,16 +439,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-5":{"input_cost_per_token":2e-06,"output_cost_per_token":1e-05,"cache_read_input_token_cost":2e-07,"cache_creation_input_token_cost":2.5e-06,"cache_creation_input_token_cost_above_1hr":4e-06}}"#.to_vec() } }]).await;
-    parts
-        .store
-        .apply_catalog_sync(
-            "business",
-            &[("claude-sonnet-5".into(), true)],
-            None,
-            now,
-            "test",
-        )
-        .unwrap();
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
         v["requests"].as_array().unwrap().len() == 4
     })
@@ -506,7 +496,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     );
     for (name, route) in [
         ("account", "/admin/accounts/business"),
-        ("account_models", "/admin/accounts/business/models"),
+        ("account_catalog", "/admin/accounts/business/catalog"),
         ("account_quota", "/admin/accounts/business/quota?range=7d"),
         ("account_usage", "/admin/accounts/business/usage"),
         ("accounts", "/admin/accounts"),
@@ -567,6 +557,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )
         .await,
     );
+    // The shipped table prices claude-sonnet-5, not the harness's own claude-sonnet-4-5, so the live catalog
+    // this preview reads is pointed at the id the price file and the fixture both name.
+    parts.up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-5"}]}"#.to_vec(),
+        },
+    );
     let preview = json(
         post(
             app,
@@ -585,21 +586,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "pricing_import",
         "POST /admin/pricing/import",
         preview,
-    );
-    hold(
-        &planted,
-        "account_sync",
-        "POST /admin/accounts/business/models/sync",
-        json(
-            post(
-                app,
-                "/admin/accounts/business/models/sync",
-                "",
-                Some(&cookie),
-            )
-            .await,
-        )
-        .await,
     );
     hold(
         &planted,

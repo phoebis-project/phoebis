@@ -202,8 +202,8 @@ range, since they carry no session, and its subtitle says so.
 Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
 keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
 bootstrap file's quota, routing, storage, and usage blocks: the quota poll interval and sample retention, the
-catalog sync interval, cooldown fallback, and attempt limit, the ledger, pricing, and storage paths, and the usage
-cache TTL and refresh concurrency.
+catalog cache window, the cooldown fallback, the model rejection window, and the attempt limit, the ledger,
+pricing, and storage paths, and the usage cache TTL and refresh concurrency.
 
 ## Alerts
 

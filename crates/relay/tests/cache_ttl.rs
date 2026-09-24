@@ -273,7 +273,6 @@ async fn the_per_model_override_and_the_in_overage_value_apply_and_overage_is_re
             overage_policy: OveragePolicy::Allow,
             ..Default::default()
         },
-        &["claude-sonnet-4-5", "claude-opus-5", HAIKU],
         default_limits(),
     )
     .await;

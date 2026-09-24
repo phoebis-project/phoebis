@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { sampleDriven, selectionOrder } from './dist/api.js';
 
 const account = (id, over = {}) => ({
-  catalogSyncedAt: null,
   cooldowns: [],
   credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, refreshTokenExpiresAt: null },
   email: null,
@@ -16,7 +15,6 @@ const account = (id, over = {}) => ({
   pools: [],
   requests: { last24h: 0, last7d: 0, lifetime: 0 },
   routingEnabled: true,
-  servedModels: [],
   status: 'ready',
   subscription: null,
   windows: [],

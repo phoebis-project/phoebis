@@ -159,7 +159,6 @@ fn snapshot() -> RegistrySnapshot {
                 priority: 0,
             },
         ],
-        models: Vec::new(),
         pools: vec![
             pool(
                 "main",

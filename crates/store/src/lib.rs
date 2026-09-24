@@ -33,9 +33,9 @@ pub use credentials::{
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use pricing::PricingVersion;
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelRule, ModelSource, OveragePolicy,
-    PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, ServedModel,
-    ServedModelWrite, Strategy, SubStrategy, SyncDelta, ROTATION_GRACE_MS,
+    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, ModelRule, OveragePolicy, PoolMember,
+    PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, Strategy, SubStrategy,
+    ROTATION_GRACE_MS,
 };
 pub use routing::{CooldownRow, OverageRow, PinRow, ResolutionRow, RoutingLoad};
 
@@ -58,11 +58,6 @@ pub enum StoreError {
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
     AttemptPending,
-    #[error("account {account_id} already serves a model whose canonical id is {canonical_id}")]
-    CanonicalClash {
-        account_id: String,
-        canonical_id: String,
-    },
     #[error("sealed credential could not be decrypted")]
     Crypto,
     #[error("the slot was disconnected or replaced while the pairing ran")]

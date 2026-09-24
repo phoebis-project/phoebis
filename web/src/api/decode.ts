@@ -1,7 +1,7 @@
 import type {
-  Account, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode, Overview, PairingSession, Pool,
-  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, ServedModel, Session, SessionLifecycleDetail, Settings, WindowId,
+  PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, Session, SessionLifecycleDetail, Settings, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
@@ -60,11 +60,6 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   return 'ready';
 }
 
-function decodeServedModel(m: Rec): ServedModel {
-  const upstreamId = str(m.upstream_id);
-  return { canonicalId: str(m.canonical_id, upstreamId), id: str(m.canonical_id, upstreamId), inCatalog: !bool(m.missing), isNew: bool(m.new), longContext: bool(m.long_context), manual: str(m.source) === 'manual', selected: bool(m.selected), upstreamId };
-}
-
 export function decodeModelRule(v: unknown): ModelRule {
   const r = rec(v);
   return { not: bool(r.not), pattern: str(r.pattern) };
@@ -83,8 +78,6 @@ export function decodeAccount(v: unknown): Account {
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   return {
-    catalogError: strOrNull(a.catalog_error),
-    catalogSyncedAt: isoOrNull(a.catalog_synced_at),
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
@@ -99,7 +92,6 @@ export function decodeAccount(v: unknown): Account {
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     routingEnabled: bool(a.enabled, true),
-    servedModels: list(a.served_models).map(rec).map(decodeServedModel),
     status: accountStatus(a, cooldowns),
     subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier) } : null,
     windows: windows.filter((w) => w.id !== '7d_fable'),
@@ -114,11 +106,14 @@ export function planLabel(tier: string): string {
   return m[2] ? `${name} ${m[2]}x` : name;
 }
 
-export function decodeCatalog(accounts: Account[]): CatalogModel[] {
-  // The catalog is the union of what the accounts serve.
-  const out = new Map<string, CatalogModel>();
-  for (const a of accounts) for (const m of a.servedModels) if (!out.has(m.id)) out.set(m.id, { id: m.id, longContext: m.longContext });
-  return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
+export function decodeCatalogModel(v: unknown): CatalogModel {
+  const m = rec(v);
+  return { createdAt: str(m.created_at), displayName: str(m.display_name), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
+}
+
+export function decodeAccountCatalog(v: unknown): AccountCatalog {
+  const c = rec(v);
+  return { error: strOrNull(c.error), fetchedAt: isoOr(c.fetched_at, epoch), models: list(c.models).map(decodeCatalogModel) };
 }
 
 export function decodePairingSession(v: unknown): PairingSession {
@@ -376,12 +371,11 @@ export function decodeSettings(v: unknown): Settings {
     // A router too old to answer the block behaves as the block's own defaults describe, and runs the profile the about card already shows.
     compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), outboundGzip: bool(c.outbound_gzip), profile: str(c.profile, str(rec(s.about).profile)), usageEntrypoint: str(c.usage_entrypoint, 'cli') },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
-    lastSyncAt: isoOrNull(s.last_sync_at),
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     pricing: decodePricing(s.pricing),
     quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
-    routing: { catalogSyncIntervalSeconds: num(route.catalog_sync_interval_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds) },
+    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
     usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },

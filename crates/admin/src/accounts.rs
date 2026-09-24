@@ -1,5 +1,5 @@
-//! Account registry routes: creation with verification, edits, deletion, served models, and the two operator
-//! actions that clear a cooldown or a funding hold.
+//! Account registry routes: creation with verification, edits, deletion, the live catalog, and the two
+//! operator actions that clear a cooldown or a funding hold.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -10,26 +10,15 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
-use phoebis_store::{
-    canonical_id, AccountKind, AccountRow, AccountState, AccountUpdate, ModelSource, Secret,
-    ServedModelWrite, StoreError,
-};
+use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StoreError};
 use serde_json::{json, Value};
 
-use crate::routes::{
-    account, account_json, failure, failure_with_code, reload_or_refuse, store_failure,
-};
+use crate::routes::{account, account_json, failure, reload_or_refuse, store_failure};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
 
 const DUPLICATE_ID: &str = "an account with this id exists";
-
-/// What discovery said about a staged credential: the catalog to store, or the error to record.
-enum Verified {
-    Catalog(Vec<(String, bool)>),
-    Error(String),
-}
 
 #[derive(serde::Deserialize)]
 struct CreateInput {
@@ -48,19 +37,6 @@ struct PatchInput {
     enabled: Option<bool>,
     #[serde(default)]
     secret: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct ModelsInput {
-    models: Vec<ModelInput>,
-}
-
-#[derive(serde::Deserialize)]
-struct ModelInput {
-    upstream_id: String,
-    selected: bool,
-    #[serde(default)]
-    long_context: bool,
 }
 
 fn valid_slug(id: &str) -> bool {
@@ -121,22 +97,14 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     };
     let secret = input.secret.map(|s| Secret::new(&s));
     // The key is verified before the row exists, so a refused creation leaves nothing behind.
-    let verified = match &secret {
-        Some(secret) => match verify_staged(&state, &row, secret).await {
-            Ok(verified) => Some(verified),
-            Err(refusal) => return refusal,
-        },
-        None => None,
-    };
-    let (catalog, catalog_error) = match &verified {
-        Some(Verified::Catalog(models)) => (Some(models.as_slice()), None),
-        Some(Verified::Error(error)) => (None, Some(error.as_str())),
-        None => (None, None),
-    };
-    if let Err(error) =
-        state
-            .store
-            .create_account(&row, secret.as_ref(), catalog, catalog_error, now, ACTOR)
+    if let Some(secret) = &secret {
+        if let Err(refusal) = verify_staged(&state, &row, secret).await {
+            return refusal;
+        }
+    }
+    if let Err(error) = state
+        .store
+        .create_account(&row, secret.as_ref(), now, ACTOR)
     {
         // The check above is a read, and discovery runs between it and this insert, so a creation that lost a
         // race for the id arrives here as the store's unique constraint. The insert is one transaction, so a
@@ -146,6 +114,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             _ => store_failure(error),
         };
     }
+    state.catalog.evict(&row.id);
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
@@ -156,54 +125,24 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
 }
 
 /// A discovery request with the staged secret against the staged account doubles as the key check: a 401
-/// refuses the edit, a successful list is the catalog to store, and any other answer is recorded as the
-/// catalog error.
+/// refuses the edit, and any other outcome, success or failure, changes nothing here (the cache reads the
+/// live list on demand once the account exists).
 async fn verify_staged(
     state: &AdminState,
     staged: &AccountRow,
     secret: &Secret,
-) -> Result<Verified, Response> {
+) -> Result<(), Response> {
     match state.catalog.discover_with(staged, Some(secret)).await {
-        // A list carrying two spellings of one canonical id would roll the store transaction back and refuse
-        // the whole write, leaving the operator no way to hold the account at all; the scheduled sync records
-        // the same clash as a catalog error, so the row lands here too and the models are added by hand.
-        Ok(discovered) => Ok(match clashing_canonical_id(&discovered.models) {
-            Some(canonical) => {
-                Verified::Error(format!("two spellings of {canonical} in one response"))
-            }
-            None => Verified::Catalog(discovered.models),
-        }),
+        Ok(_) => Ok(()),
         Err(DiscoveryError::Unauthorized) => Err(failure(
             StatusCode::BAD_REQUEST,
             "credential rejected by the upstream",
         )),
-        Err(error) => Ok(Verified::Error(error.to_string())),
+        Err(error) => {
+            tracing::warn!(account = %staged.id, %error, "the account's catalog probe failed during verification");
+            Ok(())
+        }
     }
-}
-
-/// The first discovered id whose canonical form the account already serves under a different upstream id.
-fn stored_clash(
-    state: &AdminState,
-    account_id: &str,
-    discovered: &[(String, bool)],
-) -> Result<Option<String>, StoreError> {
-    let stored = state.store.served_models(account_id)?;
-    Ok(discovered.iter().find_map(|(upstream_id, _)| {
-        let canonical = canonical_id(upstream_id);
-        stored
-            .iter()
-            .any(|m| m.canonical_id == canonical && m.upstream_id != *upstream_id)
-            .then_some(canonical)
-    }))
-}
-
-/// The first canonical id a discovered list names twice, whatever the spellings.
-fn clashing_canonical_id(models: &[(String, bool)]) -> Option<String> {
-    let mut seen = std::collections::HashSet::new();
-    models
-        .iter()
-        .map(|(upstream_id, _)| canonical_id(upstream_id))
-        .find(|canonical| !seen.insert(canonical.clone()))
 }
 
 pub(crate) async fn patch(
@@ -234,36 +173,15 @@ pub(crate) async fn patch(
             label: label.to_string(),
             ..row.clone()
         };
-        let verified = match verify_staged(&state, &staged, &secret).await {
-            Ok(verified) => verified,
-            Err(refusal) => return refusal,
-        };
-        // A stored row under another spelling of a discovered id breaks the catalog's canonical-id
-        // uniqueness inside the commit, which would roll the verified secret back with a 500. It is the same
-        // clash the intra-list check finds, so it is recorded the same way and the stored catalog is left as
-        // it is.
-        let verified = match verified {
-            Verified::Catalog(models) => match stored_clash(&state, &id, &models) {
-                Ok(Some(canonical)) => Verified::Error(format!(
-                    "{canonical} is already served under another spelling"
-                )),
-                Ok(None) => Verified::Catalog(models),
-                Err(error) => return store_failure(error),
-            },
-            error => error,
-        };
-        let (catalog, catalog_error) = match &verified {
-            Verified::Catalog(models) => (Some(models.as_slice()), None),
-            Verified::Error(error) => (None, Some(error.as_str())),
-        };
+        if let Err(refusal) = verify_staged(&state, &staged, &secret).await {
+            return refusal;
+        }
         let update = AccountUpdate {
             id: &id,
             expected_revision: row.revision,
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: Some(&secret),
-            catalog,
-            catalog_error,
             state: AccountState::Ready,
             at: (state.clock)(),
             actor: ACTOR,
@@ -281,6 +199,7 @@ pub(crate) async fn patch(
             }
             Err(error) => return store_failure(error),
         }
+        state.catalog.evict(&id);
     } else if input.label.is_some() {
         // Fenced on the revision the row was read at, like the verified branch above: a patch built from a
         // stale read must not land on a row another edit has moved since.
@@ -326,6 +245,7 @@ pub(crate) async fn remove(
         }
         Err(error) => return store_failure(error),
     }
+    state.catalog.evict(&id);
     state.usage.invalidate(&id);
     let now = (state.clock)();
     for (session_id, owner) in state.vault.discard_for_account(&id) {
@@ -337,97 +257,37 @@ pub(crate) async fn remove(
     StatusCode::NO_CONTENT.into_response()
 }
 
-pub(crate) async fn models(
+/// `?refresh=1` reads the upstream again before answering; otherwise the cache answers, filling it on a
+/// miss.
+pub(crate) async fn catalog(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    if let Err(refusal) = account(&state, &id) {
-        return refusal;
-    }
-    models_json(&state, &id)
-        .map(|v| Json(v).into_response())
-        .unwrap_or_else(store_failure)
-}
-
-pub(crate) async fn put_models(
-    State(state): State<Arc<AdminState>>,
-    Path(id): Path<String>,
-    body: Bytes,
-) -> Response {
-    let Ok(input) = serde_json::from_slice::<ModelsInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must carry a models list");
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
     };
-    if let Err(refusal) = account(&state, &id) {
-        return refusal;
-    }
-    let rows: Vec<ServedModelWrite> = input
-        .models
-        .into_iter()
-        .map(|m| ServedModelWrite {
-            upstream_id: m.upstream_id,
-            selected: m.selected,
-            long_context: m.long_context,
-        })
-        .collect();
-    match state.store.put_served_models(&id, &rows, ACTOR) {
-        Ok(()) => {}
-        Err(StoreError::CanonicalClash { canonical_id, .. }) => {
-            return failure(
-                StatusCode::CONFLICT,
-                &format!("two spellings of {canonical_id}"),
-            )
-        }
-        Err(error) => return store_failure(error),
-    }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    models_json(&state, &id)
-        .map(|v| Json(v).into_response())
-        .unwrap_or_else(store_failure)
-}
-
-pub(crate) async fn sync(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    if let Err(refusal) = account(&state, &id) {
-        return refusal;
-    }
-    match state.catalog.sync(&id, ACTOR).await {
-        Ok(outcome) => {
-            // The rows are in the store either way, so the refusal is about publication alone, which is what
-            // the same answer means everywhere else an admin write cannot reach the router.
-            if let Some(error) = &outcome.reload_failed {
-                tracing::error!(account = %id, %error, "a catalog sync could not be published");
-                let written = outcome.delta.is_some() || outcome.seeded;
-                let message = if written {
-                    "the catalog was written but could not be published; the next successful reload publishes it"
-                } else if outcome.stale {
-                    "the account changed during discovery, so nothing was written; the reload that followed also failed"
-                } else {
-                    "discovery failed and its error was recorded; the reload that followed also failed"
-                };
-                let mut response = failure_with_code(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "registry_unavailable",
-                    message,
-                );
-                *response.body_mut() = axum::body::Body::from(
-                    json!({ "error": message, "written": written }).to_string(),
-                );
-                return response;
-            }
-            Json(json!({
-                "added": outcome.delta.as_ref().map(|d| d.added.clone()).unwrap_or_default(),
-                "missing": outcome.delta.as_ref().map(|d| d.missing.clone()).unwrap_or_default(),
-                "error": outcome.error,
-                "seeded": outcome.seeded,
-            }))
-            .into_response()
-        }
-        // The gate above read the row; a delete that lands during discovery reaches `CatalogService::sync`'s
-        // own read and is the same absence, answered the same way as `patch` and `remove` answer it.
-        Err(StoreError::AccountNotFound(_)) => failure(StatusCode::NOT_FOUND, "account not found"),
-        Err(error) => store_failure(error),
-    }
+    let refresh = q.get("refresh").map(String::as_str) == Some("1");
+    let fetched = if refresh {
+        state.catalog.refresh(&row).await
+    } else {
+        state.catalog.fetch(&row).await
+    };
+    let mut models = fetched.models;
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(json!({
+        "models": models.iter().map(|m| json!({
+            "id": m.id,
+            "display_name": m.display_name,
+            "created_at": m.created_at,
+            "max_input_tokens": m.max_input_tokens,
+            "max_tokens": m.max_tokens,
+        })).collect::<Vec<_>>(),
+        "fetched_at": fetched.fetched_at,
+        "error": fetched.error,
+    }))
+    .into_response()
 }
 
 pub(crate) async fn clear_cooldown(
@@ -474,31 +334,6 @@ pub(crate) async fn clear_funding(
         return refusal;
     }
     StatusCode::NO_CONTENT.into_response()
-}
-
-pub(crate) fn models_json(state: &AdminState, id: &str) -> Result<Value, StoreError> {
-    let rows = state.store.served_models(id)?;
-    let (synced_at, error) = state.store.catalog_status(id)?;
-    // A seed is what an account serves until a discovery lands, so only the newer of the two says which the
-    // current list is.
-    let built_in = state
-        .store
-        .latest_catalog_change(id)?
-        .is_some_and(|kind| kind == "catalog_seeded");
-    Ok(json!({
-        "models": rows.iter().map(|m| json!({
-            "upstream_id": m.upstream_id,
-            "canonical_id": m.canonical_id,
-            "selected": m.selected,
-            "source": match m.source { ModelSource::Discovered => "discovered", ModelSource::Manual => "manual" },
-            "long_context": m.long_context,
-            "missing": m.missing,
-            "new": m.is_new,
-        })).collect::<Vec<_>>(),
-        "catalog_synced_at": synced_at,
-        "catalog_error": error,
-        "built_in": built_in,
-    }))
 }
 
 pub(crate) async fn quota(

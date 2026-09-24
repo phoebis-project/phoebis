@@ -18,14 +18,11 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },
         "compatibility": { "cache_diagnostics": s.cache_diagnostics, "outbound_gzip": false, "profile": s.profile, "usage_entrypoint": s.usage_entrypoint },
         "keepalive": s.keepalive,
-        // The newest sync any account recorded, so the console can say when the catalog was last read
-        // instead of inventing an instant of its own.
-        "last_sync_at": state.store.newest_catalog_sync().ok().flatten(),
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "pricing": { "version": table.version, "effective": table.effective, "source": table.source, "models": table.models.iter().map(|(m, p)| json!({ "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output })).collect::<Vec<_>>() },
         "quota": { "poll_interval_seconds": s.quota_poll_interval_seconds, "sample_retention_days": s.quota_sample_retention_days },
         "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "quota_samples_days": s.quota_sample_retention_days, "rollup_days": s.rollup_retention_days },
-        "routing": { "catalog_sync_interval_seconds": s.catalog_sync_interval_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "max_attempts": s.max_attempts, "model_rejection_seconds": s.model_rejection_seconds },
+        "routing": { "catalog_cache_seconds": s.catalog_cache_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "max_attempts": s.max_attempts, "model_rejection_seconds": s.model_rejection_seconds },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
         "storage": { "ledger_path": s.ledger_path, "path": s.storage_path, "pricing_path": s.pricing_path },
         "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds, "refresh_concurrency": s.usage_refresh_concurrency },

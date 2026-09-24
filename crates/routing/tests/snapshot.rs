@@ -31,7 +31,6 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             retired_secret_last_used_at: None,
         }],
         members: Vec::new(),
-        models: Vec::new(),
         pools: vec![PoolRow {
             id: "p".into(),
             label: "p".into(),

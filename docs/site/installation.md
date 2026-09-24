@@ -152,7 +152,7 @@ so it is safe to run against a production file while the router is up. It prints
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `profile {config.compatibility.profile}`
-6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog sync every {n}s`
+6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s`
 7. `ledger at {config.stats.ledger_path}`
 8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days, quota poll every {n}s`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
@@ -233,9 +233,8 @@ quota:
   poll_interval_seconds: 3600
   sample_retention_days: 30
 routing:
-  # How often the router re-discovers each account's served models, jittered so accounts do not sync
-  # together.
-  catalog_sync_interval_seconds: 86400
+  # How long an upstream's model list is held before it is read again for the console and the models listing.
+  catalog_cache_seconds: 60
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3
@@ -372,14 +371,14 @@ Defaults whole.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `catalog_sync_interval_seconds` | `86400` | at least 300 |
+| `catalog_cache_seconds` | `60` | 1 to 86400 |
 | `cooldown_fallback_seconds` | `60` | any number of seconds |
 | `max_attempts` | `3` | 1 to 8 |
 | `model_rejection_seconds` | `3600` | 1 to 604800 |
 
 Refused with:
 
-- `catalog_sync_interval_seconds`: `routing.catalog_sync_interval_seconds must be at least 300`
+- `catalog_cache_seconds`: `routing.catalog_cache_seconds must be between 1 and 86400, not {value}`
 - `cooldown_fallback_seconds`: nothing
 - `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
 - `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
@@ -460,7 +459,7 @@ refused with `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
-`keepalive` bounds, `routing.catalog_sync_interval_seconds`, the four `sessions` keys,
+`keepalive` bounds, `routing.catalog_cache_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.rollup_retention_days`,
 `quota.sample_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name
 the same file. The first failure is the one reported, so fix the file top to bottom to find the next one.

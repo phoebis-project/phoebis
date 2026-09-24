@@ -293,6 +293,8 @@ const V22: &str = r#"
 
 // Both whitelist columns are dropped rather than renamed, so no old list is ever read as a rule list; neither sits
 // in an index, a key, or a constraint. A fresh database replays the chain, so `V2` keeps the two columns this drops.
+// `SCHEMA` and `V2` keep the table and the two columns this drops; neither column sits in an index, a key, or a
+// constraint.
 const V23: &str = r#"
 ALTER TABLE pools DROP COLUMN default_allowed_models_json;
 ALTER TABLE pools ADD COLUMN model_rules_json TEXT NOT NULL DEFAULT '[]';
@@ -305,4 +307,7 @@ CREATE TABLE model_resolutions (
     dated_id TEXT NOT NULL,
     resolved_at INTEGER NOT NULL
 );
+DROP TABLE account_models;
+ALTER TABLE accounts DROP COLUMN catalog_synced_at;
+ALTER TABLE accounts DROP COLUMN catalog_error;
 "#;

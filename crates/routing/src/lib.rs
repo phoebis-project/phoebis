@@ -1,6 +1,7 @@
 //! The router task: the registry snapshot the relay authenticates against, model resolution, and the account
 //! selection that owns pins, cooldowns, and overage state.
 
+pub mod listing;
 pub mod pattern;
 mod resolve;
 pub mod rules;

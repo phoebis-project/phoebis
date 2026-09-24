@@ -5,14 +5,23 @@ presents is placed on one account of that pool by a selection that honours the s
 and each account's quota. This page describes every field of an account, a pool, and a key, then the selection
 itself, and the answers a client gets when nothing can serve it.
 
-## Served models
+## Catalogs
 
-Creating an account also discovers the models it serves, and discovery repeats every
-`routing.catalog_sync_interval_seconds`. `GET /admin/accounts/{id}/models` lists what discovery found, and a
-`PUT` on the same path replaces the list by hand. Two upstream spellings that fold to the same canonical id, a
-plain id and its `[1m]` long-context variant among them, are refused: `409 two spellings of {canonical_id}`. Each
-served model carries a `long_context` flag, and the console marks one `missing` when discovery no longer reports
-it, `new` when nobody has reviewed it yet.
+An upstream's model list is read live from `GET /v1/models` on `api.anthropic.com` with the upstream's own
+credential, on demand, and held for `routing.catalog_cache_seconds` (sixty by default); the Upstreams view's
+catalog popup, the rule editors' suggestions, and the proxy's models listing all read that cache, and
+`GET /admin/accounts/{id}/catalog` answers it with `?refresh=1` to read again. Nothing about routing depends on
+it: every enabled member of a pool is a candidate for any model the rules allow, and an upstream that does not
+serve a model says so with a `404` the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An
+upstream whose fetch failed contributes nothing to a listing until the next fetch, and the popup shows the error.
+
+The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the
+undated one (`claude-sonnet-4-5`). The router resolves a spelling it has not seen through
+`GET /v1/models/{spelling}` in the background, never on the request's own path, and from then on the dated id
+is the canonical name the rules, the ledger, the pricing, the pins, and the cooldowns use for that spelling; the
+body toward the upstream keeps the client's spelling. Until a spelling's first resolution lands, the client's
+folded spelling is the canonical name, which is why a rule for such a model is written as a glob; a resolution
+is kept across restarts, and a later probe that fails or answers 404 never takes it back.
 
 ## Pools
 

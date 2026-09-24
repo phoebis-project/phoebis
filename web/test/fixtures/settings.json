@@ -25,7 +25,6 @@
       "max_workers": 4,
       "oauth_prewarm_verified": false
     },
-    "last_sync_at": 1000000,
     "listeners": {
       "admin": "test",
       "metrics": "127.0.0.1:9464",
@@ -81,7 +80,7 @@
       "rollup_days": 400
     },
     "routing": {
-      "catalog_sync_interval_seconds": 86400,
+      "catalog_cache_seconds": 60,
       "cooldown_fallback_seconds": 60,
       "max_attempts": 3,
       "model_rejection_seconds": 3600

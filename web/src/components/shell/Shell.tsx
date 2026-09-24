@@ -3,8 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
-import { fmtAbsolute, fmtRelative } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync } from '@/lib/hooks';
 import { Badge, Button, Segmented, Toast } from '@/components/ui/primitives';
 import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconSliders, IconSun, IconUser, IconRoute } from '@/components/ui/icons';
 
@@ -42,7 +41,6 @@ export function Shell() {
   const { theme, setTheme } = useAppSettings();
   const { clearToast, logout, role, toast } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
-  const now = useNow(15_000);
   const [navOpen, setNavOpen] = useState(false);
   const base = `/${pathname.split('/')[1] ?? ''}`;
   const title = PAGE_TITLES[base] ?? 'Phoebis Router';
@@ -70,10 +68,6 @@ export function Shell() {
           ))}
         </nav>
         <div className="sidebar__status">
-          <div className="sidebar__row" title={settings.data?.lastSyncAt ? fmtAbsolute(settings.data.lastSyncAt) : undefined}>
-            <span className={`status-dot ${settings.data && settings.data.lastSyncAt === null ? '' : 'status-dot--good'}`} aria-hidden />
-            <span>{!settings.data ? 'Synced …' : settings.data.lastSyncAt ? `Synced ${fmtRelative(settings.data.lastSyncAt, now)}` : 'never synced'}</span>
-          </div>
           <div className="sidebar__row muted mono">v{settings.data?.about.version ?? '…'}</div>
         </div>
       </aside>

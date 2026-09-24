@@ -108,8 +108,10 @@ pub struct QuotaConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
-    #[serde(default = "default_catalog_interval")]
-    pub catalog_sync_interval_seconds: u64,
+    /// How long an account's catalog is held before it is read again, for the console and the models
+    /// listing.
+    #[serde(default = "default_catalog_cache")]
+    pub catalog_cache_seconds: u64,
     #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
     #[serde(default = "default_max_attempts")]
@@ -174,8 +176,8 @@ pub struct UpstreamConfig {
 pub enum ConfigError {
     #[error("stats.body_capture_max_hours must be between 1 and 168, not {value}")]
     BodyCaptureMaxOutOfRange { value: u32 },
-    #[error("routing.catalog_sync_interval_seconds must be at least 300")]
-    CatalogIntervalTooShort,
+    #[error("routing.catalog_cache_seconds must be between 1 and 86400, not {value}")]
+    CatalogCacheOutOfRange { value: u64 },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
@@ -268,7 +270,7 @@ impl Default for QuotaConfig {
 impl Default for RoutingConfig {
     fn default() -> Self {
         RoutingConfig {
-            catalog_sync_interval_seconds: default_catalog_interval(),
+            catalog_cache_seconds: default_catalog_cache(),
             cooldown_fallback_seconds: default_cooldown_fallback(),
             max_attempts: default_max_attempts(),
             model_rejection_seconds: default_model_rejection(),
@@ -344,10 +346,10 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         });
     }
     config.keepalive.validate()?;
-    // A sync walks every account against its upstream, so a short interval turns into a standing load on
-    // hosts that change their model list a few times a year.
-    if config.routing.catalog_sync_interval_seconds < 300 {
-        return Err(ConfigError::CatalogIntervalTooShort);
+    if !(1..=86_400).contains(&config.routing.catalog_cache_seconds) {
+        return Err(ConfigError::CatalogCacheOutOfRange {
+            value: config.routing.catalog_cache_seconds,
+        });
     }
     if config.sessions.expire_after_seconds < 60 {
         return Err(ConfigError::SessionExpiryTooShort);
@@ -509,8 +511,8 @@ fn default_body_capture_max() -> u32 {
     72
 }
 
-fn default_catalog_interval() -> u64 {
-    86_400
+fn default_catalog_cache() -> u64 {
+    60
 }
 
 fn default_cooldown_fallback() -> u64 {
@@ -647,10 +649,10 @@ mod tests {
             (
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
-                config.routing.catalog_sync_interval_seconds,
+                config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds
             ),
-            (3, 60, 86_400, 3_600)
+            (3, 60, 60, 3_600)
         );
         assert_eq!(
             (
@@ -659,16 +661,33 @@ mod tests {
             ),
             (86_400, 72)
         );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_sync_interval_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
         assert_eq!(
             (
                 config.routing.max_attempts,
+                config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
-            (5, 1_800, 7_200, 24)
+            (5, 30, 1_800, 7_200, 24)
         );
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "catalog-zero",
+                "routing:\n  catalog_cache_seconds: 0\n"
+            )),
+            Err(ConfigError::CatalogCacheOutOfRange { value: 0 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "catalog-too-long",
+                "routing:\n  catalog_cache_seconds: 86401\n"
+            )),
+            Err(ConfigError::CatalogCacheOutOfRange { value: 86_401 })
+        ));
         assert!(matches!(
             load(&file(dir.path(), "zero", "routing:\n  max_attempts: 0\n")),
             Err(ConfigError::MaxAttemptsOutOfRange { value: 0 })

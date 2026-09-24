@@ -29,8 +29,8 @@ const admin = async () => {
  */
 const SYNC = {
   account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business') },
+  account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('business') },
   account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('business') },
-  account_sync: { expect: (b) => Object.fromEntries(Object.keys(b).map((k) => [camel(k), 'any'])), mock: (api) => api.syncCatalog('business') },
   account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listQuotaSnapshots()).find((s) => s.accountId === 'business') },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   alert_deliveries: { decode: (b) => b.deliveries.map(d.decodeDelivery), mock: async (api) => { for (const e of await api.listAlertEvents()) { const rows = await api.listAlertDeliveries(e.id); if (rows.length) return rows; } throw new Error('no mock alert event carries a delivery'); } },
@@ -59,7 +59,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['account_models', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

@@ -40,9 +40,6 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 state: AccountState::Ready,
             })
             .unwrap();
-        store
-            .apply_catalog_sync(id, &[("claude-sonnet-5".into(), false)], None, 1, "test")
-            .unwrap();
     }
     store
         .insert_pool(
@@ -170,9 +167,6 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             revision: 1,
             state: AccountState::Ready,
         })
-        .unwrap();
-    store
-        .apply_catalog_sync("b", &[("claude-sonnet-5".into(), false)], None, 1, "test")
         .unwrap();
     store
         .set_pool_members("p", &[("b".into(), 0)], "test")
@@ -970,9 +964,6 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
         })
         .unwrap();
     store
-        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], None, 1, "test")
-        .unwrap();
-    store
         .set_pool_members("p", &[("a".to_string(), 0)], "test")
         .unwrap();
     handle.reload().await.unwrap();
@@ -1003,9 +994,6 @@ fn insert_account_a(store: &Store) {
         .unwrap();
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
-        .unwrap();
-    store
-        .apply_catalog_sync("a", &[("claude-sonnet-5".into(), false)], None, 1, "test")
         .unwrap();
     store
         .set_pool_members("p", &[("a".to_string(), 0)], "test")

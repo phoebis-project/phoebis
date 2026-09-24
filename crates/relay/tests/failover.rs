@@ -1,7 +1,7 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::Bus;
 use phoebis_ledger::{Assembler, Record};
 use phoebis_relay::Limits;
 use phoebis_store::AccountState;
@@ -14,25 +14,6 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const C: &str = "sk-ant-oat01-CCCC";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
-
-/// Waits for the bus to publish a completion and hands back every event seen up to and including it.
-async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<Event> {
-    let give_up = std::time::Instant::now() + Duration::from_secs(2);
-    let mut all = Vec::new();
-    loop {
-        while let Ok(e) = sub.events.try_recv() {
-            all.push(e);
-        }
-        if all.iter().any(|e| matches!(e, Event::RequestComplete(_))) {
-            return all;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "no completion was published"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
 
 async fn two_accounts(up: &FakeUpstream) -> Harness {
     harness(
@@ -527,6 +508,8 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "b")
     );
+    // The harness's catalog fake resolves this spelling to a dated id in the background; the scope this
+    // request's own cooldown lands under is re-keyed to it by the time the assertion below reads it.
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert_eq!(
         (
@@ -535,7 +518,7 @@ async fn a_permission_error_cools_one_model_for_an_hour_and_leaves_the_credentia
             cooldowns[0].until
         ),
         (
-            "model:claude-sonnet-4-5",
+            "model:claude-sonnet-4-5-20250929",
             "permission",
             NOW + 3_600_000 + 1_000
         )
@@ -600,9 +583,11 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     assert_eq!(outcome(&resp).account_id, "c", "k1 and b both failed over");
     let c = h.router.cooldowns().await.unwrap();
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
+    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
+    // scope below to it.
     assert_eq!(
         (k1.scope.as_str(), k1.until),
-        ("model:claude-sonnet-4-5", NOW + 30_000 + 1_000),
+        ("model:claude-sonnet-4-5-20250929", NOW + 30_000 + 1_000),
         "an api_key 429 with Retry-After cools the model"
     );
     assert!(
@@ -694,7 +679,6 @@ async fn a_fable_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec::default(),
-        &["claude-fable-5-1", "claude-opus-5", "claude-sonnet-4-5"],
         default_limits(),
     )
     .await;
@@ -943,14 +927,7 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
         max_attempts: 1,
         ..default_limits()
     };
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &["claude-sonnet-4-5"],
-        one,
-    )
-    .await;
+    let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), one).await;
     let resp = h
         .app
         .clone()
@@ -1025,7 +1002,6 @@ async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
         &up,
         &[api_key("vendor", OLD_KEY, 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5"],
         default_limits(),
     )
     .await;
@@ -1092,7 +1068,6 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
         &up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5"],
         default_limits(),
     )
     .await;

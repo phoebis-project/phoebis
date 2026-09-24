@@ -26,20 +26,6 @@ export interface ExtraUsage {
   usedCredits: number;
 }
 
-export interface ServedModel {
-  /** Id clients send; equals `upstreamId` unless the upstream aliases it. */
-  canonicalId: string;
-  id: string;
-  inCatalog: boolean;
-  /** Discovered by a catalog sync after the account was added. */
-  isNew: boolean;
-  longContext: boolean;
-  /** Added by hand rather than discovered from the upstream catalog. */
-  manual: boolean;
-  selected: boolean;
-  upstreamId: string;
-}
-
 export interface Cooldown {
   reason: string;
   /** What the cooldown covers, as the router spells it: `account`, or `model:<id>`. Clearing one names this. */
@@ -70,9 +56,6 @@ export interface PoolMembership {
 }
 
 export interface Account {
-  /** Why the last catalog discovery failed, kept until one succeeds. */
-  catalogError: string | null;
-  catalogSyncedAt: string | null;
   cooldowns: Cooldown[];
   credential: Credential;
   email: string | null;
@@ -88,7 +71,6 @@ export interface Account {
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
   routingEnabled: boolean;
-  servedModels: ServedModel[];
   status: AccountStatus;
   subscription: Subscription | null;
   /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
@@ -114,8 +96,17 @@ export interface PairingPreview {
 }
 
 export interface CatalogModel {
+  createdAt: string;
+  displayName: string;
   id: string;
-  longContext: boolean;
+  maxInputTokens: number | null;
+  maxTokens: number | null;
+}
+
+export interface AccountCatalog {
+  error: string | null;
+  fetchedAt: string;
+  models: CatalogModel[];
 }
 
 /** One entry of a model rule list: a pattern over the folded canonical id, negated when `not` is set. */
@@ -763,14 +754,12 @@ export interface Settings {
   /** What the bootstrap file's compatibility block sets, which the route reads and never writes. */
   compatibility: { cacheDiagnostics: boolean; outboundGzip: boolean; profile: string; usageEntrypoint: string };
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
-  /** The newest catalog sync across the upstreams, or null before the first one. */
-  lastSyncAt: string | null;
   listeners: { admin: string; metrics: string; proxy: string };
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { pollIntervalSeconds: number; sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogSyncIntervalSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number };
+  routing: { catalogCacheSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */
@@ -790,13 +779,6 @@ export interface AccountInput {
   kind: AccountKind;
   label: string;
   secret: string | null;
-}
-
-export interface SyncResult {
-  added: string[];
-  error: string | null;
-  missing: string[];
-  seeded: boolean;
 }
 
 export interface Overview {

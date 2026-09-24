@@ -105,7 +105,6 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
                 priority: *p,
             })
             .collect(),
-        models: Vec::new(),
         pools: vec![PoolRow {
             id: "p".into(),
             label: "p".into(),
@@ -143,7 +142,6 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
             .flat_map(|p| s.members(&p.id).to_vec())
             .filter(|m| m.account_id != id)
             .collect(),
-        models: Vec::new(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -168,7 +166,6 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
             })
             .collect(),
         members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
-        models: Vec::new(),
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),

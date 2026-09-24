@@ -98,7 +98,7 @@ pub struct SettingsView {
     pub admin_origin: Option<String>,
     pub body_capture_max_hours: u32,
     pub cache_diagnostics: bool,
-    pub catalog_sync_interval_seconds: u64,
+    pub catalog_cache_seconds: u64,
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,

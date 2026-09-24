@@ -32,7 +32,10 @@ pub use body::{
 };
 pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
-pub use catalog::{CatalogService, Discovered, DiscoveryError, SyncOutcome};
+pub use catalog::{
+    Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError, PROBES_IN_FLIGHT,
+    RESOLUTION_CAPACITY,
+};
 pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};
 pub use drift::DriftGuard;
 pub use errors::{anthropic_error, auth_error_response, key_refusal_response};

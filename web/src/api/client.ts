@@ -1,5 +1,6 @@
 import type {
   Account,
+  AccountCatalog,
   AccountInput,
   AccountRollup,
   AlertDeliveryTest,
@@ -37,11 +38,9 @@ import type {
   RequestDetail,
   RequestPage,
   RequestQuery,
-  ServedModel,
   Session,
   SessionInfo,
   Settings,
-  SyncResult,
 } from './types';
 
 export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
@@ -120,6 +119,8 @@ export interface Api {
   deletePool(id: string): Promise<void>;
   /** Deletes the credential; the upstream keeps its pool memberships and can be paired again. */
   disconnectAccount(accountId: string): Promise<void>;
+  /** `refresh` reads the upstream again before answering rather than the cache. */
+  getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog>;
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
@@ -160,11 +161,9 @@ export interface Api {
   startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
-  syncCatalog(accountId: string): Promise<SyncResult>;
   testAlertRule(id: string): Promise<AlertDeliveryTest>;
   updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule>;
   updateKey(id: string, input: KeyInput): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput): Promise<Pool>;
-  updateServedModels(accountId: string, models: ServedModel[]): Promise<Account>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

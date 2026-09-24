@@ -22,11 +22,8 @@
           "quarantined": false
         },
         "lifecycle_generation": 1,
-        "catalog_error": null,
-        "catalog_synced_at": 1000000,
         "cooldowns": [],
         "overage": null,
-        "served_models_count": 1,
         "profile": {
           "billing_type": "stripe_subscription",
           "display_name": "Biz",
@@ -75,18 +72,7 @@
           "last_24h": 4,
           "last_7d": 4,
           "lifetime": 4
-        },
-        "served_models": [
-          {
-            "upstream_id": "claude-sonnet-5",
-            "canonical_id": "claude-sonnet-5",
-            "selected": true,
-            "source": "discovered",
-            "long_context": true,
-            "missing": false,
-            "new": false
-          }
-        ]
+        }
       },
       {
         "id": "direct",
@@ -97,11 +83,8 @@
         "identity": null,
         "credential": null,
         "lifecycle_generation": 1,
-        "catalog_error": null,
-        "catalog_synced_at": null,
         "cooldowns": [],
         "overage": null,
-        "served_models_count": 0,
         "profile": null,
         "windows": [],
         "extra_usage": null,
@@ -115,8 +98,7 @@
           "last_24h": 0,
           "last_7d": 0,
           "lifetime": 0
-        },
-        "served_models": []
+        }
       }
     ]
   }

@@ -42,18 +42,16 @@ const WRITES = [
   ['revokeKey', (api) => api.revokeKey('laptop')],
   ['rotateKey', (api) => api.rotateKey('laptop')],
   ['startPairing', (api) => api.startPairing('team')],
-  ['syncCatalog', (api) => api.syncCatalog('business')],
   ['testAlertRule', (api) => api.testAlertRule('rule_7d')],
   ['updateAlertRule', async (api) => api.updateAlertRule('rule_7d', ruleInputOf((await api.listAlertRules()).find((r) => r.id === 'rule_7d')))],
   ['updateKey', (api) => api.updateKey('laptop', { ...keyInput, name: 'laptop', expiresAt: undefined })],
   ['updatePool', async (api) => api.updatePool('all', await storyPool(api))],
-  ['updateServedModels', (api) => api.updateServedModels('business', [])],
   ['verifyAccount', (api) => api.verifyAccount('business')],
 ];
 /** The gate lets a viewer end its own session and refresh a usage snapshot; there is no session before a login. */
 const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
-  'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
+  'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
   'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
   'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
 ];

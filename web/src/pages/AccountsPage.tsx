@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '@/api';
-import type { Account, AccountStatus, CatalogModel, PairingPreview, PairingSession, QuotaHistory, ServedModel } from '@/api/types';
+import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
-import { IconPencil, IconPlus, IconRefresh, IconWarning } from '@/components/ui/icons';
+import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
@@ -19,7 +19,6 @@ export function AccountsPage() {
   const { accountId } = useParams();
   const navigate = useNavigate();
   const accounts = useAsync(() => api.listAccounts(), []);
-  const catalog = useAsync(() => api.listCatalog(), []);
   const now = useNow();
   const { canMutate } = useAppSettings();
   const [query, setQuery] = useState('');
@@ -101,7 +100,7 @@ export function AccountsPage() {
       </aside>
       <section className="accounts__detail">
         {selected ? (
-          <AccountDetail account={selected} catalog={catalog.data ?? []} now={now} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+          <AccountDetail account={selected} now={now} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
         ) : (
           <Skeleton height={400} />
         )}
@@ -158,7 +157,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { account: Account; catalog: CatalogModel[]; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: Account; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const { canMutate } = useAppSettings();
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
@@ -442,40 +441,6 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
       )}
 
       <div className="detail__grid">
-        <Card
-          title="Served models"
-          subtitle={
-            <span title={fmtAbsolute(account.catalogSyncedAt)}>
-              Catalog synced {account.catalogSyncedAt ? fmtRelative(account.catalogSyncedAt, now) : 'never'}
-              {account.catalogError && `, last error: ${account.catalogError}`}
-            </span>
-          }
-          actions={canMutate && (
-            <Button
-              size="sm"
-              disabled={busy}
-              icon={<IconRefresh size={13} />}
-              onClick={() =>
-                void run(
-                  async () => {
-                    const r = await api.syncCatalog(account.id);
-                    if (r.error) throw new Error(r.error);
-                    return r;
-                  },
-                  (r) => `Catalog re-synced: ${r.added.length} added, ${r.missing.length} missing`,
-                )
-              }
-            >
-              Re-sync
-            </Button>
-          )}
-        >
-          {/* One editor per upstream: a save still pending for the upstream left behind settles, and rolls back, in
-              its own instance rather than over this list. The one handler outliving it, onSaved, reloads every
-              upstream alike, so it needs no guard. */}
-          <ServedModels key={account.id} account={account} catalog={catalog} canMutate={canMutate} onSaved={onChanged} />
-        </Card>
-
         <div className="stack">
           <Card title="Pools">
             {account.pools.length === 0 ? (
@@ -530,97 +495,6 @@ function AccountDetail({ account, catalog, now, onToast, onPair, onChanged }: { 
       </div>
 
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
-    </div>
-  );
-}
-
-function ServedModels({ account, catalog, canMutate, onSaved }: { account: Account; canMutate: boolean; catalog: CatalogModel[]; onSaved: () => void }) {
-  const [models, setModels] = useState<ServedModel[]>(account.servedModels);
-  const [extra, setExtra] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    setModels(account.servedModels);
-  }, [account.id, account.servedModels]);
-
-  // Each write replaces the whole list, so two in flight could land out of order, or one's rollback undo the other's
-  // edit; writes run one at a time.
-  const persist = async (next: ServedModel[]) => {
-    if (saving) return;
-    const before = models;
-    setSaving(true);
-    setError(null);
-    setModels(next);
-    try {
-      await api.updateServedModels(account.id, next);
-      onSaved();
-    } catch (e) {
-      // The list the router holds is the one the checkboxes must show; a refused write puts it back and says why.
-      setModels(before);
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const toggle = (id: string) => persist(models.map((m) => (m.id === id ? { ...m, selected: !m.selected } : m)));
-
-  // Catalog rows come first in catalog order; manual and vanished ids follow.
-  const catalogIds = catalog.map((m) => m.id);
-  const ordered = [...models].sort((a, b) => {
-    const ia = catalogIds.indexOf(a.id);
-    const ib = catalogIds.indexOf(b.id);
-    if (ia === -1 && ib === -1) return a.id.localeCompare(b.id);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
-
-  return (
-    <div className="served">
-      <ul className="served__list">
-        {ordered.map((m) => (
-          <li key={m.id}>
-            <label>
-              <input type="checkbox" checked={m.selected} onChange={() => void toggle(m.id)} disabled={!canMutate || saving} />
-              <span className="mono">{m.id}</span>
-              {m.isNew && !m.selected && (
-                <Badge tone="accent" title="Discovered by a catalog sync after the upstream was added">
-                  new
-                </Badge>
-              )}
-              {m.longContext && <Badge tone="neutral">long context</Badge>}
-              {!m.inCatalog && (
-                <Badge tone="warning" title="Not in the last catalog sync">
-                  not in catalog
-                </Badge>
-              )}
-              {m.upstreamId !== m.canonicalId && <span className="muted mono">as {m.upstreamId}</span>}
-            </label>
-          </li>
-        ))}
-      </ul>
-      {error && (
-        <p className="served__error" role="alert">
-          {error}
-        </p>
-      )}
-      {canMutate && (
-        <form
-          className="served__add"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const id = extra.trim();
-            if (!id || models.some((m) => m.id === id)) return;
-            void persist([...models, { canonicalId: id, id, inCatalog: false, isNew: false, longContext: false, manual: true, selected: true, upstreamId: id }]);
-            setExtra('');
-          }}
-        >
-          <Input placeholder="Add model id" value={extra} onChange={(e) => setExtra(e.target.value)} className="mono" />
-          <Button type="submit" size="md" disabled={!extra.trim() || saving}>
-            Add
-          </Button>
-        </form>
-      )}
     </div>
   );
 }

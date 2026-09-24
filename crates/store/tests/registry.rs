@@ -1,7 +1,7 @@
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, MemoryKey,
-    MemoryRecord, MemoryStore, ModelRule, ModelSource, OveragePolicy, PoolRow, RulesMode, Secret,
-    ServedModelWrite, StorageKey, Store, StoreError, Strategy, SubStrategy,
+    MemoryRecord, MemoryStore, ModelRule, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
+    Store, StoreError, Strategy, SubStrategy,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -76,7 +76,16 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
          ALTER TABLE api_keys ADD COLUMN allowed_models_json TEXT; \
          ALTER TABLE api_keys DROP COLUMN model_rules_json; \
          ALTER TABLE api_keys DROP COLUMN model_rules_mode; \
-         ALTER TABLE api_keys DROP COLUMN long_context_twins;";
+         ALTER TABLE api_keys DROP COLUMN long_context_twins; \
+         CREATE TABLE account_models ( \
+           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, upstream_id TEXT NOT NULL, canonical_id TEXT NOT NULL, \
+           selected INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL, \
+           long_context INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0, is_new INTEGER NOT NULL DEFAULT 0, \
+           PRIMARY KEY (account_id, upstream_id), \
+           UNIQUE (account_id, canonical_id) \
+         ); \
+         ALTER TABLE accounts ADD COLUMN catalog_synced_at INTEGER; \
+         ALTER TABLE accounts ADD COLUMN catalog_error TEXT;";
     const UNDO_V22: &str = "";
     const UNDO_V21: &str = "ALTER TABLE credentials DROP COLUMN last_error;";
     const UNDO_V20: &str = "ALTER TABLE pins DROP COLUMN key_generation; ALTER TABLE pins DROP COLUMN incarnation; \
@@ -296,6 +305,27 @@ fn a_fresh_store_carries_the_rule_columns_and_neither_whitelist_column() {
         3,
         "a fresh store carries the resolution table's three columns"
     );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'account_models'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "a fresh store carries no catalog table"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') \
+             WHERE name IN ('catalog_synced_at', 'catalog_error')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "a fresh store carries neither catalog column"
+    );
 }
 
 /// Both writes stamp themselves from the same clock, so a delete and the create that follows it can land in
@@ -365,6 +395,15 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
          ALTER TABLE api_keys DROP COLUMN model_rules_json; \
          ALTER TABLE api_keys DROP COLUMN model_rules_mode; \
          ALTER TABLE api_keys DROP COLUMN long_context_twins; \
+         CREATE TABLE account_models ( \
+           account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, upstream_id TEXT NOT NULL, canonical_id TEXT NOT NULL, \
+           selected INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL, \
+           long_context INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0, is_new INTEGER NOT NULL DEFAULT 0, \
+           PRIMARY KEY (account_id, upstream_id), \
+           UNIQUE (account_id, canonical_id) \
+         ); \
+         ALTER TABLE accounts ADD COLUMN catalog_synced_at INTEGER; \
+         ALTER TABLE accounts ADD COLUMN catalog_error TEXT; \
          CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL); \
          INSERT OR REPLACE INTO api_key_tombstones (id, deleted_at) VALUES ('old', 1); \
          ALTER TABLE api_keys DROP COLUMN retired_secret_last_used_at; \
@@ -461,49 +500,6 @@ fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation()
         store.load_registry().unwrap().reused_key_ids,
         vec!["back".to_string()],
         "the change log still names the id as one with an earlier holder"
-    );
-}
-
-#[test]
-fn the_newest_catalog_change_is_what_the_account_serves_now() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::Oauth))
-        .unwrap();
-    store
-        .insert_account(&account("b", AccountKind::Oauth))
-        .unwrap();
-    assert_eq!(store.latest_catalog_change("a").unwrap(), None);
-    assert!(store
-        .seed_catalog("a", &[("claude-sonnet-4-5".into(), false)], 1, "test")
-        .unwrap());
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_seeded")
-    );
-    store
-        .apply_catalog_sync("a", &[("claude-opus-4-1".into(), false)], None, 2, "test")
-        .unwrap();
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_synced"),
-        "a discovery replaces the seed as what the account serves"
-    );
-    // A discovery that answered an empty list leaves nothing to serve, which is the one case a later seed
-    // still fills.
-    store.apply_catalog_sync("b", &[], None, 3, "test").unwrap();
-    assert!(store
-        .seed_catalog("b", &[("claude-sonnet-4-5".into(), false)], 4, "test")
-        .unwrap());
-    assert_eq!(
-        store.latest_catalog_change("b").unwrap().as_deref(),
-        Some("catalog_seeded"),
-        "and a seed after a sync is what it serves in turn"
-    );
-    assert_eq!(
-        store.latest_catalog_change("a").unwrap().as_deref(),
-        Some("catalog_synced"),
-        "each account reads its own log"
     );
 }
 
@@ -657,103 +653,6 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
 }
 
 #[test]
-fn a_catalog_sync_adds_new_ids_unselected_flags_vanished_ones_and_keeps_manual_rows() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    let first = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("claude-sonnet-5".into(), false),
-                ("claude-opus-5".into(), true),
-            ],
-            None,
-            10,
-            "catalog",
-        )
-        .unwrap();
-    assert!(first.first_sync);
-    assert!(store
-        .served_models("a")
-        .unwrap()
-        .iter()
-        .all(|m| m.selected && !m.is_new));
-    store
-        .put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "claude-sonnet-5".into(),
-                    selected: true,
-                    long_context: false,
-                },
-                ServedModelWrite {
-                    upstream_id: "claude-opus-5".into(),
-                    selected: false,
-                    long_context: true,
-                },
-                ServedModelWrite {
-                    upstream_id: "Vendor/Model-A".into(),
-                    selected: true,
-                    long_context: false,
-                },
-            ],
-            "admin",
-        )
-        .unwrap();
-    let second = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("claude-sonnet-5".into(), false),
-                ("claude-haiku-4-5".into(), false),
-            ],
-            None,
-            20,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(second.added, ["claude-haiku-4-5"]);
-    assert_eq!(second.missing, ["claude-opus-5"]);
-    let rows = store.served_models("a").unwrap();
-    let by_id = |id: &str| rows.iter().find(|m| m.upstream_id == id).unwrap();
-    assert!(!by_id("claude-haiku-4-5").selected && by_id("claude-haiku-4-5").is_new);
-    assert!(
-        by_id("claude-opus-5").missing && !by_id("claude-opus-5").selected,
-        "selected is left as the operator wrote it"
-    );
-    assert_eq!(by_id("Vendor/Model-A").source, ModelSource::Manual);
-    assert_eq!(by_id("Vendor/Model-A").canonical_id, "vendor/model-a");
-    assert!(matches!(
-        store.put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "Vendor/Model-A".into(),
-                    selected: true,
-                    long_context: false
-                },
-                ServedModelWrite {
-                    upstream_id: "vendor/model-a".into(),
-                    selected: true,
-                    long_context: false
-                },
-            ],
-            "admin"
-        ),
-        Err(StoreError::CanonicalClash { .. })
-    ));
-    assert!(
-        !store
-            .seed_catalog("a", &[("claude-fable-5-1".into(), true)], 30, "catalog")
-            .unwrap(),
-        "a seed never overwrites a populated catalog"
-    );
-}
-
-#[test]
 fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
@@ -828,33 +727,23 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
 }
 
 #[test]
-fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() {
+fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
         .create_account(
             &account("a", AccountKind::ApiKey),
             Some(&Secret::new("k1")),
-            Some(&[("claude-sonnet-5".into(), false)]),
-            None,
             1,
             "admin",
         )
         .unwrap();
-    assert_eq!(
-        (
-            store.served_models("a").unwrap().len(),
-            store.api_key_credential("a").unwrap().unwrap().1
-        ),
-        (1, 1)
-    );
+    assert_eq!(store.api_key_credential("a").unwrap().unwrap().1, 1);
     let update = AccountUpdate {
         id: "a",
         expected_revision: 1,
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
-        catalog: Some(&[("gpt-5".into(), false)]),
-        catalog_error: None,
         state: AccountState::Ready,
         at: 5,
         actor: "admin",
@@ -865,11 +754,6 @@ fn an_account_update_commits_secret_fields_and_catalog_together_or_not_at_all() 
     assert_eq!(
         store.api_key_credential("a").unwrap().unwrap().0.expose(),
         "k2"
-    );
-    assert_eq!(
-        store.served_models("a").unwrap().len(),
-        2,
-        "the catalog was applied as a sync"
     );
     let stale = AccountUpdate {
         lifecycle_generation: 7,
@@ -924,40 +808,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
     assert_eq!(revision(), 4, "a secret rotation");
     store.set_state("a", AccountState::FundingRequired).unwrap();
     assert_eq!(revision(), 5, "a state change");
-    store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            6,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(
-        revision(),
-        5,
-        "a catalog sync changes no dispatch input, so it leaves the revision alone"
-    );
     assert_eq!(store.account_revision("nobody").unwrap(), None);
-}
-
-#[test]
-fn a_catalog_sync_verified_against_a_superseded_revision_is_refused() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    let discovered = [("claude-sonnet-5".into(), false)];
-    store.update_account("a", 1, "Renamed", "admin").unwrap();
-    assert!(matches!(
-        store.apply_catalog_sync("a", &discovered, Some(1), 10, "catalog"),
-        Err(StoreError::Stale)
-    ));
-    assert!(store.served_models("a").unwrap().is_empty());
-    store
-        .apply_catalog_sync("a", &discovered, Some(2), 10, "catalog")
-        .unwrap();
-    assert_eq!(store.served_models("a").unwrap().len(), 1);
 }
 
 #[test]
@@ -970,104 +821,18 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
     store
         .set_pool_members("main", &[("a".into(), 0)], "test")
         .unwrap();
-    store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            1,
-            "catalog",
-        )
-        .unwrap();
     let load = store.load_registry().unwrap();
     assert_eq!(
-        (
-            load.accounts.len(),
-            load.pools.len(),
-            load.members.len(),
-            load.models.len()
-        ),
-        (1, 1, 1, 1)
+        (load.accounts.len(), load.pools.len(), load.members.len()),
+        (1, 1, 1)
     );
     store.delete_account("a", "test").unwrap();
     let load = store.load_registry().unwrap();
-    assert_eq!(
-        (load.accounts.len(), load.members.len(), load.models.len()),
-        (0, 0, 0)
-    );
+    assert_eq!((load.accounts.len(), load.members.len()), (0, 0));
     assert!(matches!(
         store.delete_account("a", "test"),
         Err(StoreError::AccountNotFound(_))
     ));
-}
-
-#[test]
-fn a_catalog_sync_keeps_a_manual_rows_source_and_selection() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::ApiKey))
-        .unwrap();
-    store
-        .put_served_models(
-            "a",
-            &[ServedModelWrite {
-                upstream_id: "Vendor/Model-A".into(),
-                selected: false,
-                long_context: false,
-            }],
-            "admin",
-        )
-        .unwrap();
-    let first = store
-        .apply_catalog_sync(
-            "a",
-            &[
-                ("Vendor/Model-A".into(), true),
-                ("claude-sonnet-5".into(), false),
-            ],
-            None,
-            10,
-            "catalog",
-        )
-        .unwrap();
-    assert_eq!(first.added, ["claude-sonnet-5"]);
-    let rows = store.served_models("a").unwrap();
-    let by_id = |id: &str| rows.iter().find(|m| m.upstream_id == id).unwrap();
-    let manual = by_id("Vendor/Model-A");
-    assert_eq!(manual.source, ModelSource::Manual);
-    assert!(
-        !manual.selected,
-        "the discovery reporting a manual row never changes its selection"
-    );
-    assert!(
-        manual.long_context,
-        "the discovery's long-context flag applies even to a manual row"
-    );
-    assert!(!manual.missing);
-    let new_row = by_id("claude-sonnet-5");
-    assert!(!new_row.selected && new_row.is_new);
-
-    let second = store
-        .apply_catalog_sync(
-            "a",
-            &[("claude-sonnet-5".into(), false)],
-            None,
-            20,
-            "catalog",
-        )
-        .unwrap();
-    assert!(
-        second.missing.is_empty(),
-        "a manual row omitted from a sync is never flagged missing"
-    );
-    assert!(
-        store
-            .served_models("a")
-            .unwrap()
-            .iter()
-            .any(|m| m.upstream_id == "Vendor/Model-A"),
-        "a manual row omitted from a sync is never removed"
-    );
 }
 
 #[test]
@@ -1142,7 +907,7 @@ fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     let row = account("vendor", AccountKind::ApiKey);
     store
-        .create_account(&row, Some(&Secret::new("k1")), None, None, 1, "admin")
+        .create_account(&row, Some(&Secret::new("k1")), 1, "admin")
         .unwrap();
     let built_from = store.account_revision("vendor").unwrap().unwrap();
     store

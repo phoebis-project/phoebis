@@ -108,19 +108,29 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 {
-  const page = await mount('/settings');
-  const synced = () => page.container.querySelector('.sidebar__row[title]')?.getAttribute('title') ?? '';
-  const before = synced();
-  [...page.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '12h')?.click();
-  await page.settle(100);
-  results.push({ name: 'the time format toggle re-renders every timestamp at once', ok: before !== synced() && /[AP]M/.test(synced()), missing: [before, synced()] });
-  [...page.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
-  await page.settle(100);
-  page.unmount();
+  // The time format is a stored preference the toggle lives on Settings alone; a fresh mount of the Upstreams
+  // list picks up the change from there, read off its first list row's timestamp title.
+  const titleOf = async (path) => {
+    const page = await mount(path);
+    const value = page.container.querySelector('.account-row [title]')?.getAttribute('title') ?? '';
+    page.unmount();
+    return value;
+  };
+  const before = await titleOf('/upstreams');
+  const settings = await mount('/settings');
+  [...settings.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '12h')?.click();
+  await settings.settle(100);
+  settings.unmount();
+  const after = await titleOf('/upstreams');
+  results.push({ name: 'the time format toggle re-renders every timestamp at once', ok: before !== after && /[AP]M/.test(after), missing: [before, after] });
+  const reset = await mount('/settings');
+  [...reset.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
+  await reset.settle(100);
+  reset.unmount();
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Synced', 'admin', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'admin', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 {
   // The story's two pools hold 10 and 2 pins, all of the pinned sessions sit on business or personal, and the
@@ -350,7 +360,7 @@ results.push({
   missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max 20x', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Served models', 'long context', 'new', 'Re-sync', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max 20x', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
 await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -368,10 +378,6 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
   const fable = m.container.querySelector('.detail .wbars--3');
   results.push({ name: '/upstreams usage card has three bars', ok: (fable?.querySelectorAll('.wbar').length ?? 0) === 3, missing: [String(fable?.querySelectorAll('.wbar').length)] });
-  const newTag = [...m.container.querySelectorAll('.served__list .badge')].some((b) => b.textContent?.trim() === 'new');
-  results.push({ name: '/upstreams served models shows new tag', ok: newTag, missing: [] });
-  const unchecked = [...m.container.querySelectorAll('.served__list input[type=checkbox]')].filter((c) => !c.checked).length;
-  results.push({ name: '/upstreams new model is unchecked', ok: unchecked === 1, missing: [String(unchecked)] });
 }
 {
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();
@@ -397,10 +403,6 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resume')?.click();
   await m.settle(600);
   results.push({ name: '/upstreams Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
-  const resync = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Re-sync');
-  resync?.click();
-  await m.settle(600);
-  results.push({ name: '/upstreams Re-sync toasts the sync result', ok: /Catalog re-synced: \d+ added, \d+ missing/.test(m.text()), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
   const rename = async (to) => {
     m.container.querySelector('button[aria-label="Edit label"]')?.click();
     await m.settle(150);
@@ -506,7 +508,7 @@ expect('/upstreams/mail', m.text(), ['Cooling down', 'Clear cooldown', 'rate_lim
   results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
 await m.navigate('/upstreams/personal');
-expect('/upstreams/personal', m.text(), ['in use', 'not in catalog', 'claude-sonnet-4-5-20250929', 'Clear funding flag', 'Payment method declined', ', last error: the models request answered 503', 'Overage since 3h']);
+expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
 {
   const quarantined = [...m.container.querySelectorAll('.detail__badges .badge')].find((b) => b.textContent?.trim() === 'quarantined');
   results.push({
@@ -541,67 +543,6 @@ await emailLines('/upstreams/console the head draws no line under the name of an
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({ name: '/upstreams/console the identity card reads the type and draws no base URL row', ok: rows.includes('Type=API key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
-}
-await m.navigate('/upstreams/business');
-{
-  const boxes = () => [...m.container.querySelectorAll('.served__list input[type=checkbox]')];
-  const before = boxes().map((c) => c.checked);
-  failNextCall('updateServedModels', '/admin/accounts/business/models', 'two spellings of claude-opus-5');
-  boxes()[0]?.click();
-  await m.settle(600);
-  const after = boxes().map((c) => c.checked);
-  const error = m.container.querySelector('.served__error')?.textContent ?? '';
-  results.push({
-    name: '/upstreams a refused served-model edit puts the list back and says why under it',
-    ok: before.length > 1 && JSON.stringify(after) === JSON.stringify(before) && error.includes('two spellings of claude-opus-5'),
-    missing: [JSON.stringify(before), JSON.stringify(after), error || 'no inline error'],
-  });
-  boxes()[0]?.click();
-  await m.settle(20);
-  const held = boxes().every((c) => c.disabled);
-  boxes()[1]?.click();
-  await m.settle(800);
-  const saved = boxes().map((c) => c.checked);
-  results.push({
-    name: '/upstreams a served-model write in flight holds the next one until it lands',
-    ok: held && saved[0] !== before[0] && saved[1] === before[1] && boxes().every((c) => !c.disabled) && m.container.querySelector('.served__error') === null,
-    missing: [`held ${held}`, JSON.stringify(before), JSON.stringify(saved)],
-  });
-  // One mock instance backs every mount, so the list goes back to the story for the checks after this one.
-  boxes()[0]?.click();
-  await m.settle(800);
-}
-// A save still pending when the operator moves to another upstream settles after the move: its failure must not
-// put the upstream it left behind onto the one now shown, nor its list reach the next toggle there.
-{
-  const boxes = () => [...m.container.querySelectorAll('.served__list input[type=checkbox]')];
-  const shown = () => [...m.container.querySelectorAll('.served__list li')].map((li) => `${li.querySelector('.mono')?.textContent}=${li.querySelector('input')?.checked}`);
-  const personal = (await api.listAccounts()).find((a) => a.id === 'personal').servedModels;
-  const { updateServedModels } = api;
-  const sent = [];
-  let refuse = null;
-  api.updateServedModels = (id, models) => {
-    if (id === 'business') return new Promise((_, reject) => (refuse = () => reject(new Error('the router refused the business list'))));
-    sent.push([id, models.map((x) => x.id).sort()]);
-    return updateServedModels.call(api, id, models);
-  };
-  boxes()[0]?.click();
-  await m.settle(50);
-  await m.navigate('/upstreams/personal');
-  const before = shown();
-  refuse?.();
-  await m.settle(200);
-  const after = shown();
-  boxes()[0]?.click();
-  await m.settle(600);
-  api.updateServedModels = updateServedModels;
-  await updateServedModels.call(api, 'personal', personal);
-  const want = personal.map((x) => x.id).sort();
-  results.push({
-    name: '/upstreams a save that fails after a switch of upstream leaves the new list alone, and its next toggle sends its own models',
-    ok: refuse !== null && before.length === personal.length && JSON.stringify(after) === JSON.stringify(before) && sent.length === 1 && sent[0][0] === 'personal' && JSON.stringify(sent[0][1]) === JSON.stringify(want),
-    missing: [`held ${refuse !== null}`, `before ${before.join(',')}`, `after ${after.join(',')}`, `sent ${JSON.stringify(sent)}`, `want ${want.join(',')}`],
-  });
 }
 await m.navigate('/upstreams/spare');
 {
@@ -2553,7 +2494,7 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
   const want = {
     Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Outbound gzip=off', 'compatibility.outbound_gzip'], ['Profile=claude-code-2.1.269-linux-x64', ''], ['Usage entrypoint=cli', '']],
     Quota: [['Poll interval (seconds)=3,600', 'quota.poll_interval_seconds'], ['Sample retention (days)=30', 'quota.sample_retention_days']],
-    Routing: [['Catalog sync interval (seconds)=86,400', 'routing.catalog_sync_interval_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts']],
+    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts']],
     Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
     Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
   };
@@ -2788,7 +2729,7 @@ for (const [path, absent, present] of [
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
   ['/sessions', ['Release'], ['Cache warming']],
   ['/settings', ['Add model', 'Import'], ['Keepalive', 'Pricing']],
-  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Re-sync', 'Resume', 'Verify'], ['Identity']],
+  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Identity']],
 ]) {
   await m.navigate(path);
   const t = m.text();
@@ -2803,7 +2744,6 @@ for (const [path, absent, present] of [
   results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
 }
 await m.navigate('/upstreams/business');
-results.push({ name: 'viewer: served-model checkboxes are disabled', ok: [...m.container.querySelectorAll('.served__list input[type=checkbox]')].every((c) => c.disabled), missing: [] });
 results.push({ name: 'viewer: /upstreams has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
 await m.navigate(`/requests/${laptopRow.id}`);
 {
@@ -2813,7 +2753,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
 await m.navigate('/accounts/business');
 {
   const t = m.text();
-  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add upstream') && !t.includes('Re-sync'), missing: [] });
+  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add upstream'), missing: [] });
 }
 await m.navigate('/alerts');
 {

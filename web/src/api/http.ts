@@ -1,6 +1,6 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, ServedModel, SessionInfo } from './types';
+import type { Account, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -109,6 +109,7 @@ export class HttpApi implements Api {
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);
   disconnectAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/credentials`);
+  getAccountCatalog = async (accountId: string, refresh?: boolean) => d.decodeAccountCatalog(await call('GET', `/admin/accounts/${enc(accountId)}/catalog${qs({ refresh: refresh ? 1 : undefined })}`));
   getAnalyticsBreakdown = async (q: AnalyticsQuery): Promise<AnalyticsGroup[]> => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/breakdown${analytics(q)}`)).rows.map(d.decodeAnalyticsGroup);
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
   getCapturedBodies = async (requestId: string) => {
@@ -145,7 +146,15 @@ export class HttpApi implements Api {
   listAlertDeliveries = async (eventId: string) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/events/${enc(eventId)}/deliveries`)).deliveries.map(d.decodeDelivery);
   listAlertEvents = async (state?: 'open' | 'resolved'): Promise<AlertEvent[]> => (await call<{ events: unknown[] }>('GET', `/admin/alerts/events${qs({ state })}`)).events.map(d.decodeAlertEvent);
   listAlertRules = async () => (await call<{ rules: unknown[] }>('GET', '/admin/alerts/rules')).rules.map(d.decodeAlertRule);
-  listCatalog = async () => d.decodeCatalog(await this.listAccounts());
+  listCatalog = async (): Promise<CatalogModel[]> => {
+    // The decoded status folds a disconnected upstream into 'unpaired' along with one never paired; both are
+    // the accounts a catalog fetch has nothing to ask.
+    const accounts = (await this.listAccounts()).filter((a) => a.status !== 'unpaired');
+    const catalogs = await Promise.all(accounts.map((a) => this.getAccountCatalog(a.id).catch(() => null)));
+    const out = new Map<string, CatalogModel>();
+    for (const c of catalogs) for (const m of c?.models ?? []) if (!out.has(m.id)) out.set(m.id, m);
+    return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
+  };
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
   listLifecycleDeliveries = async (kind?: AlertKind) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/deliveries${qs({ kind })}`)).deliveries.map(d.decodeLifecycleDelivery);
@@ -251,10 +260,6 @@ export class HttpApi implements Api {
       socket?.close();
     };
   };
-  syncCatalog = async (accountId: string) => {
-    const r = await call<Record<string, unknown>>('POST', `/admin/accounts/${enc(accountId)}/models/sync`);
-    return { added: (r.added as string[]) ?? [], error: (r.error as string | null) ?? null, missing: (r.missing as string[]) ?? [], seeded: Boolean(r.seeded) };
-  };
   testAlertRule = async (id: string): Promise<AlertDeliveryTest> => {
     const r = await call<Record<string, unknown>>('POST', `/admin/alerts/rules/${enc(id)}/test`);
     return { error: (r.error as string | null) ?? null, status: typeof r.status === 'number' ? r.status : null };
@@ -263,10 +268,6 @@ export class HttpApi implements Api {
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
   // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.
   updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));
-  updateServedModels = async (accountId: string, models: ServedModel[]) => {
-    await call('PUT', `/admin/accounts/${enc(accountId)}/models`, { models: models.map((m) => ({ long_context: m.longContext, selected: m.selected, upstream_id: m.upstreamId })) });
-    return d.decodeAccount(await call('GET', `/admin/accounts/${enc(accountId)}`));
-  };
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 

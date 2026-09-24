@@ -1,534 +1,747 @@
+//! The catalog cache: the account-scoped fill and its eviction fence, and the resolution map's probes off the
+//! request path.
 mod common;
-use phoebis_relay::DiscoveryError;
-use phoebis_store::{ServedModelWrite, StorageKey, Store};
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use phoebis_bus::{Bus, Event};
+use phoebis_store::{AccountKind, AccountRow, AccountState, ApiKeyRow, RulesMode, Secret};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
-use std::sync::Arc;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
 
-fn models(entries: &[(&str, Option<u64>)]) -> Vec<u8> {
-    let data: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|(id, max)| {
-            let mut v = serde_json::json!({ "id": id, "type": "model" });
-            if let Some(m) = max {
-                v["max_input_tokens"] = serde_json::json!(m);
-            }
-            v
-        })
-        .collect();
-    serde_json::json!({ "data": data, "has_more": false })
+fn model_row(id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "display_name": "",
+        "created_at": "",
+        "max_input_tokens": 1_000_000,
+        "max_tokens": null,
+    })
+}
+
+fn json_list(ids: &[&str]) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: serde_json::json!({ "data": ids.iter().map(|id| model_row(id)).collect::<Vec<_>>() })
+            .to_string()
+            .into_bytes(),
+    }
+}
+
+fn json_row(id: &str) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: model_row(id).to_string().into_bytes(),
+    }
+}
+
+fn error_code(resp: &axum::http::Response<axum::body::Body>) -> String {
+    resp.headers()
+        .get("x-phoebis-error-code")
+        .unwrap()
+        .to_str()
+        .unwrap()
         .to_string()
-        .into_bytes()
 }
 
-fn gzip(payload: &[u8]) -> Vec<u8> {
-    use std::io::Write;
-    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    e.write_all(payload).unwrap();
-    e.finish().unwrap()
+fn probes_for(up: &FakeUpstream, prefix: &str) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with(&format!("GET {prefix}")))
+        .count()
 }
 
 #[tokio::test]
-async fn a_sync_adds_new_ids_unselected_flags_vanished_ids_and_keeps_manual_rows_across_a_restart()
-{
-    let up = FakeUpstream::start(vec![
-        Rule {
-            path_prefix: "/v1/messages".into(),
-            respond: json_200(),
-        },
-        Rule {
-            path_prefix: "/v1/models".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: models(&[
-                    ("claude-sonnet-4-5", Some(200_000)),
-                    ("claude-opus-5", Some(1_000_000)),
-                ]),
-            },
-        },
-    ])
+async fn a_fetch_is_answered_from_the_cache_inside_the_window_and_refetched_after_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
     .await;
-    up.set_rule_after(
+    let a = h.store.account("a").unwrap().unwrap();
+    let first = h.catalog.fetch(&a).await;
+    assert_eq!(first.models.len(), 2);
+    assert!(first.error.is_none());
+    let second = h.catalog.fetch(&a).await;
+    assert_eq!(second, first, "the cache answers inside the window");
+    assert_eq!(
+        probes_for(&h.catalog_up, "/v1/models?limit=1000"),
         1,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![("Content-Encoding".into(), "gzip".into())],
-            body: gzip(&models(&[
-                ("claude-sonnet-4-5", None),
-                ("claude-haiku-4-5", None),
-            ])),
-        },
+        "one probe for both calls"
     );
-    let dir = tempfile::tempdir().unwrap();
-    let key = StorageKey::generate();
-    let store = Arc::new(Store::open(&dir.path().join("router.sqlite"), &key).unwrap());
-    let h = harness_on(
-        store.clone(),
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    let first = h.catalog.sync("a", "test").await.unwrap();
-    assert!(
-        first.delta.as_ref().is_some_and(|d| d.first_sync)
-            && first.error.is_none()
-            && !first.seeded
-    );
-    let rows = store.served_models("a").unwrap();
-    assert!(rows.iter().all(|m| m.selected));
-    assert!(rows
-        .iter()
-        .any(|m| m.upstream_id == "claude-opus-5" && m.long_context));
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    let third = h.catalog.fetch(&a).await;
+    assert_eq!(third.models.len(), 2);
     assert_eq!(
-        outcome(
-            &h.app
-                .clone()
-                .oneshot(request_for(KEY, "claude-opus-5", "s1"))
-                .await
-                .unwrap()
-        )
-        .account_id,
-        "a",
-        "the reload made the catalog routable"
+        probes_for(&h.catalog_up, "/v1/models?limit=1000"),
+        2,
+        "past the window, a third call probes again"
     );
-    store
-        .put_served_models(
-            "a",
-            &[
-                ServedModelWrite {
-                    upstream_id: "claude-sonnet-4-5".into(),
-                    selected: true,
-                    long_context: false,
-                },
-                ServedModelWrite {
-                    upstream_id: "claude-opus-5".into(),
-                    selected: true,
-                    long_context: true,
-                },
-                ServedModelWrite {
-                    upstream_id: "Vendor/Model-A".into(),
-                    selected: true,
-                    long_context: false,
-                },
-            ],
-            "admin",
-        )
-        .unwrap();
-    let second = h.catalog.sync("a", "test").await.unwrap();
-    let delta = second.delta.unwrap();
+    let refreshed = h.catalog.refresh(&a).await;
+    assert_eq!(refreshed.models.len(), 2);
     assert_eq!(
-        (delta.added, delta.missing),
-        (
-            vec!["claude-haiku-4-5".to_string()],
-            vec!["claude-opus-5".to_string()]
-        )
+        probes_for(&h.catalog_up, "/v1/models?limit=1000"),
+        3,
+        "refresh probes at once"
     );
-    assert_eq!(
-        outcome(
-            &h.app
-                .clone()
-                .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
-                .await
-                .unwrap()
-        )
-        .account_id,
-        "a",
-        "every pool member is a candidate for a newly discovered model too"
-    );
-    assert_eq!(
-        outcome(
-            &h.app
-                .clone()
-                .oneshot(request_for(KEY, "vendor/model-a", "s3"))
-                .await
-                .unwrap()
-        )
-        .account_id,
-        "a",
-        "the manual row survived the sync"
-    );
-    let messages_before = up
-        .requests()
-        .iter()
-        .filter(|r| r.line.starts_with("POST /v1/messages"))
-        .count();
-    let (synced_at, error) = store.catalog_status("a").unwrap();
-    assert!(synced_at.is_some() && error.is_none());
-    drop(h);
-    drop(store);
-    // The router task and its writer let go of the process lock once their last handle is gone, on their
-    // next turn, so the open is retried rather than timed.
-    let path = dir.path().join("router.sqlite");
-    let store = Arc::new(
-        wait_for(std::time::Duration::from_secs(2), || {
-            Store::open(&path, &key).ok()
-        })
-        .await,
-    );
-    let h = harness_on(
-        store.clone(),
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    assert_eq!(
-        outcome(
-            &h.app
-                .clone()
-                .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
-                .await
-                .unwrap()
-        )
-        .account_id,
-        "a",
-        "still routes after the restart"
-    );
-    assert_eq!(
-        up.requests()
-            .iter()
-            .filter(|r| r.line.starts_with("POST /v1/messages"))
-            .count(),
-        messages_before + 1,
-        "the newly discovered model reaches the upstream"
-    );
-    store
-        .put_served_models(
-            "a",
-            &[ServedModelWrite {
-                upstream_id: "claude-haiku-4-5".into(),
-                selected: true,
-                long_context: false,
-            }],
-            "admin",
-        )
-        .unwrap();
-    h.router.reload().await.unwrap();
-    assert_eq!(
-        h.app
-            .clone()
-            .oneshot(request_for(KEY, "claude-haiku-4-5", "s2"))
-            .await
-            .unwrap()
-            .status(),
-        200
-    );
-    up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_failed_sync_on_an_oauth_account_seeds_the_built_in_catalog_until_a_sync_succeeds() {
+async fn a_failed_fetch_stores_the_error_and_no_rows_for_the_window() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let first = h.catalog.fetch(&a).await;
+    assert!(first.models.is_empty());
+    assert_eq!(
+        first.error.as_deref(),
+        Some("the models endpoint answered 503")
+    );
+    let second = h.catalog.fetch(&a).await;
+    assert_eq!(second, first);
+    assert_eq!(
+        h.catalog_up.requests().len(),
+        1,
+        "a second call inside the window probes nothing"
+    );
+}
+
+#[tokio::test]
+async fn two_fetches_during_one_fill_share_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+    }])
+    .await;
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let c1 = h.catalog.clone();
+    let a1 = a.clone();
+    let fut1 = tokio::spawn(async move { c1.fetch(&a1).await });
+    let c2 = h.catalog.clone();
+    let a2 = a.clone();
+    let fut2 = tokio::spawn(async move { c2.fetch(&a2).await });
+    h.catalog_up.release();
+    let (r1, r2) = tokio::join!(fut1, fut2);
+    let (r1, r2) = (r1.unwrap(), r2.unwrap());
+    assert_eq!(r1, r2);
+    assert_eq!(r1.models.len(), 1);
+    assert_eq!(h.catalog_up.requests().len(), 1, "one probe for both");
+}
+
+#[tokio::test]
+async fn an_eviction_during_a_slow_fetch_wins() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+    }])
+    .await;
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let c = h.catalog.clone();
+    let a1 = a.clone();
+    let fut = tokio::spawn(async move { c.fetch(&a1).await });
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog_up.requests().len() == 1).then_some(())
+    })
+    .await;
+    h.catalog.evict("a");
+    h.catalog_up.release();
+    let answered = fut.await.unwrap();
+    assert_eq!(
+        answered.models.len(),
+        1,
+        "the waiting fetch still gets the rows once"
+    );
+    let again = h.catalog.fetch(&a).await;
+    assert_eq!(again.models.len(), 1);
+    assert_eq!(
+        h.catalog_up.requests().len(),
+        2,
+        "a further fetch probes again since the eviction won the commit-time fence"
+    );
+}
+
+#[tokio::test]
+async fn a_known_spelling_is_resolved_to_the_dated_id_off_the_request_path() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    let outcome_ = h.catalog.sync("a", "test").await.unwrap();
-    assert!(outcome_.seeded && outcome_.delta.is_none());
-    assert!(outcome_.error.as_deref().is_some_and(|e| e.contains("404")));
-    let ids: Vec<String> = h
-        .store
-        .served_models("a")
-        .unwrap()
-        .into_iter()
-        .map(|m| m.upstream_id)
-        .collect();
-    assert_eq!(
-        ids,
-        phoebis_profile::catalog::built_in()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(
-        h.app
-            .clone()
-            .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-            .await
-            .unwrap()
-            .status(),
-        200,
-        "the fixture model is in the seed"
-    );
-    assert!(h.store.catalog_status("a").unwrap().1.is_some());
-    up.add_credential_rule(
-        A,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: models(&[("claude-sonnet-4-5", None)]),
-        },
-    );
-    let again = h.catalog.sync("a", "test").await.unwrap();
-    assert!(!again.seeded && again.error.is_none());
-    assert!(
-        h.store.catalog_status("a").unwrap().1.is_none(),
-        "a successful sync clears the error"
-    );
-    assert!(
-        h.store
-            .served_models("a")
-            .unwrap()
-            .iter()
-            .any(|m| m.upstream_id == "claude-opus-5" && m.missing),
-        "the seed rows are discovered rows and go missing like any other"
-    );
-    assert!(
-        !h.catalog.sync("a", "test").await.unwrap().seeded,
-        "a populated catalog is never re-seeded"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn discovery_sends_the_measured_request_shape_on_each_dispatch_path_and_a_401_is_unauthorized(
-) {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: models(&[("claude-sonnet-4-5", None)]),
-        },
-    }])
-    .await;
-    up.add_credential_rule(
-        "sk-ant-api03-BAD",
-        "/v1/models",
-        Respond::Json {
-            status: 401,
-            headers: vec![],
-            body: b"{}".to_vec(),
-        },
-    );
-    let h = harness_with(
-        &up,
-        &[
-            oauth("a", A, 0),
-            api_key("k", "sk-ant-api03-KEY", 0),
-            api_key("bad", "sk-ant-api03-BAD", 0),
-        ],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    let a = h.store.account("a").unwrap().unwrap();
-    assert_eq!(
-        h.catalog.discover(&a).await.unwrap().models,
-        [("claude-sonnet-4-5".to_string(), false)]
-    );
-    let got = &up.requests()[0];
-    assert_eq!(got.line, "GET /v1/models?limit=1000 HTTP/1.1");
-    let names: Vec<&str> = got.headers.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "Authorization",
-            "User-Agent",
-            "anthropic-version",
-            "Connection",
-            "Accept",
-            "Host",
-            "Accept-Encoding"
-        ]
-    );
-    assert_eq!(got.headers[0].1, format!("Bearer {A}"));
-    assert_eq!(got.headers[1].1, "claude-code/2.1.269");
-    assert_eq!(got.headers[4].1, "*/*");
-    h.store.bump_lifecycle("a").unwrap();
-    let disconnected = h.store.account("a").unwrap().unwrap();
-    assert!(matches!(
-        h.catalog.discover(&disconnected).await,
-        Err(DiscoveryError::NoCredential)
-    ));
-    let k = h.store.account("k").unwrap().unwrap();
-    h.catalog.discover(&k).await.unwrap();
-    let got = &up.requests()[1];
-    assert_eq!(
-        got.headers[0],
-        ("x-api-key".to_string(), "sk-ant-api03-KEY".to_string())
-    );
-    assert!(!got.headers.iter().any(|(n, _)| n == "Authorization"));
-    let bad = h.store.account("bad").unwrap().unwrap();
-    assert!(matches!(
-        h.catalog.discover(&bad).await,
-        Err(DiscoveryError::Unauthorized)
-    ));
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_scheduler_syncs_every_account_including_a_paused_one() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: models(&[("claude-sonnet-4-5", None)]),
-        },
-    }])
-    .await;
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0), oauth("b", "sk-ant-oat01-BBBB", 0)],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    h.store.set_enabled("b", false).unwrap();
-    let scheduler = h
-        .catalog
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let resp1 = h
+        .app
         .clone()
-        .spawn_scheduler(std::time::Duration::from_millis(50));
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    scheduler.abort();
-    let seen = up.requests();
-    assert!(seen.iter().any(|r| r.credential() == Some(A)));
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp1.status(), 200);
+    let events1 = drain_until_complete(&mut sub).await;
+    let observed1 = events1
+        .iter()
+        .find_map(|e| match e {
+            Event::RequestObserved(o) => Some(o.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(observed1.canonical_model, "claude-sonnet-4-5");
+    assert_eq!(observed1.wire_model, "claude-sonnet-4-5");
     assert!(
-        seen.iter()
-            .any(|r| r.credential() == Some("sk-ant-oat01-BBBB")),
-        "a paused account keeps syncing its catalog"
+        String::from_utf8_lossy(&up.requests()[0].body).contains(r#""model":"claude-sonnet-4-5""#)
     );
-    assert!(h.store.catalog_status("b").unwrap().0.is_some());
-    up.shutdown().await;
-}
 
-#[tokio::test]
-async fn a_catalog_discovered_under_a_superseded_revision_is_dropped() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
-        respond: Respond::Gated(Box::new(Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: models(&[("claude-opus-5", None)]),
-        })),
-    }])
-    .await;
-    let h = harness_with(
-        &up,
-        &[api_key("a", "sk-ant-api03-PLACEHOLDER", 0)],
-        PoolSpec::default(),
-        &["claude-sonnet-4-5"],
-        default_limits(),
-    )
-    .await;
-    let synced_at = h.store.catalog_status("a").unwrap().0;
-    let catalog = h.catalog.clone();
-    let syncing = tokio::spawn(async move { catalog.sync("a", "test").await.unwrap() });
-    // The fake has the request, so discovery is in flight against the endpoint the account holds now.
-    wait_for(std::time::Duration::from_secs(5), || {
-        (!up.requests().is_empty()).then_some(())
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
     })
     .await;
+    wait_for_async(Duration::from_secs(2), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.model == "claude-sonnet-4-5-20250929")
+            .then_some(())
+    })
+    .await;
+
+    let resp2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 200);
+    let events2 = drain_until_complete(&mut sub).await;
+    let observed2 = events2
+        .iter()
+        .find_map(|e| match e {
+            Event::RequestObserved(o) => Some(o.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(observed2.canonical_model, "claude-sonnet-4-5-20250929");
+    assert_eq!(observed2.wire_model, "claude-sonnet-4-5");
+    // Each turn injects its own prompt id and billing hash, so the bodies differ there like any two
+    // requests would; the model field is the one part resolution must never touch.
+    assert!(
+        String::from_utf8_lossy(&up.requests()[1].body).contains(r#""model":"claude-sonnet-4-5""#)
+    );
+    let pins = h.router.pins().await.unwrap();
+    let pin = pins
+        .iter()
+        .find(|p| p.model == "claude-sonnet-4-5-20250929")
+        .unwrap();
+    assert_eq!(
+        pin.account_id, "a",
+        "the same pin renews on the same account"
+    );
+}
+
+#[tokio::test]
+async fn a_spelling_the_api_lacks_is_asked_once_per_window() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    for _ in 0..3 {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-nope", "s1"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-nope") == 1).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-nope") == 1
+    })
+    .await;
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-nope", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-nope") == 2).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_refused_request_enqueues_no_resolution() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            model_rules: rules(&["NOT claude-sonnet-4-5"]),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    stays_for(Duration::from_millis(100), || {
+        h.catalog_up.requests().is_empty()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_refresh_answering_404_keeps_the_dated_id_and_its_denial_and_cooldown_still_apply() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            model_rules: rules(&["NOT claude-sonnet-4-5-20250929"]),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
     h.store
-        .update_account(
-            "a",
-            h.store.account_revision("a").unwrap().unwrap(),
-            "a",
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "open".into(),
+                label: "open".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Replace,
+                long_context_twins: true,
+                keepalive_opt_out: false,
+                body_capture_hours: None,
+                secret_digest: h.store.api_key_digest("phoebis-open").to_vec(),
+                prefix: phoebis_store::key_prefix("phoebis-open"),
+                created_at: NOW,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+            },
             "test",
         )
         .unwrap();
-    up.release();
-    let outcome = syncing.await.unwrap();
-    assert!(
-        outcome.stale && outcome.delta.is_none() && outcome.error.is_none(),
-        "the list came from an endpoint the account no longer holds"
-    );
-    assert_eq!(
-        h.store
-            .served_models("a")
-            .unwrap()
-            .iter()
-            .map(|m| m.upstream_id.clone())
-            .collect::<Vec<_>>(),
-        ["claude-sonnet-4-5"],
-        "nothing was added and nothing was flagged missing"
-    );
-    assert_eq!(
-        h.store.catalog_status("a").unwrap().0,
-        synced_at,
-        "and the sync timestamp did not move"
-    );
-    up.shutdown().await;
-}
+    h.router.reload().await.unwrap();
 
-/// A models list with one padded id, sized to land at exactly `total_len` bytes so a body just under and just
-/// over the discovery bound can be built from the same shape.
-fn padded_models_body(total_len: usize) -> Vec<u8> {
-    let prefix = br#"{"data":[{"id":""#;
-    let suffix = br#"","type":"model"}],"has_more":false}"#;
-    let mut out = Vec::with_capacity(total_len);
-    out.extend_from_slice(prefix);
-    out.resize(total_len - suffix.len(), b'x');
-    out.extend_from_slice(suffix);
-    out
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for("phoebis-open", "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+
+    // The dated-id resolution has landed: the desktop key's pool-inherited denial now bites.
+    let denied = wait_for_async(Duration::from_secs(2), || async {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+            .await
+            .unwrap();
+        (resp.status() == 404).then_some(error_code(&resp))
+    })
+    .await;
+    assert_eq!(
+        denied, "model_not_allowed",
+        "the exact dated-id denial holds"
+    );
+
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    h.catalog_up
+        .add_credential_rule(A, "/v1/models/claude-sonnet-4-5", json_404_plain());
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for("phoebis-open", "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "the dated id still routes; the refresh landed"
+    );
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 2).then_some(())
+    })
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(
+        error_code(&resp),
+        "model_not_allowed",
+        "still denied under the kept dated id"
+    );
+
+    let now = h.clock.load(Ordering::SeqCst);
+    h.router.report(phoebis_routing::Report::Cooldown {
+        account_id: "a".into(),
+        row: phoebis_store::CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-sonnet-4-5-20250929".into(),
+            until: now + 3_600_000,
+            set_at: now,
+            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    let before = up.requests().len();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for("phoebis-open", "claude-sonnet-4-5", "s3"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(error_code(&resp), "model_rejected");
+    assert_eq!(up.requests().len(), before, "no upstream call");
 }
 
 #[tokio::test]
-async fn chunks_summing_past_the_discovery_bound_are_refused_like_one_oversized_chunk_and_just_under_it_is_kept(
-) {
-    // The models discovery bound (`crates/relay/src/catalog.rs`'s own `MAX_BODY`), duplicated here since the
-    // constant is private to that module.
-    const MAX_BODY: usize = 4 * 1024 * 1024;
+async fn at_most_four_probes_are_in_flight_and_a_failed_probe_waits_its_window() {
     let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let mut catalog_rules_vec = vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
         respond: Respond::Json {
             status: 200,
             headers: vec![],
-            body: padded_models_body(MAX_BODY - 1024),
+            body: b"{\"data\":[]}".to_vec(),
         },
+    }];
+    for n in 1..=6 {
+        catalog_rules_vec.push(Rule {
+            path_prefix: format!("/v1/models/claude-x{n}"),
+            respond: Respond::Gated(Box::new(json_row(&format!("claude-x{n}-20260101")))),
+        });
+    }
+    catalog_rules_vec.push(Rule {
+        path_prefix: "/v1/models/claude-nope".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    });
+    let catalog_up = FakeUpstream::start(catalog_rules_vec).await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    for n in 1..=6 {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, &format!("claude-x{n}"), &format!("s{n}")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-x") == 4).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-x") == 4
+    })
+    .await;
+    h.catalog_up.release();
+    // Retried until the four gated probes clear `resolving`: each poll both proves the inference request
+    // still succeeds and gives a fresh admission attempt for x5 a chance to land.
+    wait_for_async(Duration::from_secs(2), || async {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-x5", "s5b"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        (probes_for(&h.catalog_up, "/v1/models/claude-x5") == 1).then_some(())
+    })
+    .await;
+
+    // A 503 on claude-nope, to prove the doubling backoff after a failure.
+    for n in 0..3 {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-nope", &format!("t{n}")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-nope") == 1).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-nope") == 1
+    })
+    .await;
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-nope", "u1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-nope") == 2).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-nope") == 2
+    })
+    .await;
+    // The window has doubled to 120s after one failure; 90s past the second probe is still inside it.
+    h.clock.store(NOW + 61_000 + 90_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-nope", "u2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-nope") == 2
+    })
+    .await;
+    h.clock.store(NOW + 61_000 + 121_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-nope", "u3"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-nope") == 3).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_replacement_account_under_the_same_id_reads_its_own_catalog() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let first = h.catalog.fetch(&a).await;
+    assert_eq!(first.models.len(), 2);
+
+    h.store.delete_account("a", "test").unwrap();
+    h.store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
+    h.catalog_up
+        .add_credential_rule("k2", "/v1/models", json_list(&["claude-vendor-1"]));
+    h.router.reload().await.unwrap();
+
+    let new_row = h.store.account("a").unwrap().unwrap();
+    let second = h.catalog.fetch(&new_row).await;
+    assert_eq!(second.models.len(), 1);
+    assert_eq!(second.models[0].id, "claude-vendor-1");
+    assert_ne!(
+        first.models, second.models,
+        "no row of the old holder answers the new one"
+    );
+}
+
+#[tokio::test]
+async fn a_gated_fill_whose_account_was_replaced_commits_nothing() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![]).await;
+    catalog_up.add_credential_rule(
+        A,
+        "/v1/models",
+        Respond::Gated(Box::new(json_list(&[
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-5",
+        ]))),
+    );
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let old_row = h.store.account("a").unwrap().unwrap();
+    let c = h.catalog.clone();
+    let old = old_row.clone();
+    let fut = tokio::spawn(async move { c.fetch(&old).await });
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog_up.requests().len() == 1).then_some(())
+    })
+    .await;
+
+    h.store.delete_account("a", "test").unwrap();
+    h.store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
+    h.catalog_up
+        .add_credential_rule("k2", "/v1/models", json_list(&["claude-vendor-1"]));
+    h.catalog_up.release();
+
+    let answered = fut.await.unwrap();
+    assert_eq!(
+        answered.models.len(),
+        2,
+        "the spawned fetch answers the old rows once"
+    );
+
+    let new_row = h.store.account("a").unwrap().unwrap();
+    let second = h.catalog.fetch(&new_row).await;
+    assert_eq!(second.models.len(), 1);
+    assert_eq!(second.models[0].id, "claude-vendor-1");
+    assert_eq!(
+        probes_for(&h.catalog_up, "/v1/models"),
+        2,
+        "the replacement's fetch adds a second probe line"
+    );
+}
+
+#[tokio::test]
+async fn a_catalog_probe_and_an_inference_request_never_share_a_connection() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
     }])
     .await;
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        &[],
-        default_limits(),
-    )
-    .await;
-    let a = h.store.account("a").unwrap().unwrap();
-    // A body just under the bound, delivered as the many small reads a real socket hands back, is kept whole.
-    let under = h.catalog.discover(&a).await.unwrap();
-    assert_eq!(under.models.len(), 1);
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(up.requests().len(), 1);
 
-    up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: padded_models_body(MAX_BODY + 4096),
-        },
+    // The request admitted above also enqueues its own background resolution, on the same fake and the
+    // same account credential a plain list fetch uses; the list line is counted on its own path so that
+    // probe's traffic never masks what this test is about.
+    let a = h.store.account("a").unwrap().unwrap();
+    let fetched = h.catalog.fetch(&a).await;
+    assert_eq!(fetched.models.len(), 2);
+    assert_eq!(
+        probes_for(&h.catalog_up, "/v1/models?limit=1000"),
+        1,
+        "the list line lands on the catalog fake"
     );
-    let error = h.catalog.discover(&a).await.unwrap_err();
-    let DiscoveryError::Malformed(message) = error else {
-        panic!("expected a malformed refusal, got {error:?}");
-    };
-    assert!(
-        message.contains(&format!("exceeds {MAX_BODY} bytes")),
-        "a body over the bound is refused the same way one oversized chunk is: {message}"
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "the probe never rode the inference connection"
     );
-    up.shutdown().await;
+
+    let resp2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 200);
+    assert_eq!(up.requests().len(), 2);
+    assert_eq!(
+        probes_for(&h.catalog_up, "/v1/models?limit=1000"),
+        1,
+        "the inference request never rode the probe's connection"
+    );
 }

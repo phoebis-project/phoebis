@@ -576,7 +576,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -616,7 +615,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -757,7 +755,6 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;
@@ -783,7 +780,6 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        &["claude-sonnet-4-5", "claude-opus-5"],
         default_limits(),
     )
     .await;

@@ -29,11 +29,8 @@ export const FIXTURES: Record<string, Fixture> = {
         "quarantined": false
       },
       "lifecycle_generation": 1,
-      "catalog_error": null,
-      "catalog_synced_at": 1000000,
       "cooldowns": [],
       "overage": null,
-      "served_models_count": 1,
       "profile": {
         "billing_type": "stripe_subscription",
         "display_name": "Biz",
@@ -82,37 +79,23 @@ export const FIXTURES: Record<string, Fixture> = {
         "last_24h": 4,
         "last_7d": 4,
         "lifetime": 4
-      },
-      "served_models": [
-        {
-          "upstream_id": "claude-sonnet-5",
-          "canonical_id": "claude-sonnet-5",
-          "selected": true,
-          "source": "discovered",
-          "long_context": true,
-          "missing": false,
-          "new": false
-        }
-      ]
+      }
     }
   },
-  "account_models": {
-    "route": "GET /admin/accounts/business/models",
+  "account_catalog": {
+    "route": "GET /admin/accounts/business/catalog",
     "body": {
       "models": [
         {
-          "upstream_id": "claude-sonnet-5",
-          "canonical_id": "claude-sonnet-5",
-          "selected": true,
-          "source": "discovered",
-          "long_context": true,
-          "missing": false,
-          "new": false
+          "id": "claude-sonnet-4-5",
+          "display_name": "",
+          "created_at": "",
+          "max_input_tokens": null,
+          "max_tokens": null
         }
       ],
-      "catalog_synced_at": 1000000,
-      "catalog_error": null,
-      "built_in": false
+      "fetched_at": 1000000,
+      "error": null
     }
   },
   "account_quota": {
@@ -170,19 +153,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "source": "poll"
         }
       ]
-    }
-  },
-  "account_sync": {
-    "route": "POST /admin/accounts/business/models/sync",
-    "body": {
-      "added": [
-        "claude-sonnet-4-5"
-      ],
-      "missing": [
-        "claude-sonnet-5"
-      ],
-      "error": null,
-      "seeded": false
     }
   },
   "account_usage": {
@@ -246,11 +216,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "quarantined": false
           },
           "lifecycle_generation": 1,
-          "catalog_error": null,
-          "catalog_synced_at": 1000000,
           "cooldowns": [],
           "overage": null,
-          "served_models_count": 1,
           "profile": {
             "billing_type": "stripe_subscription",
             "display_name": "Biz",
@@ -299,18 +266,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_24h": 4,
             "last_7d": 4,
             "lifetime": 4
-          },
-          "served_models": [
-            {
-              "upstream_id": "claude-sonnet-5",
-              "canonical_id": "claude-sonnet-5",
-              "selected": true,
-              "source": "discovered",
-              "long_context": true,
-              "missing": false,
-              "new": false
-            }
-          ]
+          }
         },
         {
           "id": "direct",
@@ -321,11 +277,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "identity": null,
           "credential": null,
           "lifecycle_generation": 1,
-          "catalog_error": null,
-          "catalog_synced_at": null,
           "cooldowns": [],
           "overage": null,
-          "served_models_count": 0,
           "profile": null,
           "windows": [],
           "extra_usage": null,
@@ -339,8 +292,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_24h": 0,
             "last_7d": 0,
             "lifetime": 0
-          },
-          "served_models": []
+          }
         }
       ]
     }
@@ -5152,7 +5104,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "max_workers": 4,
         "oauth_prewarm_verified": false
       },
-      "last_sync_at": 1000000,
       "listeners": {
         "admin": "test",
         "metrics": "127.0.0.1:9464",
@@ -5208,7 +5159,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "rollup_days": 400
       },
       "routing": {
-        "catalog_sync_interval_seconds": 86400,
+        "catalog_cache_seconds": 60,
         "cooldown_fallback_seconds": 60,
         "max_attempts": 3,
         "model_rejection_seconds": 3600

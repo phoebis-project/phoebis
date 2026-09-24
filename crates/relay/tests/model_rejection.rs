@@ -1,8 +1,6 @@
 //! A 404 `not_found_error` naming the wire model: the account cools for that model alone, the request fails
 //! over, and everything else a 404 or a 400/422 can say reaches the client as it came.
 mod common;
-use std::time::Duration;
-
 use phoebis_bus::{Bus, Event};
 use phoebis_relay::Limits;
 use common::*;
@@ -17,25 +15,6 @@ fn status_and_body(r: &Respond) -> (u16, Vec<u8>) {
     match r {
         Respond::Json { status, body, .. } => (*status, body.clone()),
         _ => panic!("expected a Json respond"),
-    }
-}
-
-/// Waits for the bus to publish a completion and hands back every event seen up to and including it.
-async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<Event> {
-    let give_up = std::time::Instant::now() + Duration::from_secs(2);
-    let mut all = Vec::new();
-    loop {
-        while let Ok(e) = sub.events.try_recv() {
-            all.push(e);
-        }
-        if all.iter().any(|e| matches!(e, Event::RequestComplete(_))) {
-            return all;
-        }
-        assert!(
-            std::time::Instant::now() < give_up,
-            "no completion was published"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -66,6 +45,8 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     let o = outcome(&resp);
     assert_eq!((o.account_id.as_str(), o.attempt), ("b", 2));
     assert_eq!(credentials_seen(&up), [A, B]);
+    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
+    // scope below to it.
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert_eq!(cooldowns.len(), 1);
     assert_eq!(
@@ -75,7 +56,12 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
             cooldowns[0].until,
             cooldowns[0].window.as_str()
         ),
-        ("a", "model:claude-sonnet-4-5", 4_601_000, "model_rejection")
+        (
+            "a",
+            "model:claude-sonnet-4-5-20250929",
+            4_601_000,
+            "model_rejection"
+        )
     );
     assert_eq!(cooldowns[0].reason, "model_rejected");
     // A second request for the same model finds "a" already cooling and goes to "b" alone.
@@ -316,9 +302,11 @@ async fn a_non_portable_request_keeps_the_upstreams_404_and_records_the_cooldown
     let got_body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(got_body.as_ref(), expected_body.as_slice());
     assert_eq!(credentials_seen(&up), [A, A]);
+    // The harness's catalog fake resolves this spelling to a dated id in the background, which re-keys the
+    // scope below to it.
     let cooldowns = h.router.cooldowns().await.unwrap();
     assert!(cooldowns.iter().any(|c| c.account_id == "a"
-        && c.scope == "model:claude-sonnet-4-5"
+        && c.scope == "model:claude-sonnet-4-5-20250929"
         && c.reason == "model_rejected"));
     let pins = h.router.pins().await.unwrap();
     assert_eq!(

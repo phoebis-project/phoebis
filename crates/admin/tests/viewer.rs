@@ -7,7 +7,7 @@ use common::{delete, get, json, login, patch, post, put};
 const GETS: &[&str] = &[
     "/admin/accounts",
     "/admin/accounts/business",
-    "/admin/accounts/business/models",
+    "/admin/accounts/business/catalog",
     "/admin/accounts/business/quota?range=7d",
     "/admin/accounts/business/usage",
     "/admin/alerts/deliveries",
@@ -183,12 +183,6 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
             "",
         ),
         ("DELETE", "/admin/accounts/business/credentials".into(), ""),
-        (
-            "PUT",
-            "/admin/accounts/business/models".into(),
-            r#"{"models":[]}"#,
-        ),
-        ("POST", "/admin/accounts/business/models/sync".into(), ""),
         ("POST", "/admin/accounts/business/pause".into(), ""),
         ("POST", "/admin/accounts/business/resume".into(), ""),
         ("POST", "/admin/accounts/direct/verify".into(), ""),
@@ -276,7 +270,7 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
         .collect::<String>()
         .matches(".route(\"/admin/")
         .count();
-    assert_eq!(routed, 53, "a route joined the table; add it to this test");
+    assert_eq!(routed, 52, "a route joined the table; add it to this test");
     // The state the mutations would have changed is as the admin left it.
     assert_eq!(
         json(get(&parts.app, "/admin/keys", Some(&admin)).await).await["keys"]
