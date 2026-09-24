@@ -58,14 +58,13 @@ pub struct OutboundHead {
     pub injected: Vec<Injected>,
 }
 
-/// `inject_betas` names beta items by their `wire_name`; each one absent from the
-/// caller's list is appended to the merged line; when the caller sent no `anthropic-beta` line at all and the
-/// list is non-empty, a line holding exactly the injected entries is inserted after `anthropic-version` (else
-/// right before the credential slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a
-/// missing line stays missing, as today. `drop_betas` entries are removed from the caller's list,
-/// whether the caller sent them or an earlier attempt injected them. An `anthropic-beta` line that
-/// ends up empty emits no header at all, whether the caller sent it empty or a drop emptied it: the list is
-/// what the line says, and a line saying nothing is left out.
+/// `inject_betas` names beta items by their `wire_name`; each one absent from the caller's list is appended to
+/// the merged line, and when the caller sent no `anthropic-beta` line at all and the list is non-empty, a line
+/// holding exactly the injected entries is inserted after `anthropic-version` (else right before the credential
+/// slot, else at the tail ahead of the relay's own `Host`); with nothing to inject a missing line stays missing.
+/// `drop_betas` entries are removed from the caller's list, whether the caller sent them or an earlier attempt
+/// injected them. An `anthropic-beta` line that ends up empty emits no header at all, whether the caller sent it
+/// empty or a drop emptied it: the list is what the line says, and a line saying nothing is left out.
 #[allow(clippy::too_many_arguments)]
 pub fn outbound_headers(
     caller: &HeaderMap,
@@ -688,12 +687,7 @@ mod tests {
         );
         assert!(injected.is_empty());
 
-        let (line, injected) = betas(
-            "",
-            &api_key(),
-            &[Injected::ExtendedTtlBeta],
-            &[],
-        );
+        let (line, injected) = betas("", &api_key(), &[Injected::ExtendedTtlBeta], &[]);
         assert_eq!(line, "extended-cache-ttl-2025-04-11");
         assert_eq!(injected, vec![Injected::ExtendedTtlBeta]);
     }

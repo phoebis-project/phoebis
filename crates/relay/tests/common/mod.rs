@@ -532,8 +532,7 @@ async fn build(
         clock,
         limits,
     );
-    let relay = relay
-        .with_cache_diagnostics(cache_diagnostics);
+    let relay = relay.with_cache_diagnostics(cache_diagnostics);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.

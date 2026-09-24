@@ -286,8 +286,9 @@ fn error_type_of(data: &[u8]) -> String {
 
 /// The measured pool a relayed connection came from, so the body task can hand it back.
 #[derive(Clone)]
-pub(crate) enum Checkin {
-    Measured(Arc<Pool>, PoolKey),
+pub(crate) struct Checkin {
+    pub pool: Arc<Pool>,
+    pub key: PoolKey,
 }
 
 pub(crate) trait ReturnToPool: Sized {
@@ -296,9 +297,7 @@ pub(crate) trait ReturnToPool: Sized {
 
 impl ReturnToPool for Conn {
     fn return_to(self, checkin: Checkin) {
-        if let Checkin::Measured(pool, key) = checkin {
-            pool.checkin(key, self);
-        }
+        checkin.pool.checkin(checkin.key, self);
     }
 }
 

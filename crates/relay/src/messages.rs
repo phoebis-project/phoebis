@@ -1319,8 +1319,8 @@ impl Relay {
                 );
             }
         };
-        let authority = "api.anthropic.com".to_string();
-        let Some(addr) = (self.resolver)(&authority).await else {
+        let authority = dispatch::UPSTREAM_AUTHORITY;
+        let Some(addr) = (self.resolver)(authority).await else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
             return Leg::FailOver;
         };
@@ -1361,25 +1361,23 @@ impl Relay {
             } else {
                 &[]
             };
-            let head = {
-                // A latched or freshly stripped `ClientRequestId` means this leg generates none: the id is the
-                // relay's own addition, and the account has already refused it once.
-                let client_request_id = admitted
-                    .restore
-                    .as_ref()
-                    .filter(|_| !skip.contains(&Injected::ClientRequestId))
-                    .map(|_| uuid_v4());
-                outbound_headers(
-                    admitted.caller,
-                    admitted.original,
-                    &credential.kind,
-                    &authority,
-                    edited.len(),
-                    client_request_id.as_deref(),
-                    &inject_betas,
-                    drop_betas,
-                )
-            };
+            // A latched or freshly stripped `ClientRequestId` means this leg generates none: the id is the
+            // relay's own addition, and the account has already refused it once.
+            let client_request_id = admitted
+                .restore
+                .as_ref()
+                .filter(|_| !skip.contains(&Injected::ClientRequestId))
+                .map(|_| uuid_v4());
+            let head = outbound_headers(
+                admitted.caller,
+                admitted.original,
+                &credential.kind,
+                authority,
+                edited.len(),
+                client_request_id.as_deref(),
+                &inject_betas,
+                drop_betas,
+            );
             let injected: Vec<Injected> = body_injected
                 .iter()
                 .chain(&head.injected)
@@ -1412,34 +1410,28 @@ impl Relay {
                 spent: *spent,
                 trace: admitted.trace,
             };
-            let dispatched = {
-                let request = RawRequest {
-                    method: "POST",
-                    target: admitted.target.to_string(),
-                    headers: head.headers,
-                    body: Bytes::from(edited.clone()),
-                };
-                match dispatch::attempt(
-                    self,
-                    &request,
-                    &pool_key,
-                    &authority,
-                    addr,
-                    fresh,
-                    cancel,
-                )
-                .await
+            let request = RawRequest {
+                method: "POST",
+                target: admitted.target.to_string(),
+                headers: head.headers,
+                body: Bytes::from(edited.clone()),
+            };
+            let dispatched =
+                match dispatch::attempt(self, &request, &pool_key, authority, addr, fresh, cancel)
+                    .await
                 {
                     Err(failure) => Err(failure),
                     Ok(sent) => Ok(self
                         .respond(
                             responding,
                             sent,
-                            Checkin::Measured(self.pool.clone(), pool_key.clone()),
+                            Checkin {
+                                pool: self.pool.clone(),
+                                key: pool_key.clone(),
+                            },
                         )
                         .await),
-                }
-            };
+                };
             let next = match dispatched {
                 Ok(next) => next,
                 Err(AttemptFailure::Unsent(detail))

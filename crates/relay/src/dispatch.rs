@@ -16,6 +16,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::messages::Relay;
 
+/// The one authority the relay dials: `api.anthropic.com` on 443, so the `Host` value, the resolver's input,
+/// and the pool key's host are the bare name.
+pub(crate) const UPSTREAM_AUTHORITY: &str = phoebis_store::INFERENCE_HOST;
+
 pub(crate) struct Sent<C> {
     pub conn: C,
     pub head: ResponseHead,

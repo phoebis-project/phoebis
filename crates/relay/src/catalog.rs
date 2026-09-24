@@ -17,6 +17,8 @@ use phoebis_transport::response::{framing, read_head, BodyReader};
 use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::dispatch::UPSTREAM_AUTHORITY;
+
 /// A models list is a few hundred short objects; anything past this is not one.
 const MAX_BODY: usize = 4 * 1024 * 1024;
 const LONG_CONTEXT_ABOVE: u64 = 200_000;
@@ -144,14 +146,13 @@ impl CatalogService {
                 )
             }
         };
-        let authority = "api.anthropic.com".to_string();
         let headers = vec![
             credential,
             ("User-Agent".into(), MODELS_USER_AGENT.into()),
             ("anthropic-version".into(), "2023-06-01".into()),
             ("Connection".into(), "keep-alive".into()),
             ("Accept".into(), "*/*".into()),
-            ("Host".into(), authority.clone()),
+            ("Host".into(), UPSTREAM_AUTHORITY.to_string()),
             ("Accept-Encoding".into(), "gzip, deflate, br, zstd".into()),
         ];
         let request = RawRequest {
@@ -160,26 +161,24 @@ impl CatalogService {
             headers,
             body: Bytes::new(),
         };
-        let addr = (self.resolver)(&authority)
-            .await
-            .ok_or_else(|| DiscoveryError::Unreachable(format!("no address for {authority}")))?;
+        let addr = (self.resolver)(UPSTREAM_AUTHORITY).await.ok_or_else(|| {
+            DiscoveryError::Unreachable(format!("no address for {UPSTREAM_AUTHORITY}"))
+        })?;
         let (status, body) = tokio::time::timeout(self.timeout, async {
-            {
-                let key = PoolKey {
-                    account_id: account.id.clone(),
-                    host: authority.clone(),
-                };
-                let (mut conn, _) = self
-                    .pool
-                    .checkout(key.clone(), &authority, addr)
-                    .await
-                    .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
-                let (status, body, reusable) = exchange(&mut conn, &request).await?;
-                if reusable {
-                    self.pool.checkin(key, conn);
-                }
-                Ok((status, body))
+            let key = PoolKey {
+                account_id: account.id.clone(),
+                host: UPSTREAM_AUTHORITY.to_string(),
+            };
+            let (mut conn, _) = self
+                .pool
+                .checkout(key.clone(), UPSTREAM_AUTHORITY, addr)
+                .await
+                .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
+            let (status, body, reusable) = exchange(&mut conn, &request).await?;
+            if reusable {
+                self.pool.checkin(key, conn);
             }
+            Ok((status, body))
         })
         .await
         .map_err(|_| DiscoveryError::Unreachable("timed out".into()))??;
