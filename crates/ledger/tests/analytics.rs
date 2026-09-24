@@ -23,7 +23,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
         Some("claude-cli/2.1.300 (external, cli)"),
         None,
     ];
-    // The last one stands for a row folded before the column existed, which folds under the reserved id.
+    // The last one stands for a request the relay never classified, which folds under the reserved id.
     let clients = [Some("claude-code/cli"), Some("sdk/python"), None];
     let efforts = [None, None, Some("low"), Some("high"), Some("max")];
     let kinds = [

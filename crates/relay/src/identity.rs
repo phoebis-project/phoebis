@@ -14,7 +14,7 @@ const MAIN_AGENT: &str = "main";
 const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
 /// Bound on an identifier or model name the relay repeats into logs and ledger keys.
-const MAX_ID_LEN: usize = 256;
+pub(crate) const MAX_ID_LEN: usize = 256;
 
 #[derive(Debug)]
 pub struct RequestIdentity {
@@ -176,6 +176,15 @@ mod tests {
             client_class(&agent("claude-cli/2.1.269;x (external, cli; y)")),
             "claude-code/cli",
             "the class is a label and never the version gate"
+        );
+        let over_bound = format!(
+            "claude-cli/2.1.269 (external, {})",
+            "a".repeat(MAX_ID_LEN + 1)
+        );
+        assert_eq!(
+            client_class(&agent(&over_bound)),
+            "claude-code/cli",
+            "an entrypoint token past the bound reads as unknown rather than widening the class"
         );
         let mut headers = agent("anthropic-sdk-python/0.40.0");
         headers.insert("x-stainless-lang", "python".parse().unwrap());

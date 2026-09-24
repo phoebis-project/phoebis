@@ -135,7 +135,9 @@ pub fn entrypoint_of(user_agent: &str) -> &str {
         return "cli";
     };
     let candidate = candidate.trim();
-    let valid = !candidate.is_empty()
+    // Bounded the same as `header_id`'s identifiers: a token running past this length reaches a log line and a
+    // ledger key, so it reads as unknown rather than widening every row that names its class.
+    let valid = (1..=crate::identity::MAX_ID_LEN).contains(&candidate.len())
         && candidate
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b == b'-');

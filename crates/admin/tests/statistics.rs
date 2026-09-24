@@ -396,7 +396,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     assert_eq!(too_many_patterns.status(), 400);
     assert_eq!(
         json(too_many_patterns).await["error"],
-        "user agent patterns are at most 256 characters, at most 32 of them"
+        "patterns are at most 256 characters, at most 32 of them"
     );
     let one_long_pattern = get(
         &parts.app,
@@ -414,7 +414,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     );
     assert_eq!(
         json(one_long_pattern).await["error"],
-        "user agent patterns are at most 256 characters, at most 32 of them"
+        "patterns are at most 256 characters, at most 32 of them"
     );
     let long_agent = get(
         &parts.app,
@@ -429,7 +429,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     );
     assert_eq!(
         json(long_agent).await["error"],
-        "user agent patterns are at most 256 characters, at most 32 of them"
+        "patterns are at most 256 characters, at most 32 of them"
     );
     let at_the_bound = get(
         &parts.app,
@@ -662,7 +662,7 @@ async fn the_request_log_answers_and_filters_the_client_the_agent_type_and_the_t
     assert_eq!(too_long.status(), 400);
     assert_eq!(
         json(too_long).await["error"],
-        "user agent patterns are at most 256 characters, at most 32 of them"
+        "patterns are at most 256 characters, at most 32 of them"
     );
 }
 
@@ -737,7 +737,7 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     assert_eq!(too_many_clients.status(), 400);
     assert_eq!(
         json(too_many_clients).await["error"],
-        "user agent patterns are at most 256 characters, at most 32 of them"
+        "patterns are at most 256 characters, at most 32 of them"
     );
 }
 

@@ -177,8 +177,8 @@ limited, upstream marked, overage, window spent, or utilization. When its pin wa
 drawer says from which upstream and every reason the router found: account cooled, window spent, upstream paused, pin
 idle past the affinity window, and the rest.
 
-![The Requests view: the filterable table and the request drawer](assets/requests-light.png#only-light)
-![The Requests view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)
+![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
+![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
 
 ### Analytics
 

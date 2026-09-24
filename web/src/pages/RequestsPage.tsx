@@ -126,6 +126,10 @@ export function RequestsPage() {
   useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
+  // Sized to the longest class the loaded rows actually carry, floored at the header label so the column never
+  // collapses under it and capped at the longest known class; a wider forged class truncates behind the cell's
+  // ellipsis instead of widening the column.
+  const clientColumnChars = Math.min(CLIENT_CLASS_CHARS, Math.max('Client'.length, ...rows.map((r) => (r.client ?? '').length)));
   const nextCursor = requests.data?.nextCursor ?? null;
   const goNext = () => {
     if (!nextCursor) return;
@@ -270,7 +274,7 @@ export function RequestsPage() {
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && <td className="mono">{r.model}</td>}
                         {visible.has('client') && (
-                          <td className="mono requests__client" title={r.client ?? undefined} style={{ minWidth: `${CLIENT_CLASS_CHARS}ch` }}>
+                          <td className="mono requests__client" title={r.client ?? undefined} style={{ minWidth: `${clientColumnChars}ch` }}>
                             {r.client ?? <span className="muted">-</span>}
                             {r.agentType && <span className="sub">{r.agentType}</span>}
                           </td>

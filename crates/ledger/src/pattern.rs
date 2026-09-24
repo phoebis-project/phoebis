@@ -42,8 +42,7 @@ pub fn to_like(pattern: &str) -> (String, char) {
 pub const MAX_PATTERN_CHARS: usize = 256;
 pub const MAX_PATTERNS: usize = 32;
 /// The refusal a route answers for a pattern or a list past the bounds.
-pub const PATTERNS_TOO_LONG: &str =
-    "user agent patterns are at most 256 characters, at most 32 of them";
+pub const PATTERNS_TOO_LONG: &str = "patterns are at most 256 characters, at most 32 of them";
 
 pub fn within_bounds(patterns: &[String]) -> bool {
     patterns.len() <= MAX_PATTERNS

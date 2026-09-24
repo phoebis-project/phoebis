@@ -41,8 +41,8 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
     })
 }
 
-/// Its own function, beside `attempt_json`, for the same reason: nested inline the object would overflow the
-/// `json!` macro's expansion depth now that `request_summary` carries six more top-level keys.
+/// Its own function, beside `usage_json` and `attempt_json`, for the same reason: nested inline the object
+/// would overflow the `json!` macro's expansion depth.
 fn shape_json(r: &RequestRecord) -> Value {
     json!({
         "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),

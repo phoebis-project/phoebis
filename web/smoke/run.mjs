@@ -1321,17 +1321,22 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   const drawer = m.container.querySelector('.drawer');
   const row = (label) => [...(drawer?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   const agent = row('User agent');
+  // A hint the mock left absent reads the drawer's muted placeholder rather than the seeded value.
+  const hint = (label, value) => row(label)?.textContent?.trim() === (value ?? 'not sent');
   results.push({
     name: '/requests drawer shows the client hints',
     ok:
       hinted !== undefined &&
-      ['Client hints', 'Turn origin', 'Tool time before this turn', 'User agent'].every((t) => (drawer?.textContent ?? '').includes(t)) &&
+      ['Client hints', 'Turn origin', 'Tool time before this turn', 'User agent', 'Agent type', 'Compaction', 'Context compacted'].every((t) => (drawer?.textContent ?? '').includes(t)) &&
       row('Turn origin')?.textContent?.trim() === hinted.turnOrigin &&
       row('Client')?.textContent?.trim() === hinted.client &&
       agent?.getAttribute('title') === hinted.userAgent &&
       (agent?.textContent ?? '').length > 0 &&
-      hinted.userAgent.startsWith((agent?.textContent ?? '').replace(/…$/, '')),
-    missing: [hinted?.id ?? 'no row with a turn origin', row('Turn origin')?.textContent ?? 'no turn origin row', agent?.getAttribute('title') ?? 'no user agent title', agent?.textContent ?? ''],
+      hinted.userAgent.startsWith((agent?.textContent ?? '').replace(/…$/, '')) &&
+      hint('Agent type', hinted.agentType) &&
+      hint('Compaction', hinted.compaction) &&
+      hint('Context compacted', hinted.contextCompacted),
+    missing: [hinted?.id ?? 'no row with a turn origin', row('Turn origin')?.textContent ?? 'no turn origin row', agent?.getAttribute('title') ?? 'no user agent title', agent?.textContent ?? '', row('Agent type')?.textContent ?? 'no agent type row', row('Compaction')?.textContent ?? 'no compaction row', row('Context compacted')?.textContent ?? 'no context compacted row'],
   });
   await m.navigate('/requests');
 }
