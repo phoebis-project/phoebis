@@ -262,6 +262,7 @@ pub async fn harness_on(
         clock.clone(),
         Duration::from_secs(10),
         Duration::from_secs(60),
+        Duration::from_secs(5),
     ));
     let bus = Bus::new();
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));

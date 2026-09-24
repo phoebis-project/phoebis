@@ -1,5 +1,5 @@
 //! The live model catalog: a per-account cache fetched on demand and held for a short window, and the
-//! resolution map that folds an undated spelling to the dated id the API lists, off the request path.
+//! published map that folds an undated spelling to the newest dated id the enabled accounts' listings carry.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -8,6 +8,7 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
+use phoebis_routing::listing::undated;
 pub use phoebis_routing::listing::CatalogRow;
 use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
@@ -18,20 +19,51 @@ use phoebis_transport::request::{write_request, RawRequest};
 use phoebis_transport::response::{framing, read_head, BodyReader};
 use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::dispatch::UPSTREAM_AUTHORITY;
 
 /// A models list is a few hundred short objects; anything past this is not one.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
-/// The most spellings the resolution map holds, cached and in flight together; a spelling past it is admitted
-/// under its folded spelling and probed once room returns. The API lists a dozen ids, so the bound is slack.
-pub const RESOLUTION_CAPACITY: usize = 256;
-/// The most `GET /v1/models/{spelling}` probes in flight at once.
-pub const PROBES_IN_FLIGHT: usize = 4;
+/// The dated id `spelling` resolves to under `listing`: the newest `<spelling>-YYYYMMDD` entry, or `None` when
+/// the listing holds no dated entry for it (a dateless id of the 4.6 generation and later is its own snapshot).
+pub fn derive(listing: &[CatalogRow], spelling: &str) -> Option<String> {
+    listing
+        .iter()
+        .filter(|row| undated(&row.id) == Some(spelling))
+        .map(|row| row.id.as_str())
+        // The date is the id's last eight bytes and zero-padded, so the lexical maximum is the newest.
+        .max()
+        .map(str::to_string)
+}
+
+/// Every spelling `listing` implies with its newest dated id: one entry per undated base the listing carries a
+/// dated id for, keyed by `phoebis_routing::listing::undated`.
+pub fn derive_all(listing: &[CatalogRow]) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for row in listing {
+        if let Some(base) = undated(&row.id) {
+            let entry = out.entry(base.to_string()).or_default();
+            if row.id.as_str() > entry.as_str() {
+                *entry = row.id.clone();
+            }
+        }
+    }
+    out
+}
+
+/// The `YYYYMMDD` a dated id ends in, as an integer, so two snapshots of one spelling order by date.
+fn snapshot_date(id: &str) -> Option<u32> {
+    let (_, suffix) = id.rsplit_once('-')?;
+    (suffix.len() == 8).then(|| suffix.parse().ok()).flatten()
+}
 
 const SLOTS_POISONED: &str = "catalog slots lock poisoned by a prior panic";
-const RESOLUTION_POISONED: &str = "catalog resolution lock poisoned by a prior panic";
+const PUBLISHED_POISONED: &str = "catalog published map poisoned by a prior panic";
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
 fn at_models_bound(error: TransportError) -> TransportError {
@@ -80,169 +112,23 @@ struct Slot {
     cached: Option<Catalog>,
 }
 
-/// The last status a spelling's probe ended in. `dated` on `Resolution` is the durable answer; this is only
-/// what the most recent attempt reported.
+/// What the startup fetch found before the bound: `landed` accounts answered rows, `failed` answered an error
+/// and are retried in the background, `pending` were still fetching when the bound passed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Prefetched {
+    pub landed: usize,
+    pub failed: usize,
+    pub pending: usize,
+}
+
+/// How far the cache is from answering a resolution: `Warm` once any enabled account's listing landed and its
+/// moves were acknowledged in this lifetime and never earlier, `Filling` while a fill is in flight and nothing
+/// has landed, `Cold` otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Probe {
-    Dated,
-    Missing,
-    Failed,
-}
-
-#[derive(Clone, Debug)]
-struct Resolution {
-    /// The last successful answer. Nothing after it clears it: a later 404 or failure only moves `last` and
-    /// `retry_at`, never this.
-    dated: Option<String>,
-    /// The dated id the router has acknowledged, the only one `canonical_for` answers: named by it before the
-    /// router moved the spelling's pins and cooldowns, a request would miss both.
-    published: Option<String>,
-    last: Probe,
-    at: i64,
-    retry_at: i64,
-    failures: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Admission {
-    Probe,
-    Skip,
-}
-
-/// What one probe of `GET /v1/models/{spelling}` answered, read into `record`.
-enum ProbeAnswer {
-    Dated(String),
-    Missing,
-    Failed,
-}
-
-/// The folded-spelling to dated-id map: bounded, coalesced per spelling, and never blocking. Its own unit
-/// tests exercise the capacity and backoff rules directly; the relay-level tests exercise it through
-/// `CatalogService`.
-struct ResolutionMap {
-    capacity: usize,
-    in_flight: usize,
-    window_ms: i64,
-    entries: HashMap<String, Resolution>,
-    resolving: HashSet<String>,
-}
-
-impl ResolutionMap {
-    fn new(capacity: usize, in_flight: usize, window_ms: i64) -> ResolutionMap {
-        ResolutionMap {
-            capacity,
-            in_flight,
-            window_ms,
-            entries: HashMap::new(),
-            resolving: HashSet::new(),
-        }
-    }
-
-    /// Loads a persisted answer as if a probe had just landed it, so a restart answers before any probe runs.
-    /// Published at once: the router loads the same row before it serves a selection.
-    fn seed(&mut self, spelling: String, dated_id: String, resolved_at: i64) {
-        self.entries.insert(
-            spelling,
-            Resolution {
-                dated: Some(dated_id.clone()),
-                published: Some(dated_id),
-                last: Probe::Dated,
-                at: resolved_at,
-                retry_at: resolved_at + self.window_ms,
-                failures: 0,
-            },
-        );
-    }
-
-    fn canonical_for(&self, spelling: &str) -> Option<String> {
-        self.entries.get(spelling).and_then(|e| e.published.clone())
-    }
-
-    /// Only the id still recorded is published: an acknowledgement that arrives after a later probe recorded
-    /// another id is for an answer the map has moved past.
-    fn publish(&mut self, spelling: &str, dated_id: &str) {
-        if let Some(entry) = self
-            .entries
-            .get_mut(spelling)
-            .filter(|entry| entry.dated.as_deref() == Some(dated_id))
-        {
-            entry.published = Some(dated_id.to_string());
-        }
-    }
-
-    /// Drops every entry with no dated id past its retry time: the negative side of the map is the only side
-    /// that ever expires, since a dated answer is kept whatever a later probe says.
-    fn expire_negatives(&mut self, now: i64) {
-        self.entries
-            .retain(|_, entry| entry.dated.is_some() || entry.retry_at > now);
-    }
-
-    fn admit(&mut self, spelling: &str, now: i64) -> Admission {
-        if self.resolving.contains(spelling) {
-            return Admission::Skip;
-        }
-        match self.entries.get(spelling) {
-            Some(entry) if entry.retry_at > now => return Admission::Skip,
-            Some(_) => {}
-            None => {
-                if self.entries.len() + self.resolving.len() >= self.capacity {
-                    self.expire_negatives(now);
-                    if self.entries.len() + self.resolving.len() >= self.capacity {
-                        return Admission::Skip;
-                    }
-                }
-            }
-        }
-        if self.resolving.len() >= self.in_flight {
-            return Admission::Skip;
-        }
-        self.resolving.insert(spelling.to_string());
-        Admission::Probe
-    }
-
-    /// A dated id lands in two states: pending here, returned for the caller to hand the router, and published
-    /// by `publish` once the router has acknowledged it. Answered on every `Dated` probe, changed or not: a
-    /// router that was gone when an earlier landing asked it is asked again on the next, and it moves nothing
-    /// twice, so a repeat costs nothing but the call. A published id stays published through a repeat.
-    fn record(&mut self, spelling: &str, outcome: ProbeAnswer, now: i64) -> Option<String> {
-        self.resolving.remove(spelling);
-        let entry = self
-            .entries
-            .entry(spelling.to_string())
-            .or_insert(Resolution {
-                dated: None,
-                published: None,
-                last: Probe::Missing,
-                at: now,
-                retry_at: now,
-                failures: 0,
-            });
-        match outcome {
-            ProbeAnswer::Dated(id) => {
-                entry.dated = Some(id.clone());
-                entry.last = Probe::Dated;
-                entry.failures = 0;
-                entry.at = now;
-                entry.retry_at = now + self.window_ms;
-                Some(id)
-            }
-            ProbeAnswer::Missing => {
-                entry.last = Probe::Missing;
-                entry.at = now;
-                entry.retry_at = now + self.window_ms;
-                None
-            }
-            ProbeAnswer::Failed => {
-                entry.last = Probe::Failed;
-                entry.failures += 1;
-                entry.at = now;
-                // One, two, four, then eight windows; the fifth failure and beyond stays at eight.
-                let doublings = entry.failures.min(4) - 1;
-                entry.retry_at = now + self.window_ms * (1i64 << doublings);
-                None
-            }
-        }
-    }
+pub enum Warmth {
+    Cold,
+    Filling,
+    Warm,
 }
 
 pub struct CatalogService {
@@ -250,7 +136,6 @@ pub struct CatalogService {
     manager: Arc<CredentialManager>,
     pool: Arc<Pool>,
     resolver: Resolver,
-    resolution: Mutex<ResolutionMap>,
     router: RouterHandle,
     slots: Mutex<HashMap<SlotKey, Slot>>,
     /// Bumped per account id by `evict`, independently of whether a slot yet exists to clear: a fill that
@@ -260,11 +145,22 @@ pub struct CatalogService {
     store: Arc<Store>,
     timeout: Duration,
     window: Duration,
+    /// Spelling to the dated id the router has acknowledged; only ever grown or moved to a strictly newer
+    /// snapshot, never shrunk.
+    published: Mutex<HashMap<String, String>>,
+    /// Held across the whole of `publish`, so two fills landing together derive, hand to the router, and insert
+    /// one after the other rather than racing each other's read of `published`.
+    publishing: tokio::sync::Mutex<()>,
+    warmth: watch::Sender<Warmth>,
+    fills_in_flight: watch::Sender<usize>,
+    startup_bound: Duration,
+    tasks: TaskTracker,
+    stop: CancellationToken,
 }
 
 impl CatalogService {
     /// `pool` and `resolver` are the catalog's own transport; `router` takes each landed resolution to the
-    /// routing state, and `store.resolutions()` seeds the map so a restart answers before any probe.
+    /// routing state, and `store.resolutions()` seeds `published` so a restart answers before any fetch lands.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Arc<Store>,
@@ -275,21 +171,19 @@ impl CatalogService {
         clock: Clock,
         timeout: Duration,
         window: Duration,
+        startup_bound: Duration,
     ) -> CatalogService {
-        let mut resolution = ResolutionMap::new(
-            RESOLUTION_CAPACITY,
-            PROBES_IN_FLIGHT,
-            window.as_millis() as i64,
-        );
-        for row in store.resolutions().unwrap_or_default() {
-            resolution.seed(row.spelling, row.dated_id, row.resolved_at);
-        }
+        let published = store
+            .resolutions()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (row.spelling, row.dated_id))
+            .collect();
         CatalogService {
             clock,
             manager,
             pool,
             resolver,
-            resolution: Mutex::new(resolution),
             router,
             slots: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
@@ -297,6 +191,13 @@ impl CatalogService {
             store,
             timeout,
             window,
+            published: Mutex::new(published),
+            publishing: tokio::sync::Mutex::new(()),
+            warmth: watch::Sender::new(Warmth::Cold),
+            fills_in_flight: watch::Sender::new(0),
+            startup_bound,
+            tasks: TaskTracker::new(),
+            stop: CancellationToken::new(),
         }
     }
 
@@ -328,7 +229,8 @@ impl CatalogService {
     }
 
     /// The account's entry when younger than the window, else one fill (coalesced per account, and dropped
-    /// unstored when `evict` ran under it) whose answer, rows or an error, is stored and returned.
+    /// unstored when `evict` ran under it) whose answer, rows or an error, is stored and returned; a fill that
+    /// lands rows also derives and publishes the union's resolutions before the fetch is counted done.
     pub async fn fetch(&self, account: &AccountRow) -> Catalog {
         let key = SlotKey {
             account_id: account.id.clone(),
@@ -356,6 +258,7 @@ impl CatalogService {
             .get(&key.account_id)
             .copied()
             .unwrap_or(0);
+        self.raise_in_flight();
         let discovered = self.discover(account).await;
         // The window opens when the answer is in hand: dated from before a discovery slower than the window,
         // the slot would be stale on commit and every caller waiting on the fill lock would discover again.
@@ -375,11 +278,9 @@ impl CatalogService {
         // The commit-time fence: a slot read or filled for one credential must never answer for the next, so
         // the row is re-read and both the generation (bumped independently of a slot's existence, so a fill
         // that started before the account even had one still loses) and the holder it names must still match.
-        let still_current = self
-            .store
-            .account(&account.id)
-            .ok()
-            .flatten()
+        let reread = self.store.account(&account.id).ok().flatten();
+        let still_current = reread
+            .as_ref()
             .is_some_and(|row| row.incarnation == key.incarnation && row.revision == key.revision);
         let current_generation = self
             .generations
@@ -395,7 +296,20 @@ impl CatalogService {
                     cached: Some(catalog.clone()),
                 },
             );
+            if !catalog.models.is_empty() {
+                self.publish(fetched_at).await;
+                if reread.as_ref().is_some_and(|row| row.enabled) {
+                    self.warmth.send_if_modified(|w| match w {
+                        Warmth::Warm => false,
+                        other => {
+                            *other = Warmth::Warm;
+                            true
+                        }
+                    });
+                }
+            }
         }
+        self.lower_in_flight();
         catalog
     }
 
@@ -425,57 +339,196 @@ impl CatalogService {
         }
     }
 
-    /// The dated id the map last resolved a folded spelling to and the router acknowledged, or `None`; a later
-    /// 404 or failure never clears it, and it never waits.
-    pub fn canonical_for(&self, spelling: &str) -> Option<String> {
-        self.resolution
+    /// The dated id the router has acknowledged for a spelling, or `None`; never waits and never asks anyone.
+    pub fn lookup(&self, spelling: &str) -> Option<String> {
+        self.published
             .lock()
-            .expect(RESOLUTION_POISONED)
-            .canonical_for(spelling)
+            .expect(PUBLISHED_POISONED)
+            .get(spelling)
+            .cloned()
     }
 
-    /// One background resolution for a spelling the map lacks or holds past its retry time; coalesced per
-    /// spelling, capped at `PROBES_IN_FLIGHT`, and skipped without blocking when the map is full.
-    pub fn request_resolution(self: &Arc<Self>, spelling: &str) {
-        let now = (self.clock)();
-        let admission = self
-            .resolution
-            .lock()
-            .expect(RESOLUTION_POISONED)
-            .admit(spelling, now);
-        if admission != Admission::Probe {
-            return;
+    /// `lookup`, after a wait bounded by the startup bound on a miss while any fill is in flight: the canonical
+    /// name admission records the request under, the spelling itself when nothing dated is known.
+    pub async fn canonical_for(&self, spelling: &str) -> String {
+        if let Some(dated) = self.lookup(spelling) {
+            return dated;
         }
-        let service = Arc::clone(self);
-        let spelling = spelling.to_string();
-        tokio::spawn(async move {
-            let outcome = service.probe_spelling(&spelling).await;
-            let now = (service.clock)();
-            let resolved = service
-                .resolution
-                .lock()
-                .expect(RESOLUTION_POISONED)
-                .record(&spelling, outcome, now);
-            let Some(dated_id) = resolved else {
-                return;
-            };
-            match service.router.resolve(&spelling, &dated_id, now).await {
-                Ok(()) => service
-                    .resolution
-                    .lock()
-                    .expect(RESOLUTION_POISONED)
-                    .publish(&spelling, &dated_id),
-                // The entry stays pending, so requests keep the folded spelling the router's rows are still
-                // under, and the probe after the window asks again.
-                Err(error) => {
-                    tracing::debug!(%spelling, %error, "a resolution was not handed to the router")
+        let mut rx = self.fills_in_flight.subscribe();
+        if *rx.borrow() > 0 {
+            // The count, not the warmth, gates the wait: a listing that landed for one account leaves the
+            // service `Warm` while another account's fill, the one that will resolve this spelling, is still
+            // in flight.
+            let _ = tokio::time::timeout(self.startup_bound, rx.wait_for(|n| *n == 0)).await;
+        }
+        self.lookup(spelling)
+            .unwrap_or_else(|| spelling.to_string())
+    }
+
+    pub fn warmth(&self) -> Warmth {
+        *self.warmth.borrow()
+    }
+
+    /// One `fetch` per enabled `Ready` account, concurrently, awaited up to the startup bound; a fetch still
+    /// running at the bound finishes in the background, and an account whose fetch failed is retried there on a
+    /// doubling backoff from the cache window, capped at one hour, until it lands, the row leaves `Ready`, or
+    /// `shutdown` cancels it.
+    pub async fn prefetch(self: &Arc<Self>) -> Prefetched {
+        let deadline = tokio::time::Instant::now() + self.startup_bound;
+        let accounts: Vec<AccountRow> = self
+            .store
+            .accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.enabled && a.state == AccountState::Ready)
+            .collect();
+        let handles: Vec<(AccountRow, JoinHandle<Catalog>)> = accounts
+            .into_iter()
+            .map(|account| {
+                let service = Arc::clone(self);
+                let for_task = account.clone();
+                let handle = self
+                    .tasks
+                    .spawn(async move { service.fetch(&for_task).await });
+                (account, handle)
+            })
+            .collect();
+        let mut out = Prefetched::default();
+        for (account, handle) in handles {
+            match tokio::time::timeout_at(deadline, handle).await {
+                Ok(Ok(catalog)) if catalog.error.is_none() => out.landed += 1,
+                Ok(Ok(_)) => {
+                    out.failed += 1;
+                    self.spawn_retry(account);
                 }
+                Ok(Err(_)) => out.failed += 1,
+                Err(_) => out.pending += 1,
+            }
+        }
+        out
+    }
+
+    /// Cancels every tracked fill and retry; they end at their next await point. Synchronous, for a drop guard.
+    pub fn cancel(&self) {
+        self.stop.cancel();
+        self.tasks.close();
+    }
+
+    /// `cancel`, then waits until every tracked task has ended, so nothing spawned here outlives the caller.
+    pub async fn shutdown(&self) {
+        self.cancel();
+        self.tasks.wait().await;
+    }
+
+    /// One fetch failed inside the startup bound: retried here on a doubling backoff until rows land, the
+    /// account leaves `Ready`, or `cancel` ends it with everything else the tracker holds.
+    fn spawn_retry(self: &Arc<Self>, account: AccountRow) {
+        let service = Arc::clone(self);
+        self.tasks.spawn(async move {
+            let mut backoff = service.window;
+            loop {
+                tokio::select! {
+                    _ = service.stop.cancelled() => return,
+                    _ = tokio::time::sleep(backoff) => {}
+                }
+                let Ok(Some(row)) = service.store.account(&account.id) else {
+                    return;
+                };
+                if !row.enabled || row.state != AccountState::Ready {
+                    return;
+                }
+                if service.refresh(&row).await.error.is_none() {
+                    return;
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(3_600));
             }
         });
     }
 
-    /// Credential resolution shared by the list fetch and a resolution probe. `secret` is only ever set from
-    /// the list path (a staged replacement under verification); a probe always reads the account's own.
+    /// Derives the union's mapping and hands every moved spelling to the router, one publication at a time: the
+    /// lock covers the derivation, the acknowledgement and the insert, so two fills landing together cannot leave
+    /// an older acknowledgement behind a newer one, and a spelling only ever moves to a strictly newer snapshot,
+    /// so a stale listing (an account fetched after a restart whose org lags the others) moves nothing.
+    /// `published` takes a move only once the router answered, so a request is named by a dated id no earlier
+    /// than its rows are keyed on it.
+    async fn publish(&self, now: i64) {
+        let _serialized = self.publishing.lock().await;
+        let enabled: HashSet<String> = self
+            .store
+            .accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.enabled)
+            .map(|a| a.id)
+            .collect();
+        let union: Vec<CatalogRow> = {
+            let slots = self.slots.lock().expect(SLOTS_POISONED);
+            slots
+                .iter()
+                .filter(|(key, _)| enabled.contains(&key.account_id))
+                .filter_map(|(_, slot)| slot.cached.as_ref())
+                .flat_map(|catalog| catalog.models.iter().cloned())
+                .collect()
+        };
+        let moved: Vec<(String, String)> = {
+            let published = self.published.lock().expect(PUBLISHED_POISONED);
+            derive_all(&union)
+                .into_iter()
+                .filter(|(spelling, dated)| match published.get(spelling) {
+                    None => true,
+                    Some(current) => snapshot_date(dated) > snapshot_date(current),
+                })
+                .collect()
+        };
+        for (spelling, dated) in moved {
+            match self.router.resolve(&spelling, &dated, now).await {
+                Ok(()) => {
+                    self.published
+                        .lock()
+                        .expect(PUBLISHED_POISONED)
+                        .insert(spelling, dated);
+                }
+                // Left unpublished: requests keep the name the router's rows are under, and the next landing asks again.
+                Err(error) => {
+                    tracing::debug!(%spelling, %error, "a resolution was not handed to the router")
+                }
+            }
+        }
+    }
+
+    /// The count leaves zero: `Filling` opens unless the cache is already `Warm`.
+    fn raise_in_flight(&self) {
+        self.fills_in_flight.send_modify(|n| *n += 1);
+        self.warmth.send_if_modified(|w| match w {
+            Warmth::Cold => {
+                *w = Warmth::Filling;
+                true
+            }
+            _ => false,
+        });
+    }
+
+    /// The count returns to zero: `Cold` resumes unless a landed publication already made the cache `Warm`.
+    fn lower_in_flight(&self) {
+        let mut at_zero = false;
+        self.fills_in_flight.send_modify(|n| {
+            *n -= 1;
+            at_zero = *n == 0;
+        });
+        if at_zero {
+            self.warmth.send_if_modified(|w| match w {
+                Warmth::Warm => false,
+                other => {
+                    *other = Warmth::Cold;
+                    true
+                }
+            });
+        }
+    }
+
+    /// Credential resolution for the list fetch, shared with the admin route's own verification of a staged
+    /// secret before the store learns of it: `secret` is only ever set from that path, every other caller
+    /// reads the account's own.
     async fn credential_headers(
         &self,
         account: &AccountRow,
@@ -531,8 +584,7 @@ impl CatalogService {
         ])
     }
 
-    /// The GET round trip over the catalog's own pool and resolver, shared by the list fetch and a
-    /// resolution probe.
+    /// The GET round trip over the catalog's own pool and resolver, the list fetch's only use of either.
     async fn send(
         &self,
         account: &AccountRow,
@@ -568,49 +620,11 @@ impl CatalogService {
         .map_err(|_| DiscoveryError::Unreachable("timed out".into()))?
     }
 
-    /// One `GET /v1/models/{spelling}` through the first account that is enabled, `Ready`, and answers a
-    /// credential; a status this fetch does not carry a rule for, and no ready account at all, both fail.
-    async fn probe_spelling(&self, spelling: &str) -> ProbeAnswer {
-        let accounts = self.store.accounts().unwrap_or_default();
-        let target = format!("/v1/models/{}", percent_encode_segment(spelling));
-        for account in accounts
-            .into_iter()
-            .filter(|a| a.enabled && a.state == AccountState::Ready)
-        {
-            let Ok(headers) = self.credential_headers(&account, None).await else {
-                continue;
-            };
-            return match self.send(&account, target.clone(), headers).await {
-                Ok((200, body)) => match parse_id(&body) {
-                    Some(id) => ProbeAnswer::Dated(id),
-                    None => ProbeAnswer::Failed,
-                },
-                Ok((404, _)) => ProbeAnswer::Missing,
-                Ok(_) | Err(_) => ProbeAnswer::Failed,
-            };
-        }
-        ProbeAnswer::Failed
-    }
-
     fn fresh_slot(&self, key: &SlotKey, now: i64) -> Option<Catalog> {
         let slots = self.slots.lock().expect(SLOTS_POISONED);
         let catalog = slots.get(key)?.cached.as_ref()?;
         (catalog.fetched_at + self.window.as_millis() as i64 > now).then(|| catalog.clone())
     }
-}
-
-/// Encodes everything but RFC 3986's unreserved characters, so a spelling naming a slash or another
-/// path-carrying byte still names one path segment.
-fn percent_encode_segment(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
@@ -649,15 +663,6 @@ async fn exchange<C: AsyncRead + AsyncWrite + Unpin>(
             .map_err(|e| DiscoveryError::Malformed(e.to_string()))?,
     );
     Ok((head.status, out, reusable))
-}
-
-/// A single model object, the shape `GET /v1/models/{id}` answers: only `id` matters to a resolution probe.
-fn parse_id(body: &[u8]) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()?
-        .get("id")?
-        .as_str()
-        .map(str::to_string)
 }
 
 fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
@@ -699,196 +704,37 @@ fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
 mod tests {
     use super::*;
 
-    fn map() -> ResolutionMap {
-        ResolutionMap::new(4, 2, 100)
+    fn row(id: &str) -> CatalogRow {
+        CatalogRow {
+            id: id.to_string(),
+            display_name: String::new(),
+            created_at: String::new(),
+            max_input_tokens: None,
+            max_tokens: None,
+        }
     }
 
     #[test]
-    fn the_map_holds_at_most_its_capacity_and_probes_at_most_its_in_flight_count() {
-        let mut m = map();
-        assert_eq!(m.admit("s1", 0), Admission::Probe);
-        assert_eq!(m.admit("s2", 0), Admission::Probe);
-        assert_eq!(m.admit("s3", 0), Admission::Skip, "in-flight is at its cap");
-        assert_eq!(m.admit("s4", 0), Admission::Skip);
-        assert_eq!(m.admit("s5", 0), Admission::Skip);
-        // Recording the two in flight frees the in-flight slots, not the capacity: two more may now probe.
-        assert_eq!(m.record("s1", ProbeAnswer::Missing, 0), None);
-        assert_eq!(m.record("s2", ProbeAnswer::Missing, 1), None);
-        assert_eq!(m.admit("s3", 1), Admission::Probe);
-        assert_eq!(m.admit("s4", 2), Admission::Probe);
-        assert_eq!(m.record("s3", ProbeAnswer::Missing, 2), None);
-        assert_eq!(m.record("s4", ProbeAnswer::Missing, 3), None);
-        // The map now holds four negative entries with retry times 100, 101, 102, and 103; at 99 none
-        // has passed, so a fifth spelling stays skipped rather than start a probe.
+    fn the_newest_dated_entry_wins_and_a_dateless_id_is_its_own_snapshot() {
+        let listing = vec![
+            row("claude-sonnet-4-5-20250601"),
+            row("claude-sonnet-4-5-20250929"),
+            row("claude-opus-5"),
+            row("claude-sonnet-4-6"),
+        ];
         assert_eq!(
-            m.admit("s5", 99),
-            Admission::Skip,
-            "four negative entries still sit inside their own window"
+            derive(&listing, "claude-sonnet-4-5"),
+            Some("claude-sonnet-4-5-20250929".to_string())
         );
-        assert_eq!(m.entries.len() + m.resolving.len(), 4);
-        // At 100, s1's retry time alone has passed: exactly one negative entry expires and room opens.
+        assert_eq!(derive(&listing, "claude-opus-5"), None);
+        assert_eq!(derive(&listing, "claude-sonnet-4-6"), None);
+        assert_eq!(derive(&listing, "claude-nope"), None);
+        assert_eq!(derive(&listing, "claude-sonnet-4-5-20250929"), None);
+        let all = derive_all(&listing);
+        assert_eq!(all.len(), 1);
         assert_eq!(
-            m.admit("s5", 100),
-            Admission::Probe,
-            "s1's retry time passed"
-        );
-        assert_eq!(m.record("s5", ProbeAnswer::Missing, 100), None);
-        assert_eq!(m.entries.len(), 4, "the map holds four entries again");
-    }
-
-    #[test]
-    fn a_failed_probe_backs_off_by_doubling_windows_and_a_success_resets_it() {
-        let mut m = map();
-        assert_eq!(m.admit("s", 0), Admission::Probe);
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 0), None);
-        assert_eq!(
-            m.admit("s", 99),
-            Admission::Skip,
-            "one window has not passed"
-        );
-        assert_eq!(m.admit("s", 100), Admission::Probe, "one window has passed");
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 100), None);
-        assert_eq!(
-            m.admit("s", 299),
-            Admission::Skip,
-            "two windows have not passed"
-        );
-        assert_eq!(
-            m.admit("s", 300),
-            Admission::Probe,
-            "two windows have passed"
-        );
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 300), None);
-        assert_eq!(
-            m.admit("s", 699),
-            Admission::Skip,
-            "four windows have not passed"
-        );
-        assert_eq!(
-            m.admit("s", 700),
-            Admission::Probe,
-            "four windows have passed"
-        );
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 700), None);
-        assert_eq!(
-            m.admit("s", 1499),
-            Admission::Skip,
-            "eight windows have not passed"
-        );
-        assert_eq!(
-            m.admit("s", 1500),
-            Admission::Probe,
-            "eight windows have passed"
-        );
-        // A fifth failure stays at eight windows, not sixteen.
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 1500), None);
-        assert_eq!(m.admit("s", 2299), Admission::Skip, "still eight windows");
-        assert_eq!(m.admit("s", 2300), Admission::Probe);
-        // A success resets the backoff to one window.
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 2300),
-            Some("claude-s-1".to_string())
-        );
-        assert_eq!(
-            m.admit("s", 2399),
-            Admission::Skip,
-            "one window after a success"
-        );
-        assert_eq!(
-            m.admit("s", 2400),
-            Admission::Probe,
-            "one window has passed again"
-        );
-    }
-
-    #[test]
-    fn a_refresh_answering_404_or_failing_keeps_the_dated_id() {
-        let mut m = map();
-        assert_eq!(m.canonical_for("s"), None);
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 0),
-            Some("claude-s-1".to_string())
-        );
-        assert_eq!(m.record("s", ProbeAnswer::Missing, 50), None);
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 60), None);
-        assert_eq!(
-            m.canonical_for("s"),
-            None,
-            "a 404 or a failure leaves a pending id pending"
-        );
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 70),
-            Some("claude-s-1".to_string()),
-            "and the next landing asks the router again"
-        );
-        m.publish("s", "claude-s-1");
-        assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
-        assert_eq!(m.record("s", ProbeAnswer::Missing, 200), None);
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "a 404 never clears a dated id already published"
-        );
-        assert_eq!(m.record("s", ProbeAnswer::Failed, 300), None);
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "a failed refresh never clears it either"
-        );
-    }
-
-    #[test]
-    fn a_dated_id_is_answered_only_once_the_router_acknowledged_it() {
-        let mut m = map();
-        assert_eq!(m.admit("s", 0), Admission::Probe);
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 0),
-            Some("claude-s-1".to_string())
-        );
-        assert_eq!(
-            m.canonical_for("s"),
-            None,
-            "recorded alone, the id is pending"
-        );
-        m.publish("s", "claude-s-1");
-        assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 100),
-            Some("claude-s-1".to_string()),
-            "every landing asks the router, which moves nothing twice"
-        );
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "a second record of the published id keeps it published"
-        );
-        assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-2".into()), 200),
-            Some("claude-s-2".to_string())
-        );
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "a newer id waits for its own acknowledgement behind the published one"
-        );
-        m.publish("s", "claude-s-1");
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "a late acknowledgement of the older id publishes nothing new"
-        );
-        m.publish("s", "claude-s-2");
-        assert_eq!(m.canonical_for("s"), Some("claude-s-2".to_string()));
-    }
-
-    #[test]
-    fn a_seeded_resolution_is_published_at_once() {
-        let mut m = map();
-        m.seed("s".into(), "claude-s-1".into(), 0);
-        assert_eq!(
-            m.canonical_for("s"),
-            Some("claude-s-1".to_string()),
-            "the router loaded the same row at start"
+            all.get("claude-sonnet-4-5"),
+            Some(&"claude-sonnet-4-5-20250929".to_string())
         );
     }
 }

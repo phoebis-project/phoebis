@@ -489,7 +489,7 @@ pub fn spawn(
                             match command {
                                 Command::Report(report) => task.report(report),
                                 // A resolution is a report with an answer: it lands with the drain rather than
-                                // leaving its caller to probe the spelling again after a restart.
+                                // leaving the catalog cache to publish the spelling again after a restart.
                                 Command::Resolve { spelling, dated_id, at, reply } => {
                                     task.resolve(&spelling, &dated_id, at);
                                     let _ = reply.send(());

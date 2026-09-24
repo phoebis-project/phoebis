@@ -20,13 +20,6 @@ fn status_and_body(r: &Respond) -> (u16, Vec<u8>) {
     }
 }
 
-fn probes_for(up: &FakeUpstream, prefix: &str) -> usize {
-    up.requests()
-        .iter()
-        .filter(|r| r.line.starts_with(&format!("GET {prefix}")))
-        .count()
-}
-
 #[tokio::test]
 async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     let up = FakeUpstream::start(vec![Rule {
@@ -54,10 +47,6 @@ async fn a_404_naming_the_model_cools_the_pair_and_fails_over() {
     let o = outcome(&resp);
     assert_eq!((o.account_id.as_str(), o.attempt), ("b", 2));
     assert_eq!(credentials_seen(&up), [A, B]);
-    wait_for(Duration::from_secs(2), || {
-        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
-    })
-    .await;
     let cooldowns = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()
@@ -319,10 +308,6 @@ async fn a_non_portable_request_keeps_the_upstreams_404_and_records_the_cooldown
     let got_body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(got_body.as_ref(), expected_body.as_slice());
     assert_eq!(credentials_seen(&up), [A, A]);
-    wait_for(Duration::from_secs(2), || {
-        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
-    })
-    .await;
     let cooldowns = wait_for_async(Duration::from_secs(2), || async {
         let rows = h.router.cooldowns().await.unwrap();
         rows.iter()

@@ -33,6 +33,8 @@ pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
 /// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
 pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
+/// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
+pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
 pub struct TestAccount {
@@ -131,20 +133,29 @@ pub fn rules(entries: &[&str]) -> Vec<ModelRule> {
 pub struct Harness {
     pub app: axum::Router,
     pub catalog: Arc<CatalogService>,
-    /// The fake the catalog cache and the resolution map talk to, apart from `up` so a background probe never
-    /// lands in a test's `up.requests()`. It has its own connection pool and trusted CA: `PoolKey` is the
-    /// account and the host with no address, so a shared pool would hand either fake the other's connection.
+    /// The fake the listing fetches go to, apart from `up` so a background fill never lands in a test's
+    /// `up.requests()`. It has its own connection pool and trusted CA: `PoolKey` is the account and the host
+    /// with no address, so a shared pool would hand either fake the other's connection.
     pub catalog_up: FakeUpstream,
     pub clock: Arc<AtomicI64>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
+    /// Cancels `catalog`'s fills and retries on drop, so a retry sleeping its backoff never outlives the test.
+    _stop: CatalogGuard,
     pub store: Arc<Store>,
 }
 
+struct CatalogGuard(Arc<CatalogService>);
+
+impl Drop for CatalogGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 /// The default catalog fake: `/v1/models?limit=1000` answers two rows (`claude-sonnet-4-5-20250929` at
-/// 1,000,000 input tokens and `claude-opus-5` at 1,000,000), `/v1/models/claude-sonnet-4-5` the dated row,
-/// every other `/v1/models/{id}` a 404 naming no model.
+/// 1,000,000 input tokens and `claude-opus-5` at 1,000,000), the listing alone.
 pub fn catalog_rules() -> Vec<Rule> {
     let sonnet = serde_json::json!({
         "id": "claude-sonnet-4-5-20250929",
@@ -153,41 +164,27 @@ pub fn catalog_rules() -> Vec<Rule> {
         "max_input_tokens": 1_000_000,
         "max_tokens": 128_000,
     });
-    vec![
-        Rule {
-            path_prefix: "/v1/models?limit=1000".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: serde_json::json!({
-                    "data": [
-                        sonnet,
-                        {
-                            "id": "claude-opus-5",
-                            "display_name": "Claude Opus 5",
-                            "created_at": "2025-11-01",
-                            "max_input_tokens": 1_000_000,
-                            "max_tokens": 64_000,
-                        },
-                    ],
-                })
-                .to_string()
-                .into_bytes(),
-            },
+    vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::json!({
+                "data": [
+                    sonnet,
+                    {
+                        "id": "claude-opus-5",
+                        "display_name": "Claude Opus 5",
+                        "created_at": "2025-11-01",
+                        "max_input_tokens": 1_000_000,
+                        "max_tokens": 64_000,
+                    },
+                ],
+            })
+            .to_string()
+            .into_bytes(),
         },
-        Rule {
-            path_prefix: "/v1/models/claude-sonnet-4-5".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: sonnet.to_string().into_bytes(),
-            },
-        },
-        Rule {
-            path_prefix: "/v1/models/".into(),
-            respond: json_404_plain(),
-        },
-    ]
+    }]
 }
 
 pub async fn relay_with(kind: AccountKind, up: &FakeUpstream) -> axum::Router {
@@ -259,13 +256,16 @@ pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec
 }
 
 /// A harness whose pool is restricted to one model, for the tests that check a routing refusal against a
-/// specific model without a second account or model to route around.
+/// specific model without a second account or model to route around. The pattern is a glob on the spelling: the
+/// prefetch names the harness's default model by its dated snapshot before any request, so an exact entry for
+/// the undated spelling would never match.
 pub async fn harness_restricted_to(up: &FakeUpstream, model: &'static str) -> Harness {
+    let glob = format!("{model}*");
     harness(
         up,
         &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
         PoolSpec {
-            model_rules: rules(&[model, "NOT *"]),
+            model_rules: rules(&[&glob, "NOT *"]),
             ..PoolSpec::default()
         },
     )
@@ -476,6 +476,31 @@ pub async fn harness_with_bus_and_catalog(
     .await
 }
 
+/// `build` over a store the caller already opened and seeded, for the restart and roll-back tests that check a
+/// resolution carried across the store the harness is handed rather than the one it would have opened itself.
+pub async fn harness_with_store_and_catalog(
+    store: Arc<Store>,
+    up: &FakeUpstream,
+    catalog_up: FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    window: Duration,
+) -> Harness {
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        false,
+        None,
+        Some(catalog_up),
+        window,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn build(
     store: Arc<Store>,
@@ -671,6 +696,7 @@ async fn build(
         clock.clone(),
         limits.head_timeout,
         catalog_window,
+        STARTUP_BOUND,
     ));
     let relay = Relay::new(
         store.clone(),
@@ -682,6 +708,9 @@ async fn build(
         limits,
         catalog.clone(),
     );
+    // So a harness answers like the router does: a spelling the prefetch resolved is named by its dated id
+    // from the harness's first request, with no per-test fill to wait on.
+    catalog.prefetch().await;
     let relay = relay.with_cache_diagnostics(cache_diagnostics);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
@@ -697,11 +726,12 @@ async fn build(
     let relay = Arc::new(relay);
     Harness {
         app: router(relay.clone()),
-        catalog,
+        catalog: catalog.clone(),
         catalog_up,
         clock: clock_cell,
         relay,
         router: router_handle,
+        _stop: CatalogGuard(catalog),
         store,
     }
 }
@@ -931,6 +961,14 @@ pub fn outcome(resp: &axum::http::Response<Body>) -> RelayOutcome {
         .get::<RelayOutcome>()
         .expect("a relayed response carries its outcome")
         .clone()
+}
+
+/// Every listing request line the fake recorded, for the catalog cache's one fill path.
+pub fn listings_for(up: &FakeUpstream) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with("GET /v1/models?limit=1000"))
+        .count()
 }
 
 pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {

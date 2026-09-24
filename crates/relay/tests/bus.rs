@@ -114,7 +114,12 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
             observed.stream,
             observed.canonical_model.as_str()
         ),
-        (Some("desktop"), Some("main"), true, "claude-sonnet-4-5")
+        (
+            Some("desktop"),
+            Some("main"),
+            true,
+            "claude-sonnet-4-5-20250929"
+        )
     );
     assert!(observed.headers.iter().any(|(n, _)| n == "user-agent"));
     assert!(observed
@@ -555,7 +560,7 @@ async fn refused_and_exhausted_requests_publish_an_observed_event_and_their_comp
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
-            model_rules: rules(&["claude-sonnet-4-5", "NOT *"]),
+            model_rules: rules(&["claude-sonnet-4-5*", "NOT *"]),
             ..PoolSpec::default()
         },
         bus,

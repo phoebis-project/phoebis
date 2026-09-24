@@ -759,17 +759,21 @@ const DATED: &str = "claude-sonnet-4-5-20250929";
 async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under_the_dated_id() {
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        catalog: relay_common::catalog_rules(),
         ..RigSpec::default()
     })
     .await;
     assert_eq!(r.status("main").canonical_model, "claude-sonnet-4-5");
-    // The request's own background probe lands the dated id; the relay names requests by it only once the
-    // router has moved the spelling's pins and cooldowns.
-    wait_for(std::time::Duration::from_secs(5), || {
-        (r.h.catalog.canonical_for("claude-sonnet-4-5").as_deref() == Some(DATED)).then_some(())
-    })
-    .await;
+    // The refresh lands the dated id; the relay names requests by it only once the router has moved the
+    // spelling's pins and cooldowns.
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    assert_eq!(
+        r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(DATED)
+    );
     r.h.router.report(Report::Cooldown {
         account_id: "a".into(),
         row: CooldownRow {

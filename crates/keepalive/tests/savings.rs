@@ -147,17 +147,22 @@ async fn a_request_under_the_dated_id_keeps_the_credit_of_a_probe_on_a_recipe_re
     let dated = "claude-sonnet-4-5-20250929";
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        catalog: relay_common::catalog_rules(),
         ..RigSpec::default()
     })
     .await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe("main").await;
     assert_eq!(r.status("main").canonical_model, "claude-sonnet-4-5");
-    wait_for(Duration::from_secs(5), || {
-        (r.h.catalog.canonical_for("claude-sonnet-4-5").as_deref() == Some(dated)).then_some(())
-    })
-    .await;
+    // The recipe is retained before its model resolves: a listing that lands only now moves the spelling.
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    assert_eq!(
+        r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(dated)
+    );
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);

@@ -67,6 +67,9 @@ const POOL_MAX_IDLE: usize = 8;
 /// A models list is one small request; a host that has not answered by then is not going to.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long the startup prefetch awaits every enabled account's listing before the proxy listener binds.
+const STARTUP_FETCH_BOUND: Duration = Duration::from_secs(5);
+
 /// An unreachable resolver must not hold a request for longer than this per lookup of an upstream or catalog
 /// host.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -230,6 +233,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock.clone(),
         DISCOVERY_TIMEOUT,
         Duration::from_secs(config.routing.catalog_cache_seconds),
+        STARTUP_FETCH_BOUND,
     ));
     let relay = Arc::new(
         Relay::new(
@@ -385,6 +389,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         confirming: tokio::sync::Mutex::new(()),
     });
 
+    let prefetched = catalog.prefetch().await;
+    tracing::info!(
+        landed = prefetched.landed,
+        failed = prefetched.failed,
+        pending = prefetched.pending,
+        bound_seconds = STARTUP_FETCH_BOUND.as_secs(),
+        "catalog prefetch done"
+    );
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -590,6 +602,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     relay.flush_memory().await;
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
+    // A retry sleeping its backoff would otherwise hold the store past this function's return.
+    catalog.shutdown().await;
     drop(catalog);
     // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
     // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its

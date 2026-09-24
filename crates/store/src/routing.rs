@@ -47,7 +47,7 @@ pub struct OverageRow {
 }
 
 /// A folded spelling and the dated id the API listed for it; the routing state keys that spelling's rows on
-/// the dated id from the moment the row exists, and a restart loads it before any probe runs.
+/// the dated id from the moment the row exists, and the row is loaded before any request is served.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolutionRow {
     pub spelling: String,
@@ -171,7 +171,7 @@ impl Store {
         Ok(())
     }
 
-    /// The persisted map on its own, for the catalog cache to seed its copy from at start.
+    /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
     pub fn resolutions(&self) -> Result<Vec<ResolutionRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let rows = conn

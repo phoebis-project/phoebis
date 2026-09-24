@@ -186,6 +186,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         clock.clone(),
         Duration::from_secs(10),
         Duration::from_secs(60),
+        Duration::from_secs(5),
     ));
     let bus = Bus::new();
     // The shipped table prices `claude-sonnet-5`, not the fixture's `claude-sonnet-4-5`; the tests assert a cost.

@@ -263,7 +263,7 @@ async fn local_rejections_are_anthropic_shaped() {
     );
     assert!(
         up.requests().is_empty(),
-        "the catalog probes go to catalog_up"
+        "the catalog fetches go to catalog_up"
     );
     up.shutdown().await;
 }

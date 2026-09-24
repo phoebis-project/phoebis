@@ -17,13 +17,16 @@ rejection ([cooldowns](#cooldowns-and-failover)). An upstream whose fetch failed
 the next fetch, and the popup shows the error.
 
 The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated one
-(`claude-sonnet-4-5`). The router resolves a spelling it has not seen through `GET /v1/models/{spelling}` in the
-background, never on the request's own path, and from then on the dated id is the canonical name the rules, the ledger,
-the pricing, the pins, and the cooldowns use for that spelling; the body toward the upstream keeps the client's
-spelling. The pins and cooldowns held under the spelling move to the dated id together with the stored resolution, and a
-request is named by the dated id only once they have. Until a spelling's first resolution lands, the client's folded
-spelling is the canonical name, which is why a rule for such a model is written as a glob; a resolution is kept across
-restarts, and a later probe that fails or answers 404 never takes it back.
+(`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
+derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled upstream,
+else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are fetched at
+startup for every enabled upstream before the proxy listener accepts requests, and a request's model is resolved by a
+lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
+pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward the
+upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart carries
+the dated id from the stored mapping even before the listings arrive, and only a fresh installation whose upstreams are
+unreachable at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the
+dated entry never takes a resolution back.
 
 ## Pools
 
@@ -162,13 +165,12 @@ and nothing else, so an allowlist is a list that names what it allows and ends i
 - `[NOT *]` alone blocks everything.
 
 A rule's subject is the canonical id: the request's model with the `[1m]` suffix removed, ASCII case folded, and
-the dated id the catalog lists substituted once the router has resolved the spelling. One entry therefore
-covers a model and its `[1m]` twin, and an entry for a model the API lists under a dated id is written as a
-glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of
-either. An entry that spells an undated id exactly (`claude-sonnet-4-5`) matches only until the router
-resolves that spelling to its dated id, after which the canonical name no longer matches it, so an exact
-entry for an undated model is written as a glob (`claude-sonnet-4-5*`) too. A model the list denies answers
-`404 model_not_allowed` without reaching an upstream.
+the dated id the catalog lists substituted. One entry therefore covers a model and its `[1m]` twin, and an entry
+for a model the API lists under a dated id is written as a glob: `NOT claude-sonnet-4-5*` covers
+`claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of either. An entry that spells an undated id
+exactly (`claude-sonnet-4-5`) never matches, because the router names that model by its dated snapshot, so an
+exact entry for an undated model is written as a glob (`claude-sonnet-4-5*`) too. A model the list denies
+answers `404 model_not_allowed` without reaching an upstream.
 
 The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?`
 one character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches

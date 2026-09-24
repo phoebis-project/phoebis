@@ -907,12 +907,9 @@ impl Relay {
                     .await;
             }
         };
-        // A hit substitutes the resolved dated id as the canonical name before anything downstream reads it,
-        // so the observed event, the routing decision, and the ledger all agree on it from this point on; a
-        // miss leaves the folded spelling as canonical until a background probe lands one.
-        if let Some(dated) = self.catalog.canonical_for(&identity.folded_model) {
-            identity.canonical_model = dated;
-        }
+        // The resolved name is substituted before anything downstream reads it, so the observed event, the
+        // routing decision, and the ledger agree.
+        identity.canonical_model = self.catalog.canonical_for(&identity.folded_model).await;
         trace
             .observed(
                 Some(&key),
@@ -946,9 +943,6 @@ impl Relay {
                     .await
             }
         };
-        // The request is admitted from here on, so a refused request above never reaches this: one
-        // background resolution for the spelling, off the request's own path.
-        self.catalog.request_resolution(&identity.folded_model);
         // Narrows what a probe starts the loop with; a registry write can move the revision before any
         // attempt, and then the router recomputes candidates from its own snapshot without this filter, so
         // `probe_eligible` runs again on every selection below to hold the same rule against the chosen row.

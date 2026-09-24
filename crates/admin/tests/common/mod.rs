@@ -782,6 +782,7 @@ async fn app_with_webhook_policy(
         clock.clone(),
         DISCOVERY_TIMEOUT,
         Duration::from_secs(60),
+        Duration::from_secs(5),
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
