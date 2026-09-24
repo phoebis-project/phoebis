@@ -4,8 +4,10 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { api } from '@/api';
 import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
+import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
+import { CoolingDown } from '@/components/CoolingDown';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
@@ -162,6 +164,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const [busy, setBusy] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(account.label);
@@ -249,109 +252,106 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
             </p>
           )}
         </div>
-        {canMutate && (
-          <div className="detail__actions">
-            {isOauth ? (
-              <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
-                {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
-              </Button>
-            ) : (
+        <div className="detail__actions">
+          {canMutate && (
+            <>
+              {isOauth ? (
+                <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
+                  {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    act(
+                      'Verify upstream',
+                      'Sends a models request to the upstream with the stored key and reports the status.',
+                      'Verify',
+                      async () => {
+                        const r = await api.verifyAccount(account.id);
+                        if (!r.ok) throw new Error(`Upstream answered ${r.status}`);
+                      },
+                      'Verify: upstream answered 200',
+                    )
+                  }
+                >
+                  Verify
+                </Button>
+              )}
               <Button
-                variant="primary"
                 disabled={busy}
                 onClick={() =>
                   act(
-                    'Verify upstream',
-                    'Sends a models request to the upstream with the stored key and reports the status.',
-                    'Verify',
+                    paused ? 'Resume upstream' : 'Pause upstream',
+                    'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                    paused ? 'Resume' : 'Pause',
+                    paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
+                    paused ? 'Resumed' : 'Paused',
+                  )
+                }
+              >
+                {paused ? 'Resume' : 'Pause'}
+              </Button>
+            </>
+          )}
+          <Button onClick={() => setCatalogOpen(true)}>Catalog</Button>
+          {canMutate && (
+            <>
+              {account.status === 'funding_required' && (
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    act(
+                      'Clear funding flag',
+                      'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.',
+                      'Clear',
+                      () => api.clearFunding(account.id),
+                      'Funding flag cleared',
+                    )
+                  }
+                >
+                  Clear funding flag
+                </Button>
+              )}
+              <Button
+                variant="danger"
+                disabled={busy}
+                onClick={() =>
+                  act(
+                    'Disconnect upstream',
+                    `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
+                    'Disconnect',
+                    () => api.disconnectAccount(account.id),
+                    'Disconnected',
+                    true,
+                  )
+                }
+              >
+                Disconnect
+              </Button>
+              <Button
+                variant="danger"
+                disabled={busy}
+                onClick={() =>
+                  act(
+                    'Delete upstream',
+                    `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
+                    'Delete',
                     async () => {
-                      const r = await api.verifyAccount(account.id);
-                      if (!r.ok) throw new Error(`Upstream answered ${r.status}`);
+                      await api.deleteAccount(account.id);
+                      navigate('/upstreams');
                     },
-                    'Verify: upstream answered 200',
+                    'Deleted',
+                    true,
                   )
                 }
               >
-                Verify
+                Delete upstream
               </Button>
-            )}
-            <Button
-              disabled={busy}
-              onClick={() =>
-                act(
-                  paused ? 'Resume upstream' : 'Pause upstream',
-                  'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
-                  paused ? 'Resume' : 'Pause',
-                  paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
-                  paused ? 'Resumed' : 'Paused',
-                )
-              }
-            >
-              {paused ? 'Resume' : 'Pause'}
-            </Button>
-            {cooldown && (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  act('Clear cooldown', 'The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown.', 'Clear', () => api.clearCooldown(account.id, cooldown.scope), 'Cooldown cleared')
-                }
-              >
-                Clear cooldown
-              </Button>
-            )}
-            {account.status === 'funding_required' && (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  act(
-                    'Clear funding flag',
-                    'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.',
-                    'Clear',
-                    () => api.clearFunding(account.id),
-                    'Funding flag cleared',
-                  )
-                }
-              >
-                Clear funding flag
-              </Button>
-            )}
-            <Button
-              variant="danger"
-              disabled={busy}
-              onClick={() =>
-                act(
-                  'Disconnect upstream',
-                  `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
-                  'Disconnect',
-                  () => api.disconnectAccount(account.id),
-                  'Disconnected',
-                  true,
-                )
-              }
-            >
-              Disconnect
-            </Button>
-            <Button
-              variant="danger"
-              disabled={busy}
-              onClick={() =>
-                act(
-                  'Delete upstream',
-                  `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
-                  'Delete',
-                  async () => {
-                    await api.deleteAccount(account.id);
-                    navigate('/upstreams');
-                  },
-                  'Deleted',
-                  true,
-                )
-              }
-            >
-              Delete upstream
-            </Button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </header>
 
       {account.status === 'reauth_required' && (
@@ -359,14 +359,6 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
           <IconWarning size={16} />
           <div>
             <b>Routing is off for this upstream.</b> The refresh token was rejected ({account.credential.lastError}). Re-pair to restore it.
-          </div>
-        </div>
-      )}
-      {account.status === 'cooldown' && cooldown && (
-        <div className="callout callout--warning">
-          <IconWarning size={16} />
-          <div>
-            Cooling down until <b title={fmtAbsolute(cooldown.until)}>{fmtRelative(cooldown.until, now).replace('in ', '')} from now</b>: {cooldown.reason}. Sessions pinned here have migrated to other members.
           </div>
         </div>
       )}
@@ -441,6 +433,25 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
       )}
 
       <div className="detail__grid">
+        {/* One block per upstream, so each opens on its own rows rather than keeping the last one's toggle. */}
+        <CoolingDown
+          key={account.id}
+          title="Cooling down"
+          now={now}
+          rows={account.cooldowns.map((c) => ({ accountId: account.id, reason: c.reason, scope: c.scope, until: c.until }))}
+          onClear={
+            canMutate
+              ? (row) =>
+                  act(
+                    'Clear cooldown',
+                    'The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown.',
+                    'Clear',
+                    () => api.clearCooldown(account.id, row.scope),
+                    'Cooldown cleared',
+                  )
+              : undefined
+          }
+        />
         <div className="stack">
           <Card title="Pools">
             {account.pools.length === 0 ? (
@@ -494,6 +505,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
         </div>
       </div>
 
+      <CatalogDialog open={catalogOpen} accountId={account.id} label={account.label} now={now} onClose={() => setCatalogOpen(false)} />
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
     </div>
   );

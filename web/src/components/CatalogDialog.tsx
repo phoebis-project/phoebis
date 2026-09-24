@@ -1,0 +1,125 @@
+import { useEffect, useRef, useState } from 'react';
+import { api } from '@/api';
+import type { AccountCatalog } from '@/api/types';
+import { IconRefresh, IconWarning } from '@/components/ui/icons';
+import { Badge, Button, Dialog, Skeleton } from '@/components/ui/primitives';
+import { fmtAbsolute, fmtDate, fmtInt, fmtRelative } from '@/lib/format';
+
+/** The window the models listing gives a `[1m]` twin above, so the badge marks the same models the twins do. */
+const LONG_CONTEXT_ABOVE = 200_000;
+
+const tokens = (n: number | null) => (n === null ? '-' : fmtInt(n));
+// `created_at` reaches the console as the upstream sent it, which may be empty or not a date at all.
+const released = (createdAt: string) => (Number.isNaN(Date.parse(createdAt)) ? createdAt || '-' : fmtDate(createdAt));
+
+function Failure({ message }: { message: string }) {
+  return (
+    <div className="callout callout--critical" role="alert">
+      <IconWarning size={16} />
+      <div>{message}</div>
+    </div>
+  );
+}
+
+/** An upstream's live model list as the router last fetched it, read when the dialog opens and again on Refresh. */
+export function CatalogDialog({ accountId, label, now, onClose, open }: { accountId: string; label: string; now: number; onClose: () => void; open: boolean }): JSX.Element {
+  const [catalog, setCatalog] = useState<AccountCatalog | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // Only the newest read lands: a Refresh overtakes the read the dialog opened with, and a close drops both.
+  const latest = useRef(0);
+
+  const read = (refresh: boolean) => {
+    const seq = ++latest.current;
+    setLoading(true);
+    setFailure(null);
+    (refresh ? api.getAccountCatalog(accountId, true) : api.getAccountCatalog(accountId)).then(
+      (answer) => {
+        if (seq !== latest.current) return;
+        setCatalog(answer);
+        setLoading(false);
+      },
+      (e: unknown) => {
+        if (seq !== latest.current) return;
+        setFailure(e instanceof Error ? e.message : String(e));
+        setLoading(false);
+      },
+    );
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setCatalog(null);
+    read(false);
+    return () => {
+      latest.current += 1;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, accountId]);
+
+  const models = catalog ? [...catalog.models].sort((a, b) => a.id.localeCompare(b.id)) : [];
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={`Catalog of ${label}`}
+      width={760}
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      <div className="row">
+        <span className="muted" title={catalog ? fmtAbsolute(catalog.fetchedAt) : undefined}>
+          {catalog ? `As of ${fmtRelative(catalog.fetchedAt, now)}` : 'Reading the catalog…'}
+        </span>
+        <Button size="sm" icon={<IconRefresh size={13} />} disabled={loading} onClick={() => read(true)}>
+          Refresh
+        </Button>
+      </div>
+      {failure ? (
+        <Failure message={failure} />
+      ) : catalog === null ? (
+        <Skeleton height={120} />
+      ) : catalog.error ? (
+        <Failure message={catalog.error} />
+      ) : models.length === 0 ? (
+        <p className="muted">The upstream lists no models.</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Name</th>
+                <th>Released</th>
+                <th className="right">Input tokens</th>
+                <th className="right">Output tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((m) => (
+                <tr key={m.id}>
+                  <td>
+                    <span className="mono">{m.id}</span>
+                    {(m.maxInputTokens ?? 0) > LONG_CONTEXT_ABOVE && (
+                      <>
+                        {' '}
+                        <Badge tone="neutral">long context</Badge>
+                      </>
+                    )}
+                  </td>
+                  <td>{m.displayName || '-'}</td>
+                  <td className="num">{released(m.createdAt)}</td>
+                  <td className="right num">{tokens(m.maxInputTokens)}</td>
+                  <td className="right num">{tokens(m.maxTokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Dialog>
+  );
+}

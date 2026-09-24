@@ -367,7 +367,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete upstream'].every((l) => headButtons.includes(l)), missing: headButtons });
-  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Clear cooldown', 'Clear funding flag', 'Disconnect', 'Delete upstream'].includes(t ?? ''));
+  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Catalog', 'Clear funding flag', 'Disconnect', 'Delete upstream'].includes(t ?? ''));
   results.push({ name: '/upstreams no action buttons below header', ok: below.length === 0, missing: below });
   const dangers = [...(head?.querySelectorAll('.btn--danger') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/upstreams Disconnect and Delete upstream are danger, and Delete upstream is last', ok: dangers.join('|') === 'Disconnect|Delete upstream' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete upstream', missing: dangers });
@@ -502,13 +502,82 @@ expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is
   results.push({ name: '/upstreams/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
 await m.navigate('/upstreams/mail');
-expect('/upstreams/mail', m.text(), ['Cooling down', 'Clear cooldown', 'rate_limited', 'n/a']);
+expect('/upstreams/mail', m.text(), [
+  'Cooling down',
+  '2 scopes cooling',
+  'Whole upstream',
+  'claude-opus-5',
+  'Clear',
+  "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
+  'rate_limited',
+  'n/a',
+]);
 {
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
+{
+  // Each row clears its own scope by name, so the upstream's other scope stays through the clear.
+  const row = [...m.container.querySelectorAll('.detail tbody tr')].find((r) => r.textContent?.includes('claude-opus-5'));
+  [...(row?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+  await m.settle(250);
+  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const asked = confirm?.textContent ?? '';
+  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+  await m.settle(600);
+  const t = m.text();
+  results.push({
+    name: '/upstreams/mail a row clears its one scope through the confirm',
+    ok: asked.includes('Clear cooldown') && asked.includes('The upstream becomes eligible immediately.') && t.includes('Cooldown cleared') && t.includes('1 scope cooling') && t.includes('Whole upstream') && !t.includes('claude-opus-5'),
+    missing: [asked.slice(0, 120) || 'no confirm', t.includes('1 scope cooling') ? '1 scope cooling' : 'no 1 scope cooling', t.includes('claude-opus-5') ? 'the model row stayed' : 'the model row left'],
+  });
+}
 await m.navigate('/upstreams/personal');
 expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
+{
+  const openCatalog = async () => {
+    [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Catalog')?.click();
+    await m.settle(400);
+    return [...m.container.querySelectorAll('dialog[open]')].pop() ?? null;
+  };
+  const closeCatalog = async (dlg) => {
+    dlg?.querySelector('button[aria-label="Close"]')?.click();
+    await m.settle(200);
+  };
+  const failed = await openCatalog();
+  results.push({
+    name: '/upstreams/personal the catalog popup shows the fetch error in a critical callout',
+    ok: failed?.querySelector('.callout--critical')?.textContent?.includes('the models request answered 503') === true && failed.querySelector('table') === null,
+    missing: [failed ? (failed.textContent ?? '').slice(0, 160) : 'no dialog'],
+  });
+  await closeCatalog(failed);
+  await m.navigate('/upstreams/business');
+  const reads = [];
+  const read = api.getAccountCatalog;
+  api.getAccountCatalog = (...args) => {
+    reads.push(args);
+    return read.apply(api, args);
+  };
+  const listed = await openCatalog();
+  const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+  const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('td')?.firstChild?.textContent ?? '');
+  expect('/upstreams/business the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
+  results.push({
+    name: '/upstreams/business the catalog popup reads five columns, sorted by id',
+    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
+    missing: [...heads, ...ids],
+  });
+  [...(listed?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Refresh')?.click();
+  await m.settle(400);
+  delete api.getAccountCatalog;
+  results.push({
+    name: '/upstreams/business the catalog popup reads on open and again with refresh',
+    ok: JSON.stringify(reads) === JSON.stringify([['business'], ['business', true]]),
+    missing: reads.map((r) => JSON.stringify(r)),
+  });
+  await closeCatalog(listed);
+  await m.navigate('/upstreams/personal');
+}
 {
   const quarantined = [...m.container.querySelectorAll('.detail__badges .badge')].find((b) => b.textContent?.trim() === 'quarantined');
   results.push({
@@ -3024,7 +3093,7 @@ for (const [path, absent, present] of [
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
   ['/sessions', ['Release'], ['Cache warming']],
   ['/settings', ['Add model', 'Import'], ['Keepalive', 'Pricing']],
-  ['/upstreams/business', ['Add upstream', 'Clear cooldown', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Identity']],
+  ['/upstreams/business', ['Add upstream', 'Clear', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity']],
 ]) {
   await m.navigate(path);
   const t = m.text();

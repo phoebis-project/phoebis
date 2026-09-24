@@ -297,6 +297,10 @@ request was fully written, with one exception: when an upstream answers 400 nami
 itself added, the router strips it and retries once on the same account, and that retry costs no attempt, since
 it corrects the router's own edit rather than trying another upstream.
 
+The Upstreams view shows what an upstream is cooling under in a cooling-down block: one line per scope, the whole
+upstream or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
+by model.
+
 ### When nothing can serve
 
 With every account in the pool rate limited, `phoebis` answers `429` with `retry-after`,

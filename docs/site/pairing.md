@@ -38,10 +38,10 @@ The console starts every pairing as a `claude_ai` login, authorizing against `cl
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
 after it starts, and the dialog shows the remaining time.
 
-![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, served models, and
-credential on the right](assets/upstreams-light.png#only-light)
-![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, served models, and
-credential on the right](assets/upstreams-dark.png#only-dark)
+![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, cooling-down block,
+and credential on the right](assets/upstreams-light.png#only-light)
+![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, cooling-down block,
+and credential on the right](assets/upstreams-dark.png#only-dark)
 
 ## With `curl`
 
@@ -125,7 +125,8 @@ The Upstreams view offers these actions, each calling its own route:
 
 | Action | What it does |
 | --- | --- |
-| Clear cooldown | Clears the account's cooldown immediately. |
+| Catalog | Opens the upstream's live model list, as of the last fetch, with a refresh. |
+| Clear cooldown | Clears one cooling scope, the whole upstream or one model, from the cooling-down block. |
 | Clear funding | Clears a `funding_required` account back to `ready`. |
 | Delete upstream | Removes the account from every pool and deletes it; request history stays in the ledger. |
 | Disconnect | Removes the credential; request history stays in the ledger. |
@@ -136,4 +137,4 @@ The Upstreams view offers these actions, each calling its own route:
 The console warns before Clear cooldown runs: "The upstream becomes eligible immediately. If the upstream is
 still rate limited, the next request re-enters cooldown."
 
-A viewer sees every one of these pages and none of the buttons, and may refresh usage.
+A viewer sees every one of these pages and none of the buttons but Catalog, and may refresh usage and the catalog.

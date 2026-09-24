@@ -80,6 +80,14 @@ export const ACCOUNTS: Account[] = [
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
+      // A second scope, one model, so the upstream's cooling-down block has an account row and a model row.
+      {
+        reason: 'model_rejected',
+        scope: 'model:claude-opus-5',
+        setAt: ago(22 * MINUTE),
+        until: ahead(38 * MINUTE),
+        windowId: null,
+      },
     ],
   },
   {
