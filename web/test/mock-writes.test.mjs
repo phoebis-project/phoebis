@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { allowedModels: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 

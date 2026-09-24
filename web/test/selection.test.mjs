@@ -36,7 +36,6 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     bodyCaptureHours: 0,
     cacheTtl: null,
     cost24h: 0,
-    defaultAllowedModels: null,
     id: 'p',
     keepalive: {
       coldProbeLimit: 2,
