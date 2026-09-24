@@ -83,8 +83,8 @@ const qs = (params: Record<string, string | number | boolean | string[] | undefi
   return s ? `?${s}` : '';
 };
 const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to)}`;
-// `qs` joins a list with commas, which a pattern may hold; both pattern lists travel joined by newline instead.
-const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
+// `qs` joins a list with commas, which a pattern may hold; every pattern list travels joined by newline instead.
+const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: q.clients?.join('\n'), group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
 
 export class HttpApi implements Api {
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);
@@ -164,7 +164,7 @@ export class HttpApi implements Api {
   };
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, client: q.client, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string): Promise<SessionInfo> => {

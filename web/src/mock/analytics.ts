@@ -17,6 +17,8 @@ export interface HourlyRollup {
   cacheMisses: number;
   /** Attempts that carried diagnostics, counted by what they reported. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /** The class the router derived for the lane's agent; the rollups file a row with none under `-`. */
+  client: string;
   cost: CostSplit;
   costUsd: number;
   /** The effort the hour's requests asked for; the rollups file an hour that asked for none under `none`. */
@@ -62,6 +64,7 @@ const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
   all: () => 'all',
+  client: (r) => r.client,
   effort: (r) => r.effort,
   key: (r) => {
     // What the router never attributed is one group whatever the generation column says.
@@ -100,6 +103,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
   if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? ''))) return false;
+  if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client))) return false;
   return true;
 }
 

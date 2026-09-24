@@ -28,7 +28,7 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'Client' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'User agent' };
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the upstream.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
@@ -115,6 +115,7 @@ export function AnalyticsPage() {
   const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
   const [groupBy, setGroupBy] = useState<GroupBy>('key');
   const [clientPattern, setClientPattern] = useState('');
+  const [classPattern, setClassPattern] = useState('');
   const [clientGroups, setClientGroups] = useState('');
   const [groupsCut, setGroupsCut] = useState(false);
   const [includeProbes, setIncludeProbes] = useState(false);
@@ -164,12 +165,12 @@ export function AnalyticsPage() {
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
-    () => ({ accountIds: filters.accountId, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: clientPattern.trim() ? [clientPattern.trim()] : undefined }),
-    [agentGroups, clientPattern, filters, fromIso, groupBy, includeProbes, toIso],
+    () => ({ accountIds: filters.accountId, clients: classPattern.trim() ? [classPattern.trim()] : undefined, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: clientPattern.trim() ? [clientPattern.trim()] : undefined }),
+    [agentGroups, classPattern, clientPattern, filters, fromIso, groupBy, includeProbes, toIso],
   );
   // The route already narrowed the rows a session view folds, but a cursor page that crossed a filter change
-  // may be wider than the pattern, so the fold applies both controls again over what it holds.
-  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: clientPattern.trim() ? [clientPattern.trim()] : undefined }), [agentGroups, clientPattern]);
+  // may be wider than the pattern, so the fold applies every pattern control again over what it holds.
+  const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: clientPattern.trim() ? [clientPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, clientPattern]);
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
   const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
@@ -182,13 +183,13 @@ export function AnalyticsPage() {
         : loadSessionRequests(
             (cursor) =>
               api
-                .listRequests({ accountIds: filters.accountId, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: clientPattern.trim() || undefined })
+                .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: clientPattern.trim() || undefined })
                 // The search matches an id across several fields, so the page keeps only the exact session; the
                 // route reads one key list, so a lifetime beside a key filter is applied here as well.
                 .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId && (sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey)) })),
             SESSION_PAGE_LIMIT,
           ),
-    [clientPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
+    [classPattern, clientPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
@@ -232,7 +233,7 @@ export function AnalyticsPage() {
   // A session fold has no cost split and no warming facts; those figures read unavailable rather than zero.
   const split = knownSplit(totals.cost);
   const { keptWarm, savings } = totals;
-  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || clientPattern.trim() !== '' || sessionId !== null || includeProbes;
+  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || clientPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
@@ -288,8 +289,9 @@ export function AnalyticsPage() {
         {DIMS.map((dim) => (
           <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => setFilters({ ...filters, [dim]: v })} mono />
         ))}
-        {/* `.mono` shrinks the text to 0.92em, which would leave this control shorter than the rest of the bar. */}
-        <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+        {/* `.mono` shrinks the text to 0.92em, which would leave these controls shorter than the rest of the bar. */}
+        <Input value={classPattern} onChange={(e) => setClassPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+        <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="User agent pattern" aria-label="User agent pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
         {groupBy === 'user_agent' && (
           <>
             <textarea
@@ -300,9 +302,9 @@ export function AnalyticsPage() {
                 setClientGroups(next.text);
                 setGroupsCut(next.cut);
               }}
-              placeholder={'Client groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
-              aria-label="Client groups"
-              title="Each pattern names a group; every other client groups under other"
+              placeholder={'User agent groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
+              aria-label="User agent groups"
+              title="Each pattern names a group; every other user agent groups under other"
               className="mono filters__groups"
               rows={2}
             />

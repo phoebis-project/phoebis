@@ -334,13 +334,20 @@ export interface RequestShape {
 export interface RequestLog {
   accountId: string | null;
   agentId: string | null;
+  /** `x-claude-code-agent-type` as the client sent it; `null` when it sent none. */
+  agentType: string | null;
   at: string;
   attempts: Attempt[];
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
+  /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`; `null` on a row from before the
+   * router recorded it. */
+  client: string | null;
   /** The kind a client-drift refusal answered with (`hash` or `version_suffix`); `null` for every other request. */
   clientDrift: string | null;
+  compaction: string | null;
+  contextCompacted: string | null;
   costUsd: number;
   durationMs: number | null;
   errorCode: string | null;
@@ -353,6 +360,8 @@ export interface RequestLog {
   /** How the request ended, once every attempt is in. */
   outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
   poolId: string | null;
+  /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
+  prevToolMs: number | null;
   requestTruncated: boolean;
   responseTruncated: boolean;
   sessionId: string | null;
@@ -362,6 +371,8 @@ export interface RequestLog {
   ttfbMs: number | null;
   /** First content token; later than `ttfbMs` on streams that open with metadata. */
   ttftMs: number | null;
+  /** `cc_turn_origin` off the attribution line; first-party only. */
+  turnOrigin: string | null;
   usage: Usage;
   /** The client that sent the request, as it named itself; `null` when it named nothing. */
   userAgent: string | null;
@@ -407,6 +418,9 @@ export interface RequestDetail {
 
 export interface RequestQuery {
   accountIds?: string[];
+  agentTypes?: string[];
+  /** A pattern over the client class, the grammar of `userAgent`. */
+  client?: string;
   cursor?: string;
   from?: string;
   includeProbes?: boolean;
@@ -418,6 +432,7 @@ export interface RequestQuery {
   search?: string;
   statuses?: number[];
   to?: string;
+  turnOrigins?: string[];
   /** A pattern: `*` any run, `?` one character, a backslash quotes either. An empty string is no filter at all. */
   userAgent?: string;
 }
@@ -427,10 +442,12 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
-export type AnalyticsGroupBy = 'account' | 'all' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
+export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
 
 export interface AnalyticsQuery {
   accountIds?: string[];
+  /** Patterns, one per line; a row matches when any matches its client class in full. */
+  clients?: string[];
   from: string;
   groupBy: AnalyticsGroupBy;
   includeProbes?: boolean;
@@ -441,7 +458,7 @@ export interface AnalyticsQuery {
   to: string;
   /** Patterns, one per line, each naming a group under `user_agent`. */
   userAgentGroups?: string[];
-  /** Patterns, one per line; a row matches when any matches its client in full. */
+  /** Patterns, one per line; a row matches when any matches its user agent in full. */
   userAgents?: string[];
 }
 

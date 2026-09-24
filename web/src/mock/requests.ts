@@ -1,5 +1,6 @@
 import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, PinMigrationReason, RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { AGENT_TYPES } from '@/lib/client';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
 import type { HourlyRollup } from './analytics';
@@ -22,6 +23,13 @@ export const USER_AGENTS: Record<string, string> = {
   ci: 'phoebis-batch/0.9 (external, ci)',
   desktop: 'claude-cli/2.1.269 (external, cli)',
   laptop: 'claude-cli/2.0.44 (external, cli)',
+};
+
+/** The class the router derives from each of those agents. */
+export const CLIENTS: Record<string, string> = {
+  ci: 'other',
+  desktop: 'claude-code/cli',
+  laptop: 'claude-code/cli',
 };
 
 export interface Lane {
@@ -225,6 +233,8 @@ function buildRequests(): RequestLog[] {
   // The drawer's refusal line needs one answer that carries a refusal, so the first eligible row takes it
   // rather than leaving it to the draw below.
   let refusalOwed = true;
+  // A separate stream so the hint draws do not shift the rest of the row's draws.
+  const hints = createRng(6_061);
   for (let i = 0; i < 232; i += 1) {
     const lane = rng.weighted([{ value: LANES[0], weight: 11 }, { value: LANES[1], weight: 5 }, { value: LANES[2], weight: 1.6 }]);
     // Skew toward recent hours so the dashboard's "recent" table is dense.
@@ -252,9 +262,12 @@ function buildRequests(): RequestLog[] {
     // Streams open with a message_start frame, so the first content token lands a
     // little after the first byte; JSON responses arrive whole.
     const ttftMs = ttfbMs === null || kind !== 'inference' ? ttfbMs : ttfbMs + (transport === 'sse' ? rng.int(40, 600) : 0);
+    const id = `req_${rng.uuid().slice(0, 12)}`;
+    const sessionId = rng.pick(SESSION_IDS);
+    const agentId = rng.pick(AGENT_IDS);
     rows.push({
       ...REQUEST_SAMPLE,
-      id: `req_${rng.uuid().slice(0, 12)}`,
+      id,
       at: iso(atMs),
       keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
@@ -273,9 +286,15 @@ function buildRequests(): RequestLog[] {
       usage,
       costUsd: Math.round(costOf(model, usage) * 10_000) / 10_000,
       errorCode,
-      sessionId: rng.pick(SESSION_IDS),
-      agentId: rng.pick(AGENT_IDS),
+      sessionId,
+      agentId,
       userAgent: USER_AGENTS[lane.keyId] ?? null,
+      client: CLIENTS[lane.keyId] ?? null,
+      agentType: agentId === 'main' ? null : hints.pick(AGENT_TYPES),
+      compaction: hints.chance(0.04) ? 'auto' : null,
+      contextCompacted: hints.chance(0.04) ? 'auto' : null,
+      prevToolMs: hints.chance(0.5) ? hints.int(200, 90_000) : null,
+      turnOrigin: lane.keyId === 'ci' ? null : hints.chance(0.9) ? 'human' : hints.pick(['scheduled', 'auto_continuation']),
       capturedBodies: lane.keyId === 'laptop',
       shape: {
         contextEdits: ['clear_thinking_20251015'],
@@ -429,6 +448,7 @@ function rollups(): HourlyRollup[] {
     const probeCostUsd = isProbe ? list.reduce((s, r) => s + r.costUsd, 0) : 0;
     out.push({
       hour,
+      client: CLIENTS[keyId] ?? '-',
       keyId,
       keyGeneration: Date.parse(keyById.get(keyId)!.createdAt),
       kind,
@@ -562,6 +582,7 @@ function historicalRollups(): HourlyRollup[] {
       if (takesMaxEffort) maxEffortOwed = false;
       const inference: HourlyRollup = {
         hour: iso(t),
+        client: CLIENTS[lane.keyId] ?? '-',
         effort: lane.keyId === 'desktop' ? 'high' : takesMaxEffort ? 'max' : 'none',
         keyId: lane.keyId,
         keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
@@ -612,6 +633,7 @@ function historicalRollups(): HourlyRollup[] {
         const probeCost = costOf(model, probeUsage);
         out.push({
           hour: iso(t),
+          client: CLIENTS[lane.keyId] ?? '-',
           effort: 'none',
           keyId: lane.keyId,
           keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),

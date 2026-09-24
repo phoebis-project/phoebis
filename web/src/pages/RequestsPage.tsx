@@ -8,6 +8,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { isDivergence, missLabel } from '@/lib/cache';
+import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { StatusBadge } from './DashboardPage';
@@ -87,7 +88,10 @@ export function RequestsPage() {
   const catalog = useAsync(() => api.listCatalog(), []);
 
   const [search, setSearch] = useState('');
-  const [client, setClient] = useState('');
+  const [userAgent, setUserAgent] = useState('');
+  const [clientPattern, setClientPattern] = useState('');
+  const [agentTypes, setAgentTypes] = useState<string[]>([]);
+  const [turnOrigins, setTurnOrigins] = useState<string[]>([]);
   const [keyIds, setKeyIds] = useState<string[]>([]);
   const [poolIds, setPoolIds] = useState<string[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
@@ -107,8 +111,8 @@ export function RequestsPage() {
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), userAgent: client };
-  }, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
+    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
+  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => {
@@ -119,7 +123,7 @@ export function RequestsPage() {
     resetPaging();
     setLoadedAt(Date.now());
   };
-  useEffect(resetPaging, [search, client, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
+  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
   const nextCursor = requests.data?.nextCursor ?? null;
@@ -134,10 +138,13 @@ export function RequestsPage() {
     setStack(copy);
     setCursor(previous);
   };
-  const active = search || client || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
+  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');
-    setClient('');
+    setUserAgent('');
+    setClientPattern('');
+    setAgentTypes([]);
+    setTurnOrigins([]);
     setKeyIds([]);
     setPoolIds([]);
     setAccountIds([]);
@@ -164,8 +171,9 @@ export function RequestsPage() {
           <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
           <MultiSelect label="Upstreams" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
           <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
-          {/* `.mono` shrinks the text to 0.92em, which would leave this control shorter than the rest of the bar. */}
-          <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+          {/* `.mono` shrinks the text to 0.92em, which would leave these controls shorter than the rest of the bar. */}
+          <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+          <Input value={userAgent} onChange={(e) => setUserAgent(e.target.value)} placeholder="User agent pattern" aria-label="User agent pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
           <MultiSelect
             label="Status"
             options={[
@@ -177,6 +185,8 @@ export function RequestsPage() {
             value={statuses}
             onChange={setStatuses}
           />
+          <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={agentTypes} onChange={setAgentTypes} mono />
+          <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={turnOrigins} onChange={setTurnOrigins} mono />
           <Select value={kind} onChange={(e) => setKind(e.target.value as '' | RequestKind)} aria-label="Kind">
             <option value="">Any kind</option>
             <option value="inference">Inference</option>
@@ -261,7 +271,8 @@ export function RequestsPage() {
                         {visible.has('model') && <td className="mono">{r.model}</td>}
                         {visible.has('client') && (
                           <td className="mono requests__client" title={r.userAgent ?? undefined}>
-                            {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
+                            {r.client ?? <span className="muted">-</span>}
+                            {r.agentType && <span className="sub">{r.agentType}</span>}
                           </td>
                         )}
                         {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
@@ -394,7 +405,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               rows={[
                 { label: 'Session', value: r.sessionId ?? '-', mono: true },
                 { label: 'Agent', value: r.agentId ?? '-', mono: true },
-                { label: 'Client', value: r.userAgent ?? '-', mono: true },
+                { label: 'Client', value: r.client ?? '-', mono: true },
+                { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
                 { label: 'Upstream', value: r.accountId === null ? '-' : <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
@@ -420,6 +432,19 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 { label: 'Context edits', value: r.shape.contextEdits.length ? r.shape.contextEdits.join(', ') : <span className="muted">none</span>, mono: r.shape.contextEdits.length > 0 },
                 { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
                 { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
+              ]}
+            />
+          </section>
+
+          <section>
+            <h3 className="section-title">Client hints</h3>
+            <KeyValue
+              rows={[
+                { label: 'Agent type', value: r.agentType ?? <span className="muted">not sent</span>, mono: Boolean(r.agentType) },
+                { label: 'Compaction', value: r.compaction ?? <span className="muted">not sent</span>, mono: Boolean(r.compaction) },
+                { label: 'Context compacted', value: r.contextCompacted ?? <span className="muted">not sent</span>, mono: Boolean(r.contextCompacted) },
+                { label: 'Turn origin', value: r.turnOrigin ?? <span className="muted">not sent</span>, mono: Boolean(r.turnOrigin) },
+                { label: 'Tool time before this turn', value: r.prevToolMs !== null ? fmtMs(r.prevToolMs) : <span className="muted">not sent</span> },
               ]}
             />
           </section>

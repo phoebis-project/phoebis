@@ -74,16 +74,23 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
-test('listRequests passes the client filter as user_agent', async () => {
+test('listRequests passes the user agent pattern as user_agent', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ userAgent: 'claude-cli/2.1.*' });
   assert.ok(String(calls[0].url).includes('user_agent=claude-cli%2F2.1.*'), String(calls[0].url));
 });
 
+test('listRequests passes the client pattern, the agent types, and the turn origins', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ agentTypes: ['Explore', 'Plan'], client: 'claude-code/*', turnOrigins: ['human'] });
+  const url = String(calls[0].url);
+  for (const part of ['client=claude-code%2F*', 'agent_types=Explore%2CPlan', 'turn_origins=human']) assert.ok(url.includes(part), `${part} in ${url}`);
+});
+
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();
-  const q = { accountIds: ['business', 'direct'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z', userAgentGroups: ['a', 'b'] };
+  const q = { accountIds: ['business', 'direct'], clients: ['a', 'b'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z', userAgentGroups: ['a', 'b'] };
   assert.deepEqual(await api.getAnalyticsSeries(q), []);
   const series = new URL(calls[0].url, 'http://x');
   assert.equal(series.pathname, '/admin/analytics/series');
@@ -96,7 +103,8 @@ test('the analytics reads encode the range, the dimension, and every id list', a
   assert.equal(series.searchParams.get('pools'), 'all');
   // One pattern per line, so a pattern holding a comma still names one group.
   assert.ok(String(calls[0].url).includes('user_agent_groups=a%0Ab'), String(calls[0].url));
-  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [], userAgentGroups: undefined }), []);
+  assert.ok(String(calls[0].url).includes('clients=a%0Ab'), String(calls[0].url));
+  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], clients: undefined, groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [], userAgentGroups: undefined }), []);
   const breakdown = new URL(calls[1].url, 'http://x');
   assert.equal(breakdown.pathname, '/admin/analytics/breakdown');
   assert.equal(breakdown.searchParams.get('group_by'), 'all');

@@ -32,7 +32,7 @@ type, the compaction and context-compacted markers, and the summed tool duration
 origin off its attribution line, and the request's shape: the effort, the thinking mode and budget, the output
 limit, the tool, system-block, and message counts, the context edits, the temperature, and the requested speed
 and service tier.
-The attempt row names the account and its kind and host; the upstream status and request id; the outcome; the
+The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the served model when it differs from the one requested, the speed,
 the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;
 the five token counts, with the thinking share of the output and the web search and fetch calls the answer made;
@@ -162,27 +162,33 @@ two-week weekly view and a three-day 5-hour view.
 ### Requests
 
 The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status, attempts,
-TTFB, tokens, and cost. One row is one client request however many attempts it took, and the attempt trail reads
-as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. Filters narrow
-the table, the client filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?`
-for one, a backslash quoting either, and a value with no wildcard matching in full), and selecting a row opens a
-drawer with the request's detail. The table holds the requests up to the moment you opened it, so paging does not shift
-as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from which
-upstream to which and why: rate limited, upstream marked, overage, window spent, or utilization. When its pin was
-released without a move, the drawer says from which upstream and every reason the router found: account cooled, window
-spent, upstream paused, pin idle past the affinity window, and the rest.
+TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
+(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn. One row
+is one client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a
+429 on the first account failed over to a 200 on the second. Filters narrow the table: the user agent filter takes a
+pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and
+a value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), and
+the agent type and turn origin filters pick from the values the client's hint headers and attribution line carry.
+Selecting a row opens a drawer with the request's detail, which shows the user agent and the client hints: the agent
+type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn. The table
+holds the requests up to the moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up
+to now. When the session moved during the request, the drawer says from which upstream to which and why: rate
+limited, upstream marked, overage, window spent, or utilization. When its pin was released without a move, the
+drawer says from which upstream and every reason the router found: account cooled, window spent, upstream paused, pin
+idle past the affinity window, and the rest.
 
 ![The Requests view: the filterable table and the request drawer](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table and the request drawer](assets/requests-dark.png#only-dark)
 
 ### Analytics
 
-A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
-and table by client, effort, key, kind, model, pool, or upstream. A key deleted and created again under the same id
-appears twice under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures stay with the
-key that spent them. A client filter takes the same patterns as the request log's, and under the client grouping a
-pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other client under
-`other`. Traffic reports request volume by outcome and the error rate; Latency reports percentiles read from the
+A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every
+chart and table by client, effort, key, kind, model, pool, upstream, or user agent; the client grouping reads the
+class and the user agent grouping the raw agent. A key deleted and created again under the same id appears twice
+under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures stay with the key that spent
+them. The client and user agent filters take the same patterns as the request log's, and under the user agent
+grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other agent
+under `other`. Traffic reports request volume by outcome and the error rate; Latency reports percentiles read from the
 merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served
 from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range;
 Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible

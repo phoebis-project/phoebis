@@ -185,8 +185,12 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
     const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? ''].join(' ').toLowerCase();
     if (!hay.includes(needle)) return false;
   }
-  // The route matches the same wildcard grammar through `LIKE ... ESCAPE`, so a row with no client matches none.
+  // The route matches the same wildcard grammar through `LIKE ... ESCAPE`, so a row with no user agent matches none.
   if (q.userAgent && !matchesPattern(q.userAgent, r.userAgent ?? '')) return false;
+  // The route reads a row with no class as `-`, the marker the rollups file it under.
+  if (q.client && !matchesPattern(q.client, r.client ?? '-')) return false;
+  if (q.agentTypes?.length && !q.agentTypes.includes(r.agentType ?? '')) return false;
+  if (q.turnOrigins?.length && !q.turnOrigins.includes(r.turnOrigin ?? '')) return false;
   return true;
 }
 

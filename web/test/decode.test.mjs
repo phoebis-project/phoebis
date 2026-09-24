@@ -257,6 +257,17 @@ test('a request row carries the generation of the key it was read under', () => 
   assert.equal(d.decodeRequest(fixture('request').request).keyGeneration, fixture('request').request.key_generation, 'the detail route answers the same row');
 });
 
+test('a request row carries the client class, the hint headers, and the turn origin', () => {
+  const detail = d.decodeRequest(fixture('request').request);
+  assert.deepEqual(
+    [detail.client, detail.agentType, detail.contextCompacted, detail.prevToolMs, detail.turnOrigin, detail.compaction],
+    ['claude-code/cli', 'Explore', 'auto', 1235, 'human', null],
+  );
+  const quiet = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  assert.equal(quiet.client, 'claude-code/cli');
+  assert.deepEqual([quiet.agentType, quiet.compaction, quiet.contextCompacted, quiet.prevToolMs], [null, null, null, null], 'a request that sent no hint reads each as not sent');
+});
+
 test('an attempt window with a reset and no utilization reads as not reported, not as zero', () => {
   const windows = [{ id: '5h', resets_at: 1_000, utilization: null }, { id: '7d', resets_at: 2_000, utilization: 0.5 }];
   const [row] = d.decodeRequestPage({ next_cursor: null, requests: [{ attempts: [{ index: 1, windows }] }] }).requests;
@@ -408,6 +419,16 @@ test('an error code named like an object member keeps its count under its code, 
   const to = new Date();
   const [mocked] = await new d.MockApi().getAnalyticsBreakdown({ from: new Date(to.getTime() - 86_400_000).toISOString(), groupBy: 'key', to: to.toISOString() });
   assert.equal(Object.getPrototypeOf(mocked.errors), null, 'the mock sums into a map with no inherited members too');
+});
+
+test('a session fold groups on the client class and narrows to a class pattern the way the rollups do', () => {
+  const row = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
+  const rows = [row, { ...row, id: 'r-second' }, { ...row, client: null, id: 'r-unclassed' }];
+  const byClient = d.foldGroups(rows, 'client');
+  assert.deepEqual(byClient.map((g) => [g.key, g.label, g.requests]).sort(), [['-', 'unattributed', 1], ['claude-code/cli', 'claude-code/cli', 2]], 'a row with no class files under -, as the rollups file it');
+  const narrowed = d.foldGroups(rows, 'client', { clientPatterns: ['claude-code/*'] });
+  assert.deepEqual(narrowed.map((g) => [g.key, g.requests]), [['claude-code/cli', 2]], 'a row with no class is matched as -, which the pattern does not name');
+  assert.deepEqual(d.foldGroups(rows, 'all', { clientPatterns: ['sdk/*'] }), []);
 });
 
 test('the session fold buckets a range the way the analytics routes do', () => {
