@@ -146,7 +146,7 @@ async fn patching_deleting_and_disconnecting_accounts() {
         .await
         .status(),
         400,
-        "a secret belongs to an api_key account"
+        "an oauth account refuses a secret with 400"
     );
     assert_eq!(
         delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))

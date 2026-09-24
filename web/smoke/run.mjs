@@ -926,6 +926,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
   expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Main conversation', 'Subagents', 'In overage', 'Per-model overrides', 'Also warm subagent caches']);
 
+  // The gateway dials one host, so the hint no longer distinguishes Anthropic upstreams from custom ones.
+  const cacheTtlLabel = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Set the cache TTL for this pool');
+  const cacheTtlHint = cacheTtlLabel?.nextElementSibling?.textContent?.trim();
+  results.push({
+    name: '/pools cache TTL hint applies to every upstream in the pool',
+    ok: cacheTtlHint === "Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool. A request that carries no breakpoints is left alone.",
+    missing: [cacheTtlHint ?? 'no hint found'],
+  });
+
   // A retention over the router's cap is refused, and the refusal has to reach the operator inside the dialog:
   // the dialog sits in the browser's top layer, where a toast behind its backdrop would never be seen.
   {

@@ -75,7 +75,6 @@ pub struct CatalogService {
 }
 
 impl CatalogService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: Arc<Store>,
         manager: Arc<CredentialManager>,

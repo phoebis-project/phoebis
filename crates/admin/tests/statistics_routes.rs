@@ -390,6 +390,42 @@ async fn an_import_that_never_answers_is_refused_at_the_timeout() {
 }
 
 #[tokio::test]
+async fn an_import_redirected_by_its_host_is_refused_without_following_it() {
+    let prices = FakeUpstream::start_plain(vec![Rule {
+        path_prefix: "/prices.json".into(),
+        respond: Respond::Json {
+            status: 302,
+            headers: vec![("Location".into(), "http://127.0.0.1:1/prices.json".into())],
+            body: Vec::new(),
+        },
+    }])
+    .await;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let resp = post(
+        &parts.app,
+        "/admin/pricing/import",
+        &format!(r#"{{"url":"{url}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(resp.status(), 502);
+    let body = json(resp).await;
+    assert_eq!(
+        body["error"].as_str(),
+        Some("the price file answered 302"),
+        "{body}"
+    );
+    assert_eq!(
+        prices.requests().len(),
+        1,
+        "the redirect must never be followed"
+    );
+    prices.shutdown().await;
+}
+
+#[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

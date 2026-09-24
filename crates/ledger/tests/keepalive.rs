@@ -397,6 +397,37 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
     let path = dir.path().join("ledger.sqlite");
     {
         let db = LedgerDb::open(&path).unwrap();
+        // Planted while every column still exists, so the roll-back below has a row to drop columns out from
+        // under: proves a row written before migration 15 keeps reading after it, not just an empty table.
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                // An hour clear of the range the final rollup assertion below reads, so this row's own
+                // fold does not add a second hour-0 row that the assertion's `[0]` could pick up instead.
+                received_at: -3_600_000,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r0".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "api_key".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(500),
+                output_tokens: Some(50),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
         // The replay runs every migration above four over a file the current schema already built, so each
         // column a later migration adds has to go first. The rollup table keeps the generation column it
         // cannot drop (it is in the primary key); the rebuild that replays over it names its own columns and
@@ -446,6 +477,17 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
     assert_eq!(db.schema_version().await.unwrap(), 15);
+    let (_, attempts) = db.request("r0").await.unwrap().unwrap();
+    assert_eq!(
+        attempts.len(),
+        1,
+        "every attempt row written before migration 15 reads after it"
+    );
+    assert_eq!(attempts[0].account_id, "a");
+    assert_eq!(attempts[0].account_kind, "api_key");
+    assert_eq!(attempts[0].outcome, "succeeded");
+    assert_eq!(attempts[0].input_tokens, Some(500));
+    assert_eq!(attempts[0].output_tokens, Some(50));
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(

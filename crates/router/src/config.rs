@@ -685,7 +685,11 @@ mod tests {
         );
         assert!(
             matches!(
-                load(&file(dir.path(), "host", "upstream:\n  resolver: 1\n")),
+                load(&file(
+                    dir.path(),
+                    "unknown-key",
+                    "upstream:\n  resolver: 1\n"
+                )),
                 Err(ConfigError::Syntax(_))
             ),
             "an unknown upstream key is refused"

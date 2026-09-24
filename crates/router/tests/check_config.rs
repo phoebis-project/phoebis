@@ -62,7 +62,7 @@ fn a_key_file_readable_by_group_or_other_warns_naming_the_path_and_0600() {
 #[test]
 fn an_unknown_upstream_key_fails_check_config() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_file(dir.path(), "wide-host", "upstream:\n  resolver: 1\n");
+    let config = config_file(dir.path(), "unknown-key", "upstream:\n  resolver: 1\n");
     let out = phoebis()
         .args(["check-config", "--config"])
         .arg(&config)
