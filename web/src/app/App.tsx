@@ -5,6 +5,7 @@ import { AlertsPage } from '@/pages/AlertsPage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
+import { ModelsPage } from '@/pages/ModelsPage';
 import { ObservePage } from '@/pages/ObservePage';
 import { PoolsPage } from '@/pages/PoolsPage';
 import { QuotaPage } from '@/pages/QuotaPage';
@@ -34,6 +35,7 @@ export const routes = [
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },
       { path: 'keys', element: <KeysPage /> },
+      { path: 'models', element: <ModelsPage /> },
       { path: 'observe', element: <ObservePage /> },
       { path: 'pools', element: <PoolsPage /> },
       { path: 'quota', element: <QuotaPage /> },

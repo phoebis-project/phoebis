@@ -163,6 +163,12 @@ two-week weekly view and a three-day 5-hour view.
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)
 
+### Models
+
+The Models view lists a key's processed rules with their level and the upstreams cooling for a matching model, every
+model-scoped cooldown grouped by model with a clear button per row, and the newest rejections and permits
+([routing](routing.md#model-rules)).
+
 ### Requests
 
 The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status, attempts,
@@ -173,13 +179,14 @@ is one client request however many attempts it took, and the attempt trail reads
 pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and
 a value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), and
 the agent type and turn origin filters pick from the values the client's hint headers and attribution line carry.
-Selecting a row opens a drawer with the request's detail, which shows the user agent and the client hints: the agent
-type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn. The table
-holds the requests up to the moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up
-to now. When the session moved during the request, the drawer says from which upstream to which and why: rate
-limited, upstream marked, overage, window spent, or utilization. When its pin was released without a move, the
-drawer says from which upstream and every reason the router found: account cooled, window spent, upstream paused, pin
-idle past the affinity window, and the rest.
+Selecting a row opens a drawer with the request's detail, which shows the user agent, the model as the client spelled it
+and, when it differs, the canonical id the router recorded, and the client hints: the agent type, the compaction and
+context-compacted markers, the turn origin, and the tool time before the turn; the trail names an upstream that rejected
+the model and the one that served it. The table holds the requests up to the moment you opened it, so paging does not
+shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from
+which upstream to which and why: rate limited, upstream marked, overage, window spent, or utilization. When its pin was
+released without a move, the drawer says from which upstream and every reason the router found: account cooled, window
+spent, upstream paused, pin idle past the affinity window, and the rest.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

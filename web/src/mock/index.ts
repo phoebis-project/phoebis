@@ -102,13 +102,27 @@ const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
 
 const MODEL_SCOPE_PREFIX = 'model:';
 
-/** The Models view's newest rejections and permits; the state route's own live cooldowns come from the accounts. */
-const MODEL_REJECTIONS: ModelEvent[] = [
-  { accountId: 'business', at: ago(6 * MINUTE), keyId: 'desktop', model: 'claude-haiku-4-5-20251001', rejectedBy: [], requestId: 'req_9f21a0', sessionId: 'sess_a1f0', wireModel: 'claude-haiku-4-5' },
-];
-const MODEL_PERMITS: ModelEvent[] = [
-  { accountId: 'console', at: ago(5 * MINUTE), keyId: 'desktop', model: 'claude-haiku-4-5-20251001', rejectedBy: ['business'], requestId: 'req_2c88e1', sessionId: 'sess_a1f0', wireModel: 'claude-haiku-4-5' },
-];
+/**
+ * The Models view's newest rejections and permits, lifted off the request log's own events so each names a request
+ * the drawer opens; the state route's live cooldowns come from the accounts.
+ */
+const modelEvents = (kind: 'model_permitted' | 'model_rejected'): ModelEvent[] =>
+  [...REQUEST_EVENTS.values()]
+    .flat()
+    .filter((e) => e.kind === kind)
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+    .map((e) => ({
+      accountId: e.accountId ?? '',
+      at: e.at,
+      keyId: e.keyId,
+      model: e.model ?? '',
+      rejectedBy: Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [],
+      requestId: typeof e.detail?.source_request_id === 'string' ? e.detail.source_request_id : null,
+      sessionId: e.sessionId,
+      wireModel: String(e.detail?.wire_model ?? ''),
+    }));
+const MODEL_REJECTIONS = modelEvents('model_rejected');
+const MODEL_PERMITS = modelEvents('model_permitted');
 
 /**
  * The signed-in role, which outlives a reload the way the router's session cookie does: the smoke runner writes

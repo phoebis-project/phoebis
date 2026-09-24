@@ -173,6 +173,16 @@ is the entry that also covers a name with a slash. The request log's client patt
 at save time when it is empty, longer than 256 characters, ends in an unquoted backslash, or holds three stars
 in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
+The Models view shows the processed list for a chosen key, each entry with the level it came from and the upstreams
+cooling for a model it matches, then every model-scoped cooldown grouped by model with a clear button per row, and
+the last rejections and permits the ledger recorded.
+
+![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][ml]
+![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][md]
+
+[ml]: assets/models-light.png#only-light
+[md]: assets/models-dark.png#only-dark
+
 ## Selection
 
 Selection keys every request by `(key id, root session, canonical model)`. The router holds all routing state

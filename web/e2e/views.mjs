@@ -93,6 +93,7 @@ const VIEWS = [
   { path: '/upstreams', title: 'Upstreams', wait: '.detail__head', slug: 'upstreams' },
   { path: '/pools', title: 'Pools', wait: '.pool .selection-order', slug: 'pools' },
   { path: '/keys', title: 'API keys', wait: '.card--table tbody tr', slug: 'keys' },
+  { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
   { path: '/analytics', title: 'Analytics', wait: '#cache-warming', slug: 'analytics' },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },

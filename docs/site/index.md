@@ -42,7 +42,7 @@ from its own configuration.
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle and the role badge, and the sidebar carries eleven views.
+toggle and the role badge, and the sidebar carries twelve views.
 
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-light.png#only-light)
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-dark.png#only-dark)
@@ -57,6 +57,7 @@ The sidebar shows the views in this order:
 | Upstreams | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
 | API keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
+| Models | A key's model rules, cooldowns, and rejections (see [Pools, keys, and routing](routing.md)). |
 | Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |

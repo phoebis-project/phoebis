@@ -335,8 +335,37 @@ function buildRequests(): RequestLog[] {
   if (unsampled) {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
+  // The drawer and the Models view need one request an upstream refused the model of. The newest desktop turn that
+  // failed over past a 429 takes it: the client spelled the model without the date the router resolved it to, and
+  // a pool member the request had not tried answered 404 for that model first. Nothing here draws from a stream,
+  // so every row after it keeps its values.
+  const story = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.outcome === 'succeeded' && r.sessionId !== null && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet));
+  const rejecter = story && LANES.find((l) => l.keyId === story.keyId)?.accountIds.find((id) => !story.attempts.some((a) => a.accountId === id));
+  if (story && rejecter) {
+    const at = Date.parse(story.at);
+    const rejection: Attempt = {
+      accountId: rejecter,
+      cacheMissReason: null,
+      cooldownSet: { reason: 'model_rejected', until: iso(at + REJECTION_MS + HOUR) },
+      durationMs: REJECTION_MS,
+      index: 0,
+      outcome: 'upstream_error',
+      response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
+      startedAt: story.at,
+      upstreamStatus: 404,
+      windows: [],
+    };
+    story.attempts = [rejection, ...story.attempts.map((a) => ({ ...a, index: a.index + 1, startedAt: iso(Date.parse(a.startedAt) + REJECTION_MS) }))];
+    story.durationMs = (story.durationMs ?? 0) + REJECTION_MS;
+    story.model = 'claude-sonnet-4-5';
+    story.canonicalModel = 'claude-sonnet-4-5-20250929';
+    story.costUsd = Math.round(costOf(story.model, story.usage) * 10_000) / 10_000;
+  }
   return rows;
 }
+
+/** The rejection story's refused attempt: an upstream refuses a model it does not serve before any inference runs. */
+const REJECTION_MS = 180;
 
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
@@ -380,6 +409,22 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       releaseOwed = false;
     }
     if (events.length) out.set(r.id, events);
+  }
+  // The rejection story's two events, as the assembler writes them: the refusal when its head lands, the permit
+  // when the request completes. Both carry the request's own id, which is how the drawer tells them from another
+  // request's in the same window.
+  const story = REQUESTS.find((r) => r.attempts.some((a) => a.cooldownSet?.reason === 'model_rejected'));
+  if (story) {
+    const refused = story.attempts[0];
+    const served = story.attempts[story.attempts.length - 1];
+    const pin = { keyId: story.keyId, model: story.canonicalModel, sessionId: story.sessionId };
+    const detail = { request_id: null, source_request_id: story.id, wire_model: story.model };
+    const events: RequestEvent[] = [
+      ...(out.get(story.id) ?? []),
+      { ...pin, accountId: refused.accountId, at: iso(Date.parse(refused.startedAt) + (refused.durationMs ?? 0)), detail: { attempt: 1, ...detail }, kind: 'model_rejected' },
+      { ...pin, accountId: served.accountId, at: iso(Date.parse(story.at) + (story.durationMs ?? 0)), detail: { attempt: story.attempts.length, rejected_by: [refused.accountId], ...detail }, kind: 'model_permitted' },
+    ];
+    out.set(story.id, events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)));
   }
   return out;
 }

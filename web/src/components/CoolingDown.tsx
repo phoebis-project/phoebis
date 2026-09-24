@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 
@@ -13,8 +14,11 @@ export function scopeLabel(scope: string): string {
   return scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope;
 }
 
-/** The rows an upstream (or a model group) is cooling under, with a clear button per row when `onClear` is given. */
-export function CoolingDown({ now, onClear, rows, title }: { now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; title: string }): JSX.Element {
+/**
+ * The rows an upstream (or a model group) is cooling under, with a clear button per row when `onClear` is given.
+ * A model group's rows all share its scope, so `showUpstream` names the upstream each row belongs to.
+ */
+export function CoolingDown({ now, onClear, rows, showUpstream = false, title }: { now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showUpstream?: boolean; title: string }): JSX.Element {
   // Null until the operator toggles, so a block that was empty when it mounted still opens once a row arrives.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const open = toggled ?? rows.length > 0;
@@ -44,6 +48,7 @@ export function CoolingDown({ now, onClear, rows, title }: { now: number; onClea
               <table className="table">
                 <thead>
                   <tr>
+                    {showUpstream && <th>Upstream</th>}
                     <th>Scope</th>
                     <th>Reason</th>
                     <th>Until</th>
@@ -53,6 +58,11 @@ export function CoolingDown({ now, onClear, rows, title }: { now: number; onClea
                 <tbody>
                   {rows.map((r) => (
                     <tr key={`${r.accountId}/${r.scope}`}>
+                      {showUpstream && (
+                        <td>
+                          <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link>
+                        </td>
+                      )}
                       <td>{r.scope === 'account' ? scopeLabel(r.scope) : <span className="mono">{scopeLabel(r.scope)}</span>}</td>
                       <td className="mono">{r.reason}</td>
                       <td className="num">

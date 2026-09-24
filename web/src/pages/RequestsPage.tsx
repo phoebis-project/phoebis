@@ -372,8 +372,16 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
   // The route lists the session's events by time alone, so a move or a release belongs to this request only when
-  // it is the same pin's, keyed by key, session, and canonical model.
-  const migrations = r === null || fetched === null ? [] : fetched.events.filter((e) => (e.kind === 'pin_migrated' || e.kind === 'pin_expired') && e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel);
+  // it is the same pin's, keyed by key, session, and canonical model; a model's rejection or permit only when it
+  // carries this request's id.
+  const trail =
+    r === null || fetched === null
+      ? []
+      : fetched.events.filter((e) =>
+          e.kind === 'pin_migrated' || e.kind === 'pin_expired'
+            ? e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel
+            : (e.kind === 'model_rejected' || e.kind === 'model_permitted') && e.detail?.source_request_id === r.id,
+        );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -415,6 +423,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
                 { label: 'Upstream', value: r.accountId === null ? '-' : <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
                 { label: 'Model', value: r.model, mono: true },
+                ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
                 { label: 'Status', value: <StatusBadge status={r.status} /> },
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
@@ -503,11 +512,33 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 </li>
               ))}
             </ol>
-            {migrations.map((e) => {
+            {trail.map((e) => {
               if (e.kind === 'pin_expired') {
                 return (
                   <p className="attempt__migration" key={`${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
                     Session released from {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
+                  </p>
+                );
+              }
+              const account = e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-';
+              if (e.kind === 'model_rejected') {
+                return (
+                  <p className="attempt__migration" key={`${e.kind}-${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
+                    Model rejected by {account}: {String(e.detail?.wire_model ?? r.model)}
+                  </p>
+                );
+              }
+              if (e.kind === 'model_permitted') {
+                const rejectedBy = Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [];
+                return (
+                  <p className="attempt__migration" key={`${e.kind}-${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
+                    Model permitted by {account} after{' '}
+                    {rejectedBy.map((id, i) => (
+                      <span key={id}>
+                        {i > 0 && ', '}
+                        <Link to={`/upstreams/${id}`}>{id}</Link>
+                      </span>
+                    ))}
                   </p>
                 );
               }

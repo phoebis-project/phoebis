@@ -1387,6 +1387,86 @@ m.unmount();
 // fails the run rather than leaving the check to read a page nothing narrowed.
 const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labelled ${label}`] });
 
+m = await mount('/models');
+{
+  const story = requests.find((r) => r.model !== r.canonicalModel);
+  const rulesCard = () => m.container.querySelector('.models__rules');
+  const cells = (tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '');
+  const drawnRules = () => [...(rulesCard()?.querySelectorAll('tbody tr') ?? [])].map((tr) => cells(tr).join(' | '));
+  // The route's own answer for the key, so an edit an earlier check made to a key's list is read rather than assumed.
+  const answeredRules = async (keyId) => (await api.getKeyModels(keyId)).rules.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, [...new Set(r.cooldowns.map((c) => c.accountId))].join(', ') || '-'].join(' | '));
+  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
+  results.push({ name: '/models sits in the nav after API keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('API keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
+  // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
+  const first = (await api.listKeys())[0];
+  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', story?.canonicalModel ?? 'no story request']);
+  const firstRules = first ? await answeredRules(first.id) : [];
+  results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
+  const select = m.container.querySelector('select[aria-label="Key"]');
+  if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
+  else {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'laptop');
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await m.settle(400);
+    const laptop = await answeredRules('laptop');
+    const drawn = drawnRules();
+    results.push({
+      name: '/models switches the key and reads the other key\'s entries, the key\'s own ahead of the pool\'s',
+      ok: (rulesCard()?.textContent ?? '').includes('Processed rules for laptop') && JSON.stringify(drawn) === JSON.stringify(laptop) && drawn[0]?.startsWith('key | Allow') && drawn.some((r) => r.startsWith('pool | Deny')) && drawn.some((r) => !r.endsWith('| -')),
+      missing: [JSON.stringify(drawn), JSON.stringify(laptop)],
+    });
+    // Each upstream in the cooling column is its own link, so the operator reaches the block that clears it.
+    const links = [...(rulesCard()?.querySelectorAll('tbody td:last-child a') ?? [])].map((a) => a.getAttribute('href'));
+    results.push({ name: '/models the cooling column links each upstream', ok: links.length > 0 && links.every((h) => /^\/upstreams\/[a-z]+$/.test(h ?? '')), missing: links });
+  }
+  const state = await api.getModelsState();
+  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === c.querySelector('.card__title')?.textContent));
+  const groupRows = groups.flatMap((c) => [...c.querySelectorAll('tbody tr')].map((tr) => cells(tr).slice(0, 2).join(' | ')));
+  const answeredGroupRows = state.cooldowns.flatMap((g) => g.rows.map((r) => `${r.accountId} | ${g.model}`));
+  results.push({ name: '/models draws one cooling-down block per model, each row naming its upstream', ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows), missing: [JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)] });
+  {
+    // Recorded rather than sent, so the story's cooldowns stay for the checks after this one.
+    const original = api.clearCooldown;
+    const calls = [];
+    api.clearCooldown = async (accountId, scope) => {
+      calls.push([accountId, scope]);
+    };
+    [...(groups[0]?.querySelectorAll('tbody button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+    await m.settle(250);
+    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
+    const asked = confirm?.textContent ?? '';
+    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
+    await m.settle(400);
+    api.clearCooldown = original;
+    const first = state.cooldowns[0]?.rows[0];
+    results.push({
+      name: '/models a row clears its upstream\'s model scope through the Upstreams view\'s confirm',
+      ok: asked.includes('Clear cooldown') && asked.includes('The upstream becomes eligible immediately.') && JSON.stringify(calls) === JSON.stringify([[first?.accountId, first?.scope]]) && m.text().includes('Cooldown cleared'),
+      missing: [asked.slice(0, 120) || 'no confirm', JSON.stringify(calls)],
+    });
+  }
+  const recent = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const recentRow = (title) => recent(title)?.querySelector('tbody tr');
+  const hrefs = (el) => [...(el?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
+  const rejection = state.rejections[0];
+  const permit = state.permits[0];
+  results.push({ name: 'fixture: the newest rejection and permit name the request whose two names differ', ok: story !== undefined && rejection?.requestId === story.id && permit?.requestId === story.id && permit.rejectedBy.includes(rejection.accountId), missing: [story?.id ?? 'no story', rejection?.requestId ?? 'no rejection', permit?.requestId ?? 'no permit'] });
+  if (rejection && permit) {
+    const rejected = recentRow('Recent rejections');
+    const permitted = recentRow('Recent permits');
+    results.push({
+      name: '/models the recent rows link the request and the upstreams and name both spellings',
+      ok:
+        JSON.stringify(hrefs(rejected)) === JSON.stringify([`/requests/${rejection.requestId}`, `/upstreams/${rejection.accountId}`]) &&
+        JSON.stringify(hrefs(permitted)) === JSON.stringify([`/requests/${permit.requestId}`, `/upstreams/${permit.accountId}`, ...permit.rejectedBy.map((id) => `/upstreams/${id}`)]) &&
+        (rejected?.textContent ?? '').includes(`${rejection.model}sent as ${rejection.wireModel}`) &&
+        (permitted?.textContent ?? '').includes(`${permit.model}sent as ${permit.wireModel}`),
+      missing: [rejected?.textContent ?? 'no rejection row', JSON.stringify(hrefs(rejected)), permitted?.textContent ?? 'no permit row', JSON.stringify(hrefs(permitted))],
+    });
+  }
+}
+m.unmount();
+
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-code/cli', 'other', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
 {
@@ -1582,6 +1662,38 @@ if (failoverRow) {
   });
 } else {
   results.push({ name: '/requests a failover row whose attempts reported quota windows', ok: false, missing: ['fixture'] });
+}
+{
+  // The rejection story: the client spelled the model without its date, one pool member refused it, and another
+  // served it after the failover.
+  const story = requests.find((r) => r.model !== r.canonicalModel);
+  const own = story ? requestEvents.get(story.id) ?? [] : [];
+  const rejected = own.find((e) => e.kind === 'model_rejected');
+  const permitted = own.find((e) => e.kind === 'model_permitted');
+  results.push({ name: 'fixture: a request whose client spelling differs from its canonical id, rejected then permitted', ok: story !== undefined && rejected !== undefined && permitted !== undefined, missing: [story?.id ?? 'no story request', rejected ? '' : 'no model_rejected', permitted ? '' : 'no model_permitted'] });
+  if (story && rejected && permitted) {
+    await m.navigate(`/requests/${story.id}`);
+    const summary = [...m.container.querySelectorAll('.kv__row')].map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`);
+    const model = summary.indexOf(`Model: ${story.model}`);
+    results.push({ name: '/requests/:story drawer shows the client\'s spelling, then the canonical id', ok: model >= 0 && summary[model + 1] === `Canonical model: ${story.canonicalModel}`, missing: summary.slice(0, 10) });
+    expect('/requests/:story drawer names the upstream that rejected the model and the one that served it', m.text(), ['Canonical model', `Model rejected by ${rejected.accountId}: ${story.model}`, `Model permitted by ${permitted.accountId} after ${rejected.accountId}`]);
+    const lines = [...m.container.querySelectorAll('.attempt__migration')].filter((p) => p.textContent?.startsWith('Model '));
+    const hrefs = lines.map((p) => [...p.querySelectorAll('a')].map((a) => a.getAttribute('href')).join(' '));
+    results.push({ name: '/requests/:story drawer links each upstream the model events name', ok: JSON.stringify(hrefs) === JSON.stringify([`/upstreams/${rejected.accountId}`, `/upstreams/${permitted.accountId} /upstreams/${rejected.accountId}`]), missing: hrefs });
+    // The route lists the session's events by time, so another request's rejection in the same window arrives
+    // with this one's; only the request id the event carries keeps it off this drawer.
+    requestEvents.set(story.id, own.map((e) => (e.kind.startsWith('model_') ? { ...e, detail: { ...e.detail, source_request_id: 'req_elsewhere' } } : e)));
+    await m.navigate(`/requests/${desktopRow.id === story.id ? laptopRow.id : desktopRow.id}`);
+    await m.navigate(`/requests/${story.id}`);
+    await m.settle(400);
+    results.push({ name: "/requests another request's model events are not drawn", ok: !m.text().includes('Model rejected by') && !m.text().includes('Model permitted by'), missing: m.text().includes('Model rejected by') ? ["another request's rejection is drawn on this one"] : [] });
+    requestEvents.set(story.id, own);
+  }
+  const sameNames = requests.find((r) => r.kind === 'inference' && r.model === r.canonicalModel);
+  if (sameNames) {
+    await m.navigate(`/requests/${sameNames.id}`);
+    results.push({ name: '/requests a request whose two names match draws one model row', ok: m.text().includes(`Model${sameNames.model}`) && !m.text().includes('Canonical model'), missing: [] });
+  }
 }
 {
   const spentId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.detail?.reason === 'spent'))?.[0];
@@ -3170,6 +3282,13 @@ await m.navigate('/sessions');
   const items = [...(row?.querySelectorAll('.menu__list button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: 'viewer: /sessions hides Release', ok: !items.includes('Release'), missing: items });
   results.push({ name: 'viewer: /sessions keeps both read-only jumps', ok: items.includes('View in analytics') && items.includes('View in observe'), missing: items });
+}
+await m.navigate('/models');
+{
+  // The confirm dialog is mounted closed on every page, so only a button outside a closed dialog counts.
+  const clears = [...m.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Clear' && !b.closest('dialog:not([open])')).length;
+  const blocks = [...m.container.querySelectorAll('.card__title')].filter((t) => t.textContent?.startsWith('claude-')).length;
+  results.push({ name: 'viewer: /models reads every block and offers no Clear', ok: clears === 0 && blocks > 0 && m.text().includes('Processed rules for') && m.text().includes('Recent permits'), missing: [`${clears} Clear buttons`, `${blocks} model blocks`] });
 }
 await m.navigate('/quota');
 results.push({ name: 'viewer: /quota keeps Refresh all', ok: m.text().includes('Refresh all'), missing: [] });
