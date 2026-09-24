@@ -35,7 +35,7 @@ pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
     derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,
-    Prefetched, Warmth, MAX_BODY,
+    Prefetched, Warmth, MAX_BODY, REFRESH_TICK,
 };
 pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};
 pub use drift::DriftGuard;

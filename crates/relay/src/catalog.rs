@@ -29,6 +29,12 @@ use crate::dispatch::UPSTREAM_AUTHORITY;
 /// A models list is a few hundred short objects; anything past this is not one.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
+/// How often the periodic loop wakes to compare each slot's age against the refresh interval; a refresh lands
+/// within one tick of falling due.
+pub const REFRESH_TICK: Duration = Duration::from_secs(60);
+/// The least time between two served-model refreshes of one account.
+pub const SERVED_REFRESH_INTERVAL_MS: i64 = 60_000;
+
 /// The dated id `spelling` resolves to under `listing`: the newest `<spelling>-YYYYMMDD` entry, or `None` when
 /// the listing holds no dated entry for it (a dateless id of the 4.6 generation and later is its own snapshot).
 pub fn derive(listing: &[CatalogRow], spelling: &str) -> Option<String> {
@@ -64,6 +70,7 @@ fn snapshot_date(id: &str) -> Option<u32> {
 
 const SLOTS_POISONED: &str = "catalog slots lock poisoned by a prior panic";
 const PUBLISHED_POISONED: &str = "catalog published map poisoned by a prior panic";
+const SERVED_REFRESHED_POISONED: &str = "catalog served-refresh map poisoned by a prior panic";
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
 fn at_models_bound(error: TransportError) -> TransportError {
@@ -154,6 +161,8 @@ pub struct CatalogService {
     warmth: watch::Sender<Warmth>,
     fills_in_flight: watch::Sender<usize>,
     startup_bound: Duration,
+    /// The clock reading of each account's last served-model refresh, rate-limiting `note_served`.
+    served_refreshed: Mutex<HashMap<String, i64>>,
     tasks: TaskTracker,
     stop: CancellationToken,
 }
@@ -196,6 +205,7 @@ impl CatalogService {
             warmth: watch::Sender::new(Warmth::Cold),
             fills_in_flight: watch::Sender::new(0),
             startup_bound,
+            served_refreshed: Mutex::new(HashMap::new()),
             tasks: TaskTracker::new(),
             stop: CancellationToken::new(),
         }
@@ -317,6 +327,89 @@ impl CatalogService {
     pub async fn refresh(&self, account: &AccountRow) -> Catalog {
         self.evict(&account.id);
         self.fetch(account).await
+    }
+
+    /// Refreshes every enabled `Ready` account whose listing is `every` old, checked each `tick` on the
+    /// service's clock; the handle ends with the service. Accounts refresh one after another, a known bound: a
+    /// slow upstream stretches the sweep by its own round trips, and nothing shrinks it meanwhile, since a
+    /// published spelling never moves back to an older snapshot. A due account is read through `fetch`, not
+    /// `refresh`: `every` is always past the fetch window, so staleness alone forces a real request, and a
+    /// plain fetch coalesces with a fill already in flight rather than evicting it out from under itself.
+    pub fn spawn_refresh(self: &Arc<Self>, every: Duration, tick: Duration) -> JoinHandle<()> {
+        let service = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tick).await;
+                let now = (service.clock)();
+                let accounts: Vec<AccountRow> = service
+                    .store
+                    .accounts()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|a| a.enabled && a.state == AccountState::Ready)
+                    .collect();
+                for account in accounts {
+                    if service.slot_due(&account, every, now) {
+                        service.fetch(&account).await;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Whether the account's current slot (keyed on its own incarnation and revision) is missing or has aged
+    /// past `every`.
+    fn slot_due(&self, account: &AccountRow, every: Duration, now: i64) -> bool {
+        let key = SlotKey {
+            account_id: account.id.clone(),
+            incarnation: account.incarnation,
+            revision: account.revision,
+        };
+        let fetched_at = self
+            .slots
+            .lock()
+            .expect(SLOTS_POISONED)
+            .get(&key)
+            .and_then(|slot| slot.cached.as_ref())
+            .map(|catalog| catalog.fetched_at);
+        match fetched_at {
+            Some(fetched_at) => fetched_at + every.as_millis() as i64 <= now,
+            None => true,
+        }
+    }
+
+    /// An answer named `served` where the router had resolved `resolved`: one background refresh of the
+    /// account, skipped inside `SERVED_REFRESH_INTERVAL_MS` of the account's last such refresh; a match is a
+    /// no-op.
+    pub fn note_served(self: &Arc<Self>, account_id: &str, resolved: &str, served: &str) {
+        if served == resolved {
+            return;
+        }
+        let now = (self.clock)();
+        {
+            let mut refreshed = self
+                .served_refreshed
+                .lock()
+                .expect(SERVED_REFRESHED_POISONED);
+            if refreshed
+                .get(account_id)
+                .is_some_and(|&last| now - last < SERVED_REFRESH_INTERVAL_MS)
+            {
+                return;
+            }
+            refreshed.insert(account_id.to_string(), now);
+        }
+        let service = Arc::clone(self);
+        let account_id = account_id.to_string();
+        self.tasks.spawn(async move {
+            let Ok(Some(row)) = service.store.account(&account_id) else {
+                return;
+            };
+            if !row.enabled || row.state != AccountState::Ready {
+                return;
+            }
+            service.refresh(&row).await;
+        });
     }
 
     /// Forgets every entry under the account id, whatever incarnation and revision it was filled for, and

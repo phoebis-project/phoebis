@@ -8,13 +8,13 @@ itself, and the answers a client gets when nothing can serve it.
 ## Catalogs
 
 An upstream's model list is read live from `GET /v1/models` on `api.anthropic.com` with the upstream's own credential,
-on demand, and held for `routing.catalog_cache_seconds` (sixty by default) from the moment the answer arrives; the
-Upstreams view's catalog popup, the rule editors' suggestions, and the proxy's
-[models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog` answers it
-with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a candidate for
-any model the rules allow, and an upstream that does not serve a model says so with a `404` the router records as a
-rejection ([cooldowns](#cooldowns-and-failover)). An upstream whose fetch failed contributes nothing to a listing until
-the next fetch, and the popup shows the error.
+at startup, on the refresh interval, and on demand, and held for `routing.catalog_cache_seconds` (sixty by default)
+from the moment the answer arrives; the Upstreams view's catalog popup, the rule editors' suggestions, and the
+proxy's [models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog`
+answers it with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a
+candidate for any model the rules allow, and an upstream that does not serve a model says so with a `404` the router
+records as a rejection ([cooldowns](#cooldowns-and-failover)). An upstream whose fetch failed contributes nothing to a
+listing until the next fetch, and the popup shows the error.
 
 The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated one
 (`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
@@ -27,6 +27,14 @@ upstream keeps the client's spelling. A resolution is kept across restarts: the 
 the dated id from the stored mapping even before the listings arrive, and only a fresh installation whose upstreams are
 unreachable at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the
 dated entry never takes a resolution back.
+
+The listings are refreshed on a slow interval (six hours by default), once more within a minute of an upstream
+answering under a different snapshot than the router resolved (the alias moved), and on demand from the Upstreams
+view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`; the popup, the rule editors' suggestions, and
+the proxy's models listing keep reading the cache under `routing.catalog_cache_seconds`. A refresh that finds a newer
+snapshot for a spelling names the next requests by it; the pins and cooldowns already keyed on the previous dated id
+stay where they are, since a snapshot is a model of its own, and the stored mapping is updated in the same
+transaction.
 
 ## Pools
 

@@ -2310,36 +2310,41 @@ impl Relay {
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
-        // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run for it.
-        let publish = (trace.bus_attached() || on_message_id.is_some()).then(|| Publish {
-            trace: trace.clone(),
-            clock: self.clock.clone(),
-            outcome: outcome.clone(),
-            decoder: decoder
-                .is_none()
-                .then(|| {
-                    encoding(head)
-                        .ok()
-                        .filter(|e| !matches!(e, Encoding::Identity))
-                        .map(phoebis_transport::decode::decoder)
-                })
-                .flatten(),
-            decode_failed: false,
-            parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
-            // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
-            json: (!event_stream && head.status == 200).then(Vec::new),
-            usage: Usage::default(),
-            response: ResponseFacts::default(),
-            index: 0,
-            bytes: 0,
-            first_content_at: None,
-            saw_tool_use: false,
-            stream_error: None,
-            status: head.status,
-            message_id: None,
-            pending_message_id: None,
-            on_message_id,
-        });
+        // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
+        // for it, and a committed 200 needs it too, since the served-model check reads the answer.
+        let publish =
+            (trace.bus_attached() || on_message_id.is_some() || head.status == 200).then(|| {
+                Publish {
+                    trace: trace.clone(),
+                    clock: self.clock.clone(),
+                    outcome: outcome.clone(),
+                    catalog: self.catalog.clone(),
+                    decoder: decoder
+                        .is_none()
+                        .then(|| {
+                            encoding(head)
+                                .ok()
+                                .filter(|e| !matches!(e, Encoding::Identity))
+                                .map(phoebis_transport::decode::decoder)
+                        })
+                        .flatten(),
+                    decode_failed: false,
+                    parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                    // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
+                    json: (!event_stream && head.status == 200).then(Vec::new),
+                    usage: Usage::default(),
+                    response: ResponseFacts::default(),
+                    index: 0,
+                    bytes: 0,
+                    first_content_at: None,
+                    saw_tool_use: false,
+                    stream_error: None,
+                    status: head.status,
+                    message_id: None,
+                    pending_message_id: None,
+                    on_message_id,
+                }
+            });
         let body = relay_body(
             Relayed {
                 cancel,

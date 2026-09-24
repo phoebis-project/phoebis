@@ -141,6 +141,9 @@ pub struct Harness {
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
+    /// Aborts the periodic refresh loop on drop, ahead of `_stop` so no tick still due starts a fill after the
+    /// fills below are cancelled.
+    _refresh: RefreshGuard,
     /// Cancels `catalog`'s fills and retries on drop, so a retry sleeping its backoff never outlives the test.
     _stop: CatalogGuard,
     pub store: Arc<Store>,
@@ -151,6 +154,14 @@ struct CatalogGuard(Arc<CatalogService>);
 impl Drop for CatalogGuard {
     fn drop(&mut self) {
         self.0.cancel();
+    }
+}
+
+struct RefreshGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -711,6 +722,9 @@ async fn build(
     // So a harness answers like the router does: a spelling the prefetch resolved is named by its dated id
     // from the harness's first request, with no per-test fill to wait on.
     catalog.prefetch().await;
+    // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
+    // default's six-hour interval.
+    let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
     let relay = relay.with_cache_diagnostics(cache_diagnostics);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
@@ -731,6 +745,7 @@ async fn build(
         clock: clock_cell,
         relay,
         router: router_handle,
+        _refresh: RefreshGuard(refresh),
         _stop: CatalogGuard(catalog),
         store,
     }

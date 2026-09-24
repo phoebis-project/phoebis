@@ -12,7 +12,8 @@ use phoebis_store::{
     RulesMode, Secret, StorageKey, Store,
 };
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -1123,4 +1124,200 @@ async fn a_fill_slower_than_its_window_is_shared_by_every_caller_waiting_on_it()
             .all(|answer| answer == &answers[0] && answer.models.len() == 1),
         "all three share the one answer: {answers:?}"
     );
+}
+
+#[tokio::test]
+async fn the_periodic_refresh_fires_on_the_stepped_clock() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 1
+    })
+    .await;
+    h.clock.store(NOW + 21_601_000, Ordering::SeqCst);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 2
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_refresh_that_moves_a_spelling_to_a_newer_snapshot_rekeys_through_the_acknowledged_command(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(h
+        .router
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.model == "claude-sonnet-4-5-20250929"));
+
+    h.catalog_up.set_rule_after(
+        1,
+        "/v1/models?limit=1000",
+        json_list(&["claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20251101"]),
+    );
+    let a = h.store.account("a").unwrap().unwrap();
+    h.catalog.refresh(&a).await;
+
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some("claude-sonnet-4-5-20251101")
+    );
+    // The acknowledgement moves the lookup at once; the persisted row lands behind it on the router's writer.
+    wait_for(Duration::from_secs(2), || {
+        let rows = h.store.resolutions().unwrap();
+        (rows.len() == 1 && rows[0].dated_id == "claude-sonnet-4-5-20251101").then_some(())
+    })
+    .await;
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.model == "claude-sonnet-4-5-20250929"),
+        "s1's pin stays under the snapshot it was made on; a newer one is a different model"
+    );
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(h
+        .router
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.model == "claude-sonnet-4-5-20251101"));
+}
+
+#[tokio::test]
+async fn a_response_naming_another_snapshot_refreshes_the_account_once_per_minute() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5-20251101","usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 2
+    })
+    .await;
+
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 3).then_some(())
+    })
+    .await;
+
+    // The same through a streamed answer whose `message_start` names the other snapshot.
+    let stream_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_2","model":"claude-sonnet-4-5-20251101","usage":{"input_tokens":1}}}"#.into(),
+                },
+                SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+            delay_between: Duration::from_millis(0),
+        },
+    }])
+    .await;
+    let h2 = harness(&stream_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h2.catalog_up), 1, "the startup fetch alone");
+    let resp = h2.app.clone().oneshot(stream_request(KEY)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h2.catalog_up) == 2).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_response_naming_the_resolved_id_triggers_no_refresh() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5-20250929","usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 1
+    })
+    .await;
 }

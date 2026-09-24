@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::catalog::CatalogService;
 use crate::hold::Inspect;
 use crate::messages::{RelayOutcome, Trace};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
@@ -54,6 +55,9 @@ pub(crate) struct Publish {
     pub trace: Trace,
     pub clock: Clock,
     pub outcome: RelayOutcome,
+    /// Notified once the answer's model is known, so a snapshot the router did not resolve to triggers a
+    /// bounded refresh of the account that served it.
+    pub catalog: Arc<CatalogService>,
     /// Decodes the raw chunk for the bus when the caller receives the upstream's coding as it is; `None`
     /// when the relay already decodes for the caller and the piece is text.
     pub decoder: Option<Box<dyn Decoder>>,
@@ -219,6 +223,14 @@ impl Publish {
             if let Some(id) = message_id_from_json(&json, &[]) {
                 self.saw_message_id(id);
             }
+        }
+        // The API answering under another snapshot is the alias moving; one refresh brings the listing up to it.
+        if let (Some(resolved), Some(served)) = (
+            self.outcome.canonical_model.as_deref(),
+            self.response.model.as_deref(),
+        ) {
+            self.catalog
+                .note_served(&self.outcome.account_id, resolved, served);
         }
         self.fire_pending_hook().await;
         let outcome = match (end, self.stream_error.take()) {

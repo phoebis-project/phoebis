@@ -14,7 +14,7 @@ use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay};
+use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, REFRESH_TICK};
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -397,6 +397,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         bound_seconds = STARTUP_FETCH_BOUND.as_secs(),
         "catalog prefetch done"
     );
+    let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), REFRESH_TICK);
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -602,6 +603,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     relay.flush_memory().await;
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
+    // Stopped ahead of the tracked fills and retries below, so no tick still due starts a fill after they join.
+    refresh.abort();
     // A retry sleeping its backoff would otherwise hold the store past this function's return.
     catalog.shutdown().await;
     drop(catalog);
