@@ -931,8 +931,11 @@ async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
     )
     .await;
     let app = h.app.clone();
-    let inflight =
-        tokio::spawn(async move { app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1")).await.unwrap() });
+    let inflight = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
     // The fake has the request, so it was admitted and selected against the registry as it stands now.
     wait_for(Duration::from_secs(5), || {
         (!up.requests().is_empty()).then_some(())

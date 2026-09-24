@@ -196,13 +196,6 @@ pub fn key_refusal_response(refusal: &KeyRefusal, request_id: &str) -> Response 
     key_refusal(refusal).response(request_id)
 }
 
-pub(crate) const ACCOUNTS_UNAVAILABLE: Failure = Failure {
-    status: StatusCode::SERVICE_UNAVAILABLE,
-    error_type: "api_error",
-    code: "accounts_unavailable",
-    message: "the bound account cannot serve requests",
-};
-
 /// The account the request was bound to went away while it was in flight, so its credential is gone and no
 /// answer about it can be trusted.
 pub(crate) const ACCOUNT_CANCELLED: Failure = Failure {

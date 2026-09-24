@@ -247,6 +247,148 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     prices.shutdown().await;
 }
 
+/// A gzip-compressed body, the shape `flate2::write::GzEncoder` gives a stream the wire never decodes for us.
+fn gzip(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(payload).unwrap();
+    e.finish().unwrap()
+}
+
+#[tokio::test]
+async fn an_import_that_cannot_connect_answers_without_the_url_or_its_token() {
+    const SENTINEL: &str = "SENTINEL-IMPORT-TOKEN";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let before = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    let resp = tokio::time::timeout(
+        Duration::from_secs(20),
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"http://127.0.0.1:{port}/prices.json?access_token={SENTINEL}"}}"#),
+            Some(&cookie),
+        ),
+    )
+    .await
+    .expect("a refused connection answers promptly");
+    assert_eq!(resp.status(), 502);
+    let body = json(resp).await;
+    let text = body.to_string();
+    assert!(
+        !text.contains(SENTINEL) && !text.contains("127.0.0.1"),
+        "the answer names neither the token nor the host: {text}"
+    );
+    let after = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    assert_eq!(before, after, "nothing was written for the refused fetch");
+}
+
+#[tokio::test]
+async fn a_gzip_encoded_price_file_is_decoded_before_it_is_parsed() {
+    let prices = FakeUpstream::start_plain(vec![Rule {
+        path_prefix: "/prices.json".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: gzip(br#"{"claude-sonnet-4-5":{"input_cost_per_token":3e-06,"output_cost_per_token":1.5e-05}}"#),
+        },
+    }])
+    .await;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .apply_catalog_sync(
+            "business",
+            &[("claude-sonnet-4-5".into(), false)],
+            None,
+            common::NOW,
+            "test",
+        )
+        .unwrap();
+    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let preview = json(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"{url}"}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(preview["models"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["models"][0]["model"], "claude-sonnet-4-5");
+    prices.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_gzip_bomb_past_the_bound_is_refused_by_the_bound() {
+    let prices = FakeUpstream::start_plain(vec![Rule {
+        path_prefix: "/prices.json".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: gzip(&vec![b'x'; 17 << 20]),
+        },
+    }])
+    .await;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let resp = post(
+        &parts.app,
+        "/admin/pricing/import",
+        &format!(r#"{{"url":"{url}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(resp.status(), 502);
+    let body = json(resp).await;
+    assert_eq!(
+        body["error"].as_str(),
+        Some("the price file is larger than the 16 MiB bound"),
+        "{body}"
+    );
+    prices.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_import_that_never_answers_is_refused_at_the_timeout() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Accepted once and held open, never written to: the client's read waits out the import's own timeout
+    // rather than a connection refusal or a peer close.
+    let _held = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+        drop(stream);
+    });
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let resp = tokio::time::timeout(
+        Duration::from_secs(45),
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"http://{addr}/prices.json"}}"#),
+            Some(&cookie),
+        ),
+    )
+    .await
+    .expect("the paused clock advances straight to the import's own timeout");
+    assert_eq!(resp.status(), 502);
+    let body = json(resp).await;
+    assert_eq!(
+        body["error"].as_str(),
+        Some("the price file did not arrive in time"),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
     let parts = common::admin_parts_full().await;

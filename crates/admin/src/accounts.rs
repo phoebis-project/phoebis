@@ -227,20 +227,21 @@ pub(crate) async fn patch(
     let label = input.label.as_deref().unwrap_or(&row.label);
     let verifying = row.kind == AccountKind::ApiKey && input.secret.is_some();
     if verifying {
-        // Staged, never written: the row the store holds is untouched until discovery has passed.
+        let secret = Secret::new(input.secret.as_deref().expect("verifying implies a secret"));
+        // Staged, never written: the row the store holds is untouched until discovery has passed, and the
+        // verification below has to see what the patch would land, not what is stored now.
         let staged = AccountRow {
             label: label.to_string(),
             ..row.clone()
         };
-        let secret = Secret::new(input.secret.as_deref().expect("verifying implies a secret"));
         let verified = match verify_staged(&state, &staged, &secret).await {
             Ok(verified) => verified,
             Err(refusal) => return refusal,
         };
         // A stored row under another spelling of a discovered id breaks the catalog's canonical-id
-        // uniqueness inside the commit, which would roll the verified secret or URL back with a 500. It is
-        // the same clash the intra-list check finds, so it is recorded the same way and the stored catalog
-        // is left as it is.
+        // uniqueness inside the commit, which would roll the verified secret back with a 500. It is the same
+        // clash the intra-list check finds, so it is recorded the same way and the stored catalog is left as
+        // it is.
         let verified = match verified {
             Verified::Catalog(models) => match stored_clash(&state, &id, &models) {
                 Ok(Some(canonical)) => Verified::Error(format!(
@@ -283,12 +284,7 @@ pub(crate) async fn patch(
     } else if input.label.is_some() {
         // Fenced on the revision the row was read at, like the verified branch above: a patch built from a
         // stale read must not land on a row another edit has moved since.
-        if let Err(error) = state.store.update_account(
-            &id,
-            row.revision,
-            label,
-            ACTOR,
-        ) {
+        if let Err(error) = state.store.update_account(&id, row.revision, label, ACTOR) {
             match &error {
                 StoreError::Stale => {
                     return failure(

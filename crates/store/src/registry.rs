@@ -874,9 +874,18 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = ?3, catalog_error = ?4, revision = revision + 1, updated_at = ?5 \
+            "UPDATE accounts SET label = ?2, state = ?3, catalog_error = ?4, \
+             revision = revision + 1, updated_at = ?5 \
              WHERE id = ?1 AND lifecycle_generation = ?6 AND revision = ?7",
-            params![u.id, u.label, u.state, u.catalog_error, u.at, u.lifecycle_generation as i64, u.expected_revision as i64],
+            params![
+                u.id,
+                u.label,
+                u.state,
+                u.catalog_error,
+                u.at,
+                u.lifecycle_generation as i64,
+                u.expected_revision as i64,
+            ],
         )?;
         if updated == 0 {
             let exists: i64 = tx.query_row(

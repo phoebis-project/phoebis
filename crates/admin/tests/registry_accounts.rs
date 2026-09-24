@@ -146,7 +146,7 @@ async fn patching_deleting_and_disconnecting_accounts() {
         .await
         .status(),
         400,
-        "an oauth account refuses a secret with 400"
+        "a secret belongs to an api_key account"
     );
     assert_eq!(
         delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))
@@ -201,6 +201,36 @@ async fn patching_deleting_and_disconnecting_accounts() {
             .status(),
         403
     );
+}
+
+#[tokio::test]
+async fn an_account_write_ignores_a_member_the_route_does_not_name() {
+    let (app, _up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"extra","kind":"api_key","label":"Extra","secret":"sk-ant-api03-EXTRA","region":"eu"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let body = json(created).await;
+    assert!(
+        body.get("region").is_none(),
+        "a member the route does not name is dropped, not echoed"
+    );
+    let patched = patch(
+        &app,
+        "/admin/accounts/extra",
+        r#"{"label":"Extra 2","region":"eu"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let body = json(patched).await;
+    assert_eq!(body["label"].as_str(), Some("Extra 2"));
+    assert!(body.get("region").is_none());
 }
 
 #[tokio::test]

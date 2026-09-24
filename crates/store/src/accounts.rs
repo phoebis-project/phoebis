@@ -215,12 +215,7 @@ impl Store {
         tx.execute(
             "UPDATE accounts SET kind = ?2, label = ?3, revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1",
-            params![
-                id,
-                kind,
-                label,
-                jiff::Timestamp::now().as_millisecond()
-            ],
+            params![id, kind, label, jiff::Timestamp::now().as_millisecond()],
         )?;
         tx.commit()?;
         Ok(())
@@ -401,12 +396,7 @@ impl Store {
         if tx.execute(
             "UPDATE accounts SET label = ?2, revision = revision + 1, updated_at = ?3 \
              WHERE id = ?1 AND revision = ?4",
-            params![
-                id,
-                label,
-                now,
-                expected_revision as i64
-            ],
+            params![id, label, now, expected_revision as i64],
         )? == 0
         {
             let exists: i64 = tx.query_row(

@@ -20,6 +20,7 @@ const ACTOR: &str = "admin";
 const IMPORT_MAX_BYTES: usize = 16 << 20;
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(30);
 const PREVIEW_TTL_MS: i64 = 10 * 60 * 1_000;
+const TOO_LARGE: &str = "the price file is larger than the 16 MiB bound";
 
 /// What an import records as its source: enough to say where a table came from, never the credential a
 /// query string or userinfo may carry, since the label is answered to the viewer role and kept per version.
@@ -56,6 +57,75 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     }
 }
 
+/// The error's Display names the URL, which may carry a token in its query; the category is all that is
+/// answered, and a timeout keeps the sentence the console shows for it.
+fn import_failure(e: reqwest::Error) -> String {
+    if e.is_timeout() {
+        return "the price file did not arrive in time".to_string();
+    }
+    let e = e.without_url();
+    if e.is_connect() {
+        "the price file could not be fetched: connect".to_string()
+    } else if e.is_body() || e.is_decode() {
+        "the price file could not be fetched: body".to_string()
+    } else if let Some(status) = e.status() {
+        format!(
+            "the price file could not be fetched: status {}",
+            status.as_u16()
+        )
+    } else {
+        "the price file could not be fetched: request".to_string()
+    }
+}
+
+/// The import's own client: built per call because an import is an operator action, never a hot path, and
+/// the bounds are the request's rather than a pool's. No redirect, so the bytes come from the host the
+/// operator named.
+async fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "url does not parse".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("url must be http or https".into());
+    }
+    if parsed.host_str().is_none() {
+        return Err("url has no host".into());
+    }
+    // Built as the alerts crate builds its webhook client (`ReqwestWebhook::new`), minus its destination
+    // guard: whether an import may dial a private address is a decision the owner holds, so the difference
+    // is deliberate.
+    let client = reqwest::Client::builder()
+        .timeout(IMPORT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(format!("phoebis/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| "the import client could not be built".to_string())?;
+    let mut response = client
+        .get(parsed)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(import_failure)?;
+    if response.status().as_u16() != 200 {
+        return Err(format!(
+            "the price file answered {}",
+            response.status().as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|len| len > IMPORT_MAX_BYTES as u64)
+    {
+        return Err(TOO_LARGE.to_string());
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(import_failure)? {
+        if out.len() + chunk.len() > IMPORT_MAX_BYTES {
+            return Err(TOO_LARGE.to_string());
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 pub(crate) async fn import(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
     #[derive(serde::Deserialize)]
     struct Input {
@@ -67,7 +137,7 @@ pub(crate) async fn import(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if !(input.url.starts_with("http://") || input.url.starts_with("https://")) {
         return failure(StatusCode::BAD_REQUEST, "url must be http or https");
     }
-    let bytes = match fetch_url(&state, &input.url).await {
+    let bytes = match fetch_url(&input.url).await {
         Ok(b) => b,
         Err(m) => return failure(StatusCode::BAD_GATEWAY, &m),
     };

@@ -51,11 +51,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (19, V19),
     (20, V20),
     (21, V21),
+    (22, V22),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 22;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -284,4 +285,7 @@ ALTER TABLE refresh_attempts ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 0;
 // for a failure that predates the column.
 const V21: &str = r#"
 ALTER TABLE credentials ADD COLUMN last_error TEXT;
+"#;
+
+const V22: &str = r#"
 "#;

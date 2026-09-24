@@ -480,3 +480,52 @@ async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage
     );
     up.shutdown().await;
 }
+
+/// The tool-search shape (the beta line, a `tool_reference` block) named no fence any pool can trip any more:
+/// every account dials the one measured host, so the request carrying it reaches the upstream as sent.
+#[tokio::test]
+async fn a_request_carrying_the_tool_search_betas_reaches_the_upstream_unchanged() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", OA, 0), api_key("k", A, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let reference = r#"{"type":"tool_reference","tool_name":"lookup"}"#;
+    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(
+            r#""messages":[{"role":"user","content":["#,
+            &format!(r#""messages":[{{"role":"user","content":[{reference},"#),
+            1,
+        );
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(
+        &mut req,
+        "anthropic-beta",
+        "claude-code-20250219,oauth-2025-04-20,advanced-tool-use-2025-11-20",
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(
+        beta_list(sent)
+            .iter()
+            .any(|b| b == "advanced-tool-use-2025-11-20"),
+        "the beta line travels as sent"
+    );
+    assert!(
+        String::from_utf8_lossy(&sent.body).contains(reference),
+        "the tool_reference block travels as sent"
+    );
+    up.shutdown().await;
+}

@@ -1228,38 +1228,38 @@ impl Relay {
                 !edits.cache_ttl_refused
                     && (markerless == Markerless::TakesTheMember || edits.cache_ttl_edited)
             };
-                // Isolated per account, so a failover never carries one account's previous request id, or the
-                // previous message id a diagnostics member names, into another account's memory.
-                let previous = memory_key
-                    .map(|key| self.memory.previous(key, &account.id, canonical_model))
-                    .unwrap_or_default();
-                let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
-                    .then_some(previous.message_id.as_deref());
-                let edits = edit_body(
-                    &mut edited,
-                    &NativeEdit {
-                        account_uuid: account_uuid.as_deref(),
-                        upstream_model: &selection.upstream_model,
-                        restore: restore_with(&admitted.restore, &previous, skip),
-                        diagnostics,
-                        cache_ttl: ttl,
-                        markerless,
-                        version_check: admitted.restore.as_ref().map(|r| VersionCheck {
-                            client_version: &r.cli_version,
-                            prompt_units: r.prompt_units,
-                        }),
-                    },
-                )?;
-                if !claims_its_ttl(&edits) {
-                    ttl = None;
-                }
-                body_injected.extend(edits.restored);
-                if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
-                    inject_betas.push(Injected::CacheDiagnosisBeta);
-                }
-                if ttl == Some(CacheTtl::OneHour) {
-                    inject_betas.push(Injected::ExtendedTtlBeta);
-                }
+            // Isolated per account, so a failover never carries one account's previous request id, or the
+            // previous message id a diagnostics member names, into another account's memory.
+            let previous = memory_key
+                .map(|key| self.memory.previous(key, &account.id, canonical_model))
+                .unwrap_or_default();
+            let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
+                .then_some(previous.message_id.as_deref());
+            let edits = edit_body(
+                &mut edited,
+                &NativeEdit {
+                    account_uuid: account_uuid.as_deref(),
+                    upstream_model: &selection.upstream_model,
+                    restore: restore_with(&admitted.restore, &previous, skip),
+                    diagnostics,
+                    cache_ttl: ttl,
+                    markerless,
+                    version_check: admitted.restore.as_ref().map(|r| VersionCheck {
+                        client_version: &r.cli_version,
+                        prompt_units: r.prompt_units,
+                    }),
+                },
+            )?;
+            if !claims_its_ttl(&edits) {
+                ttl = None;
+            }
+            body_injected.extend(edits.restored);
+            if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
+                inject_betas.push(Injected::CacheDiagnosisBeta);
+            }
+            if ttl == Some(CacheTtl::OneHour) {
+                inject_betas.push(Injected::ExtendedTtlBeta);
+            }
             Ok((edited, body_injected, inject_betas, ttl))
         };
         // Seeded from what this account has already refused, so a leg the operator has not touched since the
