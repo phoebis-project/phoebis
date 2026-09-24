@@ -54,6 +54,17 @@ pub struct RequestRecord {
     /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired
     /// presentation belongs to.
     pub rotation_at: Option<i64>,
+    /// The class the relay derived at admission, `claude-code/<entrypoint>` or `other`. `None` on a row written
+    /// before the column existed.
+    pub client: Option<String>,
+    /// The gateway hint headers as the client sent them, each `None` when it sent none.
+    pub agent_type: Option<String>,
+    pub compaction: Option<String>,
+    pub context_compacted: Option<String>,
+    /// The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds.
+    pub prev_tool_ms: Option<i64>,
+    /// `cc_turn_origin` off the attribution line; first-party only.
+    pub turn_origin: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

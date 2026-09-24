@@ -70,6 +70,9 @@ pub struct RollupRow {
     pub kind: String,
     /// The `User-Agent` of the request the row folded, `UNATTRIBUTED` for a request that sent none.
     pub user_agent: String,
+    /// The class of the request the row folded, `UNATTRIBUTED` for a keepalive credit and for a row folded
+    /// before the column existed; a dimension, so it sits in the key.
+    pub client: String,
     /// The request's `output_config.effort`, `NO_EFFORT` when it sent none; a dimension, so it sits in the key.
     pub effort: String,
     pub requests: u64,
@@ -124,6 +127,7 @@ impl RollupRow {
         canonical_model: &str,
         kind: &str,
         user_agent: &str,
+        client: &str,
         effort: &str,
     ) -> RollupRow {
         RollupRow {
@@ -135,6 +139,7 @@ impl RollupRow {
             canonical_model: canonical_model.into(),
             kind: kind.into(),
             user_agent: user_agent.into(),
+            client: client.into(),
             effort: effort.into(),
             requests: 0,
             succeeded: 0,
@@ -302,6 +307,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         &request.canonical_model,
         &request.kind,
         request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
+        request.client.as_deref().unwrap_or(UNATTRIBUTED),
         request.effort.as_deref().unwrap_or(NO_EFFORT),
     );
     d.requests = 1;
@@ -463,6 +469,7 @@ pub fn fold_request(
             &delta.canonical_model,
             &delta.kind,
             &delta.user_agent,
+            &delta.client,
             &delta.effort,
         )
     });
@@ -533,8 +540,9 @@ fn reread_utilization(
 }
 
 /// The keepalive engine's own delta: one row of its key, holding what a kept-warm request saved, what a probe
-/// cost, and what a stopped recipe wasted. The user agent is the reserved id, since a probe's own request row
-/// carries the agent the recipe replays and a credit belongs to the key rather than to one caller.
+/// cost, and what a stopped recipe wasted. The user agent and the client are both the reserved id, since a
+/// probe's own request row carries the agent and class the recipe replays and a credit belongs to the key
+/// rather than to one caller.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
     let key = RollupRow::key(
         hour_of(delta.at),
@@ -544,6 +552,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         &delta.account_id,
         &delta.canonical_model,
         &delta.kind,
+        UNATTRIBUTED,
         UNATTRIBUTED,
         NO_EFFORT,
     );
@@ -809,7 +818,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, effort, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -818,8 +827,8 @@ pub(crate) fn read_rollup(
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client],
             row_to_rollup,
         )
         .optional()?)
@@ -827,8 +836,8 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client],
     )?;
     Ok(())
 }
@@ -837,9 +846,9 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49)"),
         params![
-            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.effort, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
@@ -874,46 +883,47 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         canonical_model: r.get(offset + 5)?,
         kind: r.get(offset + 6)?,
         user_agent: r.get(offset + 7)?,
-        effort: r.get(offset + 8)?,
-        requests: u(9)?,
-        succeeded: u(10)?,
-        rate_limited: u(11)?,
-        failed: u(12)?,
-        exhausted: u(13)?,
-        rejected: u(14)?,
-        attempts: u(15)?,
-        failovers: u(16)?,
-        cache_hits: u(17)?,
-        cache_misses: u(18)?,
-        uncached_requests: u(19)?,
-        input_tokens: u(20)?,
-        cache_read_tokens: u(21)?,
-        cache_write_5m_tokens: u(22)?,
-        cache_write_1h_tokens: u(23)?,
-        output_tokens: u(24)?,
-        thinking_tokens: u(25)?,
-        web_search_requests: u(26)?,
-        web_fetch_requests: u(27)?,
-        estimated_usd: r.get(offset + 28)?,
-        input_usd: r.get(offset + 29)?,
-        cache_read_usd: r.get(offset + 30)?,
-        cache_write_usd: r.get(offset + 31)?,
-        output_usd: r.get(offset + 32)?,
-        kept_warm_requests: u(33)?,
-        kept_warm_tokens: u(34)?,
-        saved_usd_gross: r.get(offset + 35)?,
-        probe_cost_usd: r.get(offset + 36)?,
-        probe_migrated: u(37)?,
-        wasted_probes: u(38)?,
-        wasted_probe_usd: r.get(offset + 39)?,
-        wasted_probe_reasons: counts(40)?,
-        probes_skipped: u(41)?,
-        ttfb_hist: hist(42)?,
-        ttfc_hist: hist(43)?,
-        duration_hist: hist(44)?,
-        output_tps_hist: hist(45)?,
-        errors: counts(46)?,
-        cache_miss_reasons: counts(47)?,
+        client: r.get(offset + 8)?,
+        effort: r.get(offset + 9)?,
+        requests: u(10)?,
+        succeeded: u(11)?,
+        rate_limited: u(12)?,
+        failed: u(13)?,
+        exhausted: u(14)?,
+        rejected: u(15)?,
+        attempts: u(16)?,
+        failovers: u(17)?,
+        cache_hits: u(18)?,
+        cache_misses: u(19)?,
+        uncached_requests: u(20)?,
+        input_tokens: u(21)?,
+        cache_read_tokens: u(22)?,
+        cache_write_5m_tokens: u(23)?,
+        cache_write_1h_tokens: u(24)?,
+        output_tokens: u(25)?,
+        thinking_tokens: u(26)?,
+        web_search_requests: u(27)?,
+        web_fetch_requests: u(28)?,
+        estimated_usd: r.get(offset + 29)?,
+        input_usd: r.get(offset + 30)?,
+        cache_read_usd: r.get(offset + 31)?,
+        cache_write_usd: r.get(offset + 32)?,
+        output_usd: r.get(offset + 33)?,
+        kept_warm_requests: u(34)?,
+        kept_warm_tokens: u(35)?,
+        saved_usd_gross: r.get(offset + 36)?,
+        probe_cost_usd: r.get(offset + 37)?,
+        probe_migrated: u(38)?,
+        wasted_probes: u(39)?,
+        wasted_probe_usd: r.get(offset + 40)?,
+        wasted_probe_reasons: counts(41)?,
+        probes_skipped: u(42)?,
+        ttfb_hist: hist(43)?,
+        ttfc_hist: hist(44)?,
+        duration_hist: hist(45)?,
+        output_tps_hist: hist(46)?,
+        errors: counts(47)?,
+        cache_miss_reasons: counts(48)?,
     })
 }
 
@@ -937,7 +947,7 @@ pub fn read_rollups(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, effort"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort"))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -982,7 +992,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, effort"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort"))?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,
@@ -1013,6 +1023,7 @@ mod tests {
     fn v2_columns() -> String {
         COLUMNS
             .replace(", user_agent", "")
+            .replace(", client", "")
             .replace(", effort", "")
             .replace(
                 ", thinking_tokens, web_search_requests, web_fetch_requests",
@@ -1054,7 +1065,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 15);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 16);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -1067,6 +1078,110 @@ mod tests {
             ),
             (UNATTRIBUTED, 3_600, "k", 5, 6),
             "a row folded before the column existed takes the reserved id and keeps its counts"
+        );
+    }
+
+    /// A stored ledger at version 15 has no client column on its rows or its rollup key. The migration adds
+    /// both, rebuilding the table as version 3 rebuilt it for the agent; a row folded before the column
+    /// existed takes the reserved id, and the client joins the key, so a live client's row stands beside it
+    /// rather than folding into it.
+    #[test]
+    fn a_version_fifteen_ledger_keeps_its_rollup_rows_under_the_unattributed_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            let tx = conn.transaction().unwrap();
+            for (_, sql) in crate::schema::MIGRATIONS.iter().filter(|(v, _)| *v < 16) {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '15')",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                &format!(
+                    "INSERT INTO rollups_hourly ({}) VALUES \
+                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua', 'none', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
+                     1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{{}}', 0, \
+                     x'', x'', x'', x'', '{{}}', '{{}}')",
+                    COLUMNS.replace(", client", "")
+                ),
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(db.read_blocking(read_version).unwrap(), 16);
+        let columns: Vec<String> = db
+            .read_blocking(|c| {
+                let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
+                let names = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(names)
+            })
+            .unwrap();
+        for column in [
+            "agent_type",
+            "client",
+            "compaction",
+            "context_compacted",
+            "prev_tool_ms",
+            "turn_origin",
+        ] {
+            assert!(
+                columns.iter().any(|c| c == column),
+                "requests names {column}"
+            );
+        }
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].client.as_str(),
+                rows[0].requests,
+                rows[0].output_tokens
+            ),
+            (UNATTRIBUTED, 5, 6),
+            "a row folded before the column existed takes the reserved client and keeps its counts"
+        );
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(
+                &tx,
+                &RequestRecord {
+                    id: "r2".into(),
+                    received_at: 3_600_000,
+                    key_id: Some("k".into()),
+                    pool_id: Some("p".into()),
+                    canonical_model: "m".into(),
+                    kind: "inference".into(),
+                    outcome: "succeeded".into(),
+                    user_agent: Some("ua".into()),
+                    client: Some("claude-code/cli".into()),
+                    ..Default::default()
+                },
+                &[attempt(1, "a", None, None, None, None)],
+                None,
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let clients: Vec<&str> = rows.iter().map(|r| r.client.as_str()).collect();
+        assert_eq!(
+            rows.len(),
+            2,
+            "the key admits both the reserved client and the live one"
+        );
+        assert!(
+            clients.contains(&UNATTRIBUTED) && clients.contains(&"claude-code/cli"),
+            "every other key part is equal, so only the client tells the two rows apart"
         );
     }
 
@@ -1092,7 +1207,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 15);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 16);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1632,6 +1747,7 @@ mod tests {
             "m",
             "inference",
             "claude-cli/2.1.269 (external, cli)",
+            "claude-code/cli",
             "high",
         );
         r.requests = 10;
@@ -1783,10 +1899,13 @@ mod tests {
             .unwrap();
             // The version-7 column list: every column a later migration added, stripped back out of the live
             // constant, so a future column addition needs no matching edit here.
-            let v7 = COLUMNS.replace(", effort", "").replace(
-                ", thinking_tokens, web_search_requests, web_fetch_requests",
-                "",
-            );
+            let v7 = COLUMNS
+                .replace(", client", "")
+                .replace(", effort", "")
+                .replace(
+                    ", thinking_tokens, web_search_requests, web_fetch_requests",
+                    "",
+                );
             let counts = |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap();
             tx.execute(
                 &format!(
@@ -1847,10 +1966,11 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 15);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 16);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = old;
+        expected.client = UNATTRIBUTED.into();
         expected.effort = NO_EFFORT.into();
         assert_eq!(
             rows[0], expected,

@@ -23,6 +23,8 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
         Some("claude-cli/2.1.300 (external, cli)"),
         None,
     ];
+    // The last one stands for a row folded before the column existed, which folds under the reserved id.
+    let clients = [Some("claude-code/cli"), Some("sdk/python"), None];
     let efforts = [None, None, Some("low"), Some("high"), Some("max")];
     let kinds = [
         "inference",
@@ -106,6 +108,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
             duration_ms: duration,
             error_code: (outcome != "succeeded").then(|| "e".into()),
             user_agent: agents[rng.random_range(0..3)].map(String::from),
+            client: clients[rng.random_range(0..3)].map(String::from),
             effort: efforts[rng.random_range(0..5)].map(String::from),
             tool_count: rng.random_range(0..30),
             ..Default::default()
@@ -202,6 +205,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         ("model", Box::new(|r| r.canonical_model.clone())),
         ("kind", Box::new(|r| r.kind.clone())),
         ("user_agent", Box::new(|r| r.user_agent.clone())),
+        ("client", Box::new(|r| r.client.clone())),
         ("effort", Box::new(|r| r.effort.clone())),
         ("hour", Box::new(|r| r.hour.to_string())),
     ];
@@ -319,7 +323,11 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
 #[test]
 fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let plant = |id: &str, key: Option<&str>, generation: i64, agent: Option<&str>| {
+    let plant = |id: &str,
+                 key: Option<&str>,
+                 generation: i64,
+                 agent: Option<&str>,
+                 client: Option<&str>| {
         let (mut request, mut attempts) = synthetic_day(1).swap_remove(0);
         request.id = id.into();
         request.key_id = key.map(String::from);
@@ -327,23 +335,25 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         request.received_at = 1_000;
         request.kind = "inference".into();
         request.user_agent = agent.map(String::from);
+        request.client = client.map(String::from);
         for attempt in &mut attempts {
             attempt.request_id = id.into();
         }
         db.insert_request(&request, &attempts, None).unwrap();
     };
-    plant("r1", Some("k1"), 1_000, None);
-    plant("r2", Some("k1"), 1_000, None);
-    plant("r3", Some("k1"), 2_000, None);
-    plant("r4", Some("k2"), 0, None);
+    plant("r1", Some("k1"), 1_000, None, Some("claude-code/cli"));
+    plant("r2", Some("k1"), 1_000, None, Some("claude-code/cli"));
+    plant("r3", Some("k1"), 2_000, None, Some("sdk/python"));
+    plant("r4", Some("k2"), 0, None, Some("sdk/python"));
     // A client whose agent carries `@`, and a request the router never attributed.
     plant(
         "r5",
         Some("k2"),
         0,
         Some("my-client/1.0 (ops@example.invalid)"),
+        Some("sdk/python"),
     );
-    plant("r6", None, 0, None);
+    plant("r6", None, 0, None, None);
     let live = LiveKeys(BTreeMap::from([
         ("k1".to_string(), 2_000),
         ("k2".to_string(), 0),
@@ -383,6 +393,25 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     assert_eq!(
         ops.label, "my-client/1.0 (ops@example.invalid)",
         "an agent carrying `@` is labelled verbatim: only a key group is parsed for a generation"
+    );
+    let clients = breakdown(
+        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        "client",
+        true,
+        &live,
+        &[],
+    );
+    assert_eq!(
+        clients
+            .iter()
+            .map(|g| (g.key.as_str(), g.label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("claude-code/cli", "claude-code/cli"),
+            ("sdk/python", "sdk/python"),
+            ("-", "unattributed"),
+        ],
+        "the class groups the rows; a row folded before the column existed labels as every reserved id does"
     );
     let sum = |keys: &[&str]| -> u64 {
         apply_filter(

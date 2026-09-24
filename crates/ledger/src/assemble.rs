@@ -530,6 +530,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         requested_service_tier: observed.shape.service_tier.clone(),
         presented_retired: observed.presented_retired,
         rotation_at: observed.rotation_at,
+        client: Some(observed.client.class.clone()),
+        agent_type: observed.client.agent_type.clone(),
+        compaction: observed.client.compaction.clone(),
+        context_compacted: observed.client.context_compacted.clone(),
+        prev_tool_ms: observed.client.prev_tool_ms,
+        turn_origin: observed.client.turn_origin.clone(),
     };
     records.push(Record::Request {
         request,

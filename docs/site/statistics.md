@@ -27,8 +27,11 @@ A `ledger_gap` event names one of these reasons:
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
 call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes
 sent and received; whether the response was served kept warm; whether its body was captured; and the client's
-user agent and the request's shape: the effort, the thinking mode and budget, the output limit, the tool,
-system-block, and message counts, the context edits, the temperature, and the requested speed and service tier.
+user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
+type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn
+origin off its attribution line, and the request's shape: the effort, the thinking mode and budget, the output
+limit, the tool, system-block, and message counts, the context edits, the temperature, and the requested speed
+and service tier.
 The attempt row names the account and its kind and host; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the served model when it differs from the one requested, the speed,
 the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;

@@ -282,6 +282,219 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
     up.shutdown().await;
 }
 
+/// The class the relay derives at admission, the gateway hints the client sent, and the turn origin off a
+/// stamped attribution line all reach the request row, and the log filters on each of them; the class is also
+/// the hourly rollup's dimension, so two classes in the same hour hold two rows.
+#[tokio::test]
+async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_log_filters_on_them(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let native =
+        String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
+            .unwrap();
+    let (line, headers) = phoebis_transport::request::parse_head(
+        phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::OauthFirstParty),
+    )
+    .unwrap();
+    let target = line.split(' ').nth(1).unwrap();
+    // `agent` swaps the fixture's own `claude-cli/` user agent and drops the fixture's `X-Stainless-Lang` with it,
+    // sending the language header `agent` names in its place.
+    let build = |body: String, session: &str, agent: Option<(&str, &str)>| {
+        let mut req = axum::http::Request::builder().method("POST").uri(target);
+        for (n, v) in &headers {
+            match n.to_ascii_lowercase().as_str() {
+                "authorization" => req = req.header("Authorization", format!("Bearer {KEY}")),
+                "host" | "content-length" | "x-claude-code-session-id" => {}
+                "user-agent" | "x-stainless-lang" if agent.is_some() => {}
+                _ => req = req.header(n.as_str(), v.as_str()),
+            }
+        }
+        if let Some((user_agent, lang)) = agent {
+            req = req
+                .header("User-Agent", user_agent)
+                .header("X-Stainless-Lang", lang);
+        }
+        req.header("x-claude-code-session-id", session)
+            .body(axum::body::Body::from(body.into_bytes()))
+            .unwrap()
+    };
+
+    // The billing line stamped with a turn origin, the three hint headers set: every fact reaches the row.
+    let spliced = native.replacen(
+        "cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa;",
+        "cc_prompt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa; cc_turn_origin=human;",
+        1,
+    );
+    let spliced = String::from_utf8(phoebis_cch::sign(spliced.as_bytes()).unwrap()).unwrap();
+    let mut req = build(spliced, "s1", None);
+    req.headers_mut()
+        .insert("x-claude-code-agent-type", "Explore".parse().unwrap());
+    req.headers_mut()
+        .insert("x-claude-code-compaction", "auto".parse().unwrap());
+    req.headers_mut()
+        .insert("x-claude-code-context-compacted", "manual".parse().unwrap());
+    req.headers_mut().insert(
+        "x-claude-code-prev-tool-durations",
+        "Bash=1200;Read=35;".parse().unwrap(),
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (row, _) = ledgered(&h, &id).await;
+    assert_eq!(
+        (
+            row.client.as_deref(),
+            row.agent_type.as_deref(),
+            row.compaction.as_deref(),
+            row.context_compacted.as_deref(),
+            row.prev_tool_ms,
+            row.turn_origin.as_deref()
+        ),
+        (
+            Some("claude-code/sdk-cli"),
+            Some("Explore"),
+            Some("auto"),
+            Some("manual"),
+            Some(1_235),
+            Some("human")
+        ),
+        "the class, the hints, and the turn origin all reach the row"
+    );
+    let matched_client = |pattern: &str| {
+        let filter = phoebis_ledger::RequestFilter {
+            client: Some(pattern.into()),
+            ..Default::default()
+        };
+        h.db.read_blocking(|c| {
+            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .len()
+    };
+    assert_eq!(
+        matched_client("claude-code/*"),
+        1,
+        "the class pattern finds it"
+    );
+    assert_eq!(
+        matched_client("sdk/*"),
+        0,
+        "and a class it does not match finds nothing"
+    );
+    let matched_agent_types = |types: &[&str]| {
+        let filter = phoebis_ledger::RequestFilter {
+            agent_types: types.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        h.db.read_blocking(|c| {
+            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .len()
+    };
+    assert_eq!(
+        matched_agent_types(&["Explore"]),
+        1,
+        "the agent type finds it"
+    );
+    assert_eq!(
+        matched_agent_types(&["Plan"]),
+        0,
+        "another agent type does not"
+    );
+    let matched_turn_origins = |origins: &[&str]| {
+        let filter = phoebis_ledger::RequestFilter {
+            turn_origins: origins.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        h.db.read_blocking(|c| {
+            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+        .0
+        .len()
+    };
+    assert_eq!(
+        matched_turn_origins(&["human"]),
+        1,
+        "the turn origin finds it"
+    );
+
+    // No hint header sent: the four hint members are absent, but the class still reads from the user agent.
+    let resp2 = h
+        .app
+        .clone()
+        .oneshot(build(native.clone(), "s2", None))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), 200);
+    let id2 = request_id(&resp2);
+    let _ = resp2.into_body().collect().await.unwrap();
+    let (row2, _) = ledgered(&h, &id2).await;
+    assert_eq!(
+        (
+            row2.client.as_deref(),
+            row2.agent_type.as_deref(),
+            row2.compaction.as_deref(),
+            row2.context_compacted.as_deref(),
+            row2.prev_tool_ms,
+            row2.turn_origin.as_deref()
+        ),
+        (Some("claude-code/sdk-cli"), None, None, None, None, None),
+        "a caller that sends no hint carries the class alone"
+    );
+
+    // A caller of a different class, in the same hour: the rollup's client dimension keeps the two apart.
+    let resp3 = h
+        .app
+        .clone()
+        .oneshot(build(
+            native,
+            "s3",
+            Some(("anthropic-sdk-python/0.40.0", "python")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp3.status(), 200);
+    let id3 = request_id(&resp3);
+    let _ = resp3.into_body().collect().await.unwrap();
+    assert_eq!(
+        ledgered(&h, &id3).await.0.client.as_deref(),
+        Some("other"),
+        "a caller outside Claude Code carries the other label"
+    );
+    let rollups =
+        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+            .await
+            .unwrap();
+    let by_client: std::collections::BTreeMap<&str, u64> =
+        rollups
+            .iter()
+            .fold(std::collections::BTreeMap::new(), |mut m, r| {
+                *m.entry(r.client.as_str()).or_default() += r.requests;
+                m
+            });
+    assert_eq!(
+        by_client.get("claude-code/sdk-cli").copied(),
+        Some(2),
+        "the first two requests fold under the same client"
+    );
+    assert_eq!(
+        by_client.get("other").copied(),
+        Some(1),
+        "the third request's class is its own row in the same hour"
+    );
+    up.shutdown().await;
+}
+
 /// A request with no `User-Agent` header at all is not invisible to the pattern filter: it lands under the
 /// `-` marker the rollups and the console's fold already use for one.
 #[tokio::test]

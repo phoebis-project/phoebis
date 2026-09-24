@@ -489,8 +489,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(15), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that drops the attempt's host"
+        (Some(16), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the client class and the hints"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(

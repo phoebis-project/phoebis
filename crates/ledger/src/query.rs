@@ -98,6 +98,10 @@ pub struct RequestFilter {
     pub outcomes: Vec<String>,
     /// A pattern under the wildcard grammar of `crate::pattern`; a value with no wildcard matches in full.
     pub user_agent: Option<String>,
+    /// A pattern under the wildcard grammar over the row's `client`; a row with none matches `-`.
+    pub client: Option<String>,
+    pub agent_types: Vec<String>,
+    pub turn_origins: Vec<String>,
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub include_probes: bool,
@@ -244,6 +248,18 @@ pub fn list_requests(
             at_like + 1
         ));
     }
+    if let Some(client) = filter.client.as_deref().filter(|c| !c.is_empty()) {
+        let (like, escape) = crate::pattern::to_like(client);
+        args.push(Box::new(like));
+        let at_like = args.len();
+        args.push(Box::new(escape.to_string()));
+        clauses.push(format!(
+            "COALESCE(client, '-') LIKE ?{at_like} ESCAPE ?{}",
+            at_like + 1
+        ));
+    }
+    in_list("agent_type", &filter.agent_types, &mut args, &mut clauses);
+    in_list("turn_origin", &filter.turn_origins, &mut args, &mut clauses);
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
         clauses.push("kind != 'probe'".into());
     }
@@ -481,6 +497,8 @@ pub struct RollupFilter {
     /// Under `group_by=user_agent`, each pattern names a group and a row falls in the first that matches it;
     /// a row no pattern matches groups under `other`. Empty means every agent is its own group.
     pub user_agent_groups: Vec<String>,
+    /// Patterns under the wildcard grammar; a row matches when any pattern matches its client in full.
+    pub clients: Vec<String>,
     pub include_probes: bool,
 }
 
@@ -495,6 +513,7 @@ impl RollupFilter {
 pub const GROUP_BYS: &[&str] = &[
     "account",
     "all",
+    "client",
     "effort",
     "key",
     "kind",
@@ -582,6 +601,7 @@ pub fn group_of(
         "account" => row.account_id.clone(),
         "model" => row.canonical_model.clone(),
         "kind" => row.kind.clone(),
+        "client" => row.client.clone(),
         "effort" => row.effort.clone(),
         "user_agent" => {
             if agent_groups.is_empty() {
@@ -620,6 +640,12 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter, live: &LiveKeys) -> 
                 || f.user_agents
                     .iter()
                     .any(|p| crate::pattern::matches(p, &r.user_agent))
+        })
+        .filter(|r| {
+            f.clients.is_empty()
+                || f.clients
+                    .iter()
+                    .any(|p| crate::pattern::matches(p, &r.client))
         })
         .collect()
 }
@@ -718,8 +744,8 @@ fn sum_groups(
         let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", ""),
                 false,
             )
         });

@@ -125,6 +125,9 @@ pub(crate) async fn list(
         statuses,
         outcomes: list_param(&q, "outcomes"),
         user_agent: q.get("user_agent").cloned(),
+        client: None,
+        agent_types: Vec::new(),
+        turn_origins: Vec::new(),
         from,
         to,
         include_probes: q

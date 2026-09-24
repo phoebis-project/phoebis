@@ -449,12 +449,17 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             sql.push_str(&format!("ALTER TABLE attempts DROP COLUMN {column}; "));
         }
         for column in [
+            "agent_type",
+            "client",
             "client_drift",
+            "compaction",
+            "context_compacted",
             "context_edits",
             "effort",
             "max_tokens",
             "message_count",
             "presented_retired",
+            "prev_tool_ms",
             "request_truncated",
             "requested_service_tier",
             "requested_speed",
@@ -465,6 +470,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             "thinking_budget",
             "thinking_type",
             "tool_count",
+            "turn_origin",
         ] {
             sql.push_str(&format!("ALTER TABLE requests DROP COLUMN {column}; "));
         }
@@ -476,7 +482,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 15);
+    assert_eq!(db.schema_version().await.unwrap(), 16);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

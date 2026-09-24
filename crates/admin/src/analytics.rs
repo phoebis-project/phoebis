@@ -54,6 +54,7 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
         kinds: list(q, "kinds"),
         user_agents: agent_list(q, "user_agents"),
         user_agent_groups: agent_list(q, "user_agent_groups"),
+        clients: Vec::new(),
         include_probes: flag(q, "include_probes"),
     }
 }
