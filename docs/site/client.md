@@ -31,7 +31,8 @@ automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all t
 
 Optional, and worth setting. Under it the client sends the full first-party shape: the attribution line with every
 field, `x-client-request-id`, and the gateway hint headers, all by default, so the router restores nothing and the
-request log reads the turn origin and the hints as the client sent them. It also switches off gateway model discovery.
+request log reads the turn origin and the hints as the client sent them. It also stops the client reading the
+router's models listing, which it otherwise uses to size its context window by the id.
 Without it the client sends the reduced shape, and the router restores, toward `api.anthropic.com`, the fields the
 reduced shape lacks on the attribution line the client sent: the `cch` billing hash, `x-client-request-id`,
 `cc_prev_req`, and `cc_prompt_id`, each only when absent. A request that carries no attribution line, as under
@@ -96,19 +97,18 @@ the settings file's environment block holds only static values.
 | POST | `/v1/messages` | router key | relayed to the selected account |
 | POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop; its markers take the pool's TTL |
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
-| GET | `/v1/models` | none | `404` |
-| GET | `/v1/models/{id}` | none | `404` |
+| GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
+| GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
 | GET | `/v0/resource/plugins/cache-keepalive/events` | router key | the companion's event report |
 | GET | `/v0/resource/plugins/cache-keepalive/snapshot` | router key | the companion's engine snapshot |
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
 The client probes `/api/hello` before it sends anything, and ignores the answer. The two `/v1/models` routes
-refuse on purpose: answering them would let a client pick a model from an account's entitlements rather than
-from its own configuration. Every refusal above, including the wrong-method and unknown-path answers, carries an
-Anthropic-shaped error body. The two keepalive companion routes are covered on the [Keepalive](keepalive.md)
-page; each session they report belongs to the key generation that registered it, so a key id created again
-reaches none of the sessions its previous holder left behind.
+answer the [models listing](#the-models-listing) below. Every refusal above, including the wrong-method and
+unknown-path answers, carries an Anthropic-shaped error body. The two keepalive companion routes are covered on
+the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it,
+so a key id created again reaches none of the sessions its previous holder left behind.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message, and the `cache_control` markers it carries take the pool's cache TTL policy the way a message's do:
@@ -166,6 +166,25 @@ With `Accept` preferring `text/html` (listed alone, or weighted above `applicati
 it), the same route answers one self-contained page, so a browser extension or a `curl -H 'Accept: text/html'`
 saved to a file shows the figures without the console and without an admin login. A wrong or missing key is
 refused exactly as `/v1/messages` refuses it, in the Anthropic error shape.
+
+## The models listing
+
+`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every
+enabled upstream of the key's pool is asked for its catalog through the router's cache
+([routing](routing.md#catalogs)), the pool's and the key's [model rules](routing.md#model-rules) are applied to
+each id, one row is kept per id (the first upstream in priority order that lists it), and the rows are sorted by
+id. The shape is the API's own: `data[]` of `id`, `type`, `display_name`, `created_at`, `max_input_tokens`, and
+`max_tokens` as the upstream reports them, with `first_id`, `last_id`, and `has_more`; `limit` (1 to 1000,
+default 20), `after_id`, and `before_id` page it, and a `limit` outside its range is refused `400 invalid_limit`.
+An upstream whose fetch failed contributes nothing until the next fetch, and a model that is cooling down on an
+upstream still lists. `GET /v1/models/{id}` answers the one row, or `404 not_found_error` with the message
+`model: {id}`; an id with a slash may be sent as is or percent-encoded.
+
+Beside every model whose `max_input_tokens` is above 200,000 the listing carries a twin whose id ends in `[1m]`
+and whose display name ends in " (1M Context)", with the same figures. Claude Code behind a gateway sizes its
+context window by the id, 200K unless it ends in `[1m]`, so the twin is what lets it use the window the
+upstream reports; a request that names the twin is routed as the model itself and the suffix never reaches the
+upstream. The twins are on by default and switched off per key with `long_context_twins`.
 
 ## Headers and transport
 

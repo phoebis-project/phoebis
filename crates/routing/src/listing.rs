@@ -1,4 +1,9 @@
-//! The shape of an upstream's model listing and the dated-id fold every canonical lookup shares.
+//! The shape of an upstream's model listing, the dated-id fold every canonical lookup shares, and the caller-key
+//! listing `GET /v1/models` answers from it.
+
+use std::collections::HashSet;
+
+use crate::rules::{allows, ProcessedRule};
 
 /// One row of an upstream's `GET /v1/models` answer, the five fields the listing repeats. No serde derive: the
 /// routing crate carries none, and the two routes that answer it build their JSON by hand.
@@ -16,6 +21,105 @@ pub struct CatalogRow {
 pub fn undated(id: &str) -> Option<&str> {
     let (base, suffix) = id.rsplit_once('-')?;
     (suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit())).then_some(base)
+}
+
+/// Input tokens above which a model gets a `[1m]` twin: Claude Code sizes its window at 200K unless the id ends
+/// in the suffix, so the twin is what lets it use the window the catalog reports.
+pub const LONG_CONTEXT_ABOVE: u64 = 200_000;
+pub const LONG_CONTEXT_SUFFIX: &str = "[1m]";
+
+/// The listing for one key: the members' rows in the order given (priority order; a member whose fetch failed
+/// hands in an empty list), each row's folded id judged by `processed`, one row per id from the first member
+/// that lists it, the twin beside every long-context row when `twins` is set, sorted by id.
+pub fn listing(
+    members: &[Vec<CatalogRow>],
+    processed: &[ProcessedRule],
+    twins: bool,
+) -> Vec<CatalogRow> {
+    let mut folded_seen = HashSet::new();
+    let mut kept: Vec<(String, CatalogRow)> = Vec::new();
+    for member in members {
+        for row in member {
+            // The upstream never lists a twin of its own; a row already carrying the suffix is not this
+            // account's model to fold under, so it is dropped rather than double-suffixed.
+            if row.id.ends_with(LONG_CONTEXT_SUFFIX) {
+                continue;
+            }
+            let folded = row.id.to_ascii_lowercase();
+            if folded_seen.insert(folded.clone()) {
+                kept.push((folded, row.clone()));
+            }
+        }
+    }
+    let mut out: Vec<CatalogRow> = kept
+        .into_iter()
+        .filter(|(folded, _)| allows(processed, folded))
+        .map(|(_, row)| row)
+        .collect();
+    if twins {
+        let twinned: Vec<CatalogRow> = out
+            .iter()
+            .filter(|row| {
+                row.max_input_tokens
+                    .is_some_and(|tokens| tokens > LONG_CONTEXT_ABOVE)
+            })
+            .map(|row| CatalogRow {
+                id: format!("{}{LONG_CONTEXT_SUFFIX}", row.id),
+                display_name: format!("{} (1M Context)", row.display_name),
+                ..row.clone()
+            })
+            .collect();
+        out.extend(twinned);
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// One page of a sorted listing in the Anthropic shape's terms: `after_id` starts past the named id, `before_id`
+/// ends before it and takes the last `limit` rows, `limit` bounds the page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Page {
+    pub data: Vec<CatalogRow>,
+    pub first_id: Option<String>,
+    pub last_id: Option<String>,
+    pub has_more: bool,
+}
+
+pub fn page(
+    listing: &[CatalogRow],
+    limit: usize,
+    after_id: Option<&str>,
+    before_id: Option<&str>,
+) -> Page {
+    let candidates: Vec<CatalogRow> = listing
+        .iter()
+        .filter(|row| match (after_id, before_id) {
+            (Some(after), _) => row.id.as_str() > after,
+            (None, Some(before)) => row.id.as_str() < before,
+            (None, None) => true,
+        })
+        .cloned()
+        .collect();
+    let has_more = candidates.len() > limit;
+    let data = if before_id.is_some() {
+        // The cursor walks backward: the page ends just before it, so it is the last `limit` rows that
+        // precede it rather than the first.
+        let start = candidates.len().saturating_sub(limit);
+        candidates[start..].to_vec()
+    } else {
+        candidates[..candidates.len().min(limit)].to_vec()
+    };
+    Page {
+        first_id: data.first().map(|row| row.id.clone()),
+        last_id: data.last().map(|row| row.id.clone()),
+        has_more,
+        data,
+    }
+}
+
+/// The row whose id equals `id` ASCII-case-insensitively, a twin included.
+pub fn find<'a>(listing: &'a [CatalogRow], id: &str) -> Option<&'a CatalogRow> {
+    listing.iter().find(|row| row.id.eq_ignore_ascii_case(id))
 }
 
 #[cfg(test)]

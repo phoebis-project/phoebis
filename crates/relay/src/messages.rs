@@ -203,6 +203,10 @@ impl Relay {
         &self.catalog
     }
 
+    pub(crate) fn router(&self) -> &RouterHandle {
+        &self.router
+    }
+
     /// Attaches the bus every relayed request is published to. Without one the relay publishes nothing.
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
@@ -595,10 +599,10 @@ pub fn router(relay: Arc<Relay>) -> Router {
         .route("/api/hello", head(hello))
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(messages))
-        // Model discovery is not part of the relayed surface: answering it would invite a client to pick a
-        // model from an account's entitlements rather than from its own configuration.
-        .route("/v1/models", get(unknown_route))
-        .route("/v1/models/{id}", get(unknown_route))
+        // The listing answers the caller's key with what its pool may route to, so a client that sizes its
+        // context window by the id sees the `[1m]` twins.
+        .route("/v1/models", get(crate::models::list))
+        .route("/v1/models/{*id}", get(crate::models::show))
         .method_not_allowed_fallback(wrong_method)
         .fallback(unknown_route)
         .with_state(relay)

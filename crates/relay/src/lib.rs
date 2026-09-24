@@ -18,6 +18,7 @@ mod hold;
 mod identity;
 mod memory;
 mod messages;
+mod models;
 mod observe;
 mod portability;
 mod ratelimit;

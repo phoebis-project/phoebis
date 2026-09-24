@@ -759,6 +759,16 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     req
 }
 
+/// A `GET` on the proxy listener under the router key, for the `/v1/models` routes.
+pub fn models_request(key: &str, path: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("Authorization", format!("Bearer {key}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
 /// The same request carrying a top-level `container`, which binds it to the account that holds the container.
 pub fn non_portable_request(key: &str, session: &str) -> Request<Body> {
     let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())

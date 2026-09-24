@@ -253,11 +253,18 @@ async fn local_rejections_are_anthropic_shaped() {
         .header("Authorization", "Bearer phoebis-testkey")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        app.oneshot(models).await.unwrap().status(),
-        StatusCode::NOT_FOUND
+    let resp = app.oneshot(models).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        v["data"].is_array(),
+        "the harness's default catalog fake feeds the listing"
     );
-    assert!(up.requests().is_empty());
+    assert!(
+        up.requests().is_empty(),
+        "the catalog probes go to catalog_up"
+    );
     up.shutdown().await;
 }
 
