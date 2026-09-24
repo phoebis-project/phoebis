@@ -39,13 +39,8 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
 
 // claude-sonnet-4-5 is not in the shipped price table; the harness serves it under that id alone. Every test
 // here serves and requests claude-sonnet-5, which the table prices, so the saving and the cost are numbers the
-// assertions can name. The routing snapshot is rebuilt after the served list changes, or the relay would still
-// resolve against the old one.
+// assertions can name.
 const PRICED: &str = "claude-sonnet-5";
-
-// No served-model gate stands between a pool and a model any more: every enabled member routes for
-// anything the pool's and the key's rules allow, so pricing a model here needs no row written for it.
-async fn priced(_r: &mut Rig) {}
 
 fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
@@ -71,7 +66,6 @@ async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
 #[tokio::test]
 async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -151,7 +145,6 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
 async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
     // A stream arms the schedule before it completes; a probe that runs while it is open must not credit it.
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -203,7 +196,6 @@ async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
     // A one-hour recipe with a covering probe, then a request inside that hour whose own evidence is a
     // five-minute write: the gap is measured against the hour the prior recipe had, so nothing is credited.
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let hour = priced_body().replace(
         r#""cache_control":{"type":"ephemeral"}"#,
         r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
@@ -268,7 +260,6 @@ async fn a_migrated_probe_is_exempt_and_the_next_request_counts_as_kept_warm() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     // The two accounts rank equally, so which one serves the first request is not known until it has: the
     // standing rule answers it on either, and nothing is left queued in front of the probe's own answer.
@@ -327,7 +318,6 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -352,7 +342,6 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     );
     // A real request before the stop resets the count: two probes, a request, one probe, then a release.
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     for _ in 0..2 {
@@ -392,7 +381,6 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     r.observe_with("main", &body).await;
     let first = r.status("main").account_id.clone().unwrap();
     let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
@@ -433,7 +421,6 @@ async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.observe_with("main", &body).await;
     r.advance(270_000);
@@ -466,7 +453,6 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
             ..RigSpec::default()
         })
         .await;
-        priced(&mut r).await;
         let body = priced_body();
         r.observe_with("main", &body).await;
         r.advance(270_000);
@@ -503,7 +489,6 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             ..RigSpec::default()
         })
         .await;
-        priced(&mut r).await;
         let body = priced_body();
         r.up.push_credential_rule(A, "/v1/messages", cold_answer());
         r.observe_with("main", &body).await;
@@ -606,7 +591,6 @@ async fn a_negative_net_holds_after_the_grace_probes_and_a_real_request_regrants
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -654,7 +638,6 @@ async fn a_negative_net_holds_after_the_grace_probes_and_a_real_request_regrants
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     for _ in 0..5 {
@@ -681,7 +664,6 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -723,7 +705,6 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
     // A caller that asks for `Claude-Sonnet-5[1m]` is served under `claude-sonnet-5`: the replay keeps the
     // spelling, and the cost and the rollup key take the canonical id.
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let spelled = BODY.replace("claude-sonnet-4-5", "Claude-Sonnet-5[1m]");
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &spelled).await;
@@ -813,7 +794,6 @@ async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -853,7 +833,6 @@ async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
 #[tokio::test]
 async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -941,7 +920,6 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
 #[tokio::test]
 async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -981,7 +959,6 @@ async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
 #[tokio::test]
 async fn a_probe_that_rebuilt_most_of_the_prefix_covered_nothing() {
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -1019,7 +996,6 @@ fn warm_answer() -> Respond {
 #[tokio::test]
 async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -1045,7 +1021,6 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     assert!(!row(&r, &elsewhere).await.kept_warm);
     // The same gap and the same covering probe, with the request served by the account the probe warmed.
     let mut r = rig(RigSpec::default()).await;
-    priced(&mut r).await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     r.advance(270_000);
@@ -1076,7 +1051,6 @@ async fn an_aggregate_only_cache_write_reaches_the_cap() {
         ..RigSpec::default()
     })
     .await;
-    priced(&mut r).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
