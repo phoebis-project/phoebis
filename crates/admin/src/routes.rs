@@ -99,6 +99,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/keys/{id}/rotate", post(keys::rotate))
         .route("/admin/live", get(live::upgrade))
         .route("/admin/live/snapshot", get(live::past))
+        .route("/admin/models/state", get(models::state))
         .route("/admin/oauth/sessions", post(pairing_start))
         .route(
             "/admin/oauth/sessions/{id}",
@@ -109,7 +110,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
             post(pairing_callback),
         )
         .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
-        .route("/admin/models/state", get(models::state))
         .route("/admin/pools", get(pools::list).post(pools::create))
         .route(
             "/admin/pools/{id}",
