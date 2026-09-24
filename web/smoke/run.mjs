@@ -1245,52 +1245,67 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 }
 m.unmount();
 
+// A helper that cannot find the control a check needs fails that check by name, so a control that disappears
+// fails the run rather than leaving the check to read a page nothing narrowed.
+const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labelled ${label}`] });
+
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-code/cli', 'other', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  // A control that is not drawn fails the check that reads the table after it rather than the whole run.
-  const type = async (label, value) => {
+  const type = async (check, label, value) => {
     const input = m.container.querySelector(`input[aria-label="${label}"]`);
-    if (input) {
-      setter.call(input, value);
-      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    if (!input) {
+      controlMissing(check, label);
+      return;
     }
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(700);
   };
   const keyColumn = () => [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
   // The class is the cell's own text; an agent type rides beneath it in a line of its own.
   const classColumn = () => [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.firstChild?.textContent?.trim());
-  await type('User agent pattern', 'phoebis-batch/*');
+  const agentCheck = '/requests the user agent filter is a pattern';
+  await type(agentCheck, 'User agent pattern', 'phoebis-batch/*');
   const wildcard = keyColumn();
-  await type('User agent pattern', 'phoebis-batch');
+  await type(agentCheck, 'User agent pattern', 'phoebis-batch');
   const bare = keyColumn();
   results.push({
-    name: '/requests the user agent filter is a pattern',
+    name: agentCheck,
     ok: wildcard.length > 0 && wildcard.every((k) => k === 'ci') && bare.length === 0,
     missing: [`with a star ${wildcard.slice(0, 3).join(',')}`, `without one ${bare.length} rows`],
   });
-  await type('User agent pattern', '');
+  await type(agentCheck, 'User agent pattern', '');
 
-  await type('Client pattern', 'claude-code/*');
+  const classCheck = '/requests client pattern narrows the table';
+  await type(classCheck, 'Client pattern', 'claude-code/*');
   const claudeCode = classColumn();
-  await type('Client pattern', 'other');
+  await type(classCheck, 'Client pattern', 'other');
   const otherKeys = keyColumn();
   results.push({
-    name: '/requests client pattern narrows the table',
+    name: classCheck,
     ok: claudeCode.length > 0 && !claudeCode.includes('other') && otherKeys.length > 0 && otherKeys.every((k) => k === 'ci'),
     missing: [`claude-code/* ${[...new Set(claudeCode)].join(',')}`, `other ${[...new Set(otherKeys)].join(',')}`],
   });
-  await type('Client pattern', '');
+  await type(classCheck, 'Client pattern', '');
 
+  const cells = [...m.container.querySelectorAll('.requests__table tbody .requests__client')];
+  // A row with no class draws a muted dash and carries no title.
+  const titleOf = (td) => (td.firstChild?.textContent?.trim() === '-' ? null : td.firstChild?.textContent?.trim());
+  const untitled = cells.filter((td) => td.getAttribute('title') !== titleOf(td)).map((td) => `${td.firstChild?.textContent?.trim()} titled ${td.getAttribute('title')}`);
+  results.push({ name: '/requests the client cell carries the class on its title', ok: cells.length > 0 && untitled.length === 0, missing: [...new Set(untitled)].slice(0, 3) });
+
+  const subCheck = '/requests agent type narrows to subagent rows';
   const agentType = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Agent type'));
+  if (!agentType) controlMissing(subCheck, 'Agent type');
   agentType?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
   [...(agentType?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'Explore')?.click();
   await m.settle(700);
   const subLines = [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.querySelector('.sub')?.textContent?.trim() ?? '');
   results.push({
-    name: '/requests agent type narrows to subagent rows',
+    name: subCheck,
     ok: subLines.length > 0 && subLines.every((line) => line === 'Explore'),
     missing: [...new Set(subLines)],
   });
@@ -1662,12 +1677,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     };
     const traffic = (dimension) => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Traffic by ${dimension}`));
     const trafficRows = (dimension) => [...(traffic(dimension)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
-    const typeGroups = async (value) => {
+    const typeGroups = async (check, value) => {
       const field = m.container.querySelector('textarea[aria-label="User agent groups"]');
-      if (field) {
-        setArea.call(field, value);
-        field.dispatchEvent(new window.Event('input', { bubbles: true }));
+      if (!field) {
+        controlMissing(check, 'User agent groups');
+        return;
       }
+      setArea.call(field, value);
+      field.dispatchEvent(new window.Event('input', { bubbles: true }));
       await m.settle(800);
     };
 
@@ -1686,21 +1703,23 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('other'), missing: classes });
 
     await groupBy('User agent');
-    await typeGroups('claude-cli/2.1.*\nphoebis-batch/*');
+    const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
+    await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');
     const named = trafficRows('user agent').map((row) => row[0]);
     results.push({
-      name: '/analytics a user agent pattern list names the groups and gathers the rest',
+      name: listCheck,
       ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.*', 'other', 'phoebis-batch/*']),
       missing: named,
     });
-    await typeGroups(['y'.repeat(300), ...Array.from({ length: 32 }, (_, i) => `client-${i}/*`)].join('\n'));
+    const boundCheck = '/analytics the user agent groups hold 32 patterns of 256 characters at most';
+    await typeGroups(boundCheck, ['y'.repeat(300), ...Array.from({ length: 32 }, (_, i) => `client-${i}/*`)].join('\n'));
     const bounded = m.container.querySelector('textarea[aria-label="User agent groups"]')?.value.split('\n') ?? [];
     results.push({
-      name: '/analytics the user agent groups hold 32 patterns of 256 characters at most',
+      name: boundCheck,
       ok: bounded.length === 32 && bounded[0].length === 256 && bounded[31] === 'client-30/*' && m.text().includes('32 patterns of 256 characters at most, as the route accepts'),
       missing: [String(bounded.length), String(bounded[0]?.length), bounded[31] ?? ''],
     });
-    await typeGroups('');
+    await typeGroups(boundCheck, '');
 
     // Effort rides on the hourly rollups, and the synthesized month is the range that holds all three.
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
@@ -1925,22 +1944,26 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       return [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     };
     const num = (cell) => Number((cell ?? '').replace(/,/g, ''));
-    const typeInto = async (label, value) => {
+    const typeInto = async (check, label, value) => {
       const input = m.container.querySelector(`input[aria-label="${label}"]`);
-      if (input) {
-        setInput.call(input, value);
-        input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      if (!input) {
+        controlMissing(check, label);
+        return;
       }
+      setInput.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
       await m.settle(900);
     };
-    const typeUserAgent = (value) => typeInto('User agent pattern', value);
-    const typeClass = (value) => typeInto('Client pattern', value);
-    const typeGroups = async (value) => {
+    const typeUserAgent = (check, value) => typeInto(check, 'User agent pattern', value);
+    const typeClass = (check, value) => typeInto(check, 'Client pattern', value);
+    const typeGroups = async (check, value) => {
       const field = m.container.querySelector('textarea[aria-label="User agent groups"]');
-      if (field) {
-        setArea.call(field, value);
-        field.dispatchEvent(new window.Event('input', { bubbles: true }));
+      if (!field) {
+        controlMissing(check, 'User agent groups');
+        return;
       }
+      setArea.call(field, value);
+      field.dispatchEvent(new window.Event('input', { bubbles: true }));
       await m.settle(900);
     };
     const seed = requests.find((r) => r.keyId === 'desktop' && r.usage.webSearch > 0);
@@ -1966,25 +1989,28 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: wrong.map((row) => `${row[0]} ${row[9]}/${row[10]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
-    await typeUserAgent('nomatch/*');
+    const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';
+    await typeUserAgent(agentFold, 'nomatch/*');
     const emptied = trafficRows('model');
-    results.push({ name: '/analytics a user agent pattern nothing matches empties the session fold', ok: emptied.length === 1 && emptied[0][0] === 'No rows.', missing: emptied.map((row) => row.join(' ')) });
-    await typeUserAgent('');
+    results.push({ name: agentFold, ok: emptied.length === 1 && emptied[0][0] === 'No rows.', missing: emptied.map((row) => row.join(' ')) });
+    await typeUserAgent(agentFold, '');
 
-    await typeClass('sdk/*');
+    const classFold = '/analytics a client pattern nothing matches empties the session fold';
+    await typeClass(classFold, 'sdk/*');
     const classless = trafficRows('model');
-    results.push({ name: '/analytics a client pattern nothing matches empties the session fold', ok: classless.length === 1 && classless[0][0] === 'No rows.', missing: classless.map((row) => row.join(' ')) });
-    await typeClass('');
+    results.push({ name: classFold, ok: classless.length === 1 && classless[0][0] === 'No rows.', missing: classless.map((row) => row.join(' ')) });
+    await typeClass(classFold, '');
 
+    const sessionGroups = '/analytics a session groups its user agents under the patterns that name them';
     await groupBy('User agent');
-    await typeGroups('claude-cli/2.1.*\nclaude-cli/2.0.*');
+    await typeGroups(sessionGroups, 'claude-cli/2.1.*\nclaude-cli/2.0.*');
     const named = trafficRows('user agent').map((row) => row[0]);
     // A session is shared across the story's keys, so what the two patterns name is read off its own rows;
     // a trailing star is a prefix, and an agent neither pattern names falls under `other`.
     const agents = [...new Set(requests.filter((r) => r.sessionId === session).map((r) => r.userAgent ?? ''))];
     const wanted = [...new Set(agents.map((c) => ['claude-cli/2.1.', 'claude-cli/2.0.'].find((p) => c.startsWith(p)) ?? 'other:'))].map((p) => (p === 'other:' ? 'other' : `${p}*`)).sort();
-    results.push({ name: '/analytics a session groups its user agents under the patterns that name them', ok: wanted.length > 0 && JSON.stringify([...named].sort()) === JSON.stringify(wanted), missing: [named.join(','), wanted.join(',')] });
-    await typeGroups('');
+    results.push({ name: sessionGroups, ok: wanted.length > 0 && JSON.stringify([...named].sort()) === JSON.stringify(wanted), missing: [named.join(','), wanted.join(',')] });
+    await typeGroups(sessionGroups, '');
 
     await groupBy('Effort');
     const perEffort = trafficRows('effort');
@@ -2010,9 +2036,12 @@ m.unmount();
   const seed = requests.find((r) => r.keyId === 'desktop' && r.sessionId !== null && r.kind !== 'probe');
   const view = `/analytics?session=${seed?.sessionId}&key=${seed?.keyId}@${seed?.keyGeneration}`;
   const setInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const typeClass = (page, value) => {
+  const typeClass = (check, page, value) => {
     const input = page.container.querySelector('input[aria-label="Client pattern"]');
-    if (!input) return;
+    if (!input) {
+      controlMissing(check, 'Client pattern');
+      return;
+    }
     setInput.call(input, value);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
@@ -2022,18 +2051,19 @@ m.unmount();
     return [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.textContent?.trim() ?? '');
   };
 
+  const narrows = '/analytics a session view narrows to the client pattern';
   let page = await mount(view);
   await page.settle(900);
   const whole = total(page);
-  typeClass(page, 'claude-code/*');
+  typeClass(narrows, page, 'claude-code/*');
   await page.settle(900);
   const matching = total(page);
-  typeClass(page, 'sdk/*');
+  typeClass(narrows, page, 'sdk/*');
   await page.settle(900);
   const none = total(page);
   const noneRows = trafficRows(page);
   results.push({
-    name: '/analytics a session view narrows to the client pattern',
+    name: narrows,
     ok: seed !== undefined && whole > 0 && matching === whole && none === 0 && noneRows.length === 1 && noneRows[0] === 'No rows.',
     missing: [`session ${whole}`, `claude-code/* ${matching}`, `sdk/* ${none}`, ...noneRows],
   });
@@ -2046,18 +2076,19 @@ m.unmount();
     reads.push(q);
     return new Promise((resolve) => setTimeout(resolve, 1_500)).then(() => listRequests.call(api, q));
   };
+  const restarts = '/analytics a client pattern typed during a session load restarts the fold';
   page = await mount(view);
   const pending = total(page);
-  typeClass(page, 'sdk/*');
+  typeClass(restarts, page, 'sdk/*');
   await page.settle(3_500);
   const restarted = total(page);
-  typeClass(page, '');
+  typeClass(restarts, page, '');
   await page.settle(3_500);
   const cleared = total(page);
   api.listRequests = listRequests;
   const typed = reads.filter((q) => q.client === 'sdk/*');
   results.push({
-    name: '/analytics a client pattern typed during a session load restarts the fold',
+    name: restarts,
     ok: pending === -1 && typed.length === 1 && typed[0].cursor === undefined && restarted === 0 && cleared === whole,
     missing: [`while loading ${pending}`, `reads ${reads.map((q) => q.client ?? '-').join(',')}`, `after sdk/* ${restarted}`, `cleared ${cleared} of ${whole}`],
   });

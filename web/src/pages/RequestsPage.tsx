@@ -8,7 +8,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { isDivergence, missLabel } from '@/lib/cache';
-import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
+import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { StatusBadge } from './DashboardPage';
@@ -270,7 +270,7 @@ export function RequestsPage() {
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && <td className="mono">{r.model}</td>}
                         {visible.has('client') && (
-                          <td className="mono requests__client" title={r.userAgent ?? undefined}>
+                          <td className="mono requests__client" title={r.client ?? undefined} style={{ minWidth: `${CLIENT_CLASS_CHARS}ch` }}>
                             {r.client ?? <span className="muted">-</span>}
                             {r.agentType && <span className="sub">{r.agentType}</span>}
                           </td>

@@ -1392,12 +1392,12 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
-/* A client names itself far wider than the column it gets, and a wrapped cell would set the height of every row. */
+/* The page holds the cell at least as wide as the longest class it knows, counted in characters of the monospace
+   face, so the box leaves the padding out of that count. A longer class widens the column rather than being cut,
+   and a wrapped cell would set the height of every row. */
 .requests__client {
-  max-width: 150px;
-  overflow: hidden;
+  box-sizing: content-box;
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 /* Thirteen columns leave the token counts too little room for their sub to hold one line, and a log a third taller
