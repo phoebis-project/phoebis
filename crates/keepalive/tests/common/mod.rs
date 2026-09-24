@@ -74,6 +74,8 @@ pub struct Rig {
 
 pub struct RigSpec {
     pub accounts: Vec<TestAccount>,
+    /// What the catalog fake answers; nothing by default, so a spelling never resolves to a dated id mid-test.
+    pub catalog: Vec<Rule>,
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
@@ -85,6 +87,7 @@ impl Default for RigSpec {
     fn default() -> Self {
         RigSpec {
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+            catalog: Vec::new(),
             lifecycle: None,
             limits: KeepaliveLimits {
                 lease_seconds: 3_600,
@@ -120,9 +123,9 @@ pub async fn rig(spec: RigSpec) -> Rig {
     }
     let bus = Bus::new();
     let sub = bus.subscribe("test");
-    // No rule answers the catalog fake here: this suite is about a session's pin and account continuity, and
-    // a spelling resolving to a dated id mid-test is not what it is testing.
-    let catalog_up = FakeUpstream::start(vec![]).await;
+    // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
+    // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
+    let catalog_up = FakeUpstream::start(spec.catalog).await;
     let h = relay_common::harness_with_bus_and_catalog(
         &up,
         &spec.accounts,

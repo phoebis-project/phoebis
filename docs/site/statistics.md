@@ -116,8 +116,9 @@ rendered:
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
-The `model` label is bounded by the price table: a model the table prices keeps its own id, and every other
-model is reported as `other`, so a downstream caller cannot grow the label set by naming models it likes.
+The `model` label is bounded by the price table: a model reads as the table entry that prices it, its own id or, for a
+dated id priced under its undated base, that base; every other model is reported as `other`, so a downstream caller
+cannot grow the label set by naming models it likes.
 `phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
 attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and

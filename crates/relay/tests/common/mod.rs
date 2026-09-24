@@ -31,6 +31,8 @@ pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
+/// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
+pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct TestAccount {
@@ -302,7 +304,19 @@ pub async fn harness_on(
     pool: PoolSpec,
     limits: Limits,
 ) -> Harness {
-    build(store, up, accounts, pool, limits, None, false, None, None).await
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        limits,
+        None,
+        false,
+        None,
+        None,
+        CATALOG_WINDOW,
+    )
+    .await
 }
 
 /// The same builder with the session memory held to `cap` entries, for the cases that need an eviction to
@@ -324,6 +338,7 @@ pub async fn harness_with_memory_cap(
         false,
         Some(cap),
         None,
+        CATALOG_WINDOW,
     )
     .await
 }
@@ -347,6 +362,7 @@ pub async fn harness_with_cache_diagnostics_default(
         cache_diagnostics,
         None,
         None,
+        CATALOG_WINDOW,
     )
     .await
 }
@@ -380,6 +396,7 @@ pub async fn harness_with_bus_limits(
         false,
         None,
         None,
+        CATALOG_WINDOW,
     )
     .await
 }
@@ -403,6 +420,32 @@ pub async fn harness_with_catalog(
         false,
         None,
         Some(catalog_up),
+        CATALOG_WINDOW,
+    )
+    .await
+}
+
+/// `harness_with_catalog` with the cache held for `window` rather than `CATALOG_WINDOW`, for the tests that need a
+/// window shorter than a discovery.
+pub async fn harness_with_catalog_window(
+    up: &FakeUpstream,
+    catalog_up: FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    window: Duration,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        false,
+        None,
+        Some(catalog_up),
+        window,
     )
     .await
 }
@@ -428,6 +471,7 @@ pub async fn harness_with_bus_and_catalog(
         false,
         None,
         Some(catalog_up),
+        CATALOG_WINDOW,
     )
     .await
 }
@@ -443,6 +487,7 @@ async fn build(
     cache_diagnostics: bool,
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
+    catalog_window: Duration,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -625,7 +670,7 @@ async fn build(
         router_handle.clone(),
         clock.clone(),
         limits.head_timeout,
-        Duration::from_secs(60),
+        catalog_window,
     ));
     let relay = Relay::new(
         store.clone(),

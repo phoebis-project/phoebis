@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
-use phoebis_store::{AccountState, CooldownRow, PinRow, Store, StoreError};
+use phoebis_store::{AccountState, CooldownRow, PinRow, RekeyWrite, Store, StoreError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -147,12 +147,6 @@ pub enum Report {
         pin: PinRef,
         now: i64,
     },
-    /// A spelling the catalog cache resolved to the dated id the API lists.
-    Resolved {
-        spelling: String,
-        dated_id: String,
-        at: i64,
-    },
     Sample {
         account_id: String,
         sample: UtilizationSample,
@@ -173,6 +167,10 @@ pub enum ReloadError {
 }
 
 enum Command {
+    Canonicals {
+        models: Vec<String>,
+        reply: oneshot::Sender<Vec<String>>,
+    },
     ClearCooldown {
         account_id: String,
         scope: String,
@@ -200,6 +198,12 @@ enum Command {
         reply: oneshot::Sender<Result<(), String>>,
     },
     Report(Report),
+    Resolve {
+        spelling: String,
+        dated_id: String,
+        at: i64,
+        reply: oneshot::Sender<()>,
+    },
     /// A usage fetch ended: `at` is when its sample landed, `None` for a fetch that failed.
     SampleFinished {
         account_id: String,
@@ -261,6 +265,27 @@ impl RouterHandle {
                 tracing::warn!("the router task has stopped, a report was dropped")
             }
         }
+    }
+
+    /// A spelling the catalog cache resolved to the dated id the API lists. Waits for room in the queue
+    /// rather than dropping, and answers once the state keys the spelling's pins and cooldowns on the dated
+    /// id: a caller that names requests by the dated id only after this answers never runs ahead of the rows.
+    pub async fn resolve(&self, spelling: &str, dated_id: &str, at: i64) -> Result<(), RouterGone> {
+        let (spelling, dated_id) = (spelling.to_string(), dated_id.to_string());
+        self.ask(|reply| Command::Resolve {
+            spelling,
+            dated_id,
+            at,
+            reply,
+        })
+        .await
+    }
+
+    /// The name the state keys each model's rows on, in the order asked: one ask for every model a caller
+    /// retained, so a sweep never queues one command per model in front of selection.
+    pub async fn canonicals(&self, models: Vec<String>) -> Result<Vec<String>, RouterGone> {
+        self.ask(|reply| Command::Canonicals { models, reply })
+            .await
     }
 
     pub async fn reload(&self) -> Result<(), ReloadError> {
@@ -396,9 +421,16 @@ pub fn spawn(
     // the last handle is gone, and with it the process lock a reopened on-disk store needs back.
     let writer_tx = tx.downgrade();
     tokio::spawn(async move {
+        // The memory has already moved when a rekey fails, and only the next landing of the same spelling
+        // would write it again; one more try at the next batch covers a passing failure without letting a
+        // write the store keeps refusing hold up every later one.
+        let mut retry: Option<Box<RekeyWrite>> = None;
         // One batch at a time, in order: two blocking writes racing on separate threads could land a delete
         // before the upsert it was meant to follow.
         while let Some(batch) = writes.recv().await {
+            if let Some(rekey) = retry.take() {
+                retry_rekey(&writer_store, rekey).await;
+            }
             let store = writer_store.clone();
             let size = batch.len();
             match tokio::task::spawn_blocking(move || apply(&store, batch)).await {
@@ -412,13 +444,17 @@ pub fn spawn(
                         }
                     }
                 }
-                Ok(Err(error)) => {
-                    tracing::error!(%error, batch = size, "a routing state write failed")
+                Ok(Err(failed)) => {
+                    tracing::error!(error = %failed.error, batch = size, "a routing state write failed");
+                    retry = failed.rekey;
                 }
                 Err(error) => {
                     tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost")
                 }
             }
+        }
+        if let Some(rekey) = retry.take() {
+            retry_rekey(&writer_store, rekey).await;
         }
         let _ = done_tx.send(());
     });
@@ -449,7 +485,18 @@ pub fn spawn(
                     Some(Command::Shutdown { reply }) => {
                         // Nothing queued behind the shutdown is served: the handles that sent it are done.
                         rx.close();
-                        while let Some(command) = rx.recv().await { if let Command::Report(report) = command { task.report(report); } }
+                        while let Some(command) = rx.recv().await {
+                            match command {
+                                Command::Report(report) => task.report(report),
+                                // A resolution is a report with an answer: it lands with the drain rather than
+                                // leaving its caller to probe the spelling again after a restart.
+                                Command::Resolve { spelling, dated_id, at, reply } => {
+                                    task.resolve(&spelling, &dated_id, at);
+                                    let _ = reply.send(());
+                                }
+                                _ => {}
+                            }
+                        }
                         task.drain_writer().await;
                         let _ = reply.send(());
                         break;
@@ -464,9 +511,36 @@ pub fn spawn(
     Ok(handle)
 }
 
+/// A batch that stopped at a failed write, carrying that write when it was a rekey: the one write the writer
+/// tries again.
+struct Failed {
+    error: StoreError,
+    rekey: Option<Box<RekeyWrite>>,
+}
+
+impl From<StoreError> for Failed {
+    fn from(error: StoreError) -> Failed {
+        Failed { error, rekey: None }
+    }
+}
+
+async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
+    let store = store.clone();
+    let spelling = rekey.resolution.spelling.clone();
+    match tokio::task::spawn_blocking(move || store.rekey_resolution(&rekey)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::error!(%error, %spelling, "a model resolution's rekey failed again and is dropped")
+        }
+        Err(error) => {
+            tracing::error!(%error, %spelling, "a model resolution's rekey panicked and is dropped")
+        }
+    }
+}
+
 /// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
 /// that the registry snapshot has to be rebuilt from.
-fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
+fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
     let mut moved = false;
     for write in batch {
         match write {
@@ -491,12 +565,19 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, StoreError> {
             StateWrite::DeletePin(key_id, session_id, model) => {
                 store.delete_pin(&key_id, &session_id, &model)?;
             }
+            StateWrite::Rekey(rekey) => {
+                if let Err(error) = store.rekey_resolution(&rekey) {
+                    return Err(Failed {
+                        error,
+                        rekey: Some(Box::new(rekey)),
+                    });
+                }
+            }
             StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
             StateWrite::UpsertOverage(row) => {
                 store.upsert_overage(&row)?;
             }
             StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
-            StateWrite::UpsertResolution(row) => store.upsert_resolution(&row)?,
         }
     }
     Ok(moved)
@@ -682,6 +763,23 @@ impl Task {
                 let _ = reply.send(SelectAnswer { result, cancel });
             }
             Command::Report(report) => self.report(report),
+            Command::Resolve {
+                spelling,
+                dated_id,
+                at,
+                reply,
+            } => {
+                self.resolve(&spelling, &dated_id, at);
+                let _ = reply.send(());
+            }
+            Command::Canonicals { models, reply } => {
+                let _ = reply.send(
+                    models
+                        .iter()
+                        .map(|model| self.state.canonical(model).to_string())
+                        .collect(),
+                );
+            }
             Command::SampleFinished {
                 account_id,
                 incarnation,
@@ -931,33 +1029,6 @@ impl Task {
                     }
                 }
             }
-            Report::Resolved {
-                spelling,
-                dated_id,
-                at,
-            } => {
-                let writes = self.state.apply_resolution(&spelling, &dated_id, at);
-                // A late invalidation from a request admitted under the retiring spelling must still land
-                // beside the moved pin rather than starting a fresh migration window under a key nothing
-                // selects on any more.
-                let keys: Vec<(String, String, String)> = self
-                    .invalidated
-                    .keys()
-                    .filter(|(_, _, model)| model == &spelling)
-                    .cloned()
-                    .collect();
-                for (key_id, session_id, _) in keys {
-                    if let Some(value) = self.invalidated.remove(&(
-                        key_id.clone(),
-                        session_id.clone(),
-                        spelling.clone(),
-                    )) {
-                        self.invalidated
-                            .insert((key_id, session_id, dated_id.clone()), value);
-                    }
-                }
-                self.write(writes);
-            }
             Report::Sample {
                 account_id,
                 sample,
@@ -999,6 +1070,28 @@ impl Task {
                 }]);
             }
         }
+    }
+
+    fn resolve(&mut self, spelling: &str, dated_id: &str, at: i64) {
+        let rekey = self.state.apply_resolution(spelling, dated_id, at);
+        // A late invalidation from a request admitted under the retiring spelling must still land beside the
+        // moved pin rather than starting a fresh migration window under a key nothing selects on any more.
+        let keys: Vec<(String, String, String)> = self
+            .invalidated
+            .keys()
+            .filter(|(_, _, model)| model == spelling)
+            .cloned()
+            .collect();
+        for (key_id, session_id, model) in keys {
+            if let Some(value) =
+                self.invalidated
+                    .remove(&(key_id.clone(), session_id.clone(), model))
+            {
+                self.invalidated
+                    .insert((key_id, session_id, dated_id.to_string()), value);
+            }
+        }
+        self.write(vec![StateWrite::Rekey(rekey)]);
     }
 
     /// Whether a report is about a slot or a credential the registry has moved past. A delayed rejection

@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
 pub use phoebis_routing::listing::CatalogRow;
-use phoebis_routing::{Report, RouterHandle};
+use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding};
@@ -94,6 +94,9 @@ struct Resolution {
     /// The last successful answer. Nothing after it clears it: a later 404 or failure only moves `last` and
     /// `retry_at`, never this.
     dated: Option<String>,
+    /// The dated id the router has acknowledged, the only one `canonical_for` answers: named by it before the
+    /// router moved the spelling's pins and cooldowns, a request would miss both.
+    published: Option<String>,
     last: Probe,
     at: i64,
     retry_at: i64,
@@ -136,11 +139,13 @@ impl ResolutionMap {
     }
 
     /// Loads a persisted answer as if a probe had just landed it, so a restart answers before any probe runs.
+    /// Published at once: the router loads the same row before it serves a selection.
     fn seed(&mut self, spelling: String, dated_id: String, resolved_at: i64) {
         self.entries.insert(
             spelling,
             Resolution {
-                dated: Some(dated_id),
+                dated: Some(dated_id.clone()),
+                published: Some(dated_id),
                 last: Probe::Dated,
                 at: resolved_at,
                 retry_at: resolved_at + self.window_ms,
@@ -150,7 +155,19 @@ impl ResolutionMap {
     }
 
     fn canonical_for(&self, spelling: &str) -> Option<String> {
-        self.entries.get(spelling).and_then(|e| e.dated.clone())
+        self.entries.get(spelling).and_then(|e| e.published.clone())
+    }
+
+    /// Only the id still recorded is published: an acknowledgement that arrives after a later probe recorded
+    /// another id is for an answer the map has moved past.
+    fn publish(&mut self, spelling: &str, dated_id: &str) {
+        if let Some(entry) = self
+            .entries
+            .get_mut(spelling)
+            .filter(|entry| entry.dated.as_deref() == Some(dated_id))
+        {
+            entry.published = Some(dated_id.to_string());
+        }
     }
 
     /// Drops every entry with no dated id past its retry time: the negative side of the map is the only side
@@ -183,9 +200,10 @@ impl ResolutionMap {
         Admission::Probe
     }
 
-    /// Answers the dated id on every `Dated` probe, changed or not: a `Report::Resolved` the router drops on
-    /// a full queue is re-sent on the next probe rather than lost for good, and `apply_resolution` is
-    /// idempotent once the rows have moved, so a repeat costs nothing but the call.
+    /// A dated id lands in two states: pending here, returned for the caller to hand the router, and published
+    /// by `publish` once the router has acknowledged it. Answered on every `Dated` probe, changed or not: a
+    /// router that was gone when an earlier landing asked it is asked again on the next, and it moves nothing
+    /// twice, so a repeat costs nothing but the call. A published id stays published through a repeat.
     fn record(&mut self, spelling: &str, outcome: ProbeAnswer, now: i64) -> Option<String> {
         self.resolving.remove(spelling);
         let entry = self
@@ -193,6 +211,7 @@ impl ResolutionMap {
             .entry(spelling.to_string())
             .or_insert(Resolution {
                 dated: None,
+                published: None,
                 last: Probe::Missing,
                 at: now,
                 retry_at: now,
@@ -244,7 +263,7 @@ pub struct CatalogService {
 }
 
 impl CatalogService {
-    /// `pool` and `resolver` are the catalog's own transport; `router` carries `Report::Resolved` to the
+    /// `pool` and `resolver` are the catalog's own transport; `router` takes each landed resolution to the
     /// routing state, and `store.resolutions()` seeds the map so a restart answers before any probe.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -337,16 +356,19 @@ impl CatalogService {
             .get(&key.account_id)
             .copied()
             .unwrap_or(0);
-        let now = (self.clock)();
-        let catalog = match self.discover(account).await {
+        let discovered = self.discover(account).await;
+        // The window opens when the answer is in hand: dated from before a discovery slower than the window,
+        // the slot would be stale on commit and every caller waiting on the fill lock would discover again.
+        let fetched_at = (self.clock)();
+        let catalog = match discovered {
             Ok(discovered) => Catalog {
                 models: discovered.models,
-                fetched_at: now,
+                fetched_at,
                 error: None,
             },
             Err(error) => Catalog {
                 models: Vec::new(),
-                fetched_at: now,
+                fetched_at,
                 error: Some(error.to_string()),
             },
         };
@@ -403,8 +425,8 @@ impl CatalogService {
         }
     }
 
-    /// The dated id the map last resolved a folded spelling to, or `None`; a later 404 or failure never
-    /// clears it, and it never waits.
+    /// The dated id the map last resolved a folded spelling to and the router acknowledged, or `None`; a later
+    /// 404 or failure never clears it, and it never waits.
     pub fn canonical_for(&self, spelling: &str) -> Option<String> {
         self.resolution
             .lock()
@@ -434,12 +456,20 @@ impl CatalogService {
                 .lock()
                 .expect(RESOLUTION_POISONED)
                 .record(&spelling, outcome, now);
-            if let Some(dated_id) = resolved {
-                service.router.report(Report::Resolved {
-                    spelling,
-                    dated_id,
-                    at: now,
-                });
+            let Some(dated_id) = resolved else {
+                return;
+            };
+            match service.router.resolve(&spelling, &dated_id, now).await {
+                Ok(()) => service
+                    .resolution
+                    .lock()
+                    .expect(RESOLUTION_POISONED)
+                    .publish(&spelling, &dated_id),
+                // The entry stays pending, so requests keep the folded spelling the router's rows are still
+                // under, and the probe after the window asks again.
+                Err(error) => {
+                    tracing::debug!(%spelling, %error, "a resolution was not handed to the router")
+                }
             }
         });
     }
@@ -779,23 +809,86 @@ mod tests {
             m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 0),
             Some("claude-s-1".to_string())
         );
-        assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
-        // The same answer again is still reported: a dropped Report::Resolved gets another chance to land.
+        assert_eq!(m.record("s", ProbeAnswer::Missing, 50), None);
+        assert_eq!(m.record("s", ProbeAnswer::Failed, 60), None);
         assert_eq!(
-            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 100),
-            Some("claude-s-1".to_string())
+            m.canonical_for("s"),
+            None,
+            "a 404 or a failure leaves a pending id pending"
         );
+        assert_eq!(
+            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 70),
+            Some("claude-s-1".to_string()),
+            "and the next landing asks the router again"
+        );
+        m.publish("s", "claude-s-1");
+        assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
         assert_eq!(m.record("s", ProbeAnswer::Missing, 200), None);
         assert_eq!(
             m.canonical_for("s"),
             Some("claude-s-1".to_string()),
-            "a 404 never clears a dated id already known"
+            "a 404 never clears a dated id already published"
         );
         assert_eq!(m.record("s", ProbeAnswer::Failed, 300), None);
         assert_eq!(
             m.canonical_for("s"),
             Some("claude-s-1".to_string()),
             "a failed refresh never clears it either"
+        );
+    }
+
+    #[test]
+    fn a_dated_id_is_answered_only_once_the_router_acknowledged_it() {
+        let mut m = map();
+        assert_eq!(m.admit("s", 0), Admission::Probe);
+        assert_eq!(
+            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 0),
+            Some("claude-s-1".to_string())
+        );
+        assert_eq!(
+            m.canonical_for("s"),
+            None,
+            "recorded alone, the id is pending"
+        );
+        m.publish("s", "claude-s-1");
+        assert_eq!(m.canonical_for("s"), Some("claude-s-1".to_string()));
+        assert_eq!(
+            m.record("s", ProbeAnswer::Dated("claude-s-1".into()), 100),
+            Some("claude-s-1".to_string()),
+            "every landing asks the router, which moves nothing twice"
+        );
+        assert_eq!(
+            m.canonical_for("s"),
+            Some("claude-s-1".to_string()),
+            "a second record of the published id keeps it published"
+        );
+        assert_eq!(
+            m.record("s", ProbeAnswer::Dated("claude-s-2".into()), 200),
+            Some("claude-s-2".to_string())
+        );
+        assert_eq!(
+            m.canonical_for("s"),
+            Some("claude-s-1".to_string()),
+            "a newer id waits for its own acknowledgement behind the published one"
+        );
+        m.publish("s", "claude-s-1");
+        assert_eq!(
+            m.canonical_for("s"),
+            Some("claude-s-1".to_string()),
+            "a late acknowledgement of the older id publishes nothing new"
+        );
+        m.publish("s", "claude-s-2");
+        assert_eq!(m.canonical_for("s"), Some("claude-s-2".to_string()));
+    }
+
+    #[test]
+    fn a_seeded_resolution_is_published_at_once() {
+        let mut m = map();
+        m.seed("s".into(), "claude-s-1".into(), 0);
+        assert_eq!(
+            m.canonical_for("s"),
+            Some("claude-s-1".to_string()),
+            "the router loaded the same row at start"
         );
     }
 }

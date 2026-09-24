@@ -751,3 +751,57 @@ async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
         "one withheld probe, counted when it came due"
     );
 }
+
+/// The id `catalog_rules` resolves the rig's `claude-sonnet-4-5` spelling to.
+const DATED: &str = "claude-sonnet-4-5-20250929";
+
+#[tokio::test]
+async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under_the_dated_id() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        catalog: relay_common::catalog_rules(),
+        ..RigSpec::default()
+    })
+    .await;
+    assert_eq!(r.status("main").canonical_model, "claude-sonnet-4-5");
+    // The request's own background probe lands the dated id; the relay names requests by it only once the
+    // router has moved the spelling's pins and cooldowns.
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.h.catalog.canonical_for("claude-sonnet-4-5").as_deref() == Some(DATED)).then_some(())
+    })
+    .await;
+    r.h.router.report(Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: format!("model:{DATED}"),
+            until: r.now() + 600_000,
+            set_at: r.now(),
+            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    settled(&r, |r| async move {
+        r.h.router
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.scope == format!("model:{DATED}"))
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Cooled),
+        "the gate reads the cooldown under the name the router holds, so no probe is dispatched"
+    );
+    assert_eq!(r.status("main").canonical_model, DATED);
+}

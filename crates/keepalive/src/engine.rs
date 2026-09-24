@@ -603,6 +603,42 @@ impl Inner {
             })
     }
 
+    /// Every model name a live recipe compares against the router's rows: the recipe's own, and the one its
+    /// open observation took from the recipe before it.
+    pub(crate) fn retained_models(&self) -> Vec<String> {
+        let mut models = BTreeSet::new();
+        for (key, session) in &self.sessions {
+            for (agent_id, agent) in &session.agents {
+                let Some(observation) = agent.current.as_ref().filter(|_| self.live(key, agent_id))
+                else {
+                    continue;
+                };
+                models.insert(agent.canonical_model.clone());
+                if let Some(prior) = &observation.prior {
+                    models.insert(prior.model.clone());
+                }
+            }
+        }
+        models.into_iter().collect()
+    }
+
+    /// A resolution that landed after a recipe was retained moved the router's pins and model cooldowns to the
+    /// dated id; the recipe follows, so the gate finds them and the next request's credit compares like names.
+    pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
+        for session in self.sessions.values_mut() {
+            for agent in session.agents.values_mut() {
+                if let Some(dated) = canonical.get(&agent.canonical_model) {
+                    agent.canonical_model = dated.clone();
+                }
+                if let Some(prior) = agent.current.as_mut().and_then(|o| o.prior.as_mut()) {
+                    if let Some(dated) = canonical.get(&prior.model) {
+                        prior.model = dated.clone();
+                    }
+                }
+            }
+        }
+    }
+
     /// The cheap half of what a tick needs to decide before it asks the router: whether any live agent still
     /// holds a recipe. An idle session, or one whose companion has sent nothing real yet, retains nothing for
     /// the gate to read, so the tick that finds none needs no fresher view than the one it already has.
@@ -1316,10 +1352,10 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let max_workers = self.parts.limits.max_workers;
-        // The three asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
+        // The four asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let something_retained = {
+        let retained_models = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
@@ -1327,17 +1363,18 @@ impl Engine {
             inner.expire(now, expiry);
             inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
             inner.roll_day(now);
-            inner.anything_retained()
+            inner.anything_retained().then(|| inner.retained_models())
         };
-        if !something_retained {
+        let Some(retained_models) = retained_models else {
             return;
-        }
-        let view = self.router_view(now).await;
+        };
+        let view = self.router_view(now, retained_models).await;
         let jobs = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
             }
+            inner.follow_resolutions(&view.canonical);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
@@ -1511,6 +1548,8 @@ impl Engine {
 }
 
 pub(crate) struct RouterView {
+    /// A retained model name to the one the router keys its rows on, for the names that differ.
+    pub canonical: HashMap<String, String>,
     pub cooled: BTreeSet<(String, String)>,
     pub overage: BTreeSet<String>,
     /// `(key, session, canonical model)` to the pinned account: the account a probe would actually run on.
@@ -1526,12 +1565,25 @@ pub(crate) enum Gate {
 }
 
 impl Engine {
-    /// Three asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
+    /// Four asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
-    pub(crate) async fn router_view(&self, now: i64) -> RouterView {
+    pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
         self.router_view_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let snapshot = self.parts.router.snapshot();
+        let canonical = self
+            .parts
+            .router
+            .canonicals(retained_models.clone())
+            .await
+            .map(|answered| {
+                retained_models
+                    .into_iter()
+                    .zip(answered)
+                    .filter(|(retained, canonical)| retained != canonical)
+                    .collect()
+            })
+            .unwrap_or_default();
         let pins = self
             .parts
             .router
@@ -1562,6 +1614,7 @@ impl Engine {
             .map(|(id, _)| id)
             .collect();
         RouterView {
+            canonical,
             cooled,
             overage,
             pins,

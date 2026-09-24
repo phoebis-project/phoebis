@@ -371,13 +371,15 @@ pub fn request_events(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
+
 /// The newest `limit` events of one kind, newest first.
 pub fn recent_events_of_kind(
     conn: &Connection,
     kind: &str,
     limit: usize,
 ) -> Result<Vec<EventRecord>, LedgerError> {
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2")?;
+    let mut stmt = conn.prepare(RECENT_EVENTS_OF_KIND)?;
     let rows = stmt.query_map(params![kind, limit as i64], |r| {
         Ok(EventRecord {
             at: r.get(0)?,
@@ -1134,4 +1136,33 @@ pub fn pool_traffic(
         at += bucket_seconds;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_events_of_a_kind_are_read_by_seeking_to_the_kind() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let plan: Vec<String> = db
+            .read_blocking(|c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {RECENT_EVENTS_OF_KIND}"))?;
+                let rows = stmt
+                    .query_map(params!["model_rejected", 50], |r| r.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH events USING")
+                    && step.contains("events_kind_at")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN")),
+            "a poll never walks the whole history: {plan:?}"
+        );
+    }
 }

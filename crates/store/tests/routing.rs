@@ -1,9 +1,18 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, OverageRow, PinRow, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite,
+    ResolutionRow, StorageKey, Store,
 };
+
+const SPELLING: &str = "claude-sonnet-4-5";
+const DATED: &str = "claude-sonnet-4-5-20250929";
 
 fn store_with(ids: &[&str]) -> Store {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    seed_accounts(&store, ids);
+    store
+}
+
+fn seed_accounts(store: &Store, ids: &[&str]) {
     for id in ids {
         store
             .insert_account(&AccountRow {
@@ -19,7 +28,6 @@ fn store_with(ids: &[&str]) -> Store {
             })
             .unwrap();
     }
-    store
 }
 
 fn cooldown(account: &str, scope: &str, until: i64) -> CooldownRow {
@@ -276,4 +284,95 @@ fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
     );
     let overage = &store.load_routing().unwrap().overage[0];
     assert_eq!((overage.in_use, overage.incarnation), (false, 4));
+}
+
+fn spelling_pin() -> PinRow {
+    PinRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        model: SPELLING.into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        migrated_at: None,
+        key_generation: 1,
+        incarnation: 1,
+    }
+}
+
+/// The rows one landing of the spelling's resolution moves: the pin and the model cooldown of account `a`, and
+/// the spelling row beside them.
+fn rekey_of_a() -> RekeyWrite {
+    RekeyWrite {
+        resolution: ResolutionRow {
+            spelling: SPELLING.into(),
+            dated_id: DATED.into(),
+            resolved_at: 1_500,
+        },
+        delete_pins: vec![("k".into(), "s".into(), SPELLING.into())],
+        upsert_pins: vec![PinRow {
+            model: DATED.into(),
+            ..spelling_pin()
+        }],
+        delete_cooldowns: vec![("a".into(), format!("model:{SPELLING}"))],
+        upsert_cooldowns: vec![cooldown("a", &format!("model:{DATED}"), 10_000)],
+    }
+}
+
+#[test]
+fn a_rekey_that_fails_on_its_last_statement_leaves_every_row_as_it_was() {
+    let store = store_with(&["a"]);
+    store.upsert_pin(&spelling_pin()).unwrap();
+    store
+        .upsert_cooldown(&cooldown("a", &format!("model:{SPELLING}"), 10_000))
+        .unwrap();
+    // `cooldowns.account_id REFERENCES accounts(id)` is what refuses the last statement below; the store turns
+    // `foreign_keys` on for its connection, which a row naming an unknown account shows on its own.
+    assert!(
+        store
+            .upsert_cooldown(&cooldown("ghost", "model:claude-opus-5", 10_000))
+            .is_err(),
+        "the foreign key is enforced"
+    );
+    let before = store.load_routing().unwrap();
+    let mut rekey = rekey_of_a();
+    rekey
+        .upsert_cooldowns
+        .push(cooldown("ghost", &format!("model:{DATED}"), 10_000));
+    assert!(store.rekey_resolution(&rekey).is_err());
+    let after = store.load_routing().unwrap();
+    assert_eq!(after.pins, before.pins, "the pin stays under the spelling");
+    assert_eq!(
+        after.cooldowns, before.cooldowns,
+        "the cooldown stays under the spelling"
+    );
+    assert!(
+        after.resolutions.is_empty(),
+        "and no spelling row points at rows that never moved"
+    );
+}
+
+#[test]
+fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&spelling_pin()).unwrap();
+        store
+            .upsert_cooldown(&cooldown("a", &format!("model:{SPELLING}"), 10_000))
+            .unwrap();
+        store.rekey_resolution(&rekey_of_a()).unwrap();
+    }
+    let load = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap();
+    let rekey = rekey_of_a();
+    assert_eq!(load.pins, rekey.upsert_pins);
+    assert_eq!(load.cooldowns, rekey.upsert_cooldowns);
+    assert_eq!(load.resolutions, vec![rekey.resolution]);
 }

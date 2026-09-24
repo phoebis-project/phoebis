@@ -68,22 +68,27 @@ impl PriceTable {
         })
     }
 
-    /// The row for the id, else the row for the id with a trailing `-YYYYMMDD` removed: a dated id the
-    /// catalog lists prices as the undated id the table ships.
-    pub fn price(&self, canonical_model: &str) -> Option<&ModelPrice> {
-        self.models.get(canonical_model).or_else(|| {
-            phoebis_routing::listing::undated(canonical_model).and_then(|base| self.models.get(base))
-        })
+    /// The row for the id, else the row for the id with a trailing `-YYYYMMDD` removed, with the key it sits
+    /// under: a dated id the catalog lists prices as the undated id the table ships. `price` and `model_label`
+    /// both read this, so a label never names another row than the one that priced the request.
+    fn entry(&self, canonical_model: &str) -> Option<(&str, &ModelPrice)> {
+        self.models
+            .get_key_value(canonical_model)
+            .or_else(|| {
+                phoebis_routing::listing::undated(canonical_model)
+                    .and_then(|base| self.models.get_key_value(base))
+            })
+            .map(|(key, price)| (key.as_str(), price))
     }
 
-    /// The metrics label: a priced model keeps its id, everything else is one bucket, so a caller cannot grow
-    /// the label set by naming models.
-    pub fn model_label<'a>(&self, canonical_model: &'a str) -> &'a str {
-        if self.models.contains_key(canonical_model) {
-            canonical_model
-        } else {
-            "other"
-        }
+    pub fn price(&self, canonical_model: &str) -> Option<&ModelPrice> {
+        self.entry(canonical_model).map(|(_, price)| price)
+    }
+
+    /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
+    /// so a caller cannot grow the label set by naming models.
+    pub fn model_label(&self, canonical_model: &str) -> &str {
+        self.entry(canonical_model).map_or("other", |(key, _)| key)
     }
 
     pub fn estimate(
@@ -452,6 +457,38 @@ mod tests {
             table.price("claude-x-2025").is_none(),
             "a four-digit suffix is not a date, so no fallback and no match"
         );
+    }
+
+    #[test]
+    fn a_metric_label_names_the_table_key_that_priced_the_model() {
+        let price = ModelPrice {
+            input: 1.0,
+            cache_write_5m: 1.25,
+            cache_write_1h: 2.0,
+            cache_read: 0.1,
+            output: 5.0,
+        };
+        let table = PriceTable {
+            version: "test".into(),
+            effective: "test".into(),
+            source: "test".into(),
+            models: BTreeMap::from([
+                ("claude-haiku-4-5-20251001".to_string(), price.clone()),
+                ("claude-sonnet-4-5".to_string(), price),
+            ]),
+        };
+        assert_eq!(
+            table.model_label("claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5",
+            "a dated id priced by its undated row labels as that row"
+        );
+        assert_eq!(
+            table.model_label("claude-haiku-4-5-20251001"),
+            "claude-haiku-4-5-20251001",
+            "a dated id with a row of its own labels as itself"
+        );
+        assert_eq!(table.model_label("claude-nope-20250101"), "other");
+        assert_eq!(table.model_label("gpt-5"), "other");
     }
 
     #[test]

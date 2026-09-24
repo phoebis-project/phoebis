@@ -505,11 +505,10 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
         };
         assert_eq!(selection.account.id, "a");
         epoch = selection.pin.unwrap().epoch;
-        handle.report(Report::Resolved {
-            spelling: "claude-sonnet-4-5".into(),
-            dated_id: "claude-sonnet-4-5-20250929".into(),
-            at: 1_500,
-        });
+        handle
+            .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
+            .await
+            .unwrap();
         wait_for(WRITTEN, || {
             let load = store.load_routing().unwrap();
             let resolved = load.resolutions.iter().any(|r| {
@@ -560,6 +559,167 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
     })
     .await;
     assert_eq!(cooled.until, 2_000 + HOUR);
+}
+
+/// A model cooldown for `account_id` under `scope`, an hour past `now`, as the relay reports one.
+fn model_cooldown(account_id: &str, scope: &str, now: i64) -> Report {
+    Report::Cooldown {
+        account_id: account_id.into(),
+        row: CooldownRow {
+            account_id: account_id.into(),
+            scope: scope.into(),
+            until: now + HOUR,
+            set_at: now,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    }
+}
+
+#[tokio::test]
+async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_under_the_dated_id()
+{
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let s = handle.snapshot();
+    let answer = handle
+        .select(SelectRequest {
+            key_id: "k".into(),
+            key_generation: s.key("k").unwrap().created_at,
+            session_id: Some("s1".into()),
+            canonical_model: "claude-sonnet-4-5".into(),
+            candidates: resolve(
+                &s,
+                s.key("k").unwrap(),
+                "claude-sonnet-4-5",
+                "claude-sonnet-4-5",
+            )
+            .unwrap(),
+            portable: true,
+            attempted: vec![],
+            now: 1_000,
+            fallback_ms: 60_000,
+            revision: s.revision,
+        })
+        .await
+        .unwrap();
+    let SelectResult::Selected(selection) = answer.result else {
+        panic!("expected a selection")
+    };
+    let other = if selection.account.id == "a" {
+        "b"
+    } else {
+        "a"
+    };
+    handle.report(model_cooldown(other, "model:claude-sonnet-4-5", 1_000));
+    handle
+        .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
+        .await
+        .unwrap();
+    let pins = handle.pins().await.unwrap();
+    assert_eq!(
+        pins.iter().map(|p| p.model.as_str()).collect::<Vec<_>>(),
+        ["claude-sonnet-4-5-20250929"]
+    );
+    let cooldowns = handle.cooldowns().await.unwrap();
+    assert_eq!(
+        cooldowns
+            .iter()
+            .map(|c| c.scope.as_str())
+            .collect::<Vec<_>>(),
+        ["model:claude-sonnet-4-5-20250929"]
+    );
+}
+
+/// Account `a`'s model cooldown under the spelling is in the router's memory while the store has lost the
+/// account behind its back, so the rekey's cooldown upsert breaks `cooldowns.account_id REFERENCES
+/// accounts(id)` and the whole landing rolls back.
+async fn a_refused_rekey() -> (Arc<Store>, phoebis_routing::RouterHandle) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000));
+    wait_for(WRITTEN, || {
+        (!store.load_routing().unwrap().cooldowns.is_empty()).then_some(())
+    })
+    .await;
+    store.delete_account("a", "test").unwrap();
+    handle
+        .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
+        .await
+        .unwrap();
+    (store, handle)
+}
+
+fn restore_a(store: &Store) {
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+}
+
+/// Waits for the writer to land `b`'s cooldown under `scope`, which it only reaches after every batch before it.
+async fn landed(store: &Store, scope: &str) {
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .cooldowns
+            .iter()
+            .any(|c| c.account_id == "b" && c.scope == scope)
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dropped() {
+    let (store, handle) = a_refused_rekey().await;
+    restore_a(&store);
+    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    landed(&store, "model:claude-opus-5").await;
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        load.resolutions
+            .iter()
+            .map(|r| (r.spelling.as_str(), r.dated_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("claude-sonnet-4-5", "claude-sonnet-4-5-20250929")],
+        "the retry landed the spelling row"
+    );
+    assert!(
+        load.cooldowns
+            .iter()
+            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-4-5-20250929"),
+        "beside the row it moved"
+    );
+
+    let (store, handle) = a_refused_rekey().await;
+    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    landed(&store, "model:claude-opus-5").await;
+    restore_a(&store);
+    handle.report(model_cooldown("b", "model:claude-haiku-4-5", 1_000));
+    landed(&store, "model:claude-haiku-4-5").await;
+    assert!(
+        store.load_routing().unwrap().resolutions.is_empty(),
+        "a rekey that failed its one retry is dropped, not retried at every later write"
+    );
 }
 
 #[tokio::test]

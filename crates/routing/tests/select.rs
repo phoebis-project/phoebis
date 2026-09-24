@@ -2820,24 +2820,30 @@ fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_afte
     };
     assert_eq!(opening.account.id, "a");
     let epoch = opening.pin.unwrap().epoch;
-    let writes = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
-    assert!(
-        writes.iter().any(
-            |w| matches!(w, StateWrite::DeletePin(k, sess, m) if k == "k" && sess == "s1" && m == "claude-sonnet-4-5")
-        ),
-        "the pin under the folded spelling is dropped: {writes:?}"
+    let rekey = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+    assert_eq!(
+        rekey.delete_pins,
+        [(
+            "k".to_string(),
+            "s1".to_string(),
+            "claude-sonnet-4-5".to_string()
+        )],
+        "the pin under the folded spelling is dropped"
     );
     assert!(
-        writes.iter().any(
-            |w| matches!(w, StateWrite::UpsertPin(p) if p.model == "claude-sonnet-4-5-20250929")
-        ),
-        "and re-written under the dated id: {writes:?}"
-    );
-    assert!(
-        writes
+        rekey
+            .upsert_pins
             .iter()
-            .any(|w| matches!(w, StateWrite::UpsertResolution(_))),
-        "and the resolution itself is persisted: {writes:?}"
+            .any(|p| p.model == "claude-sonnet-4-5-20250929"),
+        "and re-written under the dated id: {rekey:?}"
+    );
+    assert_eq!(
+        (
+            rekey.resolution.spelling.as_str(),
+            rekey.resolution.dated_id.as_str()
+        ),
+        ("claude-sonnet-4-5", "claude-sonnet-4-5-20250929"),
+        "and the resolution itself travels with them"
     );
     let SelectResult::Selected(sel) = select(
         &mut st,
@@ -2881,7 +2887,7 @@ fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_afte
 }
 
 #[test]
-fn a_repeated_resolution_report_moves_nothing_twice() {
+fn a_resolution_moves_every_row_in_one_rekey_and_a_repeat_carries_only_the_resolution() {
     let s = snapshot(Pool {
         strategy: Strategy::RoundRobin,
         members: vec![("a", 0), ("b", 0)],
@@ -2907,26 +2913,49 @@ fn a_repeated_resolution_report_moves_nothing_twice() {
         MODEL_REJECTED_REASON,
     ));
     let first = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
-    assert!(
-        first.iter().any(|w| matches!(w, StateWrite::UpsertPin(_))),
-        "the first report moves the pin: {first:?}"
+    assert_eq!(
+        (
+            first.delete_pins.len(),
+            first
+                .upsert_pins
+                .iter()
+                .map(|p| p.model.as_str())
+                .collect::<Vec<_>>()
+        ),
+        (1, vec!["claude-sonnet-4-5-20250929"]),
+        "the pin moves: {first:?}"
     );
-    assert!(
-        first
-            .iter()
-            .any(|w| matches!(w, StateWrite::UpsertCooldown(_))),
-        "and the cooldown: {first:?}"
+    assert_eq!(
+        (
+            first.delete_cooldowns.clone(),
+            first
+                .upsert_cooldowns
+                .iter()
+                .map(|c| (c.account_id.as_str(), c.scope.as_str()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            vec![("b".to_string(), "model:claude-sonnet-4-5".to_string())],
+            vec![("b", "model:claude-sonnet-4-5-20250929")]
+        ),
+        "and the cooldown with it: {first:?}"
     );
+    assert_eq!(first.resolution.resolved_at, 2_000);
     let second = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 3_000);
     assert!(
-        !second.iter().any(|w| matches!(
-            w,
-            StateWrite::DeletePin(..)
-                | StateWrite::UpsertPin(_)
-                | StateWrite::DeleteCooldown(..)
-                | StateWrite::UpsertCooldown(_)
-        )),
-        "a repeated report moves nothing that already moved: {second:?}"
+        second.delete_pins.is_empty()
+            && second.upsert_pins.is_empty()
+            && second.delete_cooldowns.is_empty()
+            && second.upsert_cooldowns.is_empty(),
+        "a repeat moves nothing that already moved: {second:?}"
+    );
+    assert_eq!(
+        (
+            second.resolution.dated_id.as_str(),
+            second.resolution.resolved_at
+        ),
+        ("claude-sonnet-4-5-20250929", 3_000),
+        "and carries the resolution row alone"
     );
 }
 

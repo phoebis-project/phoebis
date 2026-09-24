@@ -289,16 +289,20 @@ async fn a_known_spelling_is_resolved_to_the_dated_id_off_the_request_path() {
         (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
     })
     .await;
-    wait_for_async(Duration::from_secs(2), || async {
-        h.router
-            .pins()
-            .await
-            .unwrap()
-            .iter()
-            .any(|p| p.model == "claude-sonnet-4-5-20250929")
-            .then_some(())
+    // Published only once the router acknowledged the move, so the pin already sits under the dated id.
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.canonical_for("claude-sonnet-4-5").as_deref()
+            == Some("claude-sonnet-4-5-20250929"))
+        .then_some(())
     })
     .await;
+    assert!(h
+        .router
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.model == "claude-sonnet-4-5-20250929"));
 
     let resp2 = h
         .app
@@ -800,4 +804,83 @@ async fn a_catalog_probe_and_an_inference_request_never_share_a_connection() {
         1,
         "the inference request never rode the probe's connection"
     );
+}
+
+#[tokio::test]
+async fn a_fill_slower_than_its_window_is_shared_by_every_caller_waiting_on_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+    }])
+    .await;
+    let h = harness_with_catalog_window(
+        &up,
+        catalog_up,
+        &[api_key("a", "sk-ant-api03-A", 0)],
+        PoolSpec::default(),
+        Duration::from_secs(1),
+    )
+    .await;
+    let a = h.store.account("a").unwrap().unwrap();
+    let callers: Vec<_> = (0..3)
+        .map(|_| {
+            let (catalog, account) = (h.catalog.clone(), a.clone());
+            tokio::spawn(async move { catalog.fetch(&account).await })
+        })
+        .collect();
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog_up.requests().len() == 1).then_some(())
+    })
+    .await;
+    // The discovery answers two seconds after it left, twice the window.
+    h.clock.fetch_add(2_000, Ordering::SeqCst);
+    h.catalog_up.release();
+    let mut answers = Vec::new();
+    for caller in callers {
+        answers.push(caller.await.unwrap());
+    }
+    assert_eq!(
+        h.catalog_up.requests().len(),
+        1,
+        "the callers behind the fill lock read the fill rather than discovering again"
+    );
+    assert!(
+        answers
+            .iter()
+            .all(|answer| answer == &answers[0] && answer.models.len() == 1),
+        "all three share the one answer: {answers:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_resolution_the_router_never_acknowledged_stays_unpublished_and_is_asked_again() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.router.shutdown().await.unwrap();
+    h.catalog.request_resolution("claude-sonnet-4-5");
+    wait_for(Duration::from_secs(2), || {
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        h.catalog.canonical_for("claude-sonnet-4-5").is_none()
+    })
+    .await;
+    // The answer was recorded, so the spelling waits out its window rather than probing again at once.
+    h.catalog.request_resolution("claude-sonnet-4-5");
+    stays_for(Duration::from_millis(100), || {
+        probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 1
+    })
+    .await;
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    wait_for(Duration::from_secs(2), || {
+        h.catalog.request_resolution("claude-sonnet-4-5");
+        (probes_for(&h.catalog_up, "/v1/models/claude-sonnet-4-5") == 2).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        h.catalog.canonical_for("claude-sonnet-4-5").is_none()
+    })
+    .await;
 }

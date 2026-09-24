@@ -142,6 +142,40 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
 }
 
 #[tokio::test]
+async fn a_request_under_the_dated_id_keeps_the_credit_of_a_probe_on_a_recipe_retained_under_the_spelling(
+) {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        catalog: relay_common::catalog_rules(),
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe("main").await;
+    assert_eq!(r.status("main").canonical_model, "claude-sonnet-4-5");
+    wait_for(Duration::from_secs(5), || {
+        (r.h.catalog.canonical_for("claude-sonnet-4-5").as_deref() == Some(dated)).then_some(())
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    // Past the first request's five-minute TTL, the next one is named by the dated id and reads what the probe
+    // kept warm.
+    r.advance(60_000);
+    let second = r.observe("main").await;
+    assert_eq!(r.status("main").canonical_model, dated);
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(
+        inference_rows(&rows).kept_warm_tokens,
+        2_000,
+        "the probe covered the recipe the request continues, whichever name each was taken under"
+    );
+    assert!(row(&r, &second).await.kept_warm);
+}
+
+#[tokio::test]
 async fn a_probe_during_a_long_stream_and_a_shortened_ttl_credit_nothing() {
     // A stream arms the schedule before it completes; a probe that runs while it is open must not credit it.
     let mut r = rig(RigSpec::default()).await;

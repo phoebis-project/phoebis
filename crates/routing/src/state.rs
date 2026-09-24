@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use phoebis_store::{AccountState, CooldownRow, OverageRow, PinRow, ResolutionRow, RoutingLoad};
+use phoebis_store::{
+    AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
+};
 
 use crate::RegistrySnapshot;
 
@@ -72,10 +74,12 @@ pub enum StateWrite {
     },
     DeleteCooldown(String, String),
     DeletePin(String, String, String),
+    /// One resolution landing, committed as one transaction so the store never holds moved rows without the
+    /// spelling row that finds them after a restart.
+    Rekey(RekeyWrite),
     UpsertCooldown(CooldownRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
-    UpsertResolution(ResolutionRow),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -429,7 +433,7 @@ impl RoutingState {
 
     /// Records the resolution and moves every pin and every model cooldown keyed on `spelling` to `dated_id`
     /// in one step, so nothing selects between the two halves: two rows that meet merge as the store merges
-    /// them (the later cooldown deadline wins, the pin with the newer `last_used_at` wins). The writes carry
+    /// them (the later cooldown deadline wins, the pin with the newer `last_used_at` wins). The rekey carries
     /// the deletes under the old key, the upserts under the new one, and the resolution row itself.
     ///
     /// The rows here are found and moved by their raw stored key rather than through `pin`/`cooldown`'s own
@@ -437,8 +441,18 @@ impl RoutingState {
     /// existed, so only a raw key finds them. A spelling re-pointed to a newer dated id moves only the rows
     /// still keyed on the literal spelling; rows already moved under the previous dated id stay there, since
     /// a new snapshot is a new model.
-    pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> Vec<StateWrite> {
-        let mut writes = Vec::new();
+    pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> RekeyWrite {
+        let mut rekey = RekeyWrite {
+            resolution: ResolutionRow {
+                spelling: spelling.to_string(),
+                dated_id: dated_id.to_string(),
+                resolved_at: at,
+            },
+            delete_pins: Vec::new(),
+            upsert_pins: Vec::new(),
+            delete_cooldowns: Vec::new(),
+            upsert_cooldowns: Vec::new(),
+        };
         self.resolutions
             .insert(spelling.to_string(), dated_id.to_string());
 
@@ -454,7 +468,7 @@ impl RoutingState {
                 pin.session_id.clone(),
                 pin.model.clone(),
             ));
-            writes.push(StateWrite::DeletePin(
+            rekey.delete_pins.push((
                 pin.key_id.clone(),
                 pin.session_id.clone(),
                 pin.model.clone(),
@@ -474,7 +488,7 @@ impl RoutingState {
                     ..pin
                 };
                 self.pins.insert(dated_key, moved.clone());
-                writes.push(StateWrite::UpsertPin(moved));
+                rekey.upsert_pins.push(moved);
             }
         }
 
@@ -489,10 +503,9 @@ impl RoutingState {
         for row in moved_cooldowns {
             self.cooldowns
                 .remove(&(row.account_id.clone(), row.scope.clone()));
-            writes.push(StateWrite::DeleteCooldown(
-                row.account_id.clone(),
-                row.scope.clone(),
-            ));
+            rekey
+                .delete_cooldowns
+                .push((row.account_id.clone(), row.scope.clone()));
             let account_id = row.account_id.clone();
             let moved = CooldownRow {
                 scope: new_scope.clone(),
@@ -504,16 +517,10 @@ impl RoutingState {
                     .get(&(account_id, new_scope.clone()))
                     .cloned()
                     .expect("record_cooldown just inserted or updated this row");
-                writes.push(StateWrite::UpsertCooldown(merged));
+                rekey.upsert_cooldowns.push(merged);
             }
         }
-
-        writes.push(StateWrite::UpsertResolution(ResolutionRow {
-            spelling: spelling.to_string(),
-            dated_id: dated_id.to_string(),
-            resolved_at: at,
-        }));
-        writes
+        rekey
     }
 
     pub fn release_session(

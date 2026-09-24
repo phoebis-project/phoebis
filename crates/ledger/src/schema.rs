@@ -241,6 +241,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// the turn origin, every column nullable so a row from before this version reads NULL; the client is a
 /// dimension of the hourly rollup, so it joins the primary key beside the agent and the table is rebuilt as
 /// versions 3, 7, and 9 rebuilt it, every existing row filed under the reserved id.
+///
+/// Version 17: the newest events of one kind are read on every poll of the Models view, and `events_at` made
+/// that a walk of the whole history whenever the kind had fewer rows than the limit; an index that starts with
+/// the kind seeks straight to them.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -546,5 +550,9 @@ INSERT INTO rollups_hourly_next (hour, key_id, key_generation, pool_id, account_
 DROP TABLE rollups_hourly;
 ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);",
+    ),
+    (
+        17,
+        "CREATE INDEX IF NOT EXISTS events_kind_at ON events (kind, at);",
     ),
 ];
