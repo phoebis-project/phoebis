@@ -90,18 +90,26 @@ fn carrying_prompt_id(session: &str, id: &str) -> Request<Body> {
 }
 
 /// The opt-out shape: `CLAUDE_CODE_ATTRIBUTION_HEADER=false` drops the billing line but leaves the rest of
-/// `system` in place, so `system[0]` becomes whatever followed it.
-fn without_billing_line(session: &str) -> Request<Body> {
+/// `system` in place, so `system[0]` becomes whatever followed it. `metadata.user_id` is seeded with the
+/// account `relay_with` selects, so a test that wants the wire bytes untouched does not have `edit_body`'s own
+/// account-identity splice rewrite the fixture's empty one out from under it.
+fn bytes_without_billing_line() -> Vec<u8> {
     let mut value: serde_json::Value =
         serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
     value["system"]
         .as_array_mut()
         .expect("the fixture carries a system array")
         .remove(0);
-    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
+    value["metadata"]["user_id"] = serde_json::Value::String(format!(
+        r#"{{"account_uuid":"{ACCOUNT_UUID}","session_id":"s-1"}}"#
+    ));
+    serde_json::to_vec(&value).expect("a Value always re-encodes")
+}
+
+fn without_billing_line(session: &str) -> Request<Body> {
     let mut req = request_from_fixture(
         inference_head(FixtureKind::OauthNonFirstParty),
-        &native,
+        &bytes_without_billing_line(),
         KEY,
     );
     set_header(&mut req, "x-claude-code-session-id", session);
@@ -333,33 +341,10 @@ async fn a_carried_prompt_id_past_the_bound_is_retained_by_nothing_and_travels_a
     up.shutdown().await;
 }
 
+/// A forged `claude-cli/` agent buys nothing on a body that carries no attribution line: the relay never
+/// writes a line the client did not, so there is nothing for the agent to unlock.
 #[tokio::test]
-async fn an_absent_line_is_inserted_whole_with_the_version_and_entrypoint_from_the_user_agent() {
-    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
-    app.clone()
-        .oneshot(without_billing_line("s-1"))
-        .await
-        .unwrap();
-    let line = billing_line(&up.requests()[0].body);
-    assert!(
-        line.starts_with(
-            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch="
-        ),
-        "{line}"
-    );
-    assert!(field(&line, "cc_prompt_id").is_some());
-    assert_eq!(
-        phoebis_cch::sign(&up.requests()[0].body).unwrap(),
-        up.requests()[0].body
-    );
-    up.shutdown().await;
-}
-
-/// A version half that is not digits and dots is a forged User-Agent: the whole-line insert would sign a
-/// line carrying whatever `;`-separated field it named.
-#[tokio::test]
-async fn a_user_agent_whose_version_carries_a_field_of_its_own_restores_nothing() {
+async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_restores_nothing() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let mut req = without_billing_line("s-1");
@@ -383,13 +368,44 @@ async fn a_user_agent_whose_version_carries_a_field_of_its_own_restores_nothing(
     up.shutdown().await;
 }
 
-/// A prerelease build spells its version with a suffix; the line is inserted with that spelling, as the client
-/// itself would write it.
+/// The same forged version half, proven where a line already exists to fill: the version gate refuses it
+/// there too, not only where there is no line at all.
+#[tokio::test]
+async fn a_version_spelled_any_other_way_than_the_clients_restores_nothing_on_a_sent_line() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        body(BodyFixture::Oauth),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", "s-1");
+    set_header(
+        &mut req,
+        "user-agent",
+        "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
+    );
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
+    let sent = &up.requests()[0];
+    let line = billing_line(&sent.body);
+    assert_eq!(field(&line, "cch"), None);
+    assert_eq!(field(&line, "cc_prompt_id"), None);
+    assert_eq!(header(sent, "x-client-request-id"), None);
+    up.shutdown().await;
+}
+
+/// A prerelease build spells its version with a suffix; the fields the restoration fills use that spelling,
+/// as the client itself would write it.
 #[tokio::test]
 async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let mut req = without_billing_line("s-1");
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        body(BodyFixture::Oauth),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", "s-1");
     set_header(
         &mut req,
         "user-agent",
@@ -398,16 +414,89 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
     let sent = &up.requests()[0];
     let line = billing_line(&sent.body);
-    let version = field(&line, "cc_version").expect("the line was inserted whole");
-    assert!(
-        version.starts_with("2.1.269-beta.1.") && version.len() == "2.1.269-beta.1.".len() + 3,
-        "the version keeps its own spelling ahead of the three hex digits: {line}"
-    );
-    assert_eq!(field(&line, "cc_entrypoint"), Some("cli"));
+    assert!(field(&line, "cch").is_some());
+    assert!(field(&line, "cc_prompt_id").is_some());
     assert!(
         header(sent, "x-client-request-id").is_some(),
         "the rest of the first-party shape is presented too"
     );
+    up.shutdown().await;
+}
+
+/// With the account identity already the one `relay_with` seeds and the model already one the pool serves as
+/// it is, `edit_body` finds nothing else to write either, so the body a client without the block sends reaches
+/// the upstream byte for byte.
+#[tokio::test]
+async fn a_body_without_the_block_relays_byte_identical_under_a_claude_code_user_agent() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let sent = bytes_without_billing_line();
+    let resp = app
+        .clone()
+        .oneshot(without_billing_line("s-1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let recorded = &up.requests()[0];
+    assert_eq!(
+        recorded.body, sent,
+        "the body reaches the upstream exactly as sent"
+    );
+    assert!(
+        !String::from_utf8_lossy(&recorded.body).contains("x-anthropic-billing-header"),
+        "no line was inserted, the reason the bytes are identical: {}",
+        String::from_utf8_lossy(&recorded.body)
+    );
+    assert_eq!(header(recorded, "x-client-request-id"), None);
+    up.shutdown().await;
+}
+
+/// The wire-level characterization of `insert_if_absent`'s seating rule: a first-party line that already ends
+/// in `cc_turn_origin` still ends in it once a field is filled ahead of it, and the client's own hash formula
+/// over the wire body reproduces the stamp this build wrote.
+#[tokio::test]
+async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field_is_filled() {
+    const SESSION: &str = "b2f7a3c1-9e44-4a3f-8b02-2a6a1e9c4f10";
+    const PROMPT_ID: &str = "11111111-1111-4111-8111-111111111111";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(cli_request(SESSION, None, None))
+        .await
+        .unwrap();
+    let native = format!(
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cc_prompt_id={PROMPT_ID}; cc_turn_origin=human;"}}],"metadata":{{"user_id":"{{\"account_uuid\":\"\",\"session_id\":\"s-1\"}}"}},"messages":[{{"role":"user","content":"hi"}}]}}"#
+    );
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", SESSION);
+    app.clone().oneshot(req).await.unwrap();
+    let wire = up.requests()[1].body.clone();
+    let line = billing_line(&wire);
+    let names: Vec<&str> = line
+        .trim_start_matches("x-anthropic-billing-header: ")
+        .split("; ")
+        .map(|f| f.split('=').next().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "cc_version",
+            "cc_entrypoint",
+            "cch",
+            "cc_prev_req",
+            "cc_prompt_id",
+            "cc_turn_origin"
+        ],
+        "cc_prev_req lands ahead of cc_prompt_id, and cc_turn_origin still closes the line"
+    );
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    assert_eq!(field(&line, "cc_prompt_id"), Some(PROMPT_ID));
+    assert_eq!(field(&line, "cc_turn_origin"), Some("human"));
+    assert_eq!(phoebis_cch::sign(&wire).unwrap(), wire);
     up.shutdown().await;
 }
 

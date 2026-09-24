@@ -227,6 +227,41 @@ pub struct RequestShape {
     pub service_tier: Option<String>,
 }
 
+/// The class of a caller that is not Claude Code: a request's label is `claude-code/<entrypoint>` or `other`.
+pub const OTHER_CLIENT: &str = "other";
+
+/// Who sent the request and what its hint headers and its attribution line said about the turn, read once at
+/// admission. Every member but `class` is absent unless the client sent it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClientFacts {
+    /// `claude-code/<entrypoint>` for a `claude-cli/` user agent, else `other`.
+    pub class: String,
+    /// `x-claude-code-agent-type`, on a subagent's own turns.
+    pub agent_type: Option<String>,
+    /// `x-claude-code-compaction`, on the summarization request.
+    pub compaction: Option<String>,
+    /// `x-claude-code-context-compacted`, once on the first request after a compaction.
+    pub context_compacted: Option<String>,
+    /// The sum of `x-claude-code-prev-tool-durations` in milliseconds; the per-tool list is not kept.
+    pub prev_tool_ms: Option<i64>,
+    /// `cc_turn_origin` off the attribution line, first-party only; never restored, since the relay cannot
+    /// know who started the turn.
+    pub turn_origin: Option<String>,
+}
+
+impl Default for ClientFacts {
+    fn default() -> Self {
+        ClientFacts {
+            class: OTHER_CLIENT.into(),
+            agent_type: None,
+            compaction: None,
+            context_compacted: None,
+            prev_tool_ms: None,
+            turn_origin: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RequestObserved {
     pub request_id: String,
@@ -250,6 +285,9 @@ pub struct RequestObserved {
     pub body_capture_hours: u32,
     /// Empty for a refusal published before the body was read.
     pub shape: RequestShape,
+    /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
+    /// unstructured, as the caller spelled them.
+    pub client: ClientFacts,
     /// The caller presented the secret a rotation retired.
     pub presented_retired: bool,
     /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired

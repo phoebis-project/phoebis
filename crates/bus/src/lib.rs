@@ -12,9 +12,9 @@ use tokio::sync::mpsc;
 
 pub use event::{
     header_published, lifecycle_channel, user_agent_of, AccountSelected, AttemptOutcome,
-    CooldownSet, Event, Kind, LifecycleReceiver, LifecycleSender, Origin, Outcome, Phase,
-    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead,
-    SessionLifecycle, Usage, HEADER_DENYLIST, USER_AGENT_MAX_BYTES,
+    ClientFacts, CooldownSet, Event, Kind, LifecycleReceiver, LifecycleSender, Origin, Outcome,
+    Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    ResponseHead, SessionLifecycle, Usage, HEADER_DENYLIST, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
@@ -169,6 +169,7 @@ mod tests {
             body: Bytes::from_static(b"{}"),
             body_capture_hours: 0,
             shape: RequestShape::default(),
+            client: ClientFacts::default(),
             presented_retired: false,
             rotation_at: None,
             received_at: 1,

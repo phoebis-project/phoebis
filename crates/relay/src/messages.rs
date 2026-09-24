@@ -14,7 +14,7 @@ use axum::routing::{get, head, post};
 use axum::Router;
 use bytes::Bytes;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Bus, CooldownSet, Event, Kind, Origin, Outcome,
+    AccountSelected, AttemptOutcome, Bus, ClientFacts, CooldownSet, Event, Kind, Origin, Outcome,
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
     ResponseHead as BusHead, Usage,
 };
@@ -37,7 +37,7 @@ use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::billing::{entrypoint_of, restorable_version, Restore};
+use crate::billing::{restorable_version, Restore};
 use crate::casing::OriginalHead;
 use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
@@ -46,10 +46,10 @@ use crate::errors::{
     MODEL_NOT_ALLOWED, MODEL_UNSERVED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
-use crate::facts::BodyFacts;
+use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
-use crate::identity::{identify, RequestIdentity};
+use crate::identity::{client_class, identify, RequestIdentity};
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
@@ -335,6 +335,7 @@ impl Trace {
         stream: bool,
         body_capture_hours: u32,
         shape: RequestShape,
+        client: ClientFacts,
         presented_retired: bool,
         rotation_at: Option<i64>,
     ) {
@@ -365,6 +366,7 @@ impl Trace {
             body,
             body_capture_hours,
             shape,
+            client,
             presented_retired,
             rotation_at,
             received_at: self.received_at,
@@ -463,6 +465,25 @@ impl Trace {
     }
 }
 
+/// The class and hint facts `observed` publishes, built once per call: the class from the identity already
+/// derived it, or read fresh for a request refused before it had one; the turn origin from the body, once it was
+/// read.
+fn client_facts(
+    headers: &HeaderMap,
+    identity: Option<&RequestIdentity>,
+    facts: Option<&BodyFacts>,
+) -> ClientFacts {
+    let hints = ClientHints::read(headers);
+    ClientFacts {
+        class: identity.map_or_else(|| client_class(headers), |i| i.client.clone()),
+        agent_type: hints.agent_type,
+        compaction: hints.compaction,
+        context_compacted: hints.context_compacted,
+        prev_tool_ms: hints.prev_tool_ms,
+        turn_origin: facts.and_then(|f| f.turn_origin.clone()),
+    }
+}
+
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
@@ -518,9 +539,6 @@ fn restore_with<'a>(
     skip: &BTreeSet<Injected>,
 ) -> Option<Restore<'a>> {
     restore.as_ref().map(|r| Restore {
-        cli_version: &r.cli_version,
-        entrypoint: &r.entrypoint,
-        prompt_units: r.prompt_units,
         prompt_id: r.prompt_id.as_deref(),
         prev_req: previous.request_id.as_deref(),
         restore_cch: true,
@@ -664,6 +682,7 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            client_facts(&parts.headers, None, None),
                             false,
                             None,
                         )
@@ -685,6 +704,7 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            client_facts(&parts.headers, None, None),
                             false,
                             None,
                         )
@@ -707,6 +727,7 @@ impl Relay {
                                 false,
                                 0,
                                 RequestShape::default(),
+                                client_facts(&parts.headers, None, None),
                                 false,
                                 None,
                             )
@@ -729,6 +750,7 @@ impl Relay {
                                 false,
                                 0,
                                 RequestShape::default(),
+                                client_facts(&parts.headers, None, None),
                                 false,
                                 None,
                             )
@@ -784,6 +806,7 @@ impl Relay {
                         false,
                         capture_hours,
                         RequestShape::default(),
+                        client_facts(&parts.headers, None, None),
                         presented == Presented::Retired,
                         key.rotated_at,
                     )
@@ -822,6 +845,7 @@ impl Relay {
                     stream,
                     capture_hours,
                     facts.shape.clone(),
+                    client_facts(&parts.headers, None, Some(&facts)),
                     presented == Presented::Retired,
                     key.rotated_at,
                 )
@@ -848,6 +872,7 @@ impl Relay {
                         stream,
                         capture_hours,
                         facts.shape.clone(),
+                        client_facts(&parts.headers, None, Some(&facts)),
                         presented == Presented::Retired,
                         key.rotated_at,
                     )
@@ -872,6 +897,7 @@ impl Relay {
                 stream,
                 capture_hours,
                 facts.shape.clone(),
+                client_facts(&parts.headers, Some(&identity), Some(&facts)),
                 presented == Presented::Retired,
                 key.rotated_at,
             )
@@ -951,15 +977,14 @@ impl Relay {
                 }
             }
         }
-        // Claude Code's own inference requests alone: a probe replays what the client sent, and a token count
-        // has no line to fill.
+        // Claude Code's own inference requests alone: a probe replays what the client sent, a token count has no
+        // line to fill, and a body without the block is relayed as sent and gets no client request id either.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
             // The version lands in a line this build signs, so one spelled any other way than the client's
             // own restores nothing rather than a version guessed around whatever it carried.
-            (Some(version), _) if trace.kind == Kind::Inference => {
+            (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
                 restorable_version(version).map(|version| RestoreContext {
                     cli_version: version.to_string(),
-                    entrypoint: entrypoint_of(user_agent(&parts.headers)).to_string(),
                     prompt_units: facts.prompt_units,
                     prompt_id: memory_key.as_ref().map(|key| {
                         self.memory.prompt_id(
@@ -2442,12 +2467,11 @@ enum Next {
     Strip(Vec<Injected>),
 }
 
-/// The restoration facts computed once at admission: the client version and entrypoint the wire already named,
-/// the version-suffix code units, and the prompt id this turn carries. The previous request id is not here
-/// because it is per-account, looked up in the failover loop against the account each attempt actually tries.
+/// The restoration facts computed once at admission: the client version the wire already named, the
+/// version-suffix code units, and the prompt id this turn carries. The previous request id is not here because
+/// it is per-account, looked up in the failover loop against the account each attempt actually tries.
 struct RestoreContext {
     cli_version: String,
-    entrypoint: String,
     prompt_units: [u16; 3],
     prompt_id: Option<String>,
 }

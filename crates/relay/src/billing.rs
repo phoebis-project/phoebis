@@ -6,7 +6,8 @@ use crate::memory::Injected;
 use crate::RelayError;
 
 /// The fields of the attribution line in the client's own order; a restored field lands where this order puts it.
-pub const FIELD_ORDER: [&str; 7] = [
+/// `cc_turn_origin` closes the client's line and is never restored.
+pub const FIELD_ORDER: [&str; 8] = [
     "cc_version",
     "cc_entrypoint",
     "cch",
@@ -14,12 +15,10 @@ pub const FIELD_ORDER: [&str; 7] = [
     "cc_is_subagent",
     "cc_prev_req",
     "cc_prompt_id",
+    "cc_turn_origin",
 ];
 
 pub struct Restore<'a> {
-    pub cli_version: &'a str,
-    pub entrypoint: &'a str,
-    pub prompt_units: [u16; 3],
     pub prompt_id: Option<&'a str>,
     pub prev_req: Option<&'a str>,
     pub restore_cch: bool,
@@ -28,9 +27,10 @@ pub struct Restore<'a> {
     pub skip: Vec<Injected>,
 }
 
-/// Fills every absent field the restoration names, or inserts the whole line as `system[0]` when the body has a
-/// `system` array whose first block is not the attribution line. Returns what was inserted. A present field is
-/// never rewritten.
+/// Fills every absent field the restoration names on the attribution line at `system[0]`. A body whose first
+/// system block is not that line, or whose `system` is not an array, is left as sent: the relay never writes a
+/// line the client did not, so every restoration carries the client's own stamp. A present field is never
+/// rewritten.
 pub fn restore_billing_line(
     body: &mut Vec<u8>,
     restore: &Restore<'_>,
@@ -48,7 +48,7 @@ pub fn restore_billing_line(
         Some((start, end)) if body[start..end].starts_with(BILLING_BLOCK) => {
             patch_line(body, start, end, restore)
         }
-        _ => insert_whole_line(body, restore),
+        _ => Ok(Vec::new()),
     }
 }
 
@@ -245,54 +245,6 @@ fn patch_line(
     Ok(injected)
 }
 
-/// Where the whole line splices in: right before the array's own first element, or, when the array holds none,
-/// right before its closing bracket.
-enum SystemArraySlot {
-    BeforeFirstElement(usize),
-    Empty(usize),
-}
-
-fn insert_whole_line(
-    body: &mut Vec<u8>,
-    restore: &Restore<'_>,
-) -> Result<Vec<Injected>, RelayError> {
-    // Both lookups are the depth-aware walk `phoebis_cch`'s own scanners use, so a `"system"`-shaped decoy earlier
-    // in the body (a `"role":"system"` message, a tool's own `{"system":[...]}`) never stands in for the
-    // top-level member. `array_member_span` already covers an array with an element; a `None` from it can only
-    // mean an empty array once `restore_billing_line` has confirmed `system` really is one, but a duplicate
-    // top-level `"system"` key can still make the depth-aware walk (first match) and the caller's own
-    // `serde_json` check (last match) disagree, so a `None` here too is a body this build declines to guess at.
-    let slot = match phoebis_cch::array_member_span(body, &["system"], 0) {
-        Some((at, _)) => SystemArraySlot::BeforeFirstElement(at),
-        None => match phoebis_cch::empty_array_member_end(body, &["system"]) {
-            Some(at) => SystemArraySlot::Empty(at),
-            None => return Ok(Vec::new()),
-        },
-    };
-    let fields = vec![
-        format!(
-            "cc_version={}",
-            cc_version(restore.cli_version, restore.prompt_units)
-        ),
-        format!("cc_entrypoint={}", restore.entrypoint),
-    ];
-    let (fields, injected) = apply_candidates(restore, fields);
-    let line = format!("x-anthropic-billing-header: {};", fields.join("; "));
-    let element = format!(
-        r#"{{"type":"text","text":{}}}"#,
-        serde_json::to_string(&line).expect("a string always encodes as JSON")
-    );
-    match slot {
-        SystemArraySlot::BeforeFirstElement(at) => {
-            body.splice(at..at, format!("{element},").bytes());
-        }
-        SystemArraySlot::Empty(at) => {
-            body.splice(at..at, element.bytes());
-        }
-    }
-    Ok(injected)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,9 +398,6 @@ mod tests {
              cc_workload=interactive; cc_is_subagent=false;",
         );
         let restore = Restore {
-            cli_version: "2.1.269",
-            entrypoint: "sdk-cli",
-            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: Some("req_1"),
             restore_cch: true,
@@ -473,9 +422,6 @@ mod tests {
             "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cc_prev_req=req_kept;",
         );
         let restore = Restore {
-            cli_version: "2.1.269",
-            entrypoint: "sdk-cli",
-            prompt_units: [b'0' as u16; 3],
             prompt_id: None,
             prev_req: Some("req_other"),
             restore_cch: false,
@@ -493,9 +439,6 @@ mod tests {
         let mut body = br#"{"model":"m","system":"be helpful","messages":[]}"#.to_vec();
         let before = body.clone();
         let restore = Restore {
-            cli_version: "2.1.269",
-            entrypoint: "sdk-cli",
-            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,
@@ -508,9 +451,6 @@ mod tests {
 
     fn full_restore() -> Restore<'static> {
         Restore {
-            cli_version: "2.1.269",
-            entrypoint: "sdk-cli",
-            prompt_units: [b'0' as u16; 3],
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
             prev_req: None,
             restore_cch: true,
@@ -540,57 +480,63 @@ mod tests {
     }
 
     #[test]
-    fn a_role_system_message_ahead_of_an_empty_top_level_system_does_not_confuse_the_insertion() {
-        let mut body =
-            br#"{"model":"m","messages":[{"role":"system","content":"x"}],"system":[]}"#.to_vec();
-        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
-        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
-        assert!(
-            text_of(&body).starts_with(
-                "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"
-            ),
-            "{}",
-            text_of(&body)
-        );
+    fn a_system_array_whose_first_block_is_not_the_line_is_left_alone() {
+        let empty = br#"{"model":"m","system":[],"messages":[]}"#.to_vec();
+        let plain_first_block =
+            br#"{"model":"m","system":[{"type":"text","text":"be helpful"}],"messages":[]}"#
+                .to_vec();
+        // serde_json reads the object as the last "system" (the array), so system_is_array passes;
+        // the depth-aware scanner reads the object as the first (the string) and cannot descend into
+        // it as an array, so every lookup that would locate a field returns nothing rather than a guess.
+        let duplicate_keys =
+            br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#.to_vec();
+        for body in [empty, plain_first_block, duplicate_keys] {
+            let mut body = body;
+            let before = body.clone();
+            let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
+            assert!(injected.is_empty());
+            assert_eq!(body, before);
+        }
     }
 
     #[test]
-    fn a_whole_line_is_inserted_into_an_empty_top_level_system_array() {
-        let mut body = br#"{"model":"claude-sonnet-5","system":[],"messages":[]}"#.to_vec();
-        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
-        let text = text_of(&body);
-        assert!(
-            text.starts_with("x-anthropic-billing-header: cc_version="),
-            "{text}"
+    fn the_field_order_names_the_eight_fields_with_cc_turn_origin_last() {
+        assert_eq!(
+            FIELD_ORDER.as_slice(),
+            [
+                "cc_version",
+                "cc_entrypoint",
+                "cch",
+                "cc_workload",
+                "cc_is_subagent",
+                "cc_prev_req",
+                "cc_prompt_id",
+                "cc_turn_origin",
+            ]
         );
-        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["system"].as_array().map(Vec::len), Some(1));
     }
 
+    /// `insert_if_absent` already seats a field by `FIELD_ORDER` position alone, so a trailing field the
+    /// restoration never fills stays trailing once another field lands ahead of it.
     #[test]
-    fn a_nested_empty_system_array_ahead_of_the_top_level_one_is_not_spliced_into() {
-        let mut body = br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_use","id":"t1","name":"x","input":{"system":[]}}]}],"system":[]}"#.to_vec();
-        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
-        assert_eq!(injected, vec![Injected::Cch, Injected::PromptId]);
-        let text = String::from_utf8(body.clone()).unwrap();
-        assert!(
-            text.contains(r#""input":{"system":[]}"#),
-            "the nested array is untouched: {text}"
+    fn a_field_filled_on_a_first_party_line_lands_ahead_of_cc_turn_origin() {
+        let mut body = billing_body(
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cch=9b244; \
+             cc_prompt_id=11111111-1111-4111-8111-111111111111; cc_turn_origin=human;",
         );
-        assert!(text_of(&body).starts_with("x-anthropic-billing-header:"));
-    }
-
-    #[test]
-    fn duplicate_top_level_system_keys_are_left_alone_rather_than_guessed_at() {
-        // `serde_json` reads the object as the last `"system"` (the array), so `system_is_array` passes; the
-        // depth-aware scanner reads the object as the first (the string) and cannot descend into it as an
-        // array, so every lookup that would locate an insertion point returns nothing rather than a guess.
-        let mut body = br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#.to_vec();
-        let before = body.clone();
-        let injected = restore_billing_line(&mut body, &full_restore()).unwrap();
-        assert!(injected.is_empty());
-        assert_eq!(body, before);
+        let restore = Restore {
+            prompt_id: None,
+            prev_req: Some("req_1"),
+            restore_cch: false,
+            skip: Vec::new(),
+        };
+        let injected = restore_billing_line(&mut body, &restore).unwrap();
+        assert_eq!(injected, vec![Injected::PrevReq]);
+        assert_eq!(
+            text_of(&body),
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cch=9b244; \
+             cc_prev_req=req_1; cc_prompt_id=11111111-1111-4111-8111-111111111111; cc_turn_origin=human;"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use phoebis_bus::{AttemptOutcome, Bus, Event, Outcome, Phase, ResponseChunk, Subscriber};
+use phoebis_bus::{AttemptOutcome, Bus, ClientFacts, Event, Outcome, Phase, ResponseChunk, Subscriber};
 use phoebis_relay::Limits;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -629,6 +629,76 @@ async fn refused_and_exhausted_requests_publish_an_observed_event_and_their_comp
         matches!(events.last(), Some(Event::RequestComplete(c)) if c.outcome == Outcome::Exhausted && c.error_code.as_deref() == Some("accounts_exhausted") && c.status == 429)
     );
     assert_eq!(events.len(), 4, "observed, selected, head, complete");
+    up.shutdown().await;
+}
+
+/// The class is derived at admission and the hint headers and the turn origin are read off the request that
+/// carries them; none of it gates the request, so the fact reaches the bus whether or not the client sent it.
+#[tokio::test]
+async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_turn_origin() {
+    use phoebis_profile::fixtures::{body as fixture_body, inference_head, BodyFixture, FixtureKind};
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut with_line: serde_json::Value =
+        serde_json::from_slice(fixture_body(BodyFixture::Oauth)).unwrap();
+    with_line["system"][0]["text"] = serde_json::Value::String(
+        "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; \
+         cc_turn_origin=human;"
+            .into(),
+    );
+    let native = serde_json::to_vec(&with_line).unwrap();
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &native,
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-agent-type", "Explore");
+    set_header(&mut req, "x-claude-code-compaction", "auto");
+    set_header(&mut req, "x-claude-code-context-compacted", "manual");
+    set_header(
+        &mut req,
+        "x-claude-code-prev-tool-durations",
+        "Bash=1200;Read=35;",
+    );
+    h.app.clone().oneshot(req).await.unwrap();
+    let (events, _) = drain(&mut sub);
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(
+        observed.client,
+        ClientFacts {
+            class: "claude-code/sdk-cli".into(),
+            agent_type: Some("Explore".into()),
+            compaction: Some("auto".into()),
+            context_compacted: Some("manual".into()),
+            prev_tool_ms: Some(1_235),
+            turn_origin: Some("human".into()),
+        }
+    );
+    let req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        fixture_body(BodyFixture::Oauth),
+        KEY,
+    );
+    h.app.clone().oneshot(req).await.unwrap();
+    let (events, _) = drain(&mut sub);
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(
+        observed.client,
+        ClientFacts {
+            class: "claude-code/sdk-cli".into(),
+            ..Default::default()
+        }
+    );
     up.shutdown().await;
 }
 

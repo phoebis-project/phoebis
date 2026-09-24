@@ -592,6 +592,7 @@ mod tests {
             body: Bytes::from_static(b"0123456789"),
             body_capture_hours: capture_hours,
             shape: RequestShape::default(),
+            client: ClientFacts::default(),
             presented_retired: false,
             rotation_at: None,
             received_at: 1_000,

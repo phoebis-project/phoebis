@@ -1,7 +1,9 @@
 //! Who and what a request is: the session, the agent, the owner, and the model it asks for.
 
 use axum::http::HeaderMap;
+use phoebis_bus::OTHER_CLIENT;
 
+use crate::billing::entrypoint_of;
 use crate::RelayError;
 
 /// The agent a request without an agent header belongs to.
@@ -22,6 +24,8 @@ pub struct RequestIdentity {
     pub owner_id: Option<String>,
     pub model: String,
     pub canonical_model: String,
+    /// `claude-code/<entrypoint>` or `other`: a log label, never a gate.
+    pub client: String,
 }
 
 pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, RelayError> {
@@ -49,7 +53,22 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         owner_id: header_id(headers, "x-keepalive-owner-id"),
         model,
         canonical_model,
+        client: client_class(headers),
     })
+}
+
+/// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
+/// reads none), `other` for anything else. The entrypoint is bounded by `entrypoint_of`, so the class is safe
+/// for a log line and a ledger key.
+pub fn client_class(headers: &HeaderMap) -> String {
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if user_agent.starts_with("claude-cli/") {
+        return format!("claude-code/{}", entrypoint_of(user_agent));
+    }
+    OTHER_CLIENT.to_string()
 }
 
 /// Brackets are allowed on top of the identifier charset because a client may name a tier with them, as the
@@ -70,7 +89,7 @@ pub(crate) fn is_valid_id(value: &str) -> bool {
 
 /// A malformed identifier is treated as absent: it is a label, never an authorization decision, so a caller
 /// cannot gain anything by sending one the relay would otherwise have to reject the whole request over.
-fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn header_id(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
@@ -136,5 +155,41 @@ mod tests {
             identify(&headers, b"{\"messages\":[]}"),
             Err(RelayError::NoModel)
         ));
+    }
+
+    #[test]
+    fn the_client_class_reads_the_entrypoint_or_other() {
+        let agent = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(axum::http::header::USER_AGENT, value.parse().unwrap());
+            headers
+        };
+        assert_eq!(
+            client_class(&agent("claude-cli/2.1.269 (external, sdk-cli)")),
+            "claude-code/sdk-cli"
+        );
+        assert_eq!(
+            client_class(&agent("claude-cli/2.1.269")),
+            "claude-code/cli"
+        );
+        assert_eq!(
+            client_class(&agent("claude-cli/2.1.269;x (external, cli; y)")),
+            "claude-code/cli",
+            "the class is a label and never the version gate"
+        );
+        let mut headers = agent("anthropic-sdk-python/0.40.0");
+        headers.insert("x-stainless-lang", "python".parse().unwrap());
+        assert_eq!(client_class(&headers), OTHER_CLIENT);
+        assert_eq!(
+            client_class(&agent("anthropic-sdk-python/0.40.0")),
+            OTHER_CLIENT
+        );
+        let mut headers = agent("anthropic-sdk-python/0.40.0");
+        headers.insert("x-stainless-lang", "py thon".parse().unwrap());
+        assert_eq!(
+            client_class(&headers),
+            OTHER_CLIENT,
+            "a stainless header on an agent outside Claude Code does not change the label"
+        );
     }
 }

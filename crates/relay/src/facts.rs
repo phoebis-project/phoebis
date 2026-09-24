@@ -1,6 +1,7 @@
 //! What the restoration reads off the body in one parse: the turn boundary, the version suffix, and the
 //! prompt id a first-party line already carries.
 
+use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
 use serde_json::Value;
 
@@ -14,7 +15,22 @@ pub struct BodyFacts {
     /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
     /// from a value spelled any other way than the client spells one.
     pub prompt_id: Option<String>,
+    /// The `cc_turn_origin` the line carries, in the client's own spelling (a token of lowercase ASCII letters
+    /// and underscores, at most 32 bytes); absent from a reduced-shape request.
+    pub turn_origin: Option<String>,
+    /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
+    pub carries_line: bool,
     pub shape: RequestShape,
+}
+
+/// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
+/// charset-checked, a malformed value absent rather than refused.
+pub struct ClientHints {
+    pub agent_type: Option<String>,
+    pub compaction: Option<String>,
+    pub context_compacted: Option<String>,
+    /// `<name>=<ms>;...` summed; absent when no entry parses or the value runs past 4 KiB.
+    pub prev_tool_ms: Option<i64>,
 }
 
 impl BodyFacts {
@@ -24,6 +40,8 @@ impl BodyFacts {
                 fresh_user_turn: false,
                 prompt_units: [b'0' as u16; 3],
                 prompt_id: None,
+                turn_origin: None,
+                carries_line: false,
                 shape: RequestShape::default(),
             };
         };
@@ -39,13 +57,21 @@ impl BodyFacts {
             .and_then(last_text)
             .map(prompt_units_of)
             .unwrap_or([b'0' as u16; 3]);
-        let prompt_id = root
+        // Read once and shared by every field the line may carry, so a change to one field's spelling rule
+        // never has to re-walk the body to find the text the others already have in hand.
+        let first_system_text = root
             .get("system")
             .and_then(Value::as_array)
             .and_then(|blocks| blocks.first())
             .and_then(|block| block.get("text"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str);
+        let carries_line =
+            first_system_text.is_some_and(|text| text.starts_with("x-anthropic-billing-header: "));
+        let prompt_id = first_system_text
             .and_then(carried_prompt_id)
+            .map(String::from);
+        let turn_origin = first_system_text
+            .and_then(carried_turn_origin)
             .map(String::from);
         let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
@@ -78,9 +104,69 @@ impl BodyFacts {
             fresh_user_turn,
             prompt_units,
             prompt_id,
+            turn_origin,
+            carries_line,
             shape,
         }
     }
+}
+
+impl ClientHints {
+    pub fn read(headers: &HeaderMap) -> ClientHints {
+        ClientHints {
+            agent_type: crate::identity::header_id(headers, "x-claude-code-agent-type"),
+            compaction: crate::identity::header_id(headers, "x-claude-code-compaction"),
+            context_compacted: crate::identity::header_id(
+                headers,
+                "x-claude-code-context-compacted",
+            ),
+            prev_tool_ms: headers
+                .get("x-claude-code-prev-tool-durations")
+                .and_then(|v| v.to_str().ok())
+                .and_then(tool_ms_sum),
+        }
+    }
+}
+
+/// Bound past which the header is not read at all: the sum is what the restoration surface reports, never the
+/// per-tool breakdown, so there is nothing this build needs from a value a caller could pad without limit.
+const PREV_TOOL_DURATIONS_MAX_BYTES: usize = 4_096;
+
+/// `<name>=<ms>` entries separated by `;`, each split at its last `=`; an entry that does not parse is skipped
+/// rather than refusing the rest, so one caller-side glitch does not blank the whole sum.
+fn tool_ms_sum(value: &str) -> Option<i64> {
+    if value.len() > PREV_TOOL_DURATIONS_MAX_BYTES {
+        return None;
+    }
+    let mut sum: i64 = 0;
+    let mut parsed = false;
+    for entry in value.split(';') {
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((_, ms)) = entry.rsplit_once('=') else {
+            continue;
+        };
+        let Ok(ms) = ms.parse::<u64>() else {
+            continue;
+        };
+        sum = sum.saturating_add(i64::try_from(ms).unwrap_or(i64::MAX));
+        parsed = true;
+    }
+    parsed.then_some(sum)
+}
+
+/// The value of `<name>=` on the attribution line at `system[0]`, whatever its spelling; the caller applies the
+/// charset and bound its own field carries, since a separator let through by the wrong rule would become a
+/// field of its own once the value is restored onto a line this build later signs.
+fn carried_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}=");
+    let value = text
+        .strip_prefix("x-anthropic-billing-header: ")?
+        .split("; ")
+        .find_map(|field| field.strip_prefix(prefix.as_str()))?
+        .trim_end_matches(';');
+    Some(value)
 }
 
 /// What a carried id may weigh. A UUID is 36; the session memory retains one per entry for a day, so a value
@@ -91,15 +177,24 @@ const PROMPT_ID_MAX: usize = 64;
 /// is recorded and then restored onto a later turn of the same session, in a line this build signs, so a
 /// separator smuggled into it would become a field of that line.
 fn carried_prompt_id(text: &str) -> Option<&str> {
-    let value = text
-        .strip_prefix("x-anthropic-billing-header: ")?
-        .split("; ")
-        .find_map(|field| field.strip_prefix("cc_prompt_id="))?
-        .trim_end_matches(';');
+    let value = carried_field(text, "cc_prompt_id")?;
     let spelled = (1..=PROMPT_ID_MAX).contains(&value.len())
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    spelled.then_some(value)
+}
+
+/// Bound on `cc_turn_origin`: the client's own token set, never wide enough to carry a separator that could
+/// smuggle a field of its own into a line this build later signs.
+const TURN_ORIGIN_MAX: usize = 32;
+
+/// The `cc_turn_origin` of an attribution line, accepted only as the client's own spelling: lowercase ASCII
+/// letters and underscores, the shape `human` and its siblings take.
+fn carried_turn_origin(text: &str) -> Option<&str> {
+    let value = carried_field(text, "cc_turn_origin")?;
+    let spelled = (1..=TURN_ORIGIN_MAX).contains(&value.len())
+        && value.bytes().all(|b| matches!(b, b'a'..=b'z' | b'_'));
     spelled.then_some(value)
 }
 
@@ -204,6 +299,90 @@ mod tests {
         let facts = BodyFacts::read(b"not json");
         assert!(!facts.fresh_user_turn);
         assert_eq!(facts.prompt_units, [b'0' as u16; 3]);
+    }
+
+    #[test]
+    fn cc_turn_origin_is_read_off_the_line_in_the_clients_own_spelling() {
+        let line = |origin: &str| {
+            format!(
+                r#"{{"system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cc_turn_origin={origin};"}}]}}"#
+            )
+        };
+        assert_eq!(
+            BodyFacts::read(line("human").as_bytes())
+                .turn_origin
+                .as_deref(),
+            Some("human")
+        );
+        assert_eq!(
+            BodyFacts::read(line("Hum an").as_bytes()).turn_origin,
+            None,
+            "a value outside the token charset is absent"
+        );
+        let over_bound = "a".repeat(33);
+        assert_eq!(
+            BodyFacts::read(line(&over_bound).as_bytes()).turn_origin,
+            None,
+            "past the 32-byte bound the value is absent"
+        );
+        let reduced = br#"{"system":[{"type":"text","text":"be helpful"}]}"#;
+        assert_eq!(BodyFacts::read(reduced).turn_origin, None);
+    }
+
+    #[test]
+    fn carries_line_is_true_for_an_attribution_line_and_false_otherwise() {
+        assert!(
+            BodyFacts::read(phoebis_profile::fixtures::body(
+                phoebis_profile::fixtures::BodyFixture::Oauth
+            ))
+            .carries_line,
+            "the reduced shape still carries the block, unstamped"
+        );
+        let plain_first_block = br#"{"system":[{"type":"text","text":"be helpful"}]}"#;
+        assert!(!BodyFacts::read(plain_first_block).carries_line);
+        let string_system = br#"{"system":"be helpful"}"#;
+        assert!(!BodyFacts::read(string_system).carries_line);
+    }
+
+    #[test]
+    fn the_hint_headers_read_when_sent_and_absent_otherwise() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-claude-code-agent-type", "Explore".parse().unwrap());
+        headers.insert("x-claude-code-compaction", "auto".parse().unwrap());
+        headers.insert("x-claude-code-context-compacted", "manual".parse().unwrap());
+        headers.insert(
+            "x-claude-code-prev-tool-durations",
+            "Bash=1200;Read=35;".parse().unwrap(),
+        );
+        let hints = ClientHints::read(&headers);
+        assert_eq!(
+            (
+                hints.agent_type.as_deref(),
+                hints.compaction.as_deref(),
+                hints.context_compacted.as_deref(),
+                hints.prev_tool_ms
+            ),
+            (Some("Explore"), Some("auto"), Some("manual"), Some(1_235))
+        );
+        let mut unparseable_entry = HeaderMap::new();
+        unparseable_entry.insert(
+            "x-claude-code-prev-tool-durations",
+            "Bash=x;".parse().unwrap(),
+        );
+        assert_eq!(ClientHints::read(&unparseable_entry).prev_tool_ms, None);
+        let mut empty_value = HeaderMap::new();
+        empty_value.insert("x-claude-code-prev-tool-durations", "".parse().unwrap());
+        assert_eq!(ClientHints::read(&empty_value).prev_tool_ms, None);
+        let hints = ClientHints::read(&HeaderMap::new());
+        assert_eq!(
+            (
+                hints.agent_type,
+                hints.compaction,
+                hints.context_compacted,
+                hints.prev_tool_ms
+            ),
+            (None, None, None, None)
+        );
     }
 
     #[test]
