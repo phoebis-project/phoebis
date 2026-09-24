@@ -35,9 +35,8 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
 The proxy listener answers `HEAD /api/hello`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET
-/v1/usage` for the key's own usage, and the two keepalive companion routes. A `GET /v1/models` on it answers 404
-on purpose: model discovery would invite a client to pick a model from an account's entitlements rather than
-from its own configuration.
+/v1/usage` for the key's own usage, the two keepalive companion routes, and `GET /v1/models` with the caller's
+own routable models ([models listing](client.md#the-models-listing)).
 
 ## The console
 
@@ -70,7 +69,6 @@ rest of this site keeps to "account".
 ## What this build does not do
 
 - Claude Code's Remote Control is unavailable behind the router.
-- Model discovery over the proxy answers 404.
 - The listeners speak HTTP/1.1 and terminate no TLS; a reverse proxy does that in front.
 
 ## Status

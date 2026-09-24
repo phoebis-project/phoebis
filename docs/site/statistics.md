@@ -33,9 +33,10 @@ origin off its attribution line, and the request's shape: the effort, the thinki
 limit, the tool, system-block, and message counts, the context edits, the temperature, and the requested speed
 and service tier.
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
-cooldown the attempt set; the stop reason, the served model when it differs from the one requested, the speed,
-the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;
-the five token counts, with the thinking share of the output and the web search and fetch calls the answer made;
+cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
+resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category
+and recommended model; the five token counts, with the thinking share of the output and the web search and
+fetch calls the answer made;
 the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
 split across input, cache read, cache write, and output; and the pricing version the estimate used.
 

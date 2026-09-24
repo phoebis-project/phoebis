@@ -9,11 +9,12 @@ itself, and the answers a client gets when nothing can serve it.
 
 An upstream's model list is read live from `GET /v1/models` on `api.anthropic.com` with the upstream's own
 credential, on demand, and held for `routing.catalog_cache_seconds` (sixty by default); the Upstreams view's
-catalog popup, the rule editors' suggestions, and the proxy's models listing all read that cache, and
-`GET /admin/accounts/{id}/catalog` answers it with `?refresh=1` to read again. Nothing about routing depends on
-it: every enabled member of a pool is a candidate for any model the rules allow, and an upstream that does not
-serve a model says so with a `404` the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An
-upstream whose fetch failed contributes nothing to a listing until the next fetch, and the popup shows the error.
+catalog popup, the rule editors' suggestions, and the proxy's [models listing](client.md#the-models-listing) all
+read that cache, and `GET /admin/accounts/{id}/catalog` answers it with `?refresh=1` to read again. Nothing about
+routing depends on it: every enabled member of a pool is a candidate for any model the rules allow, and an
+upstream that does not serve a model says so with a `404` the router records as a rejection
+([cooldowns](#cooldowns-and-failover)). An upstream whose fetch failed contributes nothing to a listing until the
+next fetch, and the popup shows the error.
 
 The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the
 undated one (`claude-sonnet-4-5`). The router resolves a spelling it has not seen through
