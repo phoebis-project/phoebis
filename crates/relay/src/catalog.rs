@@ -70,7 +70,9 @@ fn snapshot_date(id: &str) -> Option<u32> {
 
 const SLOTS_POISONED: &str = "catalog slots lock poisoned by a prior panic";
 const PUBLISHED_POISONED: &str = "catalog published map poisoned by a prior panic";
+const LISTED_POISONED: &str = "catalog listed-ids set poisoned by a prior panic";
 const SERVED_REFRESHED_POISONED: &str = "catalog served-refresh map poisoned by a prior panic";
+const MISMATCHED_POISONED: &str = "catalog mismatched-triple set poisoned by a prior panic";
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
 fn at_models_bound(error: TransportError) -> TransportError {
@@ -155,6 +157,9 @@ pub struct CatalogService {
     /// Spelling to the dated id the router has acknowledged; only ever grown or moved to a strictly newer
     /// snapshot, never shrunk.
     published: Mutex<HashMap<String, String>>,
+    /// Every id the enabled union's listings carry, rewritten under the `publishing` lock each time `publish`
+    /// derives: an id here is proven never to gain a mapping of its own, so a miss on it need not wait.
+    listed: Mutex<HashSet<String>>,
     /// Held across the whole of `publish`, so two fills landing together derive, hand to the router, and insert
     /// one after the other rather than racing each other's read of `published`.
     publishing: tokio::sync::Mutex<()>,
@@ -163,8 +168,22 @@ pub struct CatalogService {
     startup_bound: Duration,
     /// The clock reading of each account's last served-model refresh, rate-limiting `note_served`.
     served_refreshed: Mutex<HashMap<String, i64>>,
+    /// Every `(account_id, resolved, served)` triple whose served-model refresh landed rows without the union
+    /// ever deriving `served` for `resolved`'s spelling: a mismatch no further refresh can fix. Cleared for an
+    /// account by the periodic sweep's next refresh of it and by `evict`.
+    mismatched: Mutex<HashSet<(String, String, String)>>,
     tasks: TaskTracker,
     stop: CancellationToken,
+}
+
+/// Lowers `fills_in_flight` on drop, whether `fetch` ran to its end or its future was dropped mid-poll: the
+/// count must return to zero on every exit, not only the one its author had in mind.
+struct InFlightGuard<'a>(&'a CatalogService);
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.lower_in_flight();
+    }
 }
 
 impl CatalogService {
@@ -182,9 +201,15 @@ impl CatalogService {
         window: Duration,
         startup_bound: Duration,
     ) -> CatalogService {
+        // A read failure here leaves `published` empty rather than failing construction: the router's own
+        // resolution rows, loaded independently at its own start, are unaffected, and every spelling falls
+        // back to a fill or the spelling itself until one lands.
         let published = store
             .resolutions()
-            .unwrap_or_default()
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "the catalog's persisted resolutions could not be read");
+                Vec::new()
+            })
             .into_iter()
             .map(|row| (row.spelling, row.dated_id))
             .collect();
@@ -201,11 +226,13 @@ impl CatalogService {
             timeout,
             window,
             published: Mutex::new(published),
+            listed: Mutex::new(HashSet::new()),
             publishing: tokio::sync::Mutex::new(()),
             warmth: watch::Sender::new(Warmth::Cold),
             fills_in_flight: watch::Sender::new(0),
             startup_bound,
             served_refreshed: Mutex::new(HashMap::new()),
+            mismatched: Mutex::new(HashSet::new()),
             tasks: TaskTracker::new(),
             stop: CancellationToken::new(),
         }
@@ -269,6 +296,10 @@ impl CatalogService {
             .copied()
             .unwrap_or(0);
         self.raise_in_flight();
+        // Three callers await `fetch` inside an HTTP handler (the catalog popup, the pricing import,
+        // `GET /v1/models`) whose future the server drops on a client disconnect; the guard's `Drop` still
+        // lowers the count then, so a caller leaving mid-fill never strands a later miss on the full wait.
+        let _lower_on_drop = InFlightGuard(self);
         let discovered = self.discover(account).await;
         // The window opens when the answer is in hand: dated from before a discovery slower than the window,
         // the slot would be stale on commit and every caller waiting on the fill lock would discover again.
@@ -319,7 +350,6 @@ impl CatalogService {
                 }
             }
         }
-        self.lower_in_flight();
         catalog
     }
 
@@ -353,6 +383,10 @@ impl CatalogService {
                 for account in accounts {
                     if service.slot_due(&account, every, now) && !service.fill_in_flight(&account) {
                         service.refresh(&account).await;
+                        // A due account's own turn is the sweep's chance to judge a remembered mismatch
+                        // afresh, rather than carrying it until the account happens to serve a mismatched
+                        // answer again.
+                        service.clear_mismatched(&account.id);
                     }
                 }
             }
@@ -400,9 +434,28 @@ impl CatalogService {
 
     /// An answer named `served` where the router had resolved `resolved`: one background refresh of the
     /// account, skipped inside `SERVED_REFRESH_INTERVAL_MS` of the account's last such refresh; a match is a
-    /// no-op.
+    /// no-op. A triple this remembers as a standing mismatch (the refresh landed and the union still does not
+    /// derive `served` for `resolved`'s spelling, the case of an alias whose target the listing never carries)
+    /// is skipped at once rather than refreshed again.
     pub fn note_served(self: &Arc<Self>, account_id: &str, resolved: &str, served: &str) {
         if served == resolved {
+            return;
+        }
+        // A body completing after `shutdown`'s drain margin ran out must not spawn a refresh that outlives it.
+        if self.stop.is_cancelled() {
+            return;
+        }
+        let triple = (
+            account_id.to_string(),
+            resolved.to_string(),
+            served.to_string(),
+        );
+        if self
+            .mismatched
+            .lock()
+            .expect(MISMATCHED_POISONED)
+            .contains(&triple)
+        {
             return;
         }
         let now = (self.clock)();
@@ -420,9 +473,8 @@ impl CatalogService {
             refreshed.insert(account_id.to_string(), now);
         }
         let service = Arc::clone(self);
-        let account_id = account_id.to_string();
         self.tasks.spawn(async move {
-            let Ok(Some(row)) = service.store.account(&account_id) else {
+            let Ok(Some(row)) = service.store.account(&triple.0) else {
                 return;
             };
             if !row.enabled || row.state != AccountState::Ready {
@@ -435,7 +487,15 @@ impl CatalogService {
                 .served_refreshed
                 .lock()
                 .expect(SERVED_REFRESHED_POISONED)
-                .insert(account_id, now);
+                .insert(triple.0.clone(), now);
+            let spelling = undated(&triple.1).unwrap_or(&triple.1);
+            if service.lookup(spelling).as_deref() != Some(triple.2.as_str()) {
+                service
+                    .mismatched
+                    .lock()
+                    .expect(MISMATCHED_POISONED)
+                    .insert(triple);
+            }
         });
     }
 
@@ -456,11 +516,21 @@ impl CatalogService {
             .lock()
             .expect(SERVED_REFRESHED_POISONED)
             .remove(account_id);
+        self.clear_mismatched(account_id);
         // Best effort: a fill lock this misses is merely unused from here on, never looked up again under
         // the evicted holder's key, so leaving it costs nothing but a little memory.
         if let Ok(mut fills) = self.fills.try_lock() {
             fills.retain(|key, _| key.account_id != account_id);
         }
+    }
+
+    /// Forgets every mismatch remembered for the account, so a fresh listing is judged on its own merits
+    /// rather than one carried from before: `evict` and the periodic sweep's own refresh of the account call it.
+    fn clear_mismatched(&self, account_id: &str) {
+        self.mismatched
+            .lock()
+            .expect(MISMATCHED_POISONED)
+            .retain(|(id, _, _)| id != account_id);
     }
 
     /// The dated id the router has acknowledged for a spelling, or `None`; never waits and never asks anyone.
@@ -477,6 +547,18 @@ impl CatalogService {
     pub async fn canonical_for(&self, spelling: &str) -> String {
         if let Some(dated) = self.lookup(spelling) {
             return dated;
+        }
+        // A dated id resolves to itself by definition, and an id the union already lists exactly can never
+        // gain a mapping of its own (`derive` never returns the id it was asked about); waiting for a fill
+        // buys neither of them anything.
+        if undated(spelling).is_some()
+            || self
+                .listed
+                .lock()
+                .expect(LISTED_POISONED)
+                .contains(spelling)
+        {
+            return spelling.to_string();
         }
         let mut rx = self.fills_in_flight.subscribe();
         if *rx.borrow() > 0 {
@@ -535,7 +617,8 @@ impl CatalogService {
         out
     }
 
-    /// Cancels every tracked fill and retry; they end at their next await point. Synchronous, for a drop guard.
+    /// Cancels every tracked fill and retry: a sleeping retry ends at once; a fill in flight ends with its
+    /// round trip, bounded by the discovery timeout. Synchronous, for a drop guard.
     pub fn cancel(&self) {
         self.stop.cancel();
         self.tasks.close();
@@ -597,6 +680,8 @@ impl CatalogService {
                 .flat_map(|catalog| catalog.models.iter().cloned())
                 .collect()
         };
+        *self.listed.lock().expect(LISTED_POISONED) =
+            union.iter().map(|row| row.id.clone()).collect();
         let moved: Vec<(String, String)> = {
             let published = self.published.lock().expect(PUBLISHED_POISONED);
             derive_all(&union)

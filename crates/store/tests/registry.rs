@@ -438,11 +438,8 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     store.delete_api_key("old", "test").unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "ALTER TABLE accounts DROP COLUMN subscription_plan; \
-         ALTER TABLE accounts DROP COLUMN subscription_tier; \
-         ALTER TABLE accounts DROP COLUMN subscription_since; \
-         ALTER TABLE accounts DROP COLUMN trial_ends_at; \
+    conn.execute_batch(&format!(
+        "{UNDO_V24} \
          DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -466,8 +463,8 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
          ALTER TABLE cooldowns DROP COLUMN incarnation; ALTER TABLE overage_state DROP COLUMN incarnation; \
          ALTER TABLE refresh_attempts DROP COLUMN incarnation; \
          ALTER TABLE credentials DROP COLUMN last_error; \
-         UPDATE meta SET value = '15' WHERE key = 'schema_version';",
-    )
+         UPDATE meta SET value = '15' WHERE key = 'schema_version';"
+    ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();

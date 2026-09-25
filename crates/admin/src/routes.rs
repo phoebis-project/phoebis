@@ -1047,7 +1047,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 "rate_limit_tier": p["organization"]["rate_limit_tier"],
             })
         });
-    let subscription = (row.kind == AccountKind::Oauth)
+    // Null until the account has paired and a profile document exists: an OAuth row with no profile yet has
+    // no subscription to report, the same as an `api_key` upstream.
+    let subscription = (row.kind == AccountKind::Oauth && profile.is_some())
         .then(|| {
             state
                 .store

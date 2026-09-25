@@ -776,6 +776,21 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
         second["subscription"],
         serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null})
     );
+    // An OAuth account that has never paired (no profile document at all) answers `subscription: null`
+    // outright, distinct from a paired account whose profile carries none of the five fields.
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts",
+            r#"{"id":"third","kind":"oauth","label":"Third"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        201
+    );
+    let third = json(get(&parts.app, "/admin/accounts/third", Some(&cookie)).await).await;
+    assert!(third["subscription"].is_null());
     assert!(
         !json(get(&parts.app, "/admin/accounts", Some(&cookie)).await)
             .await

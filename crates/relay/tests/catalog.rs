@@ -238,6 +238,49 @@ async fn an_eviction_during_a_slow_fetch_wins() {
 }
 
 #[tokio::test]
+async fn a_dropped_fetch_future_lowers_the_in_flight_count_so_a_later_miss_does_not_wait() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+    }])
+    .await;
+    // Kept out of the harness's own accounts, so the caller below is the first and only fetch for it: the
+    // startup prefetch must not already hold the raise this test means to drop.
+    let h = harness_with_catalog(&up, catalog_up, &[], PoolSpec::default()).await;
+    h.store
+        .insert_account(&test_account_row(&api_key("a", "sk-ant-api03-A", 0)))
+        .unwrap();
+    h.store
+        .set_api_key_secret("a", &Secret::new("sk-ant-api03-A"))
+        .unwrap();
+    let a = h.store.account("a").unwrap().unwrap();
+    let c = h.catalog.clone();
+    let a1 = a.clone();
+    let fut = tokio::spawn(async move { c.fetch(&a1).await });
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog_up.requests().len() == 1).then_some(())
+    })
+    .await;
+    // The client went away mid-fill, as the catalog popup, the pricing import, and `GET /v1/models` all can.
+    fut.abort();
+    let _ = fut.await;
+    h.catalog_up.release();
+    let start = std::time::Instant::now();
+    let canonical = h.catalog.canonical_for("claude-nope").await;
+    assert_eq!(canonical, "claude-nope");
+    assert!(
+        start.elapsed() < STARTUP_BOUND,
+        "the guard lowered the count on the drop, so this miss did not wait the bound"
+    );
+    assert_ne!(
+        h.catalog.warmth(),
+        Warmth::Filling,
+        "the count returned to zero rather than sticking above it"
+    );
+}
+
+#[tokio::test]
 async fn a_spelling_is_named_by_its_dated_id_from_the_first_request_with_no_request_beyond_the_startup_fetch(
 ) {
     let up = FakeUpstream::start(vec![Rule {
@@ -896,6 +939,52 @@ async fn a_fast_unrelated_listing_does_not_release_a_request_the_gated_account_w
 }
 
 #[tokio::test]
+async fn a_dated_id_and_an_exactly_listed_spelling_skip_the_miss_wait_but_an_unlisted_one_still_waits(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let catalog_up = FakeUpstream::start(vec![]).await;
+    catalog_up.push_credential_rule(
+        B,
+        "/v1/models?limit=1000",
+        json_list(&["claude-opus-5", "claude-sonnet-4-5-20250929"]),
+    );
+    catalog_up.push_credential_rule(
+        A,
+        "/v1/models?limit=1000",
+        Respond::Gated(Box::new(json_list(&["claude-sonnet-4-5-20251101"]))),
+    );
+    let h = harness_with_catalog(
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    assert_eq!(h.catalog.warmth(), Warmth::Warm, "b's listing landed");
+    for spelling in ["claude-opus-5", "claude-sonnet-4-5-20250929"] {
+        let start = std::time::Instant::now();
+        let canonical = h.catalog.canonical_for(spelling).await;
+        assert_eq!(canonical, spelling);
+        assert!(
+            start.elapsed() < Duration::from_millis(200),
+            "{spelling} is already the union's own entry and does not wait on a's gated fill"
+        );
+    }
+    let start = std::time::Instant::now();
+    let canonical = h.catalog.canonical_for("claude-nope").await;
+    assert_eq!(canonical, "claude-nope");
+    assert!(
+        start.elapsed() >= STARTUP_BOUND,
+        "a spelling the union has never listed still waits the bound"
+    );
+    h.catalog_up.release();
+}
+
+#[tokio::test]
 async fn a_retry_sleeping_its_backoff_ends_at_shutdown() {
     let up = FakeUpstream::start(vec![]).await;
     let catalog_up = FakeUpstream::start(vec![Rule {
@@ -1274,6 +1363,8 @@ async fn a_response_naming_another_snapshot_refreshes_the_account_once_per_minut
     })
     .await;
 
+    // The one refresh already proved the listing never carries the served id, so the remembered mismatch
+    // skips a second refresh even once the minute has passed.
     h.clock.store(NOW + 61_000, Ordering::SeqCst);
     let resp = h
         .app
@@ -1282,8 +1373,8 @@ async fn a_response_naming_another_snapshot_refreshes_the_account_once_per_minut
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    wait_for(Duration::from_secs(2), || {
-        (listings_for(&h.catalog_up) == 3).then_some(())
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 2
     })
     .await;
 
@@ -1319,6 +1410,66 @@ async fn a_response_naming_another_snapshot_refreshes_the_account_once_per_minut
 }
 
 #[tokio::test]
+async fn a_live_alias_move_resolves_after_one_refresh_and_further_answers_naming_it_trigger_nothing(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5-20251101","usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let catalog_up = FakeUpstream::start(catalog_rules()).await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    // The account's listing catches up to the served snapshot by the time the triggered refresh lands.
+    h.catalog_up.set_rule_after(
+        1,
+        "/v1/models?limit=1000",
+        json_list(&[
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5-20251101",
+            "claude-opus-5",
+        ]),
+    );
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.lookup("claude-sonnet-4-5").as_deref() == Some("claude-sonnet-4-5-20251101"))
+            .then_some(())
+    })
+    .await;
+    assert_eq!(
+        listings_for(&h.catalog_up),
+        2,
+        "one refresh landed the moved alias"
+    );
+
+    // The alias is resolved now, so a further answer naming the same snapshot is the ordinary match case.
+    for _ in 0..2 {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 2
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_response_naming_the_resolved_id_triggers_no_refresh() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -1342,4 +1493,44 @@ async fn a_response_naming_the_resolved_id_triggers_no_refresh() {
         listings_for(&h.catalog_up) == 1
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_cancelled_stream_with_a_message_start_naming_another_snapshot_triggers_no_refresh() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-5-20251101","usage":{"input_tokens":1}}}"#.into(),
+                },
+                SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    // The response is held until the first SSE event, so the head commits as soon as the fake's gated write
+    // delivers `message_start`, well before the account is deleted below.
+    let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "the head and the first event were already committed"
+    );
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let _ = resp.into_body().collect().await;
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 1
+    })
+    .await;
+    up.release();
 }
