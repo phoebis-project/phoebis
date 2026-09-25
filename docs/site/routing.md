@@ -259,11 +259,11 @@ its accounts. After a restart, until those samples land, a spent session stays a
 Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the
 session straight back. With the toggle off, or no sibling holding allowance, the session stays.
 
-**Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold,
-it moves to a subscription sibling that is not in overage, never to an API key. It waits while the reset the
-overage evidence names falls within `overage_move_grace_minutes` (default 30, `0` for no wait), so a session whose
-account gets its plan back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin
-at once.
+**Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
+moves to a subscription sibling that is not in overage, never to an API key. The sibling has to hold allowance too,
+since a spent one would move the session again on its next request. It waits while the reset the overage evidence names
+falls within `overage_move_grace_minutes` (default 30, `0` for no wait), so a session whose account gets its plan back
+soon keeps its cache and moves at most once. Evidence that names no reset moves the pin at once.
 
 **Return to plan** A pin on an API-key account moves to a subscription sibling that holds allowance and is not in
 overage once its cache is cold, or once it has sat on the key for `source_dwell_seconds` since it landed there. An
@@ -288,15 +288,16 @@ round of its own within that dwell. An unmarked pin never moves for utilization.
 dwell: a marked session that stays idle never moves, no new round runs on the account until the dwell passes, and
 a restart forgets the marks, so the next request after it may start a fresh round.
 
-**Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`,
-`subagent` or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it
-alone. Without the class header, a request whose messages extend the session's conversation refreshes the pin;
-one that repeats the session's static prefix (tools and system prompt) without extending its messages restarted
-the conversation and reads cold; one that matches neither changes nothing. A request that carries
-`x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the
-round's order on the request that carries the fact. A body the router cannot read refreshes the pin on every
-request. A keepalive probe replays another request's headers and body, so the router judges none of them: a probe
-never colds a session, and its renewal counts as a refresh.
+**Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
+or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it alone. Without the
+class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats the
+session's static prefix (tools and system prompt) without extending its messages restarted the conversation and reads
+cold; one that matches neither changes nothing. A request that carries `x-claude-code-context-compacted` reads cold
+whatever else it says, so a compacted session goes first in the round's order on the request that carries the fact. A
+body the router cannot read refreshes the pin on every request. A session with no stored hashes, which such a body
+leaves, treats its next chained request as a continuation and records that request's hashes. A keepalive probe replays
+another request's headers and body, so the router judges none of them: a probe never colds a session, and its renewal
+counts as a refresh.
 
 **Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
 tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
