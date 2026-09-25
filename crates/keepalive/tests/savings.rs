@@ -266,7 +266,9 @@ async fn a_pool_policy_dispatches_the_hour_a_five_minute_body_asked_for_and_the_
     // relay actually dispatched, so the engine learns the hour the pool rewrote the request to.
     let mut r = rig(RigSpec {
         pool: PoolSpec {
-            cache_ttl: r#"{"enabled":true,"main":"1h"}"#,
+            // `in_overage` pinned off: the account is api_key, so its default would otherwise take over and
+            // mask the `main` rule this test is about.
+            cache_ttl: r#"{"enabled":true,"main":"1h","in_overage":null}"#,
             ..PoolSpec::default()
         },
         ..RigSpec::default()

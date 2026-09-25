@@ -5,6 +5,8 @@ use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
 use serde_json::Value;
 
+use crate::chains::Chains;
+
 pub struct BodyFacts {
     /// The last `messages` entry has role `user` and carries no `tool_result` block.
     pub fresh_user_turn: bool,
@@ -21,6 +23,8 @@ pub struct BodyFacts {
     /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
     pub carries_line: bool,
     pub shape: RequestShape,
+    /// `None` for a body that is not a JSON object; the same parse `shape` and the rest above read.
+    pub chains: Option<Chains>,
 }
 
 /// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
@@ -31,6 +35,8 @@ pub struct ClientHints {
     pub context_compacted: Option<String>,
     /// `<name>=<ms>;...` summed; absent when no entry parses or the value runs past 4 KiB.
     pub prev_tool_ms: Option<i64>,
+    /// `x-claude-code-request-class`.
+    pub request_class: Option<String>,
 }
 
 impl BodyFacts {
@@ -43,6 +49,7 @@ impl BodyFacts {
                 turn_origin: None,
                 carries_line: false,
                 shape: RequestShape::default(),
+                chains: None,
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
@@ -100,6 +107,7 @@ impl BodyFacts {
             speed: text(root.get("speed")),
             service_tier: text(root.get("service_tier")),
         };
+        let chains = Chains::read(&root);
         BodyFacts {
             fresh_user_turn,
             prompt_units,
@@ -107,6 +115,7 @@ impl BodyFacts {
             turn_origin,
             carries_line,
             shape,
+            chains,
         }
     }
 }
@@ -124,6 +133,7 @@ impl ClientHints {
                 .get("x-claude-code-prev-tool-durations")
                 .and_then(|v| v.to_str().ok())
                 .and_then(tool_ms_sum),
+            request_class: crate::identity::header_id(headers, "x-claude-code-request-class"),
         }
     }
 }

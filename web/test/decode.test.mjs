@@ -273,9 +273,9 @@ test('a pool decodes its cache TTL policy, its diagnostics override, and warm_su
 test('a pool the route answers without a cache TTL policy decodes to the defaults', () => {
   const wire = { ...fixture('pools').pools[0] };
   delete wire.cache_ttl;
-  assert.deepEqual(d.decodePool(wire).cacheTtl, { enabled: false, inOverage: null, main: '1h', models: [], subagent: '5m' });
+  assert.deepEqual(d.decodePool(wire).cacheTtl, { enabled: false, inOverage: '5m', main: '1h', models: [], subagent: '1h' });
   const partial = d.decodePool({ ...wire, cache_ttl: { enabled: true } });
-  assert.deepEqual([partial.cacheTtl.enabled, partial.cacheTtl.main, partial.cacheTtl.subagent, partial.cacheTtl.inOverage], [true, '1h', '5m', null], 'a field the route leaves out falls back one field at a time');
+  assert.deepEqual([partial.cacheTtl.enabled, partial.cacheTtl.main, partial.cacheTtl.subagent, partial.cacheTtl.inOverage], [true, '1h', '1h', '5m'], 'a field the route leaves out falls back one field at a time');
   const keepalive = { ...wire.keepalive };
   delete keepalive.warm_subagents;
   assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');

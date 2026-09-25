@@ -7,6 +7,7 @@ mod body;
 mod cache_ttl;
 mod casing;
 mod catalog;
+mod chains;
 mod classify;
 mod dispatch;
 mod drift;
@@ -37,7 +38,11 @@ pub use catalog::{
     derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,
     Prefetched, Warmth, MAX_BODY, REFRESH_TICK,
 };
-pub use classify::{classify, exhaustion_window, Cooldown, HeadContext, Scope, Verdict};
+pub use chains::{canonical, Chains};
+pub use classify::{
+    classify, exhaustion_window, next_month_start, Cooldown, HeadContext, Scope, Verdict,
+    SPEND_CAP_REASON,
+};
 pub use drift::DriftGuard;
 pub use errors::{anthropic_error, auth_error_response, key_refusal_response};
 pub use exhaustion::exhaustion_response;
@@ -49,7 +54,9 @@ pub use messages::{
     new_request_id, router, Limits, Probe, Relay, RelayOutcome, MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::is_portable;
-pub use ratelimit::{retry_after, upstream_date, UnifiedHeaders};
+pub use ratelimit::{
+    head_sample, retry_after, upstream_date, Bucket, BucketHeaders, UnifiedHeaders,
+};
 pub use serve::{serve, Limits as ListenLimits};
 pub use sse::{SseEvent, SseParser};
 

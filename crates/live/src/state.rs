@@ -749,6 +749,8 @@ mod tests {
             body: Bytes::new(),
             body_capture_hours,
             shape: RequestShape::default(),
+            static_hash: None,
+            boundaries: Vec::new(),
             client: phoebis_bus::ClientFacts::default(),
             presented_retired: false,
             rotation_at: None,

@@ -684,6 +684,7 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
             compaction: Some("auto".into()),
             context_compacted: Some("manual".into()),
             prev_tool_ms: Some(1_235),
+            request_class: None,
             turn_origin: Some("human".into()),
         }
     );
@@ -704,6 +705,62 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
             ..Default::default()
         }
     );
+    up.shutdown().await;
+}
+
+/// The class and the two hash chains the body implies both reach the bus and the router alike; a header-less
+/// request selects with neither the class nor `context_compacted`, and a refusal before the body is read
+/// publishes neither hash.
+#[tokio::test]
+async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_neither() {
+    use phoebis_profile::fixtures::{body as fixture_body, BodyFixture};
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    set_header(&mut req, "x-claude-code-request-class", "main");
+    h.app.clone().oneshot(req).await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    let root: serde_json::Value = serde_json::from_slice(fixture_body(BodyFixture::Oauth)).unwrap();
+    let chains = phoebis_relay::Chains::read(&root).expect("the fixture body is a JSON object");
+    assert_eq!(observed.client.request_class.as_deref(), Some("main"));
+    assert_eq!(observed.static_hash.as_deref(), chains.static_hash());
+    assert_eq!(observed.boundaries, chains.message_boundaries);
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(
+        (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),
+        (chains.static_hash(), chains.tail_hash()),
+        "the fresh pin's hashes are the request's"
+    );
+
+    // The header-less path: no class and no compacted header selects with neither fact.
+    let req = request_for(KEY, "claude-sonnet-4-5", "s2");
+    h.app.clone().oneshot(req).await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(observed.client.request_class, None);
+    assert_eq!(observed.client.context_compacted, None);
+
+    // A refusal before the body is read carries neither the class nor a chain.
+    let refused = request_for("phoebis-nobody", "claude-sonnet-4-5", "s3");
+    h.app.clone().oneshot(refused).await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(observed.client.request_class, None);
+    assert_eq!(observed.static_hash, None);
+    assert!(observed.boundaries.is_empty());
     up.shutdown().await;
 }
 

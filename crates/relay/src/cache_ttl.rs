@@ -35,7 +35,9 @@ pub struct ModelTtl {
 pub struct CacheTtlPolicy {
     pub enabled: bool,
     /// Taken over the rules below while a write costs money: the serving account is in overage, or is an
-    /// `api_key` account. `None` keeps the rules below.
+    /// `api_key` account. `None` keeps the rules below. A one-hour write costs a metered account twice a
+    /// five-minute one, and a plan-funded one the same plan tokens either way, so the metered override shortens
+    /// the write by default while the plan side keeps the hour.
     pub in_overage: Option<CacheTtl>,
     pub main: CacheTtl,
     /// Per-model overrides on the canonical model id; a model absent here takes `main` and `subagent`.
@@ -47,10 +49,10 @@ impl Default for CacheTtlPolicy {
     fn default() -> Self {
         CacheTtlPolicy {
             enabled: false,
-            in_overage: None,
+            in_overage: Some(CacheTtl::FiveMinutes),
             main: CacheTtl::OneHour,
             models: Vec::new(),
-            subagent: CacheTtl::FiveMinutes,
+            subagent: CacheTtl::OneHour,
         }
     }
 }
@@ -129,7 +131,11 @@ mod tests {
         let policy = CacheTtlPolicy::parse(&serde_json::json!({ "enabled": true })).unwrap();
         assert_eq!(
             (policy.main, policy.subagent, policy.in_overage),
-            (CacheTtl::OneHour, CacheTtl::FiveMinutes, None)
+            (
+                CacheTtl::OneHour,
+                CacheTtl::OneHour,
+                Some(CacheTtl::FiveMinutes)
+            )
         );
         assert!(matches!(
             CacheTtlPolicy::parse(&serde_json::json!({ "main": "2h" })),

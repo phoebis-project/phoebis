@@ -38,9 +38,11 @@ reduced shape lacks on the attribution line the client sent: the `cch` billing h
 `cc_prev_req`, and `cc_prompt_id`, each only when absent. A request that carries no attribution line, as under
 `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router never writes a line the client did not. The auto-mode
 classifier requests are the client's own: they keep the attribution block, the router fills them like any other line,
-and they carry the `auxiliary` request class in `x-claude-code-request-class`, which the request log shows once the
-router reads the header. The previous request id and the prompt id come from the router's session memory, which survives
-a restart: they are kept on disk for `sessions.memory_retention_days` ([installation](installation.md#sessions)). Three
+and they carry the `auxiliary` request class in `x-claude-code-request-class`. The router reads the header on
+every request: a main, subagent or compaction class keeps the session's pin warm and re-arms its keepalive
+recipe, and any other class does neither. The previous request id and the prompt id come from the router's
+session memory, which survives a restart: they are kept on disk for `sessions.memory_retention_days`
+([installation](installation.md#sessions)). Three
 things are not restored, because the router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its
 tool search; `ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and
 `cc_turn_origin`, who started the turn, which the router records when the line carries it and never writes. The
@@ -51,6 +53,12 @@ client sent it. Two self-checks guard the restoration against a client build the
 `cch` hash the router cannot reproduce, and a `cc_version` suffix that does not reproduce from the prompt and the
 client's version. Either refuses the request as client drift before anything is sent, and the request log names which
 (`hash` or `version_suffix`). The variable is an internal one that a later client build may drop.
+
+The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
+tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed
+on the client's own bytes with every `cache_control` marker removed. Neither chain gates the request; both ride
+with it as facts the request log carries, and the session's pin compares its own hashes against a later
+request's to tell a continuation from a restart.
 
 ### CLAUDE_CODE_GATEWAY_HINT_HEADERS
 

@@ -81,7 +81,7 @@ export const KEEPALIVE_TUNING_DEFAULTS: Omit<PoolKeepalive, 'costCapUsdPerDay' |
 };
 
 /** Cache TTL policy a new pool starts with: off, so a pool's breakpoints pass through untouched until set. */
-export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, inOverage: null, main: '1h', models: [], subagent: '5m' };
+export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, inOverage: '5m', main: '1h', models: [], subagent: '1h' };
 
 export interface PoolInput {
   affinityTtlSeconds: number;

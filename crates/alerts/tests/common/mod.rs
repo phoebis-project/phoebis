@@ -318,6 +318,8 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         body: Bytes::from_static(b"{}"),
         body_capture_hours: capture,
         shape: RequestShape::default(),
+        static_hash: None,
+        boundaries: Vec::new(),
         client: phoebis_bus::ClientFacts::default(),
         presented_retired: false,
         rotation_at: None,

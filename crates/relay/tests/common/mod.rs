@@ -912,6 +912,19 @@ pub fn json_200() -> Respond {
     }
 }
 
+/// A 200 JSON answer carrying the given headers, for a test that scripts the rate-limit bucket or the unified
+/// windows on a response the relay still commits.
+pub fn json_200_with_headers(headers: &[(&str, &str)]) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: headers
+            .iter()
+            .map(|(n, v)| (n.to_string(), v.to_string()))
+            .collect(),
+        body: b"{\"ok\":true}".to_vec(),
+    }
+}
+
 /// The headers a real Anthropic JSON error carries, so the pass-through test has something of the upstream's
 /// own to check survived the forward.
 fn error_headers() -> Vec<(String, String)> {

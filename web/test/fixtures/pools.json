@@ -36,15 +36,15 @@
         },
         "cache_ttl": {
           "enabled": false,
-          "in_overage": null,
+          "in_overage": "5m",
           "main": "1h",
           "models": [],
-          "subagent": "5m"
+          "subagent": "1h"
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790334384116,
-        "updated_at": 1790334384116,
+        "created_at": 1790355021763,
+        "updated_at": 1790355021763,
         "members": [
           {
             "account_id": "business",
@@ -61,7 +61,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "5GkU9NZG",
+            "prefix": "yNcAi-2G",
             "enabled": true
           }
         ],

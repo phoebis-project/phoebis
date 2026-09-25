@@ -1,9 +1,14 @@
-//! The unified rate-limit headers and `Retry-After`, read from a response head before any byte reaches the
-//! caller.
+//! The unified rate-limit headers, the per-bucket api_key headers, and `Retry-After`, read from a response head
+//! before any byte reaches the caller.
 
+use std::str::FromStr;
+
+use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead;
 
 const PREFIX: &str = "anthropic-ratelimit-unified-";
+const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {
@@ -74,6 +79,137 @@ impl UnifiedHeaders {
             || self.five_hour_utilization.is_some()
             || self.seven_day_utilization.is_some()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bucket {
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset: Option<i64>,
+}
+
+/// `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`; `None` when no family is
+/// present.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BucketHeaders {
+    pub requests: Option<Bucket>,
+    pub input_tokens: Option<Bucket>,
+    pub output_tokens: Option<Bucket>,
+}
+
+impl BucketHeaders {
+    pub fn parse(head: &ResponseHead) -> Option<BucketHeaders> {
+        let bucket = |family: &str| {
+            let limit = head
+                .get(&format!("{BUCKET_PREFIX}{family}-limit"))?
+                .trim()
+                .parse::<u64>()
+                .ok()?;
+            // A remaining value that will not parse reads as fully spent, the conservative reading of a
+            // malformed header rather than a guess at how much the account actually has left.
+            let remaining = head
+                .get(&format!("{BUCKET_PREFIX}{family}-remaining"))
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let reset = head
+                .get(&format!("{BUCKET_PREFIX}{family}-reset"))
+                .and_then(|v| jiff::Timestamp::from_str(v.trim()).ok())
+                .map(|t| t.as_millisecond());
+            Some(Bucket {
+                limit,
+                remaining,
+                reset,
+            })
+        };
+        let headers = BucketHeaders {
+            requests: bucket("requests"),
+            input_tokens: bucket("input-tokens"),
+            output_tokens: bucket("output-tokens"),
+        };
+        (headers.requests.is_some()
+            || headers.input_tokens.is_some()
+            || headers.output_tokens.is_some())
+        .then_some(headers)
+    }
+}
+
+/// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
+/// `itpm:`, `otpm:` plus the canonical model for an api_key account; `None` when the head carries neither.
+pub fn head_sample(
+    head: &ResponseHead,
+    kind: AccountKind,
+    canonical_model: &str,
+    observed_at: i64,
+) -> Option<UtilizationSample> {
+    let mut sample = UtilizationSample {
+        observed_at,
+        ..Default::default()
+    };
+    match kind {
+        AccountKind::Oauth => {
+            let unified = UnifiedHeaders::parse(head)?;
+            if let Some(utilization) = unified.five_hour_utilization {
+                sample = sample.with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization,
+                        reset: unified.five_hour_reset,
+                        observed_at,
+                    },
+                );
+            }
+            if let Some(utilization) = unified.seven_day_utilization {
+                sample = sample.with(
+                    SEVEN_DAY,
+                    WindowReading {
+                        utilization,
+                        reset: unified.seven_day_reset,
+                        observed_at,
+                    },
+                );
+            }
+            // No `UnifiedHeaders` field for it: unlike the shared windows, the overage-included 7-day reading
+            // carries no status of its own to gate on, only the utilization header itself.
+            if let Some(utilization) = head
+                .get("anthropic-ratelimit-unified-7d_oi-utilization")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+            {
+                sample = sample.with(
+                    SEVEN_DAY_FABLE,
+                    WindowReading {
+                        utilization,
+                        reset: unified.seven_day_oi_reset,
+                        observed_at,
+                    },
+                );
+            }
+        }
+        AccountKind::ApiKey => {
+            let buckets = BucketHeaders::parse(head)?;
+            for (prefix, bucket) in [
+                ("itpm", buckets.input_tokens),
+                ("otpm", buckets.output_tokens),
+                ("rpm", buckets.requests),
+            ] {
+                if let Some(b) = bucket {
+                    let utilization = if b.limit == 0 {
+                        0.0
+                    } else {
+                        1.0 - (b.remaining as f64 / b.limit as f64)
+                    };
+                    sample = sample.with(
+                        &format!("{prefix}:{canonical_model}"),
+                        WindowReading {
+                            utilization,
+                            reset: b.reset,
+                            observed_at,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    (!sample.windows.is_empty()).then_some(sample)
 }
 
 pub fn upstream_date(head: &ResponseHead) -> Option<i64> {
@@ -232,5 +368,162 @@ mod tests {
         );
         assert!(u.present());
         assert!(UnifiedHeaders::parse(&head(529, &[("retry-after", "1")])).is_none());
+    }
+
+    #[test]
+    fn bucket_headers_parse_each_family_and_absence_is_none() {
+        let h = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                ("anthropic-ratelimit-requests-remaining", "10"),
+                ("anthropic-ratelimit-requests-reset", "2026-09-25T00:00:00Z"),
+                ("anthropic-ratelimit-input-tokens-limit", "100000"),
+                ("anthropic-ratelimit-input-tokens-remaining", "25000"),
+                (
+                    "anthropic-ratelimit-input-tokens-reset",
+                    "2026-09-25T00:05:00Z",
+                ),
+                ("anthropic-ratelimit-output-tokens-limit", "20000"),
+                ("anthropic-ratelimit-output-tokens-remaining", "20000"),
+                (
+                    "anthropic-ratelimit-output-tokens-reset",
+                    "2026-09-25T00:10:00Z",
+                ),
+            ],
+        );
+        let ts = |s: &str| jiff::Timestamp::from_str(s).unwrap().as_millisecond();
+        let b = BucketHeaders::parse(&h).unwrap();
+        assert_eq!(
+            b.requests,
+            Some(Bucket {
+                limit: 50,
+                remaining: 10,
+                reset: Some(ts("2026-09-25T00:00:00Z"))
+            })
+        );
+        assert_eq!(
+            b.input_tokens,
+            Some(Bucket {
+                limit: 100_000,
+                remaining: 25_000,
+                reset: Some(ts("2026-09-25T00:05:00Z"))
+            })
+        );
+        assert_eq!(
+            b.output_tokens,
+            Some(Bucket {
+                limit: 20_000,
+                remaining: 20_000,
+                reset: Some(ts("2026-09-25T00:10:00Z"))
+            })
+        );
+        assert!(BucketHeaders::parse(&head(200, &[])).is_none());
+        // A family with no reset still parses; an unparseable reset reads as absent rather than refusing the
+        // family.
+        let no_reset = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                ("anthropic-ratelimit-requests-remaining", "10"),
+                ("anthropic-ratelimit-requests-reset", "not a timestamp"),
+            ],
+        );
+        assert_eq!(
+            BucketHeaders::parse(&no_reset).unwrap().requests,
+            Some(Bucket {
+                limit: 50,
+                remaining: 10,
+                reset: None
+            })
+        );
+        // A missing or unparseable remaining reads as fully spent, the conservative reading, rather than
+        // refusing the family.
+        let no_remaining = head(200, &[("anthropic-ratelimit-requests-limit", "50")]);
+        assert_eq!(
+            BucketHeaders::parse(&no_remaining).unwrap().requests,
+            Some(Bucket {
+                limit: 50,
+                remaining: 0,
+                reset: None
+            })
+        );
+    }
+
+    #[test]
+    fn an_api_key_head_samples_its_buckets_by_model_and_an_oauth_head_its_windows() {
+        let api_key_head = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                ("anthropic-ratelimit-requests-remaining", "40"),
+                ("anthropic-ratelimit-input-tokens-limit", "100000"),
+                ("anthropic-ratelimit-input-tokens-remaining", "75000"),
+                ("anthropic-ratelimit-output-tokens-limit", "20000"),
+                ("anthropic-ratelimit-output-tokens-remaining", "5000"),
+            ],
+        );
+        let sample = head_sample(
+            &api_key_head,
+            AccountKind::ApiKey,
+            "claude-sonnet-4-5-20250929",
+            1_700_000_000_000,
+        )
+        .unwrap();
+        let reading = |window: &str| sample.reading(window).map(|r| r.utilization);
+        let close = |a: Option<f64>, b: f64| (a.unwrap() - b).abs() < 1e-9;
+        assert!(close(reading("rpm:claude-sonnet-4-5-20250929"), 0.2));
+        assert!(close(reading("itpm:claude-sonnet-4-5-20250929"), 0.25));
+        assert!(close(reading("otpm:claude-sonnet-4-5-20250929"), 0.75));
+
+        let oauth_head = head(
+            200,
+            &[
+                ("anthropic-ratelimit-unified-5h-status", "allowed"),
+                ("anthropic-ratelimit-unified-5h-utilization", "0.42"),
+                ("anthropic-ratelimit-unified-5h-reset", "1700003600"),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d-utilization", "0.13"),
+                ("anthropic-ratelimit-unified-7d_oi-utilization", "0.05"),
+                ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+            ],
+        );
+        let sample = head_sample(
+            &oauth_head,
+            AccountKind::Oauth,
+            "claude-opus-5",
+            1_700_000_000_000,
+        )
+        .unwrap();
+        assert_eq!(sample.reading(FIVE_HOUR).map(|r| r.utilization), Some(0.42));
+        assert_eq!(sample.reading(SEVEN_DAY).map(|r| r.utilization), Some(0.13));
+        assert_eq!(
+            sample.reading(SEVEN_DAY_FABLE).map(|r| r.utilization),
+            Some(0.05)
+        );
+
+        assert!(head_sample(&head(200, &[]), AccountKind::Oauth, "m", 0).is_none());
+        assert!(head_sample(&head(200, &[]), AccountKind::ApiKey, "m", 0).is_none());
+
+        // Each reading is keyed on its own model, which is what lets the router fold a second model's sample
+        // in without touching the first's (proven end to end in head_samples.rs).
+        let second = head_sample(
+            &head(
+                200,
+                &[
+                    ("anthropic-ratelimit-requests-limit", "10"),
+                    ("anthropic-ratelimit-requests-remaining", "0"),
+                ],
+            ),
+            AccountKind::ApiKey,
+            "claude-opus-5",
+            1_700_000_001_000,
+        )
+        .unwrap();
+        assert_eq!(
+            second.reading("rpm:claude-opus-5").map(|r| r.utilization),
+            Some(1.0)
+        );
+        assert!(second.reading("rpm:claude-sonnet-4-5-20250929").is_none());
     }
 }

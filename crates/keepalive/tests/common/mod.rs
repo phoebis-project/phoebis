@@ -424,6 +424,8 @@ impl Rig {
             body: Bytes::from(body.to_string()),
             body_capture_hours: 0,
             shape: RequestShape::default(),
+            static_hash: None,
+            boundaries: Vec::new(),
             client: phoebis_bus::ClientFacts::default(),
             presented_retired: false,
             rotation_at: None,

@@ -244,6 +244,8 @@ pub struct ClientFacts {
     pub context_compacted: Option<String>,
     /// The sum of `x-claude-code-prev-tool-durations` in milliseconds; the per-tool list is not kept.
     pub prev_tool_ms: Option<i64>,
+    /// `x-claude-code-request-class`.
+    pub request_class: Option<String>,
     /// `cc_turn_origin` off the attribution line, first-party only; never restored, since the relay cannot
     /// know who started the turn.
     pub turn_origin: Option<String>,
@@ -257,6 +259,7 @@ impl Default for ClientFacts {
             compaction: None,
             context_compacted: None,
             prev_tool_ms: None,
+            request_class: None,
             turn_origin: None,
         }
     }
@@ -290,6 +293,10 @@ pub struct RequestObserved {
     pub body_capture_hours: u32,
     /// Empty for a refusal published before the body was read.
     pub shape: RequestShape,
+    /// The static chain's last boundary, lowercase hex; `None` without a chain.
+    pub static_hash: Option<String>,
+    /// Every message boundary, lowercase hex; empty without a chain.
+    pub boundaries: Vec<String>,
     /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
     /// unstructured, as the caller spelled them.
     pub client: ClientFacts,

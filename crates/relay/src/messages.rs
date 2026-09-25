@@ -55,7 +55,7 @@ use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
 use crate::observe::{answer_from_json, published_headers, wants_stream};
-use crate::ratelimit::{upstream_date, UnifiedHeaders};
+use crate::ratelimit::{head_sample, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
     drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, ReturnToPool,
@@ -349,6 +349,8 @@ impl Trace {
         stream: bool,
         body_capture_hours: u32,
         shape: RequestShape,
+        static_hash: Option<String>,
+        boundaries: Vec<String>,
         client: ClientFacts,
         presented_retired: bool,
         rotation_at: Option<i64>,
@@ -381,6 +383,8 @@ impl Trace {
             body,
             body_capture_hours,
             shape,
+            static_hash,
+            boundaries,
             client,
             presented_retired,
             rotation_at,
@@ -495,6 +499,7 @@ fn client_facts(
         compaction: hints.compaction,
         context_compacted: hints.context_compacted,
         prev_tool_ms: hints.prev_tool_ms,
+        request_class: hints.request_class,
         turn_origin: facts.and_then(|f| f.turn_origin.clone()),
     }
 }
@@ -701,6 +706,8 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            None,
+                            Vec::new(),
                             client_facts(&parts.headers, None, None),
                             false,
                             None,
@@ -723,6 +730,8 @@ impl Relay {
                             false,
                             0,
                             RequestShape::default(),
+                            None,
+                            Vec::new(),
                             client_facts(&parts.headers, None, None),
                             false,
                             None,
@@ -746,6 +755,8 @@ impl Relay {
                                 false,
                                 0,
                                 RequestShape::default(),
+                                None,
+                                Vec::new(),
                                 client_facts(&parts.headers, None, None),
                                 false,
                                 None,
@@ -769,6 +780,8 @@ impl Relay {
                                 false,
                                 0,
                                 RequestShape::default(),
+                                None,
+                                Vec::new(),
                                 client_facts(&parts.headers, None, None),
                                 false,
                                 None,
@@ -825,6 +838,8 @@ impl Relay {
                         false,
                         capture_hours,
                         RequestShape::default(),
+                        None,
+                        Vec::new(),
                         client_facts(&parts.headers, None, None),
                         presented == Presented::Retired,
                         key.rotated_at,
@@ -864,6 +879,8 @@ impl Relay {
                     stream,
                     capture_hours,
                     facts.shape.clone(),
+                    None,
+                    Vec::new(),
                     client_facts(&parts.headers, None, Some(&facts)),
                     presented == Presented::Retired,
                     key.rotated_at,
@@ -891,6 +908,8 @@ impl Relay {
                         stream,
                         capture_hours,
                         facts.shape.clone(),
+                        None,
+                        Vec::new(),
                         client_facts(&parts.headers, None, Some(&facts)),
                         presented == Presented::Retired,
                         key.rotated_at,
@@ -919,6 +938,16 @@ impl Relay {
                 stream,
                 capture_hours,
                 facts.shape.clone(),
+                facts
+                    .chains
+                    .as_ref()
+                    .and_then(|c| c.static_hash())
+                    .map(String::from),
+                facts
+                    .chains
+                    .as_ref()
+                    .map(|c| c.message_boundaries.clone())
+                    .unwrap_or_default(),
                 client_facts(&parts.headers, Some(&identity), Some(&facts)),
                 presented == Presented::Retired,
                 key.rotated_at,
@@ -1062,6 +1091,8 @@ impl Relay {
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
         let mut spent: u8 = 0;
+        // Read once and reused on every attempt of this request: neither fact changes across a failover.
+        let hints = ClientHints::read(&parts.headers);
 
         loop {
             // A backstop: every failover point already checks the budget before it comes back here, and
@@ -1092,10 +1123,18 @@ impl Relay {
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,
-                    request_class: None,
-                    context_compacted: false,
-                    static_hash: None,
-                    boundaries: Vec::new(),
+                    request_class: hints.request_class.clone(),
+                    context_compacted: hints.context_compacted.is_some(),
+                    static_hash: facts
+                        .chains
+                        .as_ref()
+                        .and_then(|c| c.static_hash())
+                        .map(String::from),
+                    boundaries: facts
+                        .chains
+                        .as_ref()
+                        .map(|c| c.message_boundaries.clone())
+                        .unwrap_or_default(),
                 })
                 .await
             {
@@ -1623,6 +1662,7 @@ impl Relay {
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         self.report_overage(ctx.account, &head, head_at);
+        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at);
 
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
@@ -2240,6 +2280,25 @@ impl Relay {
             upstream_request_id: None,
             cache_ttl_ms,
         }
+    }
+
+    /// A head that answers neither header family carries no sample and changes nothing.
+    fn report_head_sample(
+        &self,
+        account: &AccountRow,
+        head: &ResponseHead,
+        canonical_model: &str,
+        now: i64,
+    ) {
+        let observed_at = upstream_date(head).unwrap_or(now);
+        let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
+            return;
+        };
+        self.router.report(Report::Sample {
+            account_id: account.id.clone(),
+            sample,
+            incarnation: account.incarnation,
+        });
     }
 
     /// Only an OAuth head with the unified headers is evidence; everything else changes nothing.

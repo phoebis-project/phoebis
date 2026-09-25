@@ -16,6 +16,25 @@ const PERMISSION_MS: i64 = 3_600_000;
 /// The window name a rejection row carries; the console shows it beside the deadline.
 pub const MODEL_REJECTION_WINDOW: &str = "model_rejection";
 
+/// The reason row an api_key account's monthly spend cap cools under.
+pub const SPEND_CAP_REASON: &str = "spend_cap";
+
+/// 00:00 UTC on the first day of the month after the one `now` falls in.
+pub fn next_month_start(now: i64) -> i64 {
+    let date = jiff::Timestamp::from_millisecond(now)
+        .expect("a routed clock value stays in jiff's timestamp range")
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
+    let next = date
+        .first_of_month()
+        .checked_add(jiff::Span::new().months(1))
+        .expect("one month past any first-of-month date stays in jiff's date range");
+    next.to_zoned(jiff::tz::TimeZone::UTC)
+        .expect("every civil midnight exists in UTC")
+        .timestamp()
+        .as_millisecond()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Account,
@@ -111,6 +130,17 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         AccountKind::Oauth if rate_limited => {
             return Verdict::FailOver {
                 cooldown: Some(oauth_cooldown(head, unified.as_ref(), ctx)),
+                mark: None,
+            }
+        }
+        AccountKind::ApiKey if rate_limited && ctx.body_prefix.is_some_and(names_spend_limit) => {
+            return Verdict::FailOver {
+                cooldown: Some(Cooldown {
+                    scope: Scope::Account,
+                    until: next_month_start(ctx.now).saturating_add(MARGIN_MS),
+                    reason: SPEND_CAP_REASON,
+                    window: "overage".into(),
+                }),
                 mark: None,
             }
         }
@@ -309,6 +339,39 @@ fn names_credit_balance(body: &[u8]) -> bool {
     std::str::from_utf8(body).is_ok_and(|t| t.to_ascii_lowercase().contains("credit balance"))
 }
 
+/// Whether the body names the upstream's own monthly spend-cap code: a complete body reads
+/// `error.details.error_code`, a body cut mid-document falls back to the textual scan `error_type` runs, against
+/// `error_code` in place of `type`.
+fn names_spend_limit(body: &[u8]) -> bool {
+    if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        return value["error"]["details"]["error_code"].as_str()
+            == Some("enforced_spend_limit_reached");
+    }
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let Some(error_at) = text.find(r#""error""#) else {
+        return false;
+    };
+    let mut cursor = error_at;
+    while let Some(offset) = text[cursor..].find(r#""error_code""#) {
+        let match_at = cursor + offset;
+        let before = text[..match_at].trim_end();
+        if before.ends_with('{') || before.ends_with(',') {
+            let after = text[match_at + 12..]
+                .trim_start()
+                .strip_prefix(':')
+                .map(str::trim_start)
+                .and_then(|s| s.strip_prefix('"'));
+            if let Some(after) = after {
+                return after.starts_with("enforced_spend_limit_reached");
+            }
+        }
+        cursor = match_at + 12;
+    }
+    false
+}
+
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
 /// absent (the message's ends) or a boundary, where a boundary is any byte that is neither ASCII alphanumeric
 /// nor `-` nor `.` (quotes, whitespace, `:`, `,`, and the rest of punctuation all bound). An empty `wire_model`
@@ -398,6 +461,55 @@ mod tests {
             } => c,
             other => panic!("expected a cooldown, got {other:?}"),
         }
+    }
+
+    fn ms(y: i16, m: i8, d: i8, h: i8, min: i8) -> i64 {
+        jiff::civil::date(y, m, d)
+            .at(h, min, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
+            .as_millisecond()
+    }
+
+    fn spend_cap_body() -> Vec<u8> {
+        serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "This organization has reached its spend limit.",
+                "details": {"error_code": "enforced_spend_limit_reached"}
+            }
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn the_spend_cap_429_cools_the_whole_account_until_the_first_of_next_month_under_the_overage_window(
+    ) {
+        let body = spend_cap_body();
+        let mut ctx = context(AccountKind::ApiKey);
+        ctx.now = ms(2026, 9, 25, 12, 34);
+        ctx.body_prefix = Some(&body);
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str()),
+            (Scope::Account, SPEND_CAP_REASON, "overage")
+        );
+        assert_eq!(c.until, ms(2026, 10, 1, 0, 0) + MARGIN_MS);
+        // A rejection in December wraps into January of the following year.
+        ctx.now = ms(2026, 12, 31, 23, 59);
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_eq!(c.until, ms(2027, 1, 1, 0, 0) + MARGIN_MS);
+        // A rejection landing exactly at the first of the month still cools until the next month's first.
+        ctx.now = ms(2026, 9, 1, 0, 0);
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_eq!(c.until, ms(2026, 10, 1, 0, 0) + MARGIN_MS);
+        // A plain rate limit that names no spend-cap code falls through to the ordinary api_key rule.
+        ctx.body_prefix = None;
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_ne!(c.reason, SPEND_CAP_REASON);
     }
 
     #[test]

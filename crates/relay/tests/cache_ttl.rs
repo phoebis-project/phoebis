@@ -83,7 +83,8 @@ async fn a_marker_inside_a_tool_results_own_content_is_rewritten_like_every_othe
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        policy(r#"{"enabled":true,"main":"1h"}"#),
+        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
+        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
     )
     .await;
     let native = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]}],"stream":true}"#;
@@ -114,7 +115,8 @@ async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_b
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        policy(r#"{"enabled":true,"main":"1h","subagent":"5m"}"#),
+        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
+        policy(r#"{"enabled":true,"main":"1h","subagent":"5m","in_overage":null}"#),
     )
     .await;
 
@@ -356,7 +358,8 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
     let h = harness(
         &up,
         &[api_key("a", A, 0), api_key("b", B, 1)],
-        policy(r#"{"enabled":true,"main":"1h"}"#),
+        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
+        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
     )
     .await;
 

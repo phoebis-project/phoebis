@@ -97,9 +97,11 @@ again.
 ### Cache TTL
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object
-carries `enabled` (default `false`), `main` (default
-`1h`) and `subagent` (default `5m`) in `5m` or `1h`, `in_overage` (default unset), and `models`, a list of
-`{model, main, subagent}` overrides on canonical ids. With it on, every `cache_control` marker in the body is
+carries `enabled` (default `false`), `main` (default `1h`) and `subagent` (default `1h`) in `5m` or `1h`,
+`in_overage` (default `5m`), and `models`, a list of `{model, main, subagent}` overrides on canonical ids. A
+one-hour write costs a metered upstream twice what a five-minute one costs, and a plan-funded upstream the same
+plan tokens either way, so `in_overage` shortens the write by default while the plan side keeps the hour. With it
+on, every `cache_control` marker in the body is
 rewritten to the TTL for the request's agent and model, the ones inside a tool result's own content included, the
 `extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped,
 except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The guard
@@ -334,6 +336,7 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 | --- | --- | --- |
 | 429 with a valid Retry-After | Model-scoped until Retry-After | Yes |
 | 429 without a valid Retry-After | Account-wide for the fallback duration | Yes |
+| 429 naming `enforced_spend_limit_reached` | Account-wide until the first of next month, reason `spend_cap` | Yes |
 | 400 `invalid_request_error`, credit balance | Marked `funding_required` until cleared | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's Retry-After | Yes |
 
@@ -355,6 +358,16 @@ seconds up; anything non-finite, negative, malformed, or absent is invalid, and 
 account-wide fallback duration instead. An HTTP date is read against the upstream's own `Date` header when one
 is present, to reduce clock-skew error. A valid long delay is never shortened, and every deadline is an absolute
 time with a one-second margin that survives a restart.
+
+An API-key account whose monthly spend cap is reached answers a 429 naming `enforced_spend_limit_reached`; the
+account is cooled as a whole until the first of the next month, reason `spend_cap`, and an exhaustion it causes
+claims `overage`.
+
+A response head also lands a selection sample on the account it answered for, whichever header family it
+carries: an OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports
+one; an api_key head's `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`
+headers, one bucket per canonical model. A later head for another model adds that model's buckets beside the
+ones already on file rather than replacing them.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
 the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
