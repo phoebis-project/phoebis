@@ -23,6 +23,13 @@ pub fn undated(id: &str) -> Option<&str> {
     (suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit())).then_some(base)
 }
 
+/// The exact row, else the row of `undated(canonical_model)`, else `None`; the caller applies its own fallback.
+/// Shared by `RateTable::price` and the ledger's `PlanFactors::factor`, since a request's canonical model is a
+/// dated catalog id and the rows ship undated.
+pub fn row_for<'a, T>(canonical_model: &str, get: impl Fn(&str) -> Option<&'a T>) -> Option<&'a T> {
+    get(canonical_model).or_else(|| undated(canonical_model).and_then(&get))
+}
+
 /// The `YYYYMMDD` a dated id ends in, as an integer, so two snapshots of one spelling order by date; `None`
 /// when the id carries no eight-digit suffix.
 pub fn snapshot_date(id: &str) -> Option<u32> {
@@ -174,5 +181,34 @@ mod tests {
             None,
             "a four-digit suffix is not a date"
         );
+    }
+
+    #[test]
+    fn the_generic_lookup_reads_the_exact_row_then_the_undated_one_then_answers_none() {
+        let rows: std::collections::HashMap<String, u32> = [
+            ("claude-sonnet-4-5".to_string(), 1),
+            ("claude-sonnet-4-5-20250929".to_string(), 2),
+            ("claude-fable-5-1".to_string(), 3),
+        ]
+        .into_iter()
+        .collect();
+        let get = |k: &str| rows.get(k);
+        assert_eq!(
+            row_for("claude-sonnet-4-5-20250929", get),
+            Some(&2),
+            "the exact row wins over its undated base"
+        );
+        assert_eq!(
+            row_for("claude-fable-5-1-20260601", get),
+            Some(&3),
+            "a dated id with no row of its own reads its undated one"
+        );
+        assert_eq!(row_for("claude-sonnet-4-5", get), Some(&1));
+        assert_eq!(
+            row_for("claude-haiku-4-5-20251001", get),
+            None,
+            "neither the dated id nor its base has a row, and the caller's fallback is its own"
+        );
+        assert_eq!(row_for("claude-opus-5", get), None);
     }
 }

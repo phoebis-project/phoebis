@@ -56,7 +56,13 @@ Every field, in the order the request body takes them:
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60` |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
-| `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1` |
+| `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
+| `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1`; starts shedding |
+| `shed_share` | `0.5` | 0 to 1 |
+| `burn_window_seconds` | `600` | at least 60 |
+| `source_dwell_seconds` | `900` | at least 60 |
+| `migrate_when_spent` | `true` | `true` or `false` |
+| `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
@@ -235,28 +241,76 @@ another account can serve; a warm session stays. Past the end, a cancelled accou
 `subscription_ended`, and the upstream refuses the now-dead credential, so the session's next request fails over
 to a sibling.
 
-### Migration
+### Moves
 
-A pool with `migrate_above_utilization` moves a pinned session off an account whose latest 5-hour or 7-day
-sample has reached the threshold, onto a sibling whose 5-hour and 7-day readings are both below the threshold
-minus 0.05 (`MIGRATE_BAND`). Under `prefer_plan`, a pinned account in overage yields to any eligible sibling that
-is not.
+A live pin on a portable request moves only when its session sends a request, and only by one of five rules,
+checked in this order: spent, overage, return to plan, drain, and shed. The first rule that finds a destination
+moves the pin and names the move after itself. A pin on an account past its subscription end reaches none of
+them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
 
-A pinned account whose window for the session's model is spent, the Fable window for a Fable session and the
-shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands
-(until its reset, or until the sample ages out), moves on the next request to a sibling with allowance left in
-that window, without waiting for the upstream's 429. The migration band and the dwell do not apply to a spent
-move: a sibling reading over the threshold but under 1.0 still receives the session. Under `prefer_plan` a
-sibling in overage does not receive a spent pin, whether or not the pinned account is itself in overage, since
-the overage rule would hand the session back on the next request. With no sibling holding allowance the session
-stays and the upstream's answer decides.
+**Spent** The pinned account's window for the session's model is spent: the Fable window for a Fable session and
+the shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading
+stands (until its reset, or until the sample ages out). With `migrate_when_spent` on (the default), the pin moves
+on this request to a sibling that holds allowance in that window, without waiting for the upstream's 429. The
+shedding budget, the band and the dwell do not apply: a sibling reading over the threshold but under 1.0 still
+receives the session. The router has to know the sibling's allowance: an API-key account has no plan window to
+spend, and any other sibling needs a sample younger than the sample interval, so the toggle has the pool sample
+its accounts. After a restart, until those samples land, a spent session stays and the upstream's answer decides.
+Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the
+session straight back. With the toggle off, or no sibling holding allowance, the session stays.
 
-Any move records a `pin_migrated` event with reason `cooldown` or `mark` (a failover or a credential mark moved
-it), `overage`, `spent`, or `utilization`. A pin released without a move records `pin_expired` with `reasons`,
+**Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold,
+it moves to a subscription sibling that is not in overage, never to an API key. It waits while the reset the
+overage evidence names falls within `overage_move_grace_minutes` (default 30, `0` for no wait), so a session whose
+account gets its plan back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin
+at once.
+
+**Return to plan** A pin on an API-key account moves to a subscription sibling that holds allowance and is not in
+overage once its cache is cold, or once it has sat on the key for `source_dwell_seconds` since it landed there. An
+API key names no reset, so no grace applies.
+
+**Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is
+not winding down. A warm one stays (see **Subscription end**, above).
+
+**Shed** With `migrate_above_utilization` set, a request pinned to an account that reads at or above the
+threshold on its 5-hour or 7-day window starts a shedding round there, at most once per `source_dwell_seconds`.
+The round orders every pin on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
+pin's last prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share`
+(default 0.5) of the account's burn over `burn_window_seconds` (default 600). It never marks the account's last
+unmarked pin, so an account with one session sheds nothing and no round takes all of an account's burn. A pin
+whose burn carries the total past the share stays marked, and the round stops there. `warm_sessions` bounds the
+order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
+orders every pin by burn over rewrite cost, cold or warm.
+
+A marked session moves at its next request, onto a sibling that reads below the threshold minus 0.05
+(`MIGRATE_BAND`) on both windows, that did not shed this pin within `source_dwell_seconds`, and that has run no
+round of its own within that dwell. An unmarked pin never moves for utilization. The marks live in memory for the
+dwell: a marked session that stays idle never moves, no new round runs on the account until the dwell passes, and
+a restart forgets the marks, so the next request after it may start a fresh round.
+
+**Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`,
+`subagent` or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it
+alone. Without the class header, a request whose messages extend the session's conversation refreshes the pin;
+one that repeats the session's static prefix (tools and system prompt) without extending its messages restarted
+the conversation and reads cold; one that matches neither changes nothing. A request that carries
+`x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the
+round's order on the request that carries the fact. A body the router cannot read refreshes the pin on every
+request. A keepalive probe replays another request's headers and body, so the router judges none of them: a probe
+never colds a session, and its renewal counts as a refresh.
+
+**Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
+tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
+subscription account runs on its plan, dollars on an API-key account or a subscription account in overage. Every
+renewal folds both, so leaving overage switches the reading back without a reset. A keepalive probe's usage never
+counts.
+
+Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `mark`, `overage`, `return_to_plan`,
+`shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session, the others after
+the rule above that moved it. A pin released without a move records `pin_expired` with `reasons`,
 every fact the selection found against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`,
 `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`,
 `funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against
-the account, as with a utilization move whose destination emptied. Releasing a session by hand, from the Sessions
+the account, as with a move whose destination emptied. Releasing a session by hand, from the Sessions
 view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover

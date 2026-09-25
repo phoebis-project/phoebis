@@ -15,8 +15,9 @@ use crate::select::{
     release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
 };
 use crate::state::{
-    EvidenceSource, InFlight, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
-    WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_folded, EvidenceSource, InFlight, OverageEvidence, PinRef, PinUsage, RateTable,
+    RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use crate::{resolve, Presented, RegistrySnapshot};
 
@@ -94,6 +95,9 @@ pub enum RouterEvent {
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
     pub purge_interval: Duration,
+    /// The burn's prices. The task holds them because neither this crate nor the relay can see the ledger's
+    /// tables.
+    pub rates: BurnRates,
     pub sample_ttl: Duration,
     pub touch_interval: Duration,
 }
@@ -102,8 +106,27 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             purge_interval: Duration::from_secs(60),
+            rates: BurnRates::default(),
             sample_ttl: Duration::from_secs(60),
             touch_interval: Duration::from_secs(60),
+        }
+    }
+}
+
+/// The two tables a renewal's usage is priced through: meter tokens for `PinRow::burn`, dollars for
+/// `PinRow::burn_usd`. Both default to `RateTable::unit`, so a burn is a token count until the ledger's tables
+/// are wired in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BurnRates {
+    pub meter: RateTable,
+    pub dollars: RateTable,
+}
+
+impl Default for BurnRates {
+    fn default() -> Self {
+        BurnRates {
+            meter: RateTable::unit(),
+            dollars: RateTable::unit(),
         }
     }
 }
@@ -147,6 +170,13 @@ pub enum Report {
     PinRenewed {
         pin: PinRef,
         now: i64,
+        /// The attempt's usage, `None` for an attempt that answered none; never folded for a probe.
+        usage: Option<PinUsage>,
+        /// `client` or `keepalive`.
+        origin: &'static str,
+        canonical_model: String,
+        /// The cache TTL the relay resolved for the attempt: the policy's rewrite, else the client's marker.
+        cache_ttl_ms: i64,
     },
     Sample {
         account_id: String,
@@ -1032,7 +1062,14 @@ impl Task {
                     )]);
                 }
             }
-            Report::PinRenewed { mut pin, now } => {
+            Report::PinRenewed {
+                mut pin,
+                now,
+                usage,
+                origin,
+                canonical_model,
+                cache_ttl_ms,
+            } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 if let Some(current) = self
                     .state
@@ -1040,10 +1077,36 @@ impl Task {
                     .cloned()
                 {
                     if current.epoch == pin.epoch {
-                        let renewed = PinRow {
+                        let mut renewed = PinRow {
                             last_used_at: now,
                             ..current
                         };
+                        if origin == "keepalive" {
+                            // A probe's selection judged nothing, since it replays another request's facts; the
+                            // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
+                            // session's burn.
+                            renewed.last_refresh_at = now;
+                            renewed.cache_ttl_ms = cache_ttl_ms;
+                        } else if let Some(usage) = usage {
+                            // Both averages fold whatever the account's kind: the reader picks the unit its
+                            // funding selects at read time, so leaving overage needs no reset.
+                            let window_ms = self.burn_window_ms(&pin.key_id);
+                            let meter = self.config.rates.meter.price(&canonical_model, usage);
+                            let dollars = self.config.rates.dollars.price(&canonical_model, usage);
+                            renewed.burn =
+                                burn_folded(renewed.burn, renewed.burn_at, now, window_ms, meter);
+                            renewed.burn_usd = burn_folded(
+                                renewed.burn_usd,
+                                renewed.burn_at,
+                                now,
+                                window_ms,
+                                dollars,
+                            );
+                            renewed.burn_at = Some(now);
+                            renewed.last_input_tokens =
+                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+                            renewed.cache_ttl_ms = cache_ttl_ms;
+                        }
                         self.state.put_pin(renewed.clone());
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
@@ -1218,6 +1281,26 @@ impl Task {
         // a pin by design.
         self.purge();
         Ok(())
+    }
+
+    /// The burn window of the pool the key routes through; the default preset's for a key the snapshot no
+    /// longer holds, whose pin the next purge drops anyway.
+    fn burn_window_ms(&self, key_id: &str) -> i64 {
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone();
+        let seconds = snapshot
+            .key(key_id)
+            .and_then(|k| snapshot.pool(&k.pool_id))
+            .map_or(phoebis_store::Shedding::default().burn_window_seconds, |pool| {
+                pool.shedding.burn_window_seconds
+            });
+        i64::try_from(seconds)
+            .ok()
+            .and_then(|s| s.checked_mul(1_000))
+            .unwrap_or(i64::MAX)
     }
 
     fn token(&mut self, account_id: &str) -> &CancellationToken {
@@ -1483,7 +1566,8 @@ impl Drop for SampleGuard {
 /// read for the same reason: selection excludes it on that reading, so no request of its own will ever bring a
 /// fresher one. The kind order is a third: it reads overage evidence to put an account in the second group, and
 /// nothing but a sample retires that evidence, so without one a recovered account would sit below its
-/// plan-funded siblings until the process restarts.
+/// plan-funded siblings until the process restarts. The spent move is a fourth: it moves a pin only onto a
+/// sibling whose sample is younger than the TTL.
 fn needs_sample(
     pool: &phoebis_store::PoolRow,
     state: &RoutingState,
@@ -1491,6 +1575,7 @@ fn needs_sample(
     now: i64,
 ) -> bool {
     pool.kind_ordered()
+        || pool.shedding.migrate_when_spent
         || pool.migrate_above_utilization.is_some()
         || pool.select_below_utilization.is_some()
         || pool.overage_policy != phoebis_store::OveragePolicy::Allow
@@ -1575,8 +1660,8 @@ mod tests {
     use super::*;
     use phoebis_store::{Failover, OveragePolicy, PoolRow, RoutingLoad, Shedding, Strategy};
 
-    /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, and an
-    /// overage policy that never keeps an account out.
+    /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, an
+    /// overage policy that never keeps an account out, and no spent move.
     fn plain_pool() -> PoolRow {
         PoolRow {
             id: "p".into(),
@@ -1591,13 +1676,33 @@ mod tests {
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: false,
-            shedding: Shedding::default(),
+            shedding: Shedding {
+                migrate_when_spent: false,
+                ..Shedding::default()
+            },
             failover: Failover::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    #[test]
+    fn a_pool_that_moves_a_spent_pin_is_sampled_for_the_destinations_fresh_reading() {
+        let quiet = RoutingState::from_load(RoutingLoad::default());
+        let spent_moves = PoolRow {
+            shedding: Shedding::default(),
+            ..plain_pool()
+        };
+        assert!(
+            !needs_sample(&plain_pool(), &quiet, "a", 1_000),
+            "the same pool without the spent move reads no usage at all"
+        );
+        assert!(
+            needs_sample(&spent_moves, &quiet, "a", 1_000),
+            "a spent pin moves only onto a sibling with a fresh sample, and only sampling brings one"
+        );
     }
 
     fn cooled(until: i64, reason: &str) -> RoutingState {

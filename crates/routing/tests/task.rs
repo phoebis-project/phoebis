@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    resolve, sample_from_usage, spawn, Exhaustion, Presented, ReloadError, Report, ResolveError,
-    RouterConfig, SelectRequest, SelectResult, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    resolve, sample_from_usage, spawn, BurnRates, Exhaustion, PinRef, PinUsage, Presented,
+    RateTable, Rates, ReloadError, Report, ResolveError, RouterConfig, SelectRequest, SelectResult,
+    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, ModelRule,
@@ -127,6 +127,11 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         now,
         fallback_ms: 60_000,
         revision: s.revision,
+        probe: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: Vec::new(),
     }
 }
 
@@ -497,6 +502,11 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             now,
             fallback_ms: 60_000,
             revision: s.revision,
+            probe: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Vec::new(),
         }
     };
     let epoch;
@@ -610,6 +620,11 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             now: 1_000,
             fallback_ms: 60_000,
             revision: s.revision,
+            probe: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Vec::new(),
         })
         .await
         .unwrap();
@@ -2231,4 +2246,211 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         next_event(&mut events).await,
         RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
     ));
+}
+
+#[tokio::test]
+async fn a_probe_after_a_compacted_request_refreshes_warmth() {
+    use phoebis_routing::{warm, Report};
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let compacted = |now: i64, probe: bool| SelectRequest {
+        probe,
+        request_class: Some("main".into()),
+        context_compacted: true,
+        static_hash: Some("s0".into()),
+        boundaries: vec!["c1".into()],
+        ..request(&handle, Some("s1"), now)
+    };
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    handle.select(compacted(2_000, false)).await.unwrap();
+    let pin = handle.pins().await.unwrap().remove(0);
+    assert_eq!(
+        pin.last_refresh_at, 0,
+        "the client's compacted request colds the pin"
+    );
+    let answer = handle.select(compacted(3_000, true)).await.unwrap();
+    let SelectResult::Selected(selection) = answer.result else {
+        panic!("the probe renews the pin")
+    };
+    assert_eq!(
+        handle.pins().await.unwrap()[0].last_refresh_at,
+        0,
+        "the probe replays the compacted headers and chain, and selection judges none of it"
+    );
+    handle.report(Report::PinRenewed {
+        pin: selection.pin.expect("the probe held the pin"),
+        now: 3_500,
+        usage: None,
+        origin: "keepalive",
+        canonical_model: "claude-sonnet-5".into(),
+        cache_ttl_ms: 300_000,
+    });
+    let pin = handle.pins().await.unwrap().remove(0);
+    assert_eq!(
+        pin.last_refresh_at, 3_500,
+        "the probe's renewal counts as a refresh"
+    );
+    assert!(warm(&pin, 3_600));
+}
+
+/// A meter table weighing every token 1 and a dollar table weighing every token a quarter, so a pin's two
+/// averages differ by exactly that ratio.
+fn quarter_dollar_rates() -> BurnRates {
+    let mut dollars = RateTable::unit();
+    dollars.fallback = Rates {
+        input: 0.25,
+        cache_read: 0.25,
+        write_5m: 0.25,
+        write_1h: 0.25,
+        output: 0.25,
+    };
+    BurnRates {
+        meter: RateTable::unit(),
+        dollars,
+    }
+}
+
+fn renewal(
+    pin: PinRef,
+    now: i64,
+    usage: PinUsage,
+    origin: &'static str,
+    cache_ttl_ms: i64,
+) -> Report {
+    Report::PinRenewed {
+        pin,
+        now,
+        usage: Some(usage),
+        origin,
+        canonical_model: "claude-sonnet-5".into(),
+        cache_ttl_ms,
+    }
+}
+
+fn selected_pin(answer: phoebis_routing::SelectAnswer) -> PinRef {
+    match answer.result {
+        SelectResult::Selected(s) => s.pin.expect("a session request holds a pin"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_counts() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        rates: quarter_dollar_rates(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, None, clock(&now), config).unwrap();
+    let client = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let probe = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let first = PinUsage {
+        input: 100,
+        cache_read: 1_000,
+        write_5m: 50,
+        write_1h: 30,
+        output: 20,
+    };
+    let second = PinUsage {
+        input: 500,
+        ..PinUsage::default()
+    };
+    handle.report(renewal(client.clone(), 2_000, first, "client", 300_000));
+    handle.report(renewal(client, 62_000, second, "client", 300_000));
+    handle.report(renewal(probe, 2_000, first, "keepalive", 300_000));
+    let pins = handle.pins().await.unwrap();
+    // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
+    let window = 600.0_f64;
+    let meter = 1_200.0 / window * (-60.0_f64 / window).exp() + 500.0 / window;
+    let folded = pins.iter().find(|p| p.session_id == "s1").unwrap();
+    assert!(
+        (folded.burn - meter).abs() < 1e-9,
+        "the second fold decays the first by exp(-dt/window) and adds its own p/window: {} against {meter}",
+        folded.burn
+    );
+    assert!(
+        (folded.burn_usd - 0.25 * meter).abs() < 1e-9,
+        "the dollar average folds the same usage through its own table: {} against {}",
+        folded.burn_usd,
+        0.25 * meter
+    );
+    assert_eq!(
+        (folded.burn_at, folded.last_input_tokens),
+        (Some(62_000), 500)
+    );
+    let probed = pins.iter().find(|p| p.session_id == "s2").unwrap();
+    assert_eq!(
+        (probed.burn, probed.burn_usd, probed.burn_at),
+        (0.0, 0.0, None),
+        "a probe's usage never counts"
+    );
+}
+
+#[tokio::test]
+async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        rates: quarter_dollar_rates(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store.clone(), None, clock(&now), config).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let usage = PinUsage {
+        input: 60,
+        cache_read: 540,
+        write_5m: 0,
+        write_1h: 30,
+        output: 12,
+    };
+    handle.report(renewal(pin, 2_000, usage, "client", 3_600_000));
+    let row = wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .find(|p| p.burn_at.is_some())
+    })
+    .await;
+    let priced = 642.0 / 600.0;
+    assert!((row.burn - priced).abs() < 1e-9, "{}", row.burn);
+    assert!(
+        (row.burn_usd - 0.25 * priced).abs() < 1e-9,
+        "{}",
+        row.burn_usd
+    );
+    assert_eq!(
+        (row.last_input_tokens, row.cache_ttl_ms),
+        (630, 3_600_000),
+        "the input size counts every prompt token and the TTL is the one the relay resolved"
+    );
+    handle.shutdown().await.unwrap();
+    let again = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let reloaded = again.pins().await.unwrap().remove(0);
+    assert_eq!(
+        (reloaded.burn, reloaded.burn_usd),
+        (row.burn, row.burn_usd),
+        "a restart reads both averages back"
+    );
 }

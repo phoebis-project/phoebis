@@ -660,6 +660,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 incarnation: 1,
                 burn: 0.0,
                 burn_at: None,
+                burn_usd: 0.0,
                 last_input_tokens: 0,
                 last_refresh_at: 0,
                 cache_ttl_ms: 300_000,

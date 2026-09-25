@@ -1091,6 +1091,11 @@ impl Relay {
                     now,
                     fallback_ms,
                     revision: snapshot.revision,
+                    probe: admitted.trace.kind == Kind::Probe,
+                    request_class: None,
+                    context_compacted: false,
+                    static_hash: None,
+                    boundaries: Vec::new(),
                 })
                 .await
             {
@@ -1871,6 +1876,10 @@ impl Relay {
                     self.router.report(Report::PinRenewed {
                         pin: pin.clone(),
                         now: (self.clock)(),
+                        usage: None,
+                        origin: "client",
+                        canonical_model: ctx.identity.canonical_model.clone(),
+                        cache_ttl_ms: ctx.cache_ttl_ms.unwrap_or(300_000),
                     });
                 }
                 let (prefix, observer) = match held {

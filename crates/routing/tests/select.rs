@@ -1,12 +1,13 @@
 use phoebis_routing::{
-    release_reasons, resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence,
-    PinRef, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    effective_warm, release_reasons, resolve, select, warm, EvidenceSource, Exhaustion,
+    MigrateReason, OverageEvidence, PinRef, RegistrySnapshot, RoutingState, SelectRequest,
+    SelectResult, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, OveragePolicy, PinRow,
     PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
-    SubscriptionTerm,
+    SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -27,6 +28,7 @@ struct Pool {
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
     kinds: Vec<(&'static str, AccountKind)>,
+    shedding: Shedding,
     failover: Failover,
 }
 
@@ -41,6 +43,7 @@ impl Default for Pool {
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
             kinds: vec![],
+            shedding: Shedding::default(),
             failover: Failover::default(),
         }
     }
@@ -134,7 +137,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,
-            shedding: Shedding::default(),
+            shedding: pool.shedding,
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
@@ -211,6 +214,11 @@ fn request(
         now,
         fallback_ms: 60_000,
         revision: s.revision,
+        probe: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: Vec::new(),
     }
 }
 
@@ -706,67 +714,33 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
 }
 
 #[test]
-fn the_migrate_rule_moves_a_hot_pin_to_a_cooler_sibling_and_keeps_it_when_none_exists() {
+fn a_marked_pin_moves_to_a_cooler_sibling_and_stays_when_none_exists() {
     let s = snapshot(Pool {
         migrate: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let mut r = rng();
+    // Two cold pins, so the round has one to spare: it marks the hotter.
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample("a", sample(0.85, 0.3, T - 500));
+    st.record_sample("b", sample(0.9, 0.3, T - 500));
     assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
-                &mut r
-            )
-            .0
-        ),
-        "a"
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
+        "no cooler sibling, the marked pin stays"
     );
-    st.record_sample("a", sample(0.85, 0.3, 1_500));
-    st.record_sample("b", sample(0.9, 0.3, 1_500));
+    st.record_sample("b", sample(0.1, 0.3, T + 500));
     assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
-                &mut r
-            )
-            .0
-        ),
-        "a",
-        "no cooler sibling, the pin stays"
-    );
-    st.record_sample("b", sample(0.1, 0.3, 2_500));
-    let (result, _) = select(
-        &mut st,
-        &s,
-        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
-        &mut r,
-    );
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
-    assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Utilization)),
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
         "the cooler sibling wins even at the worse priority"
     );
     assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 4_000),
-                &mut r
-            )
-            .0
-        ),
-        "b",
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng()).0),
+        ("b".into(), None),
         "the new pin is on b"
     );
 }
@@ -791,7 +765,8 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
         ),
         "a"
     );
-    st.record_overage("a", overage(true, 1_500, Some(9_000)));
+    // Past the overage grace, so the move does not wait for the plan to come back.
+    st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
     let (result, _) = select(
         &mut st,
         &s,
@@ -997,7 +972,7 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
         ),
         "a"
     );
-    st.record_overage("a", overage(true, 1_500, Some(9_000)));
+    st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
     st.record_sample("a", with_fable(sample(0.1, 0.1, 2), 0.5, Some(9 * HOUR)));
     st.record_sample("b", with_fable(sample(0.5, 0.1, 2), 1.0, Some(9 * HOUR)));
     st.record_sample("c", with_fable(sample(0.6, 0.1, 2), 1.0, Some(9 * HOUR)));
@@ -1752,113 +1727,51 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 }
 
 #[test]
-fn the_migrate_rule_moves_a_hot_pin_only_to_a_destination_under_the_band() {
+fn a_marked_pin_moves_only_to_a_destination_under_the_band() {
     let s = snapshot(Pool {
         migrate: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let mut r = rng();
+    let two = |marked: &str, spare: &str| {
+        loaded(vec![
+            burning(marked, "a", 4.0, false, T),
+            burning(spare, "a", 1.0, false, T),
+        ])
+    };
+    let mut st = two("s1", "s0");
+    st.record_sample("a", sample(0.85, 0.3, T - 500));
+    st.record_sample("b", sample(0.77, 0.3, T - 500));
     assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
-                &mut r
-            )
-            .0
-        ),
-        "a"
-    );
-    st.record_sample("a", sample(0.85, 0.3, 1_500));
-    st.record_sample("b", sample(0.77, 0.3, 1_500));
-    assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
-                &mut r
-            )
-            .0
-        ),
-        "a",
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
         "0.77 is inside the band under 0.8, so b is no destination"
     );
-    st.record_sample("b", sample(0.70, 0.3, 2_500));
-    let (result, _) = select(
-        &mut st,
-        &s,
-        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
-        &mut r,
-    );
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
+    st.record_sample("b", sample(0.70, 0.3, T + 500));
     assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Utilization))
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed))
     );
-    // A fresh pin isolates the two inequalities the band applies to each window: `a` sits at
-    // exactly the threshold throughout, so every call below also proves the pinned side of `>=` is inclusive.
-    let mut edges = RoutingState::from_load(RoutingLoad::default());
-    let mut r2 = rng();
+    // A fresh state isolates the two inequalities the band applies to each window: `a` sits at exactly the
+    // threshold throughout, so every call below also proves the pinned side of `>=` is inclusive.
+    let mut edges = two("s2", "s9");
+    edges.record_sample("a", sample(0.8, 0.1, T - 500));
+    edges.record_sample("b", sample(0.1, 0.76, T - 500));
     assert_eq!(
-        picked(
-            &select(
-                &mut edges,
-                &s,
-                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 10_000),
-                &mut r2
-            )
-            .0
-        ),
-        "a"
-    );
-    edges.record_sample("a", sample(0.8, 0.1, 10_500));
-    edges.record_sample("b", sample(0.1, 0.76, 10_500));
-    assert_eq!(
-        picked(
-            &select(
-                &mut edges,
-                &s,
-                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 11_000),
-                &mut r2
-            )
-            .0
-        ),
-        "a",
+        landed(select(&mut edges, &s, &auxiliary(&s, "s2", T), &mut rng()).0),
+        ("a".into(), None),
         "b's seven-day sample sits inside the band, so the seven-day conjunct alone keeps it out"
     );
-    edges.record_sample("b", sample(0.75, 0.1, 11_500));
+    edges.record_sample("b", sample(0.75, 0.1, T + 500));
     assert_eq!(
-        picked(
-            &select(
-                &mut edges,
-                &s,
-                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 12_000),
-                &mut r2
-            )
-            .0
-        ),
-        "a",
+        landed(select(&mut edges, &s, &auxiliary(&s, "s2", T + 1_000), &mut rng()).0),
+        ("a".into(), None),
         "exactly threshold minus the band is still inside it: the comparison is strict"
     );
-    edges.record_sample("b", sample(0.1, 0.1, 12_500));
-    let (result, _) = select(
-        &mut edges,
-        &s,
-        &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 13_000),
-        &mut r2,
-    );
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
+    edges.record_sample("b", sample(0.1, 0.1, T + 1_500));
     assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Utilization)),
+        landed(select(&mut edges, &s, &auxiliary(&s, "s2", T + 2_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
         "clearly under the band, b finally qualifies"
     );
 }
@@ -2025,43 +1938,28 @@ fn a_spent_fable_window_moves_a_fable_pin_and_leaves_a_sonnet_pin_on_the_same_ac
 }
 
 #[test]
-fn a_spent_window_moves_a_pin_still_inside_the_utilization_dwell() {
+fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell() {
     let s = snapshot(Pool {
         migrate: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let pick = |st: &mut RoutingState, now: i64| {
-        select(
-            st,
-            &s,
-            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
-            &mut rng(),
-        )
-    };
-    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    st.record_sample("a", refreshing(0.85, 9 * HOUR, 9 * HOUR, 1_500));
-    st.record_sample("b", refreshing(0.3, 9 * HOUR, 9 * HOUR, 1_500));
-    let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
-        panic!()
-    };
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.85, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + 9 * HOUR, T + 9 * HOUR, T - 500));
     assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Utilization))
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed))
     );
-    // Inside the five-minute dwell, b's window is spent and a has recovered: the hover rule would hold the pin,
-    // the spent rule moves it.
-    st.record_sample("b", refreshing(1.0, 9 * HOUR, 9 * HOUR, 2_500));
-    st.record_sample("a", refreshing(0.2, 9 * HOUR, 9 * HOUR, 2_500));
-    let (result, writes) = pick(&mut st, 3_000);
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
-    assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("a", Some(MigrateReason::Spent))
-    );
+    // Inside the dwell, b's window is spent and a has recovered. a shed the pin and ran a round of its own, so
+    // no round sends the pin back; the spent move reads neither.
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("a", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    let (result, writes) = select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng());
+    assert_eq!(landed(result), ("a".into(), Some(MigrateReason::Spent)));
     assert!(writes
         .iter()
         .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))));
@@ -2251,7 +2149,7 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
 }
 
 #[test]
-fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() {
+fn a_pin_both_in_overage_and_spent_records_spent_and_lands_where_both_allow() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1), ("c", 1)],
         ..Pool::default()
@@ -2266,8 +2164,9 @@ fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() 
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    // a is in overage and spent; b is out of overage with allowance; c is out of overage and spent.
-    st.record_overage("a", overage(true, 1_500, Some(9_000)));
+    // a is in overage past the grace and spent; b is out of overage with allowance; c is out of overage and
+    // spent.
+    st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("c", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
@@ -2276,8 +2175,8 @@ fn a_pin_both_in_overage_and_spent_records_overage_and_lands_where_both_allow() 
     };
     assert_eq!(
         (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Overage)),
-        "overage is the recorded reason, and b is the one sibling both predicates allow"
+        ("b", Some(MigrateReason::Spent)),
+        "the spent rule runs first and names the move, and b is the one sibling both predicates allow"
     );
 }
 
@@ -2297,10 +2196,10 @@ fn a_spent_pin_under_prefer_plan_stays_rather_than_moving_onto_a_sibling_in_over
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    // a's five-hour window stands full while b is in known overage with no sample of its own, which is what
-    // a restart leaves: the overage rows are reloaded and the samples start empty, so b reads as holding
-    // allowance. Moving the pin there would hand it straight back on the next request.
+    // a's five-hour window stands full while b holds allowance by a fresh sample and is in known overage.
+    // Moving the pin there would hand it straight back on the next request.
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
     for now in [2_000, 3_000] {
         let SelectResult::Selected(sel) = pick(&mut st, now).0 else {
@@ -2332,6 +2231,7 @@ fn a_spent_pin_under_allow_moves_onto_a_sibling_in_overage_once_and_is_not_moved
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_overage("b", overage(true, 1_500, Some(9 * HOUR)));
     let SelectResult::Selected(sel) = pick(&mut st, 2_000).0 else {
         panic!()
@@ -3033,6 +2933,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         incarnation: 1,
         burn: 0.0,
         burn_at: None,
+        burn_usd: 0.0,
         last_input_tokens: 0,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
@@ -3627,4 +3528,945 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
             sel.trace.skipped
         );
     }
+}
+
+/// A clock well past the cache TTL, so a refresh zeroed by a cold verdict reads cold.
+const T: i64 = 10 * HOUR;
+
+/// `req` carrying the hint headers and the two chains the relay reads off the client's bytes.
+fn with_facts(
+    req: SelectRequest,
+    class: Option<&str>,
+    compacted: bool,
+    static_hash: Option<&str>,
+    boundaries: &[&str],
+) -> SelectRequest {
+    SelectRequest {
+        request_class: class.map(String::from),
+        context_compacted: compacted,
+        static_hash: static_hash.map(String::from),
+        boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
+        ..req
+    }
+}
+
+fn pinned(st: &RoutingState, session: &str) -> PinRow {
+    st.pin("k", session, "claude-sonnet-5")
+        .cloned()
+        .expect("the session holds a pin")
+}
+
+#[test]
+fn a_main_or_subagent_or_compaction_class_refreshes_a_pin_and_any_other_class_leaves_it_alone() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64, class: &str| {
+        with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            Some(class),
+            false,
+            None,
+            &[],
+        )
+    };
+    select(&mut st, &s, &at(1_000, "main"), &mut rng());
+    assert_eq!(pinned(&st, "s1").last_refresh_at, 1_000);
+    let mut now = 1_000;
+    for class in ["main", "subagent", "compaction"] {
+        now += 1_000;
+        select(&mut st, &s, &at(now, class), &mut rng());
+        assert_eq!(
+            pinned(&st, "s1").last_refresh_at,
+            now,
+            "a {class} turn refreshes the pin"
+        );
+    }
+    let refreshed = now;
+    for class in ["quota", "title", "suggestion"] {
+        now += 1_000;
+        select(&mut st, &s, &at(now, class), &mut rng());
+        let pin = pinned(&st, "s1");
+        assert_eq!(
+            (pin.last_refresh_at, pin.last_used_at),
+            (refreshed, now),
+            "a {class} request uses the pin and leaves its warmth alone"
+        );
+    }
+}
+
+#[test]
+fn without_the_class_a_continuation_refreshes_a_restart_is_cold_and_a_foreign_request_changes_nothing(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64, static_hash: &str, boundaries: &[&str]| {
+        with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            None,
+            false,
+            Some(static_hash),
+            boundaries,
+        )
+    };
+    select(&mut st, &s, &at(T + 1_000, "s0", &["m1", "m2"]), &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.static_hash.as_deref(), pin.tail_hash.as_deref()),
+        (Some("s0"), Some("m2")),
+        "a fresh pin carries the request's hashes"
+    );
+    select(
+        &mut st,
+        &s,
+        &at(T + 2_000, "s0", &["m1", "m2", "m3", "m4"]),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.tail_hash.as_deref()),
+        (T + 2_000, Some("m4")),
+        "the boundaries contain the pin's tail, so the request continues it"
+    );
+    select(&mut st, &s, &at(T + 3_000, "s0", &["x1"]), &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.tail_hash.as_deref()),
+        (0, Some("x1")),
+        "the same static prefix without the tail restarted the conversation, which is cold"
+    );
+    assert!(!warm(&pin, T + 3_000));
+    select(&mut st, &s, &at(T + 4_000, "other", &["y1"]), &mut rng());
+    let foreign = pinned(&st, "s1");
+    assert_eq!(
+        (
+            foreign.last_refresh_at,
+            foreign.static_hash.as_deref(),
+            foreign.tail_hash.as_deref(),
+            foreign.last_used_at
+        ),
+        (0, Some("s0"), Some("x1"), T + 4_000),
+        "a request matching neither hash changes nothing but the pin's use"
+    );
+    select(&mut st, &s, &at(T + 5_000, "s0", &["x1", "x2"]), &mut rng());
+    assert!(
+        warm(&pinned(&st, "s1"), T + 5_000),
+        "the restarted conversation's continuation warms the pin again"
+    );
+}
+
+#[test]
+fn a_compacted_request_is_cold_and_the_next_continuation_re_warms_the_pin() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    select(
+        &mut st,
+        &s,
+        &with_facts(req(T + 1_000), Some("main"), false, Some("s0"), &["m1"]),
+        &mut rng(),
+    );
+    select(
+        &mut st,
+        &s,
+        &with_facts(req(T + 2_000), Some("main"), true, Some("s0"), &["c1"]),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.tail_hash.as_deref()),
+        (0, Some("c1")),
+        "the compacted flag is cold whatever the class says, and the pin keeps the compacted chain's tail"
+    );
+    assert!(!warm(&pin, T + 2_000));
+    select(
+        &mut st,
+        &s,
+        &with_facts(req(T + 3_000), None, false, Some("s0"), &["c1", "c2"]),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(pin.last_refresh_at, T + 3_000);
+    assert!(
+        warm(&pin, T + 3_000),
+        "the continuation of the compacted conversation re-warms the pin"
+    );
+}
+
+#[test]
+fn a_body_without_a_chain_refreshes_on_every_request() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    for now in [1_000, 2_000, 3_000] {
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        );
+        assert_eq!(
+            pinned(&st, "s1").last_refresh_at,
+            now,
+            "a request that carries no fact refreshes the pin"
+        );
+    }
+}
+
+#[test]
+fn a_probe_never_colds_a_pin() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    select(
+        &mut st,
+        &s,
+        &with_facts(req(T + 1_000), Some("main"), false, Some("s0"), &["m1"]),
+        &mut rng(),
+    );
+    let probes = [
+        (
+            "compacted",
+            with_facts(req(T + 2_000), Some("main"), true, Some("s0"), &["m1"]),
+        ),
+        (
+            "restart-shaped",
+            with_facts(req(T + 3_000), None, false, Some("s0"), &["x1"]),
+        ),
+        (
+            "foreign",
+            with_facts(req(T + 4_000), None, false, Some("other"), &["y1"]),
+        ),
+    ];
+    for (shape, probe) in probes {
+        let probe = SelectRequest {
+            probe: true,
+            ..probe
+        };
+        let before = pinned(&st, "s1");
+        assert!(
+            effective_warm(&before, &probe),
+            "{shape}: the round's order reads the pin warm on the probe"
+        );
+        select(&mut st, &s, &probe, &mut rng());
+        let after = pinned(&st, "s1");
+        assert!(
+            after.last_refresh_at >= before.last_refresh_at,
+            "{shape}: {} fell back from {}",
+            after.last_refresh_at,
+            before.last_refresh_at
+        );
+        assert!(
+            warm(&after, probe.now),
+            "{shape}: still warm after the probe"
+        );
+    }
+}
+
+/// A pin of session `session` on `account` as a load seeds it at `now`: created an hour ago, used a second ago,
+/// refreshed a second ago under a five-minute TTL, 1 000 tokens of prompt, both averages 0 and folded at `now`.
+fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
+    PinRow {
+        key_id: "k".into(),
+        session_id: session.into(),
+        model: "claude-sonnet-5".into(),
+        account_id: account.into(),
+        epoch: 1,
+        created_at: now - HOUR,
+        last_used_at: now - 1_000,
+        key_generation: 0,
+        incarnation: 1,
+        burn: 0.0,
+        burn_at: Some(now),
+        burn_usd: 0.0,
+        last_input_tokens: 1_000,
+        last_refresh_at: now - 1_000,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+    }
+}
+
+/// `seeded_pin` burning `burn` in both units, warm or cold.
+fn burning(session: &str, account: &str, burn: f64, warm: bool, now: i64) -> PinRow {
+    PinRow {
+        burn,
+        burn_usd: burn,
+        last_refresh_at: if warm { now - 1_000 } else { now - HOUR },
+        ..seeded_pin(session, account, now)
+    }
+}
+
+fn loaded(pins: Vec<PinRow>) -> RoutingState {
+    RoutingState::from_load(RoutingLoad {
+        pins,
+        ..RoutingLoad::default()
+    })
+}
+
+/// A turn of `session` whose class says nothing about its cache, so every rule reads the pin's stored warmth.
+fn auxiliary(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
+    with_facts(
+        request(s, Some(session), "claude-sonnet-5", true, &[], now),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    )
+}
+
+/// A main-conversation turn of `session`, which refreshes its pin.
+fn main_turn(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
+    with_facts(
+        request(s, Some(session), "claude-sonnet-5", true, &[], now),
+        Some("main"),
+        false,
+        None,
+        &[],
+    )
+}
+
+fn landed(result: SelectResult) -> (String, Option<MigrateReason>) {
+    match result {
+        SelectResult::Selected(sel) => (sel.account.id, sel.migrated),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+fn marked(st: &RoutingState, session: &str, now: i64) -> bool {
+    st.shed_marked("k", session, "claude-sonnet-5", now, 900_000)
+}
+
+const MINUTE: i64 = 60_000;
+
+#[test]
+fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_fresh_sample_unless_it_is_an_api_key(
+) {
+    let pool = |migrate_when_spent: bool, kinds: Vec<(&'static str, AccountKind)>| Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds,
+        shedding: Shedding {
+            migrate_when_spent,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    };
+    let spent_a = |st: &mut RoutingState| {
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    };
+    let s = snapshot(pool(true, vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    spent_a(&mut st);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "after a restart b's allowance is unknown, so b is no destination and the upstream decides"
+    );
+    st.record_sample("b", sample(0.2, 0.2, T + 1_000 - 2 * SAMPLE_TTL_MS));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 2_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "a sample older than the sample TTL is no evidence of allowance"
+    );
+    st.record_sample("b", sample(0.2, 0.2, T + 2_500));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 3_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "a fresh sample on the sibling makes it a destination"
+    );
+
+    let off = snapshot(pool(false, vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &off,
+        &request(&off, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    spent_a(&mut st);
+    st.record_sample("b", sample(0.2, 0.2, T + 500));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &off,
+                &request(&off, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "with the toggle off a spent pin stays and the upstream's answer decides"
+    );
+
+    let keyed = snapshot(pool(true, vec![("b", AccountKind::ApiKey)]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &keyed,
+        &request(&keyed, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    spent_a(&mut st);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &keyed,
+                &request(&keyed, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "an api_key sibling holds allowance without a sample"
+    );
+}
+
+#[test]
+fn the_overage_move_waits_out_the_grace_and_lands_on_plan_funded_siblings_only() {
+    let pool = |grace: u32| Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        kinds: vec![("c", AccountKind::ApiKey)],
+        failover: Failover {
+            overage_move_grace_minutes: grace,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    };
+    let s = snapshot(pool(30));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |s: &RegistrySnapshot, session: &str, now: i64| {
+        request(s, Some(session), "claude-sonnet-5", true, &[], now)
+    };
+    select(&mut st, &s, &at(&s, "s1", T), &mut rng());
+    st.record_overage("a", overage(true, T + 500, Some(T + 10 * MINUTE)));
+    assert_eq!(
+        landed(select(&mut st, &s, &at(&s, "s1", T + 1_000), &mut rng()).0),
+        ("a".into(), None),
+        "the plan returns within the 30-minute grace, so the session keeps its cache"
+    );
+    st.record_overage("a", overage(true, T + 1_500, Some(T + 40 * MINUTE)));
+    assert_eq!(
+        landed(select(&mut st, &s, &at(&s, "s1", T + 2_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Overage)),
+        "past the grace the pin moves to the plan-funded sibling"
+    );
+    select(&mut st, &s, &at(&s, "s2", T + 3_000), &mut rng());
+    assert_eq!(pinned(&st, "s2").account_id, "a");
+    st.record_cooldown(cooled("b", "account", T + HOUR, "five_hour", "rate_limit"));
+    assert_eq!(
+        landed(select(&mut st, &s, &at(&s, "s2", T + 4_000), &mut rng()).0),
+        ("a".into(), None),
+        "with b cooled the only sibling left is the api_key one, which is no plan-funded destination"
+    );
+
+    let now_s = snapshot(pool(0));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(&mut st, &now_s, &at(&now_s, "s1", T), &mut rng());
+    st.record_overage("a", overage(true, T + 500, Some(T + 10 * MINUTE)));
+    assert_eq!(
+        landed(select(&mut st, &now_s, &at(&now_s, "s1", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Overage)),
+        "a grace of 0 moves the pin at once"
+    );
+}
+
+#[test]
+fn the_overage_move_takes_a_warm_pin_and_a_cold_one_alike_and_names_overage() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let dwell_ago = |pin: PinRow| PinRow {
+        created_at: T - 900_000,
+        ..pin
+    };
+    for (reset, expected) in [
+        (10 * MINUTE, ("a".to_string(), None)),
+        (40 * MINUTE, ("b".to_string(), Some(MigrateReason::Overage))),
+    ] {
+        let mut st = loaded(vec![
+            dwell_ago(burning("cold", "a", 0.0, false, T)),
+            dwell_ago(burning("warm", "a", 0.0, true, T)),
+        ]);
+        st.record_overage("a", overage(true, T - 500, Some(T + reset)));
+        assert_eq!(
+            landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+            expected,
+            "the cold pin, reset {reset} ms away"
+        );
+        assert_eq!(
+            landed(select(&mut st, &s, &main_turn(&s, "warm", T), &mut rng()).0),
+            expected,
+            "the warm pin, reset {reset} ms away"
+        );
+    }
+}
+
+#[test]
+fn a_cold_pin_on_an_api_key_member_returns_to_plan_and_a_warm_one_waits_out_the_dwell() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        PinRow {
+            created_at: T - 5 * MINUTE,
+            ..burning("warm", "a", 0.0, true, T)
+        },
+        PinRow {
+            created_at: T - MINUTE,
+            ..burning("cold", "a", 0.0, false, T)
+        },
+    ]);
+    // b's own window resets soon; the return names no grace, so nothing about it is read.
+    st.record_sample("b", refreshing(0.3, T + 10 * MINUTE, T + 9 * HOUR, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm", T), &mut rng()).0),
+        ("a".into(), None),
+        "a warm pin five minutes on the member waits out the dwell"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "a cold pin returns to plan at once"
+    );
+    let dwell_done = T - 5 * MINUTE + 900_000;
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm", dwell_done), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "a dwell after it landed on the member the warm pin returns too"
+    );
+}
+
+#[test]
+fn a_restart_on_a_warm_pin_is_cold_for_the_return_rule_on_that_request() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        created_at: T - MINUTE,
+        static_hash: Some("s0".into()),
+        tail_hash: Some("m2".into()),
+        ..burning("s1", "a", 0.0, true, T)
+    }]);
+    assert!(warm(&pinned(&st, "s1"), T), "the stored pin is warm");
+    let restart = with_facts(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        None,
+        false,
+        Some("s0"),
+        &["x1"],
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &restart, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "the restart is cold on the request that carries it, not one request later"
+    );
+}
+
+#[test]
+fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(T + 10 * MINUTE),
+        }],
+    );
+    let mut st = loaded(vec![
+        burning("cold", "a", 0.0, false, T),
+        burning("warm", "a", 0.0, true, T),
+    ]);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Drain)),
+        "a cold pin leaves the account winding down"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm", T), &mut rng()).0),
+        ("a".into(), None),
+        "a warm pin stays until the end refuses it"
+    );
+}
+
+/// A pool whose round runs on `a` at 0.8, with `b` a cool destination.
+fn shedding_pool(shedding: Shedding) -> Pool {
+    Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1)],
+        shedding,
+        ..Pool::default()
+    }
+}
+
+fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
+    st.record_sample("a", sample(0.9, 0.3, at));
+    st.record_sample("b", sample(0.1, 0.1, at));
+}
+
+#[test]
+fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leaving_overage_reads_the_meter_one_back(
+) {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        ..shedding_pool(Shedding::default())
+    });
+    let meter_heavy = PinRow {
+        burn: 9.0,
+        burn_usd: 1.0,
+        ..burning("meter-heavy", "a", 0.0, false, T)
+    };
+    let dollar_heavy = PinRow {
+        burn: 1.0,
+        burn_usd: 9.0,
+        ..burning("dollar-heavy", "a", 0.0, false, T)
+    };
+    let mut st = loaded(vec![meter_heavy, dollar_heavy]);
+    hot_a_cool_b(&mut st, T - 500);
+    st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "meter-heavy", T), &mut rng()).0),
+        ("a".into(), None),
+        "in overage the round reads dollars, so the meter-heavy pin is the last unmarked one"
+    );
+    assert!(marked(&st, "dollar-heavy", T) && !marked(&st, "meter-heavy", T));
+
+    let later = T + 900_000;
+    hot_a_cool_b(&mut st, later - 500);
+    assert!(
+        !st.in_overage("a", later, FALLBACK_MS),
+        "the reset has passed"
+    );
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &auxiliary(&s, "meter-heavy", later),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "back on plan the round reads meter tokens and marks the meter-heavy pin first"
+    );
+    let untouched = pinned(&st, "dollar-heavy");
+    assert_eq!(
+        (untouched.burn, untouched.burn_usd),
+        (1.0, 9.0),
+        "neither average was reset by the switch"
+    );
+}
+
+#[test]
+fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_stops_at_the_share()
+{
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        burning("warm-4", "a", 4.0, true, T),
+        burning("cold-3", "a", 3.0, false, T),
+        burning("warm-2", "a", 2.0, true, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
+        ("a".into(), None),
+        "the round ran on warm-1's request and did not mark it"
+    );
+    assert_eq!(st.last_shed("a"), Some(T));
+    let marks: Vec<&str> = ["warm-4", "cold-3", "warm-2", "warm-1"]
+        .into_iter()
+        .filter(|session| marked(&st, session, T))
+        .collect();
+    assert_eq!(
+        marks,
+        ["warm-4", "cold-3"],
+        "cold-3 first, then warm-4, and 7 of 10 reaches half"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold-3", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-4", T + 2_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a marked warm pin moves at its next request"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-2", T + 3_000), &mut rng()).0),
+        ("a".into(), None),
+        "an unmarked pin renews in place"
+    );
+    assert_eq!(
+        st.last_shed("a"),
+        Some(T),
+        "a second request inside the dwell runs no new round, so warm-2 is still unmarked"
+    );
+}
+
+#[test]
+fn a_round_never_marks_the_last_pin_and_a_zero_target_marks_nothing() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![burning("only", "a", 100.0, false, T)]);
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "only", T), &mut rng()).0),
+        ("a".into(), None),
+        "a one-pin account sheds nothing"
+    );
+
+    let mut st = loaded(vec![
+        burning("cold-1", "a", 1.0, false, T),
+        burning("warm-9", "a", 9.0, true, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold-1", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the cold pin is marked first and moves"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-9", T + 1_000), &mut rng()).0),
+        ("a".into(), None),
+        "the warm pin was the last unmarked one, whatever the target still asked"
+    );
+
+    let four = |burns: [f64; 4]| {
+        let mut st = loaded(
+            ["cold-a", "cold-b", "cold-c", "cold-d"]
+                .into_iter()
+                .zip(burns)
+                .map(|(session, burn)| burning(session, "a", burn, false, T))
+                .collect(),
+        );
+        hot_a_cool_b(&mut st, T - 500);
+        st
+    };
+    let mut st = four([0.0; 4]);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold-a", T), &mut rng()).0),
+        ("a".into(), None),
+        "no burn in the window is a zero target"
+    );
+    assert!(["cold-a", "cold-b", "cold-c", "cold-d"]
+        .iter()
+        .all(|session| !marked(&st, session, T)));
+
+    let unshared = snapshot(shedding_pool(Shedding {
+        shed_share: 0.0,
+        ..Shedding::default()
+    }));
+    let mut st = four([4.0, 3.0, 2.0, 1.0]);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &unshared,
+                &auxiliary(&unshared, "cold-a", T),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "a share of 0 marks nothing"
+    );
+    assert!(["cold-a", "cold-b", "cold-c", "cold-d"]
+        .iter()
+        .all(|session| !marked(&st, session, T)));
+}
+
+#[test]
+fn warm_sessions_never_stops_after_the_cold_pins_and_always_ignores_warmth() {
+    // The warm pins' burns over their prompt size: warm-2 0.2, warm-4 0.04, warm-1 0.001.
+    let pins = || {
+        vec![
+            burning("cold-3", "a", 3.0, false, T),
+            PinRow {
+                last_input_tokens: 100,
+                ..burning("warm-4", "a", 4.0, true, T)
+            },
+            PinRow {
+                last_input_tokens: 10,
+                ..burning("warm-2", "a", 2.0, true, T)
+            },
+            burning("warm-1", "a", 1.0, true, T),
+        ]
+    };
+    for (knob, expected) in [
+        (WarmSessions::WhenNeeded, vec!["cold-3", "warm-2"]),
+        (WarmSessions::Never, vec!["cold-3"]),
+        (WarmSessions::Always, vec!["warm-4", "warm-2"]),
+    ] {
+        let s = snapshot(shedding_pool(Shedding {
+            warm_sessions: knob,
+            ..Shedding::default()
+        }));
+        let mut st = loaded(pins());
+        hot_a_cool_b(&mut st, T - 500);
+        select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
+        let marks: Vec<&str> = ["cold-3", "warm-4", "warm-2", "warm-1"]
+            .into_iter()
+            .filter(|session| marked(&st, session, T))
+            .collect();
+        assert_eq!(marks, expected, "{knob:?}");
+    }
+}
+
+#[test]
+fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_when_that_account_cooled(
+) {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        burning("p4", "a", 4.0, false, T),
+        burning("p3", "a", 3.0, false, T),
+        burning("p2", "a", 2.0, false, T),
+        burning("p1", "a", 1.0, false, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    for (session, now) in [("p4", T), ("p3", T + 1_000)] {
+        assert_eq!(
+            landed(select(&mut st, &s, &auxiliary(&s, session, now), &mut rng()).0),
+            ("b".into(), Some(MigrateReason::Shed)),
+            "{session}: A sheds its two hottest pins to B"
+        );
+        let moved = pinned(&st, session);
+        assert_eq!(
+            (moved.shed_from.as_deref(), moved.shed_at),
+            (Some("a"), Some(now)),
+            "{session}: the moved pin remembers where it was shed from"
+        );
+    }
+    // The two sessions burn on B from here. The state is rebuilt from the pins, as a restart leaves it: A's own
+    // round is forgotten with the marks, so only each pin's `shed_from` keeps A out.
+    let at = T + 2_000;
+    let pins = st
+        .pins()
+        .into_iter()
+        .map(|p| match p.session_id.as_str() {
+            "p4" => PinRow {
+                burn: 5.0,
+                burn_usd: 5.0,
+                burn_at: Some(at),
+                ..p
+            },
+            "p3" => PinRow {
+                burn: 1.0,
+                burn_usd: 1.0,
+                burn_at: Some(at),
+                ..p
+            },
+            _ => p,
+        })
+        .collect();
+    let mut st = loaded(pins);
+    st.record_sample("a", sample(0.1, 0.1, at));
+    st.record_sample("b", sample(0.9, 0.3, at));
+    let crossed = T + 3_000;
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "p4", crossed), &mut rng()).0),
+        ("b".into(), None),
+        "B's round marks p4, and A, cool now, is still no destination for a pin it shed"
+    );
+    assert!(marked(&st, "p4", crossed));
+    let after = T + 900_001;
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "p4", after), &mut rng()).0),
+        ("a".into(), Some(MigrateReason::Shed)),
+        "past the dwell the pin may move back"
+    );
+}
+
+#[test]
+fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
+    // A small share: the round marks exactly the first pin in its order.
+    let s = snapshot(shedding_pool(Shedding {
+        shed_share: 0.1,
+        ..Shedding::default()
+    }));
+    let pins = || {
+        vec![
+            burning("warm-9", "a", 9.0, true, T),
+            burning("cold-2", "a", 2.0, false, T),
+            burning("warm-1", "a", 1.0, true, T),
+        ]
+    };
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-9", T), &mut rng()).0),
+        ("a".into(), None),
+        "warm, the hottest pin ranks behind the cold one and stays"
+    );
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    let compacted = SelectRequest {
+        context_compacted: true,
+        ..main_turn(&s, "warm-9", T)
+    };
+    assert!(
+        warm(&pinned(&st, "warm-9"), T),
+        "the stored refresh reads warm"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &compacted, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "compacted, it is cold on this request, first in the order, and moves on it"
+    );
 }

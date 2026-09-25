@@ -6,7 +6,7 @@ use phoebis_store::{
 const SPELLING: &str = "claude-sonnet-4-5";
 const DATED: &str = "claude-sonnet-4-5-20250929";
 
-/// A pin with the eight engine columns at unremarkable defaults, so a test that only cares about a handful of
+/// A pin with the engine columns at unremarkable defaults, so a test that only cares about a handful of
 /// fields does not have to spell every one.
 fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow {
     PinRow {
@@ -21,6 +21,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         incarnation: 1,
         burn: 0.0,
         burn_at: None,
+        burn_usd: 0.0,
         last_input_tokens: 0,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
@@ -143,6 +144,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
     let seeded = PinRow {
         burn: 12.5,
         burn_at: Some(2),
+        burn_usd: 0.75,
         last_input_tokens: 4_000,
         last_refresh_at: 3,
         cache_ttl_ms: 3_600_000,
@@ -193,6 +195,10 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
             Some("static-hash"),
             Some("tail-hash"),
         )
+    );
+    assert_eq!(
+        row.burn_usd, 0.75,
+        "the dollar average reads back beside the meter one"
     );
     store.delete_account("b", "test").unwrap();
     assert!(

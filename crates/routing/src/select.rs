@@ -1,9 +1,14 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
-use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy, WarmSessions,
+};
 use rand::{Rng, RngExt};
 
-use crate::state::{PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use crate::state::{
+    shed_marks, warm, BurnUnit, PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
+};
 use crate::windows::window_for;
 use crate::{term, Candidate, RegistrySnapshot, ResolveError};
 
@@ -21,24 +26,112 @@ pub struct SelectRequest {
     pub now: i64,
     pub fallback_ms: i64,
     pub revision: u64,
+    /// A keepalive probe's replay of the recipe, from the relay trace's `Kind::Probe`; its headers and body
+    /// are the re-arming request's, so it carries no warmth verdict of its own.
+    pub probe: bool,
+    /// `x-claude-code-request-class` as sent, `None` without the header.
+    pub request_class: Option<String>,
+    /// `x-claude-code-context-compacted` was present.
+    pub context_compacted: bool,
+    /// The static chain's last boundary and every boundary of the message chain, lowercase hex; empty when
+    /// the body carried no chain.
+    pub static_hash: Option<String>,
+    pub boundaries: Vec<String>,
 }
 
+/// Why a pin moved, in the order the rules run: the first rule with a destination moves it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrateReason {
+    /// A cold pin left an account winding down toward its end.
+    Drain,
+    /// A subscription account in overage handed its session back to plan quota.
     Overage,
+    /// A pin on an api_key account returned to plan quota once cold or past the dwell.
+    ReturnToPlan,
+    /// A shedding round marked the pin.
+    Shed,
     /// The pinned account's window for the request's model is spent while a sibling holds allowance in it.
     Spent,
-    Utilization,
 }
 
 impl MigrateReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            MigrateReason::Drain => "drain",
             MigrateReason::Overage => "overage",
+            MigrateReason::ReturnToPlan => "return_to_plan",
+            MigrateReason::Shed => "shed",
             MigrateReason::Spent => "spent",
-            MigrateReason::Utilization => "utilization",
         }
     }
+}
+
+/// Which classes refresh a pin's warmth and re-arm a recipe; every other class is auxiliary.
+pub const REFRESHING_CLASSES: &[&str] = &["compaction", "main", "subagent"];
+
+/// What the incoming request says about the pin's cache: a refreshing turn, a cold one (compacted or
+/// restarted), or nothing (a foreign request, or an auxiliary class).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Warmth {
+    Cold,
+    Refresh,
+    Untouched,
+}
+
+/// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request
+/// says; the class decides when present; without it, a request whose boundaries contain the pin's tail
+/// continues the conversation, one that matches the static prefix without the tail restarted it, and one
+/// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
+/// fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
+/// its own, so it is judged by none of this: its renewal report stamps the refresh instead.
+pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
+    if request.probe {
+        return Warmth::Untouched;
+    }
+    if request.context_compacted {
+        return Warmth::Cold;
+    }
+    if let Some(class) = request.request_class.as_deref() {
+        return if REFRESHING_CLASSES.contains(&class) {
+            Warmth::Refresh
+        } else {
+            Warmth::Untouched
+        };
+    }
+    if request.static_hash.is_none() && request.boundaries.is_empty() {
+        return Warmth::Refresh;
+    }
+    if request
+        .boundaries
+        .iter()
+        .any(|b| Some(b) == current.tail_hash.as_ref())
+    {
+        return Warmth::Refresh;
+    }
+    if request.static_hash.is_some() && request.static_hash == current.static_hash {
+        return Warmth::Cold;
+    }
+    Warmth::Untouched
+}
+
+/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
+pub fn effective_warm(current: &PinRow, request: &SelectRequest) -> bool {
+    warm_on(current, warmth_of(current, request), request.now)
+}
+
+fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
+    match verdict {
+        Warmth::Cold => false,
+        Warmth::Refresh => true,
+        Warmth::Untouched => warm(current, now),
+    }
+}
+
+/// The request's two hashes, for a pin it refreshed, colded or created: the static prefix and the last message
+/// boundary, which the next continuation's boundaries contain.
+fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
+    pin.static_hash = request.static_hash.clone();
+    pin.tail_hash = request.boundaries.last().cloned();
 }
 
 /// The hysteresis band under the migrate threshold: a destination counts only below `threshold - MIGRATE_BAND`.
@@ -289,6 +382,12 @@ pub fn select(
         }
     }
 
+    // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
+    // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
+    let verdict = pin
+        .as_ref()
+        .map_or(Warmth::Untouched, |current| warmth_of(current, request));
+
     // Step 2: the eligible set and the obstacle of everything outside it, each kept with its account id for
     // the release event and the trace.
     let mut eligible: Vec<&Candidate> = Vec::new();
@@ -318,9 +417,8 @@ pub fn select(
                     state,
                     snapshot,
                     current,
-                    &request.candidates,
-                    request.now,
-                    request.fallback_ms,
+                    request,
+                    verdict,
                     &mut writes,
                 )),
                 writes,
@@ -356,102 +454,30 @@ pub fn select(
 
     let window = window_for(&request.canonical_model);
 
-    // Step 4: the migrate rule, for a portable request with a live pin.
+    // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
+    // reaches them: step 5 releases it as it releases a cooled account's.
     let mut migrated = None;
+    let mut shed_from = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
-    if let Some(current) = pin.as_ref() {
-        let leaving_overage = pool.overage_policy == OveragePolicy::PreferPlan
-            && state.in_overage(&current.account_id, request.now, request.fallback_ms);
-        let mut destination: Option<Vec<&Candidate>> = None;
-        let mut reason = None;
-        if leaving_overage {
-            destination = Some(
-                eligible
-                    .iter()
-                    .copied()
-                    .filter(|c| !state.in_overage(&c.account_id, request.now, request.fallback_ms))
-                    .collect(),
-            );
-            reason = Some(MigrateReason::Overage);
-        }
-        if let Some(threshold) = pool.migrate_above_utilization {
-            let reading_at_least = |account_id: &str, name: &str, threshold: f64| {
-                state
-                    .sample(account_id)
-                    .and_then(|s| s.reading(name))
-                    .is_some_and(|r| r.utilization >= threshold)
-            };
-            let reading_under = |account_id: &str, name: &str, threshold: f64| {
-                state
-                    .sample(account_id)
-                    .and_then(|s| s.reading(name))
-                    .is_none_or(|r| r.utilization < threshold)
-            };
-            let hot = reading_at_least(&current.account_id, FIVE_HOUR, threshold)
-                || reading_at_least(&current.account_id, SEVEN_DAY, threshold);
-            if hot {
-                let cool: Vec<&Candidate> = eligible
-                    .iter()
-                    .copied()
-                    .filter(|c| {
-                        reading_under(&c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
-                            && reading_under(&c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
-                    })
-                    .collect();
-                destination = Some(match destination {
-                    Some(set) => set
-                        .into_iter()
-                        .filter(|c| cool.iter().any(|k| k.account_id == c.account_id))
-                        .collect(),
-                    None => cool,
-                });
-                reason = reason.or(Some(MigrateReason::Utilization));
-            }
-        }
-        // A spent window is not a hover: the pinned account cannot serve the request until the window resets,
-        // so the pin moves as soon as a sibling holds allowance, and the band and the dwell that keep two
-        // accounts from trading a pin at the threshold do not apply. The set replaces the band's rather than
-        // intersecting it (every account the band admits holds allowance, so this is never the narrower set).
-        // Step 5 would otherwise renew the session on the spent account until the upstream's 429 moved it,
-        // one request later than the sample already allows. Under `prefer_plan` a sibling in known overage is
-        // no destination, whether or not this pin is itself leaving overage: the overage rule hands the
-        // session back on the next request, the two rules trading it on no new evidence, so a spent pin with
-        // only such siblings stays and the upstream's 429 decides, as with no sibling at all.
-        if !holds_allowance(state, &current.account_id, window, request.now) {
-            let with_allowance: Vec<&Candidate> = eligible
-                .iter()
-                .copied()
-                .filter(|c| {
-                    c.account_id != current.account_id
-                        && holds_allowance(state, &c.account_id, window, request.now)
-                        && !(pool.overage_policy == OveragePolicy::PreferPlan
-                            && state.in_overage(&c.account_id, request.now, request.fallback_ms))
-                })
-                .collect();
-            if !with_allowance.is_empty() {
-                destination = Some(with_allowance);
-                if reason != Some(MigrateReason::Overage) {
-                    reason = Some(MigrateReason::Spent);
-                }
-            }
-        }
-        // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
-        // releasing the pin for a set of them would strand the request on nothing.
-        if window == SEVEN_DAY_FABLE {
-            destination = destination.map(|set| {
-                set.into_iter()
-                    .filter(|c| holds_allowance(state, &c.account_id, window, request.now))
-                    .collect()
-            });
-        }
-        if let Some(set) = destination.filter(|set| !set.is_empty()) {
+    if let Some(current) = pin.as_ref().filter(|current| {
+        !snapshot
+            .term(&current.account_id)
+            .is_some_and(|term| term::ended(term, request.now))
+    }) {
+        let cold = !warm_on(current, verdict, request.now);
+        if let Some((reason, set)) = move_of(
+            state, snapshot, pool, request, current, &eligible, window, cold,
+        ) {
             state.remove_pin(&current.key_id, &current.session_id, &current.model);
             writes.push(StateWrite::DeletePin(
                 current.key_id.clone(),
                 current.session_id.clone(),
                 current.model.clone(),
             ));
-            migrated = reason;
+            if reason == MigrateReason::Shed {
+                shed_from = Some(current.account_id.clone());
+            }
+            migrated = Some(reason);
             selection_set = set;
             pin = None;
         }
@@ -465,9 +491,8 @@ pub fn select(
                     state,
                     snapshot,
                     current,
-                    &request.candidates,
-                    request.now,
-                    request.fallback_ms,
+                    request,
+                    verdict,
                     &mut writes,
                 )),
                 writes,
@@ -590,7 +615,7 @@ pub fn select(
     // Step 7: a fresh pin with a fresh epoch.
     let pin_ref = session.map(|session| {
         let epoch = state.fresh_epoch();
-        let row = PinRow {
+        let mut row = PinRow {
             key_id: request.key_id.clone(),
             session_id: session.to_string(),
             model: request.canonical_model.clone(),
@@ -605,14 +630,19 @@ pub fn select(
             incarnation: chosen.incarnation,
             burn: 0.0,
             burn_at: None,
+            burn_usd: 0.0,
             last_input_tokens: 0,
+            // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
             last_refresh_at: request.now,
             cache_ttl_ms: 300_000,
-            shed_from: None,
-            shed_at: None,
+            // The shed pin remembers its source for the dwell, so no round sends it straight back; every other
+            // move clears both.
+            shed_from: shed_from.clone(),
+            shed_at: shed_from.is_some().then_some(request.now),
             static_hash: None,
             tail_hash: None,
         };
+        stamp_hashes(&mut row, request);
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
         PinRef {
@@ -647,6 +677,235 @@ pub fn select(
         }),
         writes,
     )
+}
+
+fn seconds_ms(seconds: u64) -> i64 {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|s| s.checked_mul(1_000))
+        .unwrap_or(i64::MAX)
+}
+
+fn reading_at_least(state: &RoutingState, account_id: &str, name: &str, threshold: f64) -> bool {
+    state
+        .sample(account_id)
+        .and_then(|s| s.reading(name))
+        .is_some_and(|r| r.utilization >= threshold)
+}
+
+/// An unsampled account, or one that never read the window, counts as under.
+fn reading_under(state: &RoutingState, account_id: &str, name: &str, threshold: f64) -> bool {
+    state
+        .sample(account_id)
+        .and_then(|s| s.reading(name))
+        .is_none_or(|r| r.utilization < threshold)
+}
+
+/// Whether the account's allowance is known: an api_key account has no plan window to read, and anything else
+/// needs a sample younger than the sample TTL.
+fn allowance_known(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
+        || state
+            .sample(account_id)
+            .is_some_and(|s| now - s.observed_at < state.sample_ttl_ms())
+}
+
+/// Step 4's rules in their order: spent, overage, return to plan, drain, shed. Each yields the siblings it
+/// would move the pin to, and the first with any moves it under its own reason.
+#[allow(clippy::too_many_arguments)]
+fn move_of<'a>(
+    state: &mut RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    current: &PinRow,
+    eligible: &[&'a Candidate],
+    window: &str,
+    cold: bool,
+) -> Option<(MigrateReason, Vec<&'a Candidate>)> {
+    let (now, fallback_ms) = (request.now, request.fallback_ms);
+    let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
+    let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
+    let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
+    let destinations =
+        |state: &RoutingState, keep: &dyn Fn(&Candidate) -> bool| -> Vec<&'a Candidate> {
+            eligible
+                .iter()
+                .copied()
+                .filter(|c| c.account_id != current.account_id && keep(c))
+                // An account with no allowance left in the model's own window is no destination: step 6 drops it,
+                // so releasing the pin for a set of them would strand the request on nothing.
+                .filter(|c| {
+                    window != SEVEN_DAY_FABLE || holds_allowance(state, &c.account_id, window, now)
+                })
+                .collect()
+        };
+
+    // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
+    // the pin moves outside the round's budget as soon as a sibling is known to hold allowance, rather than
+    // renewing until the upstream's 429 moves it one request later. After a restart no sibling's allowance is
+    // known, and a guess could land the session on another spent account, so the upstream decides instead.
+    // Under `prefer_plan` a sibling in overage is no destination: the overage rule would hand the session back
+    // on the next request, the two rules trading it on no new evidence.
+    if pool.shedding.migrate_when_spent && !holds_allowance(state, &current.account_id, window, now)
+    {
+        let set = destinations(state, &|c| {
+            holds_allowance(state, &c.account_id, window, now)
+                && allowance_known(state, snapshot, &c.account_id, now)
+                && !(prefer_plan && state.in_overage(&c.account_id, now, fallback_ms))
+        });
+        if !set.is_empty() {
+            return Some((MigrateReason::Spent, set));
+        }
+    }
+
+    // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
+    // subscription sibling. While the evidence's reset falls within the grace the session keeps its cache: its
+    // account is about to get its plan back, and moving now would move it twice.
+    if prefer_plan
+        && kind(&current.account_id) == Some(AccountKind::Oauth)
+        && state.in_overage(&current.account_id, now, fallback_ms)
+    {
+        let grace_ms = i64::from(pool.failover.overage_move_grace_minutes) * 60_000;
+        let reset = state.overage(&current.account_id).and_then(|e| e.reset);
+        if reset.is_none_or(|reset| reset - now > grace_ms) {
+            let set = destinations(state, &|c| {
+                kind(&c.account_id) == Some(AccountKind::Oauth)
+                    && !state.in_overage(&c.account_id, now, fallback_ms)
+            });
+            if !set.is_empty() {
+                return Some((MigrateReason::Overage, set));
+            }
+        }
+    }
+
+    // An api_key member bills every token, so a pin on one returns to plan quota once its cache is cold or once
+    // it has sat a dwell on the member. A move writes a fresh row, so `created_at` is the landing here. The
+    // member names no reset, so no grace applies.
+    if kind(&current.account_id) == Some(AccountKind::ApiKey)
+        && (cold || now - current.created_at >= dwell_ms)
+    {
+        let set = destinations(state, &|c| {
+            kind(&c.account_id) == Some(AccountKind::Oauth)
+                && !state.in_overage(&c.account_id, now, fallback_ms)
+                && holds_allowance(state, &c.account_id, window, now)
+        });
+        if !set.is_empty() {
+            return Some((MigrateReason::ReturnToPlan, set));
+        }
+    }
+
+    // A cold pin costs nothing to move off an account about to end. A warm one stays: past the end the
+    // `subscription_ended` exclusion releases it and the upstream refuses the dead token.
+    let winding_down = |id: &str| {
+        snapshot
+            .term(id)
+            .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
+    };
+    if cold && winding_down(&current.account_id) {
+        let set = destinations(state, &|c| !winding_down(&c.account_id));
+        if !set.is_empty() {
+            return Some((MigrateReason::Drain, set));
+        }
+    }
+
+    // The trigger reads the stored reading raw, as the ceiling does: a refunded window is re-read by the next
+    // poll within the sample TTL.
+    let threshold = pool.migrate_above_utilization?;
+    let hot = reading_at_least(state, &current.account_id, FIVE_HOUR, threshold)
+        || reading_at_least(state, &current.account_id, SEVEN_DAY, threshold);
+    if !hot {
+        return None;
+    }
+    if state
+        .last_shed(&current.account_id)
+        .is_none_or(|at| now - at >= dwell_ms)
+    {
+        let marks = shed_round(state, snapshot, pool, current, cold, now, fallback_ms);
+        state.record_shed(&current.account_id, now, marks);
+    }
+    // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
+    // moves at its next request.
+    if !state.shed_marked(
+        &current.key_id,
+        &current.session_id,
+        &current.model,
+        now,
+        dwell_ms,
+    ) {
+        return None;
+    }
+    let set = destinations(state, &|c| {
+        let shed_it_here = current.shed_from.as_deref() == Some(c.account_id.as_str())
+            && current.shed_at.is_some_and(|at| now - at < dwell_ms);
+        reading_under(state, &c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
+            && reading_under(state, &c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
+            && !shed_it_here
+            && state
+                .last_shed(&c.account_id)
+                .is_none_or(|at| now - at >= dwell_ms)
+    });
+    (!set.is_empty()).then_some((MigrateReason::Shed, set))
+}
+
+/// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
+/// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
+/// in the unit its funding selects. The current pin's warmth is this request's verdict; every other pin's is
+/// the stored one.
+fn shed_round(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    current: &PinRow,
+    current_cold: bool,
+    now: i64,
+    fallback_ms: i64,
+) -> Vec<(String, String, String)> {
+    let account_id = &current.account_id;
+    let kind = snapshot
+        .account(account_id)
+        .map_or(AccountKind::Oauth, |a| a.kind);
+    let unit = BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms));
+    let (pins, sum) = state.burn_of(
+        account_id,
+        unit,
+        now,
+        seconds_ms(pool.shedding.burn_window_seconds),
+    );
+    let is_current = |p: &PinRow| {
+        p.key_id == current.key_id && p.session_id == current.session_id && p.model == current.model
+    };
+    let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| {
+        if is_current(p) {
+            current_cold
+        } else {
+            !warm(p, now)
+        }
+    });
+    // A pin with no prompt size reported yet ranks as the cheapest rewrite.
+    let per_rewrite = |(p, burn): &(PinRow, f64)| *burn / p.last_input_tokens.max(1) as f64;
+    let by_rewrite =
+        |a: &(PinRow, f64), b: &(PinRow, f64)| per_rewrite(b).total_cmp(&per_rewrite(a));
+    cold.sort_by(|a, b| b.1.total_cmp(&a.1));
+    warm_pins.sort_by(by_rewrite);
+    let cold_count = cold.len();
+    let mut ordered = cold;
+    ordered.extend(warm_pins);
+    if pool.shedding.warm_sessions == WarmSessions::Always {
+        ordered.sort_by(by_rewrite);
+    }
+    let mut marks = shed_marks(&ordered, pool.shedding.shed_share * sum);
+    // `never` stops after the cold pins. The warm ones stay in the order all the same, so the last-pin rule
+    // still counts them among the account's pins.
+    if pool.shedding.warm_sessions == WarmSessions::Never {
+        marks.truncate(cold_count);
+    }
+    marks
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -702,20 +961,32 @@ fn obstacle(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Renews the pin and persists the request's verdict on it: a refreshing request stamps its refresh and its
+/// hashes, a cold one zeroes the refresh and stamps its hashes so the next continuation re-warms the pin, and
+/// a foreign one leaves both alone. A request that carries no chain has no hashes to stamp, so the pin keeps
+/// the last conversation it was judged against.
 fn renew(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
     current: &PinRow,
-    candidates: &[Candidate],
-    now: i64,
-    fallback_ms: i64,
+    request: &SelectRequest,
+    verdict: Warmth,
     writes: &mut Vec<StateWrite>,
 ) -> Selection {
-    let renewed = PinRow {
+    let (candidates, now, fallback_ms) = (&request.candidates, request.now, request.fallback_ms);
+    let mut renewed = PinRow {
         last_used_at: now,
         ..current.clone()
     };
+    let chained = request.static_hash.is_some() || !request.boundaries.is_empty();
+    match verdict {
+        Warmth::Refresh => renewed.last_refresh_at = now,
+        Warmth::Cold => renewed.last_refresh_at = 0,
+        Warmth::Untouched => {}
+    }
+    if verdict != Warmth::Untouched && chained {
+        stamp_hashes(&mut renewed, request);
+    }
     state.put_pin(renewed.clone());
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {

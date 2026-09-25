@@ -17,13 +17,17 @@ pub struct PinRow {
     /// a pin is only ever the holders' it was made for.
     pub key_generation: i64,
     pub incarnation: u64,
-    /// The moving average of priced burn over the pool's burn window (meter tokens on a subscription account,
-    /// dollars on an api_key account) and when it was last folded; 0 and `None` for a pin never renewed with
-    /// usage.
+    /// The moving average of the pin's usage priced in meter tokens over the pool's burn window, and when it
+    /// and `burn_usd` were last folded; 0 and `None` for a pin never renewed with usage. Both averages fold on
+    /// every client renewal, so no average ever mixes units, and a reader takes the one the account's funding
+    /// selects through the routing crate's `BurnUnit`.
     pub burn: f64,
     pub burn_at: Option<i64>,
+    /// The same usage as `burn`, priced in dollars and folded at the same `burn_at`.
+    pub burn_usd: f64,
     pub last_input_tokens: u64,
-    /// The last main, subagent or compaction turn; `last_used_at` moves on every request, this does not.
+    /// The last main, subagent or compaction turn, or a keepalive probe's renewal; `last_used_at` moves on every
+    /// request, this does not.
     pub last_refresh_at: i64,
     /// The cache TTL in force at the last refresh, as the relay resolved it (the policy's rewrite, else the
     /// client's own marker), so warmth is judged here without the relay's policy type; 5 minutes until reported.
@@ -115,12 +119,12 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash FROM pins ORDER BY key_id, session_id, model")?
+            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd FROM pins ORDER BY key_id, session_id, model")?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?,
                     epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?,
                     key_generation: r.get(7)?, incarnation: r.get::<_, i64>(8)? as u64,
-                    burn: r.get(9)?, burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
+                    burn: r.get(9)?, burn_at: r.get(10)?, burn_usd: r.get(18)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
                     shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                 }))?
@@ -280,15 +284,15 @@ impl Store {
 
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
+        "INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
          ON CONFLICT(key_id, session_id, model) DO UPDATE SET \
            account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
            last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
            incarnation = excluded.incarnation, burn = excluded.burn, burn_at = excluded.burn_at, \
            last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
            cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
-           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash",
+           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, burn_usd = excluded.burn_usd",
         params![
             pin.key_id,
             pin.session_id,
@@ -307,7 +311,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.shed_from,
             pin.shed_at,
             pin.static_hash,
-            pin.tail_hash
+            pin.tail_hash,
+            pin.burn_usd
         ],
     )?;
     Ok(())

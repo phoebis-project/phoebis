@@ -24,7 +24,7 @@ fn rule(id: &str) -> AlertRuleRow {
 #[test]
 fn rules_are_stored_with_a_sealed_secret_that_only_has_secret_reveals() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 25);
+    assert_eq!(store.schema_version().unwrap(), 26);
     store
         .upsert_alert_rule(&rule("r1"), Some(Some(&Secret::new("hunter2"))), "admin")
         .unwrap();

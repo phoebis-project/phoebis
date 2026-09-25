@@ -2,14 +2,15 @@
 //! newest utilization sample per account, and the in-flight counts per key and per account. Every mutation
 //! reports whether it changed anything so the task knows what to write through.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use phoebis_store::{
-    AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
+    AccountKind, AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow,
+    RoutingLoad,
 };
 
-use crate::listing::snapshot_date;
+use crate::listing::{row_for, snapshot_date};
 use crate::RegistrySnapshot;
 
 /// The sample TTL a state nobody configured ages readings on. The router task replaces it with its own
@@ -155,6 +156,137 @@ pub struct Purged {
 /// and the overage bit otherwise.
 pub type Tier = (u8, u32, u8);
 
+/// One usage report's token counts, the shape the relay reads off `Usage`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PinUsage {
+    pub input: u64,
+    pub cache_read: u64,
+    pub write_5m: u64,
+    pub write_1h: u64,
+    pub output: u64,
+}
+
+/// The price of one token of each type.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rates {
+    pub input: f64,
+    pub cache_read: f64,
+    pub write_5m: f64,
+    pub write_1h: f64,
+    pub output: f64,
+}
+
+/// A price per token by model and token type; `fallback` prices a model the table does not list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateTable {
+    pub rows: HashMap<String, Rates>,
+    pub fallback: Rates,
+}
+
+impl RateTable {
+    /// Every token of every model at 1, so a burn priced through it is a token count.
+    pub fn unit() -> RateTable {
+        RateTable {
+            rows: HashMap::new(),
+            fallback: Rates {
+                input: 1.0,
+                cache_read: 1.0,
+                write_5m: 1.0,
+                write_1h: 1.0,
+                output: 1.0,
+            },
+        }
+    }
+
+    /// Each count times its rate, summed, from the row `listing::row_for` finds for `canonical_model`, else
+    /// from `fallback`.
+    pub fn price(&self, canonical_model: &str, usage: PinUsage) -> f64 {
+        let rates = row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback);
+        usage.input as f64 * rates.input
+            + usage.cache_read as f64 * rates.cache_read
+            + usage.write_5m as f64 * rates.write_5m
+            + usage.write_1h as f64 * rates.write_1h
+            + usage.output as f64 * rates.output
+    }
+}
+
+/// Which of a pin's two averages a reader takes: meter tokens while the account is funded by its plan, dollars
+/// on an api_key account or a subscription account in overage. Serializes as `meter_tokens` or `usd`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BurnUnit {
+    MeterTokens,
+    Usd,
+}
+
+impl BurnUnit {
+    pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
+        match (kind, in_overage) {
+            (AccountKind::Oauth, false) => BurnUnit::MeterTokens,
+            (AccountKind::Oauth, true) | (AccountKind::ApiKey, _) => BurnUnit::Usd,
+        }
+    }
+
+    /// `pin.burn` or `pin.burn_usd`.
+    pub fn read(self, pin: &PinRow) -> f64 {
+        match self {
+            BurnUnit::MeterTokens => pin.burn,
+            BurnUnit::Usd => pin.burn_usd,
+        }
+    }
+}
+
+/// A burn average decayed from its last fold to `now` with time constant `window_ms`. An average never folded
+/// has nothing to decay and reads as stored.
+pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -> f64 {
+    match burn_at {
+        None => burn,
+        // A report dated before the last fold (two relays' clocks) decays nothing rather than growing it.
+        Some(at) => burn * (-((now - at).max(0) as f64) / window_ms.max(1) as f64).exp(),
+    }
+}
+
+/// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `priced` spread over the
+/// window, so the average is priced usage per second.
+pub(crate) fn burn_folded(
+    burn: f64,
+    burn_at: Option<i64>,
+    now: i64,
+    window_ms: i64,
+    priced: f64,
+) -> f64 {
+    burn_decayed(burn, burn_at, now, window_ms) + priced / (window_ms.max(1) as f64 / 1_000.0)
+}
+
+/// Whether the pin's cache entry is still alive at `now`: its last refresh is younger than the TTL in force
+/// for it.
+pub fn warm(pin: &PinRow, now: i64) -> bool {
+    now - pin.last_refresh_at < pin.cache_ttl_ms
+}
+
+/// The pins a round marks, in the round's order: never the last unmarked pin, nothing for a zero target.
+pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<(String, String, String)> {
+    let mut marks = Vec::new();
+    if target.is_nan() || target <= 0.0 {
+        return marks;
+    }
+    let mut marked = 0.0;
+    for (pin, burn) in ordered {
+        // The last unmarked pin stays whatever the target still asks, so no round takes all of an account's
+        // burn; an indivisible pin may carry the marked burn past the target, and the round stops there.
+        if marked >= target || marks.len() + 1 >= ordered.len() {
+            break;
+        }
+        marks.push((
+            pin.key_id.clone(),
+            pin.session_id.clone(),
+            pin.model.clone(),
+        ));
+        marked += burn;
+    }
+    marks
+}
+
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
 /// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
 /// gives up waiting on.
@@ -285,6 +417,9 @@ impl Drop for AccountTicket {
     }
 }
 
+/// When a shedding round ran, and the pins it marked by `(key_id, session_id, model)`.
+type ShedRound = (i64, HashSet<(String, String, String)>);
+
 pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     in_flight: InFlight,
@@ -297,6 +432,9 @@ pub struct RoutingState {
     round_robin: HashMap<(String, Tier, String), usize>,
     sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
+    /// Each account's latest shedding round. Memory only, so a restart forgets the marks with the dwell and the
+    /// next hot request may start a fresh round.
+    shed_rounds: HashMap<String, ShedRound>,
 }
 
 impl RoutingState {
@@ -344,6 +482,7 @@ impl RoutingState {
             round_robin: HashMap::new(),
             sample_ttl_ms: DEFAULT_SAMPLE_TTL_MS,
             samples: HashMap::new(),
+            shed_rounds: HashMap::new(),
         }
     }
 
@@ -641,6 +780,75 @@ impl RoutingState {
         self.in_flight = in_flight;
     }
 
+    /// The pins of an account, the burn of each in `unit` decayed to `now`, and the sum.
+    pub fn burn_of(
+        &self,
+        account_id: &str,
+        unit: BurnUnit,
+        now: i64,
+        window_ms: i64,
+    ) -> (Vec<(PinRow, f64)>, f64) {
+        let mut pins: Vec<(PinRow, f64)> = self
+            .pins
+            .values()
+            .filter(|p| p.account_id == account_id)
+            .map(|p| {
+                let burn = burn_decayed(unit.read(p), p.burn_at, now, window_ms);
+                (p.clone(), burn)
+            })
+            .collect();
+        pins.sort_by(|a, b| {
+            (&a.0.key_id, &a.0.session_id, &a.0.model).cmp(&(
+                &b.0.key_id,
+                &b.0.session_id,
+                &b.0.model,
+            ))
+        });
+        let sum = pins.iter().map(|(_, burn)| burn).sum();
+        (pins, sum)
+    }
+
+    /// Whether the latest round on the pin's current account, run within `dwell_ms`, marked it. A pin marked
+    /// on one account and moved keeps its key, so the round read is the one of the account it now sits on.
+    pub fn shed_marked(
+        &self,
+        key_id: &str,
+        session_id: &str,
+        model: &str,
+        now: i64,
+        dwell_ms: i64,
+    ) -> bool {
+        let model = self.canonical(model);
+        let Some(pin) = self.pin(key_id, session_id, model) else {
+            return false;
+        };
+        self.shed_rounds
+            .get(&pin.account_id)
+            .is_some_and(|(at, marks)| {
+                now - at < dwell_ms
+                    && marks.contains(&(
+                        key_id.to_string(),
+                        session_id.to_string(),
+                        model.to_string(),
+                    ))
+            })
+    }
+
+    /// When the account's latest shedding round ran.
+    pub fn last_shed(&self, account_id: &str) -> Option<i64> {
+        self.shed_rounds.get(account_id).map(|(at, _)| *at)
+    }
+
+    pub(crate) fn record_shed(
+        &mut self,
+        account_id: &str,
+        at: i64,
+        marks: Vec<(String, String, String)>,
+    ) {
+        self.shed_rounds
+            .insert(account_id.to_string(), (at, marks.into_iter().collect()));
+    }
+
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
     pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> bool {
         let key = (
@@ -848,10 +1056,10 @@ impl RoutingState {
         for (key, _) in &pins {
             self.pins.remove(key);
         }
-        // None of the three needs a deletion written: the overage row cascades with the account and the next
-        // holder's first reading replaces one left under another incarnation, and samples and round-robin
-        // cursors are held in memory only. Both of those are keyed by id alone, so the reload drops the sample
-        // of a holder the id has moved past.
+        // None of these needs a deletion written: the overage row cascades with the account and the next
+        // holder's first reading replaces one left under another incarnation, and samples, round-robin cursors
+        // and shedding rounds are held in memory only. Samples and cursors are keyed by id alone, so the reload
+        // drops the sample of a holder the id has moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
@@ -859,6 +1067,19 @@ impl RoutingState {
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
+        // A round is read only within its pool's dwell, so one older than every pool's has nothing left to say.
+        let longest_dwell = snapshot
+            .pools()
+            .map(|pool| {
+                i64::try_from(pool.shedding.source_dwell_seconds)
+                    .ok()
+                    .and_then(|s| s.checked_mul(1_000))
+                    .unwrap_or(i64::MAX)
+            })
+            .max()
+            .unwrap_or(0);
+        self.shed_rounds
+            .retain(|_, (at, _)| now - *at < longest_dwell);
         Purged { cooldowns, pins }
     }
 }
@@ -879,6 +1100,136 @@ fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn burning(session: &str, burn: f64) -> (PinRow, f64) {
+        let pin = PinRow {
+            key_id: "k".into(),
+            session_id: session.into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            epoch: 1,
+            created_at: 0,
+            last_used_at: 0,
+            key_generation: 0,
+            incarnation: 1,
+            burn,
+            burn_at: None,
+            burn_usd: burn,
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+        };
+        (pin, burn)
+    }
+
+    fn sessions(marks: &[(String, String, String)]) -> Vec<&str> {
+        marks.iter().map(|(_, s, _)| s.as_str()).collect()
+    }
+
+    #[test]
+    fn a_round_marks_in_order_to_the_share_and_never_the_last_pin_or_anything_for_a_zero_target() {
+        let four = [
+            burning("cold-3", 3.0),
+            burning("warm-4", 4.0),
+            burning("warm-2", 2.0),
+            burning("warm-1", 1.0),
+        ];
+        assert_eq!(
+            sessions(&shed_marks(&four, 0.5 * 10.0)),
+            ["cold-3", "warm-4"],
+            "marked in the round's order until the marked burn, 7 of 10, reaches half"
+        );
+        assert!(
+            shed_marks(&[burning("only", 100.0)], 0.5 * 100.0).is_empty(),
+            "a one-pin account sheds nothing"
+        );
+        assert_eq!(
+            sessions(&shed_marks(
+                &[burning("cold-1", 1.0), burning("warm-9", 9.0)],
+                0.5 * 10.0
+            )),
+            ["cold-1"],
+            "the warm pin is the last unmarked one, whatever the target still asks"
+        );
+        let idle = [
+            burning("a", 0.0),
+            burning("b", 0.0),
+            burning("c", 0.0),
+            burning("d", 0.0),
+        ];
+        assert!(
+            shed_marks(&idle, 0.5 * 0.0).is_empty(),
+            "no burn in the window is a zero target"
+        );
+        assert!(
+            shed_marks(&four, 0.0 * 10.0).is_empty(),
+            "a share of 0 is a zero target"
+        );
+    }
+
+    #[test]
+    fn a_dated_model_id_prices_at_its_undated_row_and_an_unlisted_one_at_the_fallback() {
+        let flat = |r: f64| Rates {
+            input: r,
+            cache_read: r,
+            write_5m: r,
+            write_1h: r,
+            output: r,
+        };
+        let table = RateTable {
+            rows: [
+                (
+                    "claude-sonnet-4-5".to_string(),
+                    Rates {
+                        input: 3.0,
+                        cache_read: 0.25,
+                        write_5m: 3.75,
+                        write_1h: 6.0,
+                        output: 15.0,
+                    },
+                ),
+                (
+                    "claude-fable-5-1".to_string(),
+                    Rates {
+                        input: 5.0,
+                        cache_read: 0.5,
+                        write_5m: 6.25,
+                        write_1h: 10.0,
+                        output: 25.0,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            fallback: flat(1.0),
+        };
+        let usage = PinUsage {
+            input: 10,
+            cache_read: 100,
+            write_5m: 4,
+            write_1h: 2,
+            output: 3,
+        };
+        assert_eq!(
+            table.price("claude-sonnet-4-5-20250929", usage),
+            30.0 + 25.0 + 15.0 + 12.0 + 45.0,
+            "the dated id prices at the undated sonnet row"
+        );
+        assert_eq!(
+            table.price("claude-fable-5-1-20260601", usage),
+            50.0 + 50.0 + 25.0 + 20.0 + 75.0,
+            "and the dated fable id at its own row, not the fallback"
+        );
+        assert_eq!(
+            table.price("claude-opus-5-20260101", usage),
+            10.0 + 100.0 + 4.0 + 2.0 + 3.0,
+            "a model no row names prices at the fallback"
+        );
+    }
 
     #[test]
     fn a_head_sample_for_one_model_keeps_the_buckets_of_another_and_an_older_reading_never_replaces_a_newer_one(

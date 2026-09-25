@@ -55,11 +55,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (23, V23),
     (24, V24),
     (25, V25),
+    (26, V26),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 25;
+pub const SCHEMA_VERSION: u32 = 26;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -363,4 +364,8 @@ CREATE TABLE plan_fits (
   corrections_json TEXT NOT NULL DEFAULT '{}', fitted_at INTEGER NOT NULL, incarnation INTEGER NOT NULL,
   PRIMARY KEY (account_id, window)
 );
+"#;
+
+const V26: &str = r#"
+ALTER TABLE pins ADD COLUMN burn_usd REAL NOT NULL DEFAULT 0;
 "#;

@@ -4,9 +4,7 @@
 mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
-use phoebis_routing::{
-    resolve, EvidenceSource, MigrateReason, OverageEvidence, Report, SelectRequest, SelectResult,
-};
+use phoebis_routing::{resolve, EvidenceSource, OverageEvidence, Report, SelectRequest, SelectResult};
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
 use common::*;
 
@@ -212,6 +210,11 @@ async fn select_main(r: &Rig) -> SelectResult {
             now: r.now(),
             fallback_ms: 60_000,
             revision: snapshot.revision,
+            probe: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Vec::new(),
         })
         .await
         .unwrap()
@@ -257,9 +260,9 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
         panic!("a serves the model")
     };
     assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("a", None),
-        "and a selection through the same handle renews the pin rather than moving it"
+        (sel.account.id.as_str(), sel.migrated, sel.in_overage),
+        ("a", None, false),
+        "and a selection through the same handle reads the evidence as passed too"
     );
 
     let mut r = armed(RigSpec {
@@ -296,12 +299,13 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
         "the named reset still stands, so the probe holds"
     );
     let SelectResult::Selected(sel) = select_main(&r).await else {
-        panic!("b serves the model")
+        panic!("a serves the model")
     };
     assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("b", Some(MigrateReason::Overage)),
-        "and a selection through the same handle moves the pin off the account still in overage"
+        (sel.account.id.as_str(), sel.migrated, sel.in_overage),
+        ("a", None, true),
+        "and a selection through the same handle reads the evidence as standing too; only a subscription \
+         account's overage moves a pin, so the api_key pin renews"
     );
 }
 

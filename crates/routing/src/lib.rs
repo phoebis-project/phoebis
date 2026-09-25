@@ -15,17 +15,18 @@ pub mod windows;
 pub use phoebis_store::canonical_id as canonical_model;
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
-    release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult, Selection,
-    SelectionTrace, Skipped, MIGRATE_BAND, MODEL_REJECTED_REASON,
+    effective_warm, release_reasons, select, warmth_of, Exhaustion, MigrateReason, SelectRequest,
+    SelectResult, Selection, SelectionTrace, Skipped, Warmth, MIGRATE_BAND, MODEL_REJECTED_REASON,
+    REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
-    AccountTicket, EvidenceSource, InFlight, KeyPermit, OverageEvidence, PinRef, Purged,
-    RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_decayed, shed_marks, warm, AccountTicket, BurnUnit, EvidenceSource, InFlight, KeyPermit,
+    OverageEvidence, PinRef, PinUsage, Purged, RateTable, Rates, RoutingState, StateWrite,
+    UtilizationSample, WindowReading, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 pub use task::{
-    sample_from_usage, spawn, ReloadError, Report, RouterConfig, RouterEvent, RouterGone,
-    RouterHandle, SelectAnswer,
+    sample_from_usage, spawn, BurnRates, ReloadError, Report, RouterConfig, RouterEvent,
+    RouterGone, RouterHandle, SelectAnswer,
 };
 pub use windows::window_for;
