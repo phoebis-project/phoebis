@@ -304,10 +304,32 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>, kind: AccountKind) ->
     "retry_after".into()
 }
 
+/// The value of a `"key": "value"` member, scanned textually in a body a JSON parse could not complete: the
+/// search starts after the first `"error"` key and trusts only a `"key"` that opens an object or follows a
+/// sibling field, never one embedded in a string value.
+fn textual_member<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!(r#""{key}""#);
+    let error_at = text.find(r#""error""#)?;
+    let mut cursor = error_at;
+    while let Some(offset) = text[cursor..].find(needle.as_str()) {
+        let match_at = cursor + offset;
+        let before = text[..match_at].trim_end();
+        if before.ends_with('{') || before.ends_with(',') {
+            let after = text[match_at + needle.len()..]
+                .trim_start()
+                .strip_prefix(':')?
+                .trim_start()
+                .strip_prefix('"')?;
+            return after.split('"').next();
+        }
+        cursor = match_at + needle.len();
+    }
+    None
+}
+
 /// The error body's `error.type`. A complete body parses directly, which is what keeps a `"type"` string that
 /// happens to appear inside an upstream `message` from being mistaken for the real type. A prefix cut
-/// mid-document fails to parse, so the type is then located textually, trusting only a `"type"` key that opens
-/// an object or follows a sibling field, never one embedded in a string value.
+/// mid-document fails to parse, so the type is then located textually through `textual_member`.
 pub(crate) fn error_type(body: &[u8]) -> Option<String> {
     if let Ok(value) = serde_json::from_slice::<Value>(body) {
         return value
@@ -317,22 +339,7 @@ pub(crate) fn error_type(body: &[u8]) -> Option<String> {
             .map(str::to_string);
     }
     let text = std::str::from_utf8(body).ok()?;
-    let error_at = text.find(r#""error""#)?;
-    let mut cursor = error_at;
-    while let Some(offset) = text[cursor..].find(r#""type""#) {
-        let match_at = cursor + offset;
-        let before = text[..match_at].trim_end();
-        if before.ends_with('{') || before.ends_with(',') {
-            let after = text[match_at + 6..]
-                .trim_start()
-                .strip_prefix(':')?
-                .trim_start()
-                .strip_prefix('"')?;
-            return after.split('"').next().map(str::to_string);
-        }
-        cursor = match_at + 6;
-    }
-    None
+    textual_member(text, "type").map(str::to_string)
 }
 
 fn names_credit_balance(body: &[u8]) -> bool {
@@ -340,8 +347,7 @@ fn names_credit_balance(body: &[u8]) -> bool {
 }
 
 /// Whether the body names the upstream's own monthly spend-cap code: a complete body reads
-/// `error.details.error_code`, a body cut mid-document falls back to the textual scan `error_type` runs, against
-/// `error_code` in place of `type`.
+/// `error.details.error_code`, a body cut mid-document falls back to `textual_member`.
 fn names_spend_limit(body: &[u8]) -> bool {
     if let Ok(value) = serde_json::from_slice::<Value>(body) {
         return value["error"]["details"]["error_code"].as_str()
@@ -350,26 +356,7 @@ fn names_spend_limit(body: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(body) else {
         return false;
     };
-    let Some(error_at) = text.find(r#""error""#) else {
-        return false;
-    };
-    let mut cursor = error_at;
-    while let Some(offset) = text[cursor..].find(r#""error_code""#) {
-        let match_at = cursor + offset;
-        let before = text[..match_at].trim_end();
-        if before.ends_with('{') || before.ends_with(',') {
-            let after = text[match_at + 12..]
-                .trim_start()
-                .strip_prefix(':')
-                .map(str::trim_start)
-                .and_then(|s| s.strip_prefix('"'));
-            if let Some(after) = after {
-                return after.starts_with("enforced_spend_limit_reached");
-            }
-        }
-        cursor = match_at + 12;
-    }
-    false
+    textual_member(text, "error_code") == Some("enforced_spend_limit_reached")
 }
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
@@ -510,6 +497,34 @@ mod tests {
         ctx.body_prefix = None;
         let c = cooldown_of(classify(&head(429, &[]), &ctx));
         assert_ne!(c.reason, SPEND_CAP_REASON);
+    }
+
+    /// The three shapes a 429 body reaches the classifier in when the upstream cuts it off mid-document: the
+    /// code fully written and quoted, the code's own text cut short, and the code cut before it ever appears.
+    #[test]
+    fn a_cut_prefix_names_the_spend_cap_code_once_its_value_closes_and_not_before() {
+        let full = spend_cap_body();
+        let text = std::str::from_utf8(&full).unwrap();
+        const CODE: &str = "enforced_spend_limit_reached";
+        let code_at = text.find(CODE).unwrap();
+        let code_end = code_at + CODE.len();
+
+        // Cut right after the value's closing quote: the object never closes, so this is not complete JSON, and
+        // the textual scan is what `names_spend_limit` falls back to.
+        let cut_after_value = &full[..code_end + 1];
+        assert!(serde_json::from_slice::<Value>(cut_after_value).is_err());
+        assert!(names_spend_limit(cut_after_value));
+
+        // Cut mid-value: the code's own text is incomplete, so it must not match.
+        let cut_mid_value = &full[..code_end - 5];
+        assert!(serde_json::from_slice::<Value>(cut_mid_value).is_err());
+        assert!(!names_spend_limit(cut_mid_value));
+
+        // Cut before the key ever appears: absent entirely.
+        let key_at = text.find(r#""error_code""#).unwrap();
+        let cut_before_key = &full[..key_at];
+        assert!(serde_json::from_slice::<Value>(cut_before_key).is_err());
+        assert!(!names_spend_limit(cut_before_key));
     }
 
     #[test]

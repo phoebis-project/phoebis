@@ -35,9 +35,9 @@ pub struct ModelTtl {
 pub struct CacheTtlPolicy {
     pub enabled: bool,
     /// Taken over the rules below while a write costs money: the serving account is in overage, or is an
-    /// `api_key` account. `None` keeps the rules below. A one-hour write costs a metered account twice a
-    /// five-minute one, and a plan-funded one the same plan tokens either way, so the metered override shortens
-    /// the write by default while the plan side keeps the hour.
+    /// `api_key` account. `None` keeps the rules below. A one-hour write costs a metered account 2x base input
+    /// against 1.25x for five minutes, and a plan-funded one the same plan tokens either way, so the metered
+    /// override shortens the write by default while the plan side keeps the hour.
     pub in_overage: Option<CacheTtl>,
     pub main: CacheTtl,
     /// Per-model overrides on the canonical model id; a model absent here takes `main` and `subagent`.

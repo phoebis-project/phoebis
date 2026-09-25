@@ -23,6 +23,7 @@ pub struct UnifiedHeaders {
     pub seven_day_utilization: Option<f64>,
     pub seven_day_oi_status: Option<String>,
     pub seven_day_oi_reset: Option<i64>,
+    pub seven_day_oi_utilization: Option<f64>,
     pub overage_in_use: Option<bool>,
     pub overage_reset: Option<i64>,
     pub overage_disabled_reason: Option<String>,
@@ -63,6 +64,7 @@ impl UnifiedHeaders {
             seven_day_utilization: float("7d-utilization"),
             seven_day_oi_status: text("7d_oi-status"),
             seven_day_oi_reset: secs("7d_oi-reset"),
+            seven_day_oi_utilization: float("7d_oi-utilization"),
             overage_in_use: text("overage-in-use").map(|v| v.eq_ignore_ascii_case("true")),
             overage_reset: secs("overage-reset"),
             overage_disabled_reason: text("overage-disabled-reason"),
@@ -89,7 +91,9 @@ pub struct Bucket {
 }
 
 /// `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`; `None` when no family is
-/// present.
+/// present, when its `limit` does not parse to a nonzero value, or when its `remaining` does not parse: a
+/// malformed header must not move a pin, so a family it cannot trust is dropped rather than read as some
+/// particular utilization.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BucketHeaders {
     pub requests: Option<Bucket>,
@@ -104,13 +108,13 @@ impl BucketHeaders {
                 .get(&format!("{BUCKET_PREFIX}{family}-limit"))?
                 .trim()
                 .parse::<u64>()
-                .ok()?;
-            // A remaining value that will not parse reads as fully spent, the conservative reading of a
-            // malformed header rather than a guess at how much the account actually has left.
+                .ok()
+                .filter(|&limit| limit != 0)?;
             let remaining = head
-                .get(&format!("{BUCKET_PREFIX}{family}-remaining"))
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .unwrap_or(0);
+                .get(&format!("{BUCKET_PREFIX}{family}-remaining"))?
+                .trim()
+                .parse::<u64>()
+                .ok()?;
             let reset = head
                 .get(&format!("{BUCKET_PREFIX}{family}-reset"))
                 .and_then(|v| jiff::Timestamp::from_str(v.trim()).ok())
@@ -168,12 +172,9 @@ pub fn head_sample(
                     },
                 );
             }
-            // No `UnifiedHeaders` field for it: unlike the shared windows, the overage-included 7-day reading
-            // carries no status of its own to gate on, only the utilization header itself.
-            if let Some(utilization) = head
-                .get("anthropic-ratelimit-unified-7d_oi-utilization")
-                .and_then(|v| v.trim().parse::<f64>().ok())
-            {
+            // Unlike the shared windows, the overage-included 7-day reading carries no status of its own to
+            // gate on, only the utilization header itself.
+            if let Some(utilization) = unified.seven_day_oi_utilization {
                 sample = sample.with(
                     SEVEN_DAY_FABLE,
                     WindowReading {
@@ -192,11 +193,9 @@ pub fn head_sample(
                 ("rpm", buckets.requests),
             ] {
                 if let Some(b) = bucket {
-                    let utilization = if b.limit == 0 {
-                        0.0
-                    } else {
-                        1.0 - (b.remaining as f64 / b.limit as f64)
-                    };
+                    // `limit` is never 0 here (`BucketHeaders::parse` drops that family), but `remaining` past
+                    // `limit` is still a reading the provider could send; clamped rather than read negative.
+                    let utilization = (1.0 - (b.remaining as f64 / b.limit as f64)).clamp(0.0, 1.0);
                     sample = sample.with(
                         &format!("{prefix}:{canonical_model}"),
                         WindowReading {
@@ -313,6 +312,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-7d-utilization", "0.13"),
                 ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700000200"),
+                ("anthropic-ratelimit-unified-7d_oi-utilization", "0.91"),
                 ("anthropic-ratelimit-unified-overage-in-use", "true"),
                 ("anthropic-ratelimit-unified-overage-reset", "1700000500"),
                 (
@@ -351,8 +351,12 @@ mod tests {
             (Some("allowed"), Some(1_700_000_400_000), Some(0.13))
         );
         assert_eq!(
-            (u.seven_day_oi_status.as_deref(), u.seven_day_oi_reset),
-            (Some("rejected"), Some(1_700_000_200_000))
+            (
+                u.seven_day_oi_status.as_deref(),
+                u.seven_day_oi_reset,
+                u.seven_day_oi_utilization
+            ),
+            (Some("rejected"), Some(1_700_000_200_000), Some(0.91))
         );
         assert_eq!(
             (
@@ -437,17 +441,43 @@ mod tests {
                 reset: None
             })
         );
-        // A missing or unparseable remaining reads as fully spent, the conservative reading, rather than
-        // refusing the family.
-        let no_remaining = head(200, &[("anthropic-ratelimit-requests-limit", "50")]);
-        assert_eq!(
-            BucketHeaders::parse(&no_remaining).unwrap().requests,
-            Some(Bucket {
-                limit: 50,
-                remaining: 0,
-                reset: None
-            })
+        // A missing or unparseable `remaining` drops the family: a malformed header must not move a pin by
+        // reading as some particular utilization. A sibling family (input-tokens) keeps the answer `Some` so
+        // the dropped one is checked directly rather than through the whole-struct `None` it would fall to alone.
+        let sibling = [
+            ("anthropic-ratelimit-input-tokens-limit", "1"),
+            ("anthropic-ratelimit-input-tokens-remaining", "1"),
+        ];
+        let no_remaining = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                sibling[0],
+                sibling[1],
+            ],
         );
+        assert_eq!(BucketHeaders::parse(&no_remaining).unwrap().requests, None);
+        let bad_remaining = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                ("anthropic-ratelimit-requests-remaining", "not a number"),
+                sibling[0],
+                sibling[1],
+            ],
+        );
+        assert_eq!(BucketHeaders::parse(&bad_remaining).unwrap().requests, None);
+        // A `limit` of 0 drops the family too, rather than reading as the opposite convention's 0.0.
+        let zero_limit = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "0"),
+                ("anthropic-ratelimit-requests-remaining", "0"),
+                sibling[0],
+                sibling[1],
+            ],
+        );
+        assert_eq!(BucketHeaders::parse(&zero_limit).unwrap().requests, None);
     }
 
     #[test]
@@ -525,5 +555,37 @@ mod tests {
             Some(1.0)
         );
         assert!(second.reading("rpm:claude-sonnet-4-5-20250929").is_none());
+    }
+
+    #[test]
+    fn a_non_finite_seven_day_oi_utilization_never_enters_the_sample() {
+        let h = head(
+            200,
+            &[
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+                ("anthropic-ratelimit-unified-7d_oi-utilization", "nan"),
+            ],
+        );
+        assert_eq!(
+            UnifiedHeaders::parse(&h).unwrap().seven_day_oi_utilization,
+            None
+        );
+        assert!(head_sample(&h, AccountKind::Oauth, "claude-opus-5", 0).is_none());
+    }
+
+    #[test]
+    fn a_remaining_past_its_limit_clamps_the_utilization_rather_than_reading_negative() {
+        let h = head(
+            200,
+            &[
+                ("anthropic-ratelimit-requests-limit", "50"),
+                ("anthropic-ratelimit-requests-remaining", "80"),
+            ],
+        );
+        let sample = head_sample(&h, AccountKind::ApiKey, "claude-opus-5", 0).unwrap();
+        assert_eq!(
+            sample.reading("rpm:claude-opus-5").map(|r| r.utilization),
+            Some(0.0)
+        );
     }
 }

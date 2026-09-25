@@ -713,7 +713,7 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
 /// publishes neither hash.
 #[tokio::test]
 async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_neither() {
-    use phoebis_profile::fixtures::{body as fixture_body, BodyFixture};
+    use phoebis_profile::fixtures::{body as fixture_body, inference_head, BodyFixture, FixtureKind};
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -739,6 +739,62 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
         (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),
         (chains.static_hash(), chains.tail_hash()),
         "the fresh pin's hashes are the request's"
+    );
+
+    // The class reaches the router: an auxiliary turn on the same session, with a body whose messages differ
+    // but whose tools and system stay put, is untouched rather than judged cold on the matching static hash.
+    // Without `request_class` reaching `SelectRequest`, the equal static hash alone would read as a restart and
+    // restamp the pin to this body's own hashes.
+    let mut auxiliary_body: serde_json::Value = root.clone();
+    auxiliary_body["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"role": "user", "content": "a second, unrelated turn"}));
+    let auxiliary_native = serde_json::to_vec(&auxiliary_body).unwrap();
+    let mut auxiliary_req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &auxiliary_native,
+        KEY,
+    );
+    set_header(&mut auxiliary_req, "x-claude-code-session-id", "s1");
+    set_header(
+        &mut auxiliary_req,
+        "x-claude-code-request-class",
+        "auxiliary",
+    );
+    h.app.clone().oneshot(auxiliary_req).await.unwrap();
+    let _ = drain_until_complete(&mut sub).await;
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(
+        (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),
+        (chains.static_hash(), chains.tail_hash()),
+        "an auxiliary turn is untouched, so the pin keeps the first request's hashes"
+    );
+
+    // The compacted flag reaches the router: a request naming it is cold and restamps the pin to its own
+    // hashes, whatever the static hash says.
+    let compacted_root = auxiliary_body;
+    let compacted_chains =
+        phoebis_relay::Chains::read(&compacted_root).expect("the body is a JSON object");
+    let compacted_native = serde_json::to_vec(&compacted_root).unwrap();
+    let mut compacted_req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &compacted_native,
+        KEY,
+    );
+    set_header(&mut compacted_req, "x-claude-code-session-id", "s1");
+    set_header(
+        &mut compacted_req,
+        "x-claude-code-context-compacted",
+        "manual",
+    );
+    h.app.clone().oneshot(compacted_req).await.unwrap();
+    let _ = drain_until_complete(&mut sub).await;
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(
+        (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),
+        (compacted_chains.static_hash(), compacted_chains.tail_hash()),
+        "a compacted request is cold and restamps the pin to its own hashes"
     );
 
     // The header-less path: no class and no compacted header selects with neither fact.

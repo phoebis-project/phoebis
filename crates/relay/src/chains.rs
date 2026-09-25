@@ -179,9 +179,38 @@ mod tests {
         });
         let a = read(base);
         let b = read(changed);
-        assert_ne!(a.static_boundaries, b.static_boundaries);
         assert_eq!(a.static_boundaries.len(), b.static_boundaries.len());
+        assert!(
+            a.static_boundaries
+                .iter()
+                .zip(&b.static_boundaries)
+                .all(|(x, y)| x != y),
+            "every static boundary moves, not only the first"
+        );
         assert_eq!(a.message_boundaries, b.message_boundaries);
+    }
+
+    #[test]
+    fn a_message_that_differs_moves_every_later_boundary_even_when_a_later_message_repeats() {
+        let shared = json!({"role": "assistant", "content": "hello"});
+        let a = read(json!({"messages": [{"role": "user", "content": "hi"}, shared.clone()]}));
+        let b = read(json!({"messages": [{"role": "user", "content": "hey"}, shared.clone()]}));
+        assert_ne!(a.message_boundaries[0], b.message_boundaries[0]);
+        assert_ne!(
+            a.message_boundaries[1], b.message_boundaries[1],
+            "boundary 1 must move too, since it chains over boundary 0 and not just message 1's own content"
+        );
+    }
+
+    #[test]
+    fn two_bodies_parsed_from_strings_with_different_key_orders_hash_alike() {
+        let a: Value =
+            serde_json::from_str(r#"{"tools":[{"name":"x","input_schema":{"type":"object"}}]}"#)
+                .unwrap();
+        let b: Value =
+            serde_json::from_str(r#"{"tools":[{"input_schema":{"type":"object"},"name":"x"}]}"#)
+                .unwrap();
+        assert_eq!(read(a), read(b));
     }
 
     #[test]

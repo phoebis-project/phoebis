@@ -4187,8 +4187,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cache_diagnostics": null,
           "body_capture_hours": 24,
-          "created_at": 1790355021763,
-          "updated_at": 1790355021763,
+          "created_at": 1790334384116,
+          "updated_at": 1790334384116,
           "members": [
             {
               "account_id": "business",
@@ -4205,7 +4205,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "yNcAi-2G",
+              "prefix": "5GkU9NZG",
               "enabled": true
             }
           ],

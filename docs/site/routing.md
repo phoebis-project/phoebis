@@ -96,24 +96,22 @@ again.
 
 ### Cache TTL
 
-A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object
-carries `enabled` (default `false`), `main` (default `1h`) and `subagent` (default `1h`) in `5m` or `1h`,
-`in_overage` (default `5m`), and `models`, a list of `{model, main, subagent}` overrides on canonical ids. A
-one-hour write costs a metered upstream twice what a five-minute one costs, and a plan-funded upstream the same
-plan tokens either way, so `in_overage` shortens the write by default while the plan side keeps the hour. With it
-on, every `cache_control` marker in the body is
-rewritten to the TTL for the request's agent and model, the ones inside a tool result's own content included, the
-`extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped,
-except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The guard
-refuses when a JSON decoder counts a different number of markers than the rewrite reached, as with a
+A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
+`enabled` (default `false`), `main` (default `1h`) and `subagent` (default `1h`) in `5m` or `1h`, `in_overage` (default
+`5m`), and `models`, a list of `{model, main, subagent}` overrides on canonical ids. A one-hour write costs a metered
+upstream 2x base input against 1.25x for a five-minute one, and a plan-funded upstream the same plan tokens either way,
+so `in_overage` shortens the write by default while the plan side keeps the hour. With it on, every `cache_control`
+marker in the body is rewritten to the TTL for the request's agent and model, the ones inside a tool result's own
+content included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash
+is restamped, except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The
+guard refuses when a JSON decoder counts a different number of markers than the rewrite reached, as with a
 `cache_control` key spelled with escapes or repeated in one object. On every other body the client's own
-`CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A request that carries no marker at all gets the
-API's top-level `cache_control` member with the TTL instead, and a request with any marker
-keeps its count. `in_overage` takes over while the write costs money: the serving upstream is in overage, or is
-an API-key upstream. The TTL is priced per attempt, so a request that fails over reads its destination's state,
-and a request without an agent id reads as the main conversation. Mixed TTLs across a session's requests are fine:
-the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of each choice
-is on the [keepalive page](keepalive.md#the-cost-reference).
+`CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A request that carries no marker at all gets the API's
+top-level `cache_control` member with the TTL instead, and a request with any marker keeps its count. `in_overage` takes
+over while the write costs money: the serving upstream is in overage, or is an API-key upstream. The TTL is priced per
+attempt, so a request that fails over reads its destination's state, and a request without an agent id reads as the main
+conversation. Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an
+entry's lifetime and price alone. The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pl]
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pd]
@@ -334,9 +332,9 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
+| 429 naming `enforced_spend_limit_reached` | Account-wide until the first of next month, reason `spend_cap` | Yes |
 | 429 with a valid Retry-After | Model-scoped until Retry-After | Yes |
 | 429 without a valid Retry-After | Account-wide for the fallback duration | Yes |
-| 429 naming `enforced_spend_limit_reached` | Account-wide until the first of next month, reason `spend_cap` | Yes |
 | 400 `invalid_request_error`, credit balance | Marked `funding_required` until cleared | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's Retry-After | Yes |
 
