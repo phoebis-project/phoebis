@@ -24,7 +24,7 @@ pub struct RequestIdentity {
     pub owner_id: Option<String>,
     pub model: String,
     /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased: what the body carries
-    /// upstream, and the resolution map's own key.
+    /// upstream, and the spelling the catalog's published map is keyed on.
     pub folded_model: String,
     /// `folded_model`, or the dated id the catalog cache resolved it to: the routing, ledger, and pricing key.
     pub canonical_model: String,

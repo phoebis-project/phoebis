@@ -169,16 +169,17 @@ refused exactly as `/v1/messages` refuses it, in the Anthropic error shape.
 
 ## The models listing
 
-`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every
-enabled upstream of the key's pool is asked for its catalog through the router's cache
-([routing](routing.md#catalogs)), the pool's and the key's [model rules](routing.md#model-rules) are applied to
-each id, one row is kept per id (the first upstream in priority order that lists it), and the rows are sorted by
-id. The shape is the API's own: `data[]` of `id`, `type`, `display_name`, `created_at`, `max_input_tokens`, and
-`max_tokens` as the upstream reports them, with `first_id`, `last_id`, and `has_more`; `limit` (1 to 1000,
-default 20), `after_id`, and `before_id` page it, and a `limit` outside its range is refused `400 invalid_limit`.
-An upstream whose fetch failed contributes nothing until the next fetch, and a model that is cooling down on an
-upstream still lists. `GET /v1/models/{id}` answers the one row, or `404 not_found_error` with the message
-`model: {id}`; an id with a slash may be sent as is or percent-encoded.
+`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every enabled
+upstream of the key's pool is asked for its catalog through the router's cache ([routing](routing.md#catalogs)),
+the same cache the router derives a model's dated id from, so a request naming an undated id is routed,
+priced and recorded under the newest dated snapshot the listing holds for it; the pool's and the key's [model
+rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first upstream in priority
+order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
+`display_name`, `created_at`, `max_input_tokens`, and `max_tokens` as the upstream reports them, with `first_id`,
+`last_id`, and `has_more`; `limit` (1 to 1000, default 20), `after_id`, and `before_id` page it, and a `limit`
+outside its range is refused `400 invalid_limit`. An upstream whose fetch failed contributes nothing until the
+next fetch, and a model that is cooling down on an upstream still lists. `GET /v1/models/{id}` answers the one row,
+or `404 not_found_error` with the message `model: {id}`; an id with a slash may be sent as is or percent-encoded.
 
 Beside every model whose `max_input_tokens` is above 200,000 the listing carries a twin whose id ends in `[1m]`
 and whose display name ends in " (1M Context)", with the same figures. Claude Code behind a gateway sizes its
