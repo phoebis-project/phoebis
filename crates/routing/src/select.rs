@@ -82,8 +82,9 @@ pub enum Warmth {
 /// says; the class decides when present; without it, a request whose boundaries contain the pin's tail
 /// continues the conversation, one that matches the static prefix without the tail restarted it, and one
 /// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
-/// fact, and so does a chained request on a pin that stores no hashes, which it cannot be foreign to. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
-/// its own, so it is judged by none of this: its renewal report stamps the refresh instead.
+/// fact, and so does a chained request on a pin that stores no hashes, which it cannot be foreign to. A
+/// keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than its own,
+/// so it is judged by none of this: its renewal report stamps the refresh instead.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
     if request.probe {
         return Warmth::Untouched;
@@ -474,6 +475,14 @@ pub fn select(
             state, snapshot, pool, request, current, &eligible, window, cold,
         ) {
             state.remove_pin(&current.key_id, &current.session_id, &current.model);
+            // The move spends the mark: a pin that comes back inside the dwell is not shed again on a round
+            // that marked it before it left.
+            state.unmark_shed(
+                &current.account_id,
+                &current.key_id,
+                &current.session_id,
+                &current.model,
+            );
             writes.push(StateWrite::DeletePin(
                 current.key_id.clone(),
                 current.session_id.clone(),

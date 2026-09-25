@@ -3708,17 +3708,35 @@ fn a_body_without_a_chain_refreshes_on_every_request() {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    for now in [1_000, 2_000, 3_000] {
+    // A chained first request, so the pin holds hashes a chainless body could otherwise be judged against.
+    select(
+        &mut st,
+        &s,
+        &with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            None,
+            false,
+            Some("s0"),
+            &["m1"],
+        ),
+        &mut rng(),
+    );
+    for now in [T + 1_000, T + 2_000] {
         select(
             &mut st,
             &s,
             &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
             &mut rng(),
         );
+        let pin = pinned(&st, "s1");
         assert_eq!(
-            pinned(&st, "s1").last_refresh_at,
-            now,
-            "a request that carries no fact refreshes the pin"
+            (
+                pin.last_refresh_at,
+                pin.static_hash.as_deref(),
+                pin.tail_hash.as_deref()
+            ),
+            (now, Some("s0"), Some("m1")),
+            "a request that carries no fact refreshes the pin and keeps its hashes"
         );
     }
 }
@@ -4355,6 +4373,41 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         Some(T),
         "a second request inside the dwell runs no new round, so warm-2 is still unmarked"
     );
+}
+
+#[test]
+fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    // c stays cool throughout, so a mark that outlived the move would find a destination.
+    hot_a_cool_b(&mut st, T - 500);
+    st.record_sample("c", sample(0.1, 0.1, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    st.record_sample("a", sample(0.9, 0.3, T + 500));
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("c", sample(0.1, 0.1, T + 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "b spends its window and the spent move takes s1 back to a, inside a's dwell"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 2_000), &mut rng()).0),
+        ("a".into(), None),
+        "a is still hot and its round still stands, but the move consumed s1's mark"
+    );
+    assert_eq!(st.last_shed("a"), Some(T), "no new round ran on a");
 }
 
 #[test]

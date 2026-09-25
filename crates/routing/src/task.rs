@@ -1081,12 +1081,12 @@ impl Task {
                             last_used_at: now,
                             ..current
                         };
+                        renewed.cache_ttl_ms = cache_ttl_ms;
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
                             // session's burn.
                             renewed.last_refresh_at = now;
-                            renewed.cache_ttl_ms = cache_ttl_ms;
                         } else if let Some(usage) = usage {
                             // Both averages fold whatever the account's kind: the reader picks the unit its
                             // funding selects at read time, so leaving overage needs no reset.
@@ -1105,7 +1105,6 @@ impl Task {
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens =
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
-                            renewed.cache_ttl_ms = cache_ttl_ms;
                         }
                         self.state.put_pin(renewed.clone());
                         self.write(vec![StateWrite::UpsertPin(renewed)]);

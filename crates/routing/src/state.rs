@@ -839,6 +839,19 @@ impl RoutingState {
         self.shed_rounds.get(account_id).map(|(at, _)| *at)
     }
 
+    pub(crate) fn unmark_shed(
+        &mut self,
+        account_id: &str,
+        key_id: &str,
+        session_id: &str,
+        model: &str,
+    ) {
+        let model = self.canonical(model).to_string();
+        if let Some((_, marks)) = self.shed_rounds.get_mut(account_id) {
+            marks.remove(&(key_id.to_string(), session_id.to_string(), model));
+        }
+    }
+
     pub(crate) fn record_shed(
         &mut self,
         account_id: &str,

@@ -2359,6 +2359,12 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
             .await
             .unwrap(),
     );
+    let unmetered = selected_pin(
+        handle
+            .select(request(&handle, Some("s3"), 1_000))
+            .await
+            .unwrap(),
+    );
     let first = PinUsage {
         input: 100,
         cache_read: 1_000,
@@ -2373,6 +2379,14 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
     handle.report(renewal(client.clone(), 2_000, first, "client", 300_000));
     handle.report(renewal(client, 62_000, second, "client", 300_000));
     handle.report(renewal(probe, 2_000, first, "keepalive", 300_000));
+    handle.report(Report::PinRenewed {
+        pin: unmetered,
+        now: 2_000,
+        usage: None,
+        origin: "client",
+        canonical_model: "claude-sonnet-5".into(),
+        cache_ttl_ms: 3_600_000,
+    });
     let pins = handle.pins().await.unwrap();
     // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
     let window = 600.0_f64;
@@ -2398,6 +2412,22 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
         (probed.burn, probed.burn_usd, probed.burn_at),
         (0.0, 0.0, None),
         "a probe's usage never counts"
+    );
+    let bare = pins.iter().find(|p| p.session_id == "s3").unwrap();
+    assert_eq!(
+        (bare.cache_ttl_ms, bare.last_used_at),
+        (3_600_000, 2_000),
+        "a client report without usage still lands the TTL the relay resolved"
+    );
+    assert_eq!(
+        (
+            bare.burn,
+            bare.burn_usd,
+            bare.burn_at,
+            bare.last_input_tokens
+        ),
+        (0.0, 0.0, None, 0),
+        "and folds nothing"
     );
 }
 
