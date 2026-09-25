@@ -113,34 +113,14 @@ struct WindowFit {
     band_inside_delta: f64,
     band_outside_tokens: f64,
     band_outside_delta: f64,
-    /// The model that dominated the previous fold, if one did.
+    /// The model that dominated the previous fold; `None` when none did or the fitter does not know, as after a
+    /// restart, and then no fold counts as a change of mix.
     dominant: Option<String>,
     /// The latest reading judged, which the next one's rise is measured from.
     last: Option<Reading>,
     run: Run,
     /// When a reset was last seen: an attempt that went out before it and completes after spans it.
     reset_at: Option<i64>,
-}
-
-/// Every persisted number is finite and the scale positive, so a restored row can never seed a denominator.
-fn sound(row: &FitRow) -> bool {
-    [
-        row.scale,
-        row.confidence,
-        row.carry_weighted,
-        row.carry_inside,
-        row.carry_outside,
-        row.carry_delta,
-        row.band_inside_tokens,
-        row.band_inside_delta,
-        row.band_outside_tokens,
-        row.band_outside_delta,
-    ]
-    .into_iter()
-    .chain(row.carry_utilization)
-    .chain(row.band_factor)
-    .all(f64::is_finite)
-        && row.scale > 0.0
 }
 
 impl WindowFit {
@@ -216,8 +196,8 @@ impl WindowFit {
     }
 
     /// One observation over the whole run, the band-weighted booked tokens over the summed delta. A fold whose
-    /// dominant model differs from the previous fold's, on a confident fit, informs that model's correction and
-    /// leaves the scale where it was; every other fold moves the scale.
+    /// dominant model differs from the previous fold's known one, on a confident fit, informs that model's
+    /// correction and leaves the scale where it was; every other fold moves the scale.
     fn fold(&mut self, reading: Reading) {
         let booked = self.booked();
         let delta = self.run.delta;
@@ -240,6 +220,7 @@ impl WindowFit {
         let corrected = fitted
             && self.confidence >= CONFIDENT
             && dominant.is_some()
+            && self.dominant.is_some()
             && dominant != self.dominant
             && dominant
                 .as_deref()
@@ -358,7 +339,7 @@ impl Fitter {
             let Some(window) = window_key(&row.window) else {
                 continue;
             };
-            if !sound(&row) {
+            if !row.sound() {
                 tracing::warn!(
                     account = %row.account_id,
                     window,
@@ -499,7 +480,9 @@ impl Fitter {
         );
         if reset_moved || last.utilization - utilization + SLACK >= QUANTUM {
             fit.restart(reading);
-            fit.reset_at = Some(at);
+            // The old window ended at the reset it announced, not when a reading showed it: an attempt sent in
+            // between belongs to the new window. A reset that came early is bounded by the reading that saw it.
+            fit.reset_at = Some(last.reset.map_or(at, |announced| announced.min(at)));
             return fit.report(account_id, window);
         }
         if fit
@@ -522,14 +505,15 @@ impl Fitter {
         fit.last = Some(reading);
         fit.run.delta += rise;
         let booked = fit.booked().weighted;
-        if fit.run.spanned && rise > 0.0 {
+        if fit.run.spanned {
+            // Flat or not: a run holding a straddling stream's charge cannot fold on it.
             fit.restart(reading);
         } else if booked <= 0.0 {
             if !open {
                 if fit.run.delta > 0.0 {
                     // Spend the router did not send: nothing booked and nothing that could still land.
                     fit.restart(reading);
-                } else if !fit.run.spanned {
+                } else {
                     // Idle: nothing carried, so the run starts over here and its length counts from now.
                     fit.run.since = Some(at);
                 }

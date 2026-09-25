@@ -221,6 +221,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             purge_interval: Duration::from_secs(3_600),
             quota_poll_interval: Duration::from_secs(config.quota.poll_interval_seconds),
             event_poll: Duration::from_secs(5),
+            expire_interval: Duration::from_secs(60),
         },
     );
     let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());

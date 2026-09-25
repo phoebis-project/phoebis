@@ -194,8 +194,9 @@ pub enum Report {
     },
     Fit {
         row: FitRow,
-        /// The account's reload epoch at write time, the same guard every report carries; distinct from
-        /// `row.incarnation`, the fit's own version as stored in `plan_fits`.
+        /// The account holder's incarnation, the guard every report carries. `row.incarnation` holds the same
+        /// value as the ledger saw it; the report's is the one checked here, and the row's is the one `purge`
+        /// checks later.
         incarnation: u64,
     },
     Overage {

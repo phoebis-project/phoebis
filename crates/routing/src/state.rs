@@ -501,11 +501,11 @@ impl RoutingState {
                 .into_iter()
                 .map(|c| ((c.account_id.clone(), c.scope.clone()), c))
                 .collect(),
-            // The ledger refuses a row it cannot divide by; one refused here too never reaches a reader.
+            // The row the ledger's fitter refuses on load is refused here too, so no reader divides by it.
             fits: load
                 .fits
                 .into_iter()
-                .filter(|f| f.scale.is_finite() && f.confidence.is_finite())
+                .filter(FitRow::sound)
                 .map(|f| ((f.account_id.clone(), f.window.clone()), f))
                 .collect(),
             in_flight: InFlight::default(),

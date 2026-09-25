@@ -375,10 +375,11 @@ fn a_non_finite_persisted_row_is_refused_at_load_and_rebuilt_from_the_prior() {
         fitter(vec![
             row("a", f64::NAN, 0.9),
             row("b", 20_000_000.0, f64::INFINITY),
+            row("c", 0.0, 0.9),
         ]),
         EARLY,
     );
-    for account in ["a", "b"] {
+    for account in ["a", "b", "c"] {
         r.account = account;
         r.read(FIVE_HOUR, 0.25);
         let fitted = r.interval(SIXTEENTH, 0.25 + SHARE).unwrap();
@@ -588,4 +589,91 @@ fn a_restart_continues_the_carried_run_and_the_band_sums_from_the_persisted_row(
             && close(row.band_outside_tokens, (SIXTEENTH + 356_700) as f64),
         "the band sums continue: {row:?}"
     );
+}
+
+#[test]
+fn a_restored_window_moves_its_scale_rather_than_a_correction_on_its_first_fold() {
+    let seed = FitRow {
+        account_id: "a".into(),
+        window: FIVE_HOUR.into(),
+        scale: MAX_5X_FIVE_HOUR,
+        confidence: 0.6,
+        intervals: 4,
+        corrections_json: "{}".into(),
+        fitted_at: EARLY - HOUR,
+        incarnation: 1,
+        ..Default::default()
+    };
+    let mut r = Run::over(fitter(vec![seed]), EARLY);
+    r.read(FIVE_HOUR, 0.25);
+    // One fold whose reading runs 10 % high against its tokens: noise, on the model every fold has used.
+    let row = r
+        .interval(SIXTEENTH, 0.25 + 1.1 * SHARE)
+        .expect("the restored window folds");
+    assert_eq!(
+        row.corrections_json, "{}",
+        "the fold before the restart is unknown, so nothing says the mix changed"
+    );
+    let observed = SIXTEENTH as f64 / (1.1 * SHARE);
+    assert!(
+        close(
+            row.scale,
+            MAX_5X_FIVE_HOUR + (observed - MAX_5X_FIVE_HOUR) / 5.0
+        ),
+        "the scale takes the fold at its weight: {}",
+        row.scale
+    );
+    assert_eq!(row.intervals, 5);
+}
+
+#[test]
+fn an_attempt_after_the_announced_reset_folds_and_one_straddling_it_drops_the_run() {
+    let (announced, next) = (EARLY + HOUR, EARLY + 6 * HOUR);
+
+    // Idle through the reset: the new window's first attempt is what reveals it, through its own head.
+    let mut r = Run::at(EARLY);
+    r.read_reset(FIVE_HOUR, 0.5, Some(announced));
+    r.now = EARLY + 2 * HOUR;
+    let went_out = r.now;
+    let id = r.start();
+    r.step(MINUTE);
+    assert!(r.read_reset(FIVE_HOUR, 0.0, Some(next)).is_none());
+    r.step(MINUTE);
+    r.complete(&id, went_out, OPUS, SIXTEENTH);
+    r.step(MINUTE);
+    let row = r
+        .read_reset(FIVE_HOUR, SHARE, Some(next))
+        .expect("an attempt sent after the announced reset belongs to the new window");
+    assert_eq!((row.scale, row.intervals), (MAX_5X_FIVE_HOUR, 1));
+
+    // A stream sent before the announced reset and answered after it, landing in a run that already carries
+    // three quanta and another attempt's tokens.
+    let mut r = Run::at(EARLY);
+    r.read_reset(FIVE_HOUR, 0.5, Some(announced));
+    r.now = EARLY + 50 * MINUTE;
+    let straddler_out = r.now;
+    let straddler = r.start();
+    r.now = EARLY + 65 * MINUTE;
+    assert!(r.read_reset(FIVE_HOUR, 0.0, Some(next)).is_none());
+    r.step(MINUTE);
+    let later_out = r.now;
+    let later = r.start();
+    r.step(2 * MINUTE);
+    assert!(
+        r.read_reset(FIVE_HOUR, 0.04, Some(next)).is_none(),
+        "the rise is carried while the later attempt is open"
+    );
+    r.step(MINUTE);
+    r.complete(&later, later_out, OPUS, SIXTEENTH);
+    r.step(MINUTE);
+    r.complete(&straddler, straddler_out, OPUS, SIXTEENTH);
+    r.step(2 * MINUTE);
+    assert!(
+        r.read_reset(FIVE_HOUR, 0.04, Some(next)).is_none(),
+        "the straddling stream drops the run on a flat reading too"
+    );
+    let row = r
+        .interval(SIXTEENTH, 0.04 + SHARE)
+        .expect("the run after the drop fits on its own tokens");
+    assert_eq!((row.scale, row.intervals), (MAX_5X_FIVE_HOUR, 1));
 }

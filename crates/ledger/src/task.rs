@@ -28,7 +28,7 @@ pub const CHANNEL_DEPTH: usize = 4_096;
 /// Records landed per transaction: enough to amortise the fsync, few enough that a drain on shutdown is quick.
 const BATCH: usize = 64;
 
-/// How often the assembler ages out entries without a completion.
+/// How often the assembler ages out entries without a completion, unless the configuration says otherwise.
 const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
 
 const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior panic";
@@ -41,6 +41,8 @@ pub struct LedgerConfig {
     pub purge_interval: Duration,
     pub quota_poll_interval: Duration,
     pub event_poll: Duration,
+    /// How often the assembler ages out entries whose completion never arrived.
+    pub expire_interval: Duration,
 }
 
 impl Default for LedgerConfig {
@@ -52,6 +54,7 @@ impl Default for LedgerConfig {
             purge_interval: Duration::from_secs(3_600),
             quota_poll_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
+            expire_interval: EXPIRE_INTERVAL,
         }
     }
 }
@@ -190,8 +193,15 @@ pub fn spawn(
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
     let assembler_clock = clock.clone();
+    let expire_interval = config.expire_interval;
     let assembler = spawn_subscriber(subscriber, move |subscriber| {
-        assemble(subscriber, assembling, assembler_clock, assembler_stop)
+        assemble(
+            subscriber,
+            assembling,
+            assembler_clock,
+            expire_interval,
+            assembler_stop,
+        )
     });
     tokio::spawn(writer(
         db.clone(),
@@ -234,10 +244,11 @@ async fn assemble(
     mut subscriber: Subscriber,
     ledger: Ledger,
     clock: Clock,
+    expire_interval: Duration,
     mut stopped: watch::Receiver<bool>,
 ) {
     let mut assembler = Assembler::new(clock.clone());
-    let mut expire = tokio::time::interval(EXPIRE_INTERVAL);
+    let mut expire = tokio::time::interval(expire_interval);
     expire.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
@@ -259,11 +270,15 @@ async fn assemble(
 }
 
 /// A request record waits for the writer's channel, since the row it names can never be written again once
-/// the request that produced it is gone; an event or a sample keeps the drop-and-count `record` always used.
+/// the request that produced it is gone. So do the attempt records: the fitter never ages an attempt out on its
+/// own, so a lost `AttemptDropped` would hold one open, and every foreign rise on its account would count as the
+/// router's, until a restart. An event or a sample keeps the drop-and-count `record` always used.
 async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     for record in records {
         match record {
-            Record::Request { .. } => ledger.record_request(record).await,
+            Record::AttemptDropped { .. }
+            | Record::AttemptStarted { .. }
+            | Record::Request { .. } => ledger.record_request(record).await,
             other => ledger.record(other),
         }
     }
@@ -577,5 +592,72 @@ async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, now: i64) {
         Ok(Ok(purged)) => tracing::debug!(?purged, "ledger retention ran"),
         Ok(Err(error)) => tracing::warn!(%error, "ledger retention failed"),
         Err(error) => tracing::error!(%error, "ledger retention panicked"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ledger whose channel holds one record and has no writer draining it.
+    fn stalled() -> (Ledger, mpsc::Receiver<Record>) {
+        let (tx, rx) = mpsc::channel(1);
+        let (stop, _) = watch::channel(false);
+        let ledger = Ledger {
+            db: Arc::new(LedgerDb::open_in_memory().unwrap()),
+            stats: Arc::new(LedgerStats::default()),
+            metrics: Arc::new(Metrics::new()),
+            tx,
+            stop: Arc::new(stop),
+            done: Arc::new(Mutex::new(None)),
+            tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        (ledger, rx)
+    }
+
+    #[tokio::test]
+    async fn attempt_records_wait_for_room_in_the_channel_rather_than_drop() {
+        let (ledger, mut rx) = stalled();
+        ledger.record(Record::Event(EventRecord::default()));
+        let attempt = |started: bool| {
+            let (account_id, request_id, attempt, at) = ("a".to_string(), "r1".to_string(), 1, 5);
+            if started {
+                Record::AttemptStarted {
+                    account_id,
+                    request_id,
+                    attempt,
+                    at,
+                }
+            } else {
+                Record::AttemptDropped {
+                    account_id,
+                    request_id,
+                    attempt,
+                    at,
+                }
+            }
+        };
+        let landing = tokio::spawn({
+            let ledger = ledger.clone();
+            let records = vec![attempt(true), attempt(false)];
+            async move { land_all(&ledger, records).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(ledger.dropped(), 0, "neither record was dropped");
+        assert!(
+            !landing.is_finished(),
+            "the landing waits while the channel is full"
+        );
+        assert!(matches!(rx.recv().await, Some(Record::Event(_))));
+        assert!(matches!(
+            rx.recv().await,
+            Some(Record::AttemptStarted { .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(Record::AttemptDropped { .. })
+        ));
+        landing.await.unwrap();
+        assert_eq!(ledger.dropped(), 0);
     }
 }

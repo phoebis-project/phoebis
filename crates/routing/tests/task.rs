@@ -2734,3 +2734,27 @@ async fn a_fit_report_lands_in_the_store_and_reloads() {
         "a restart reads the fit back"
     );
 }
+
+#[tokio::test]
+async fn a_stored_fit_the_fitter_would_refuse_is_not_served() {
+    let store = seeded_oauth(&["a"]);
+    let refused = FitRow {
+        account_id: "a".into(),
+        window: FIVE_HOUR.into(),
+        scale: 0.0,
+        confidence: 0.6,
+        intervals: 3,
+        corrections_json: "{}".into(),
+        fitted_at: 2_000,
+        incarnation: 1,
+        ..FitRow::default()
+    };
+    assert!(!refused.sound());
+    store.upsert_fit(&refused).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    assert!(
+        handle.fits().await.unwrap().is_empty(),
+        "a zero scale is no window size to serve"
+    );
+}

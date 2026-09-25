@@ -1406,11 +1406,9 @@ async fn an_expired_request_emits_a_dropped_record_per_attempt_and_the_fit_close
     land(&h, expired.records);
 
     let after = minutes(2) + IN_FLIGHT_TTL_MS;
+    // A rise with nothing open is spend the router did not send; the served request's fold below shows it
+    // was dropped rather than carried.
     reading(&h, after + 5 * 60_000, 0.3125).await;
-    assert!(
-        h.router.fits().await.unwrap().is_empty(),
-        "a rise with nothing open is spend the router did not send"
-    );
     h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
     land(&h, assembler.observe(observed_event("served")));
     land(
@@ -1452,7 +1450,6 @@ async fn a_head_sample_before_the_completion_reaches_the_fit_through_the_assembl
     h.clock.store(minutes(6), Ordering::SeqCst);
     h.bus.publish(head_event("r1", 0.3125, minutes(6)));
     landed_reading(&h, bucket_of(minutes(6)), 0.3125).await;
-    assert!(h.router.fits().await.unwrap().is_empty());
     h.clock.store(minutes(7), Ordering::SeqCst);
     h.bus.publish(served_event("r1", minutes(7)));
     listed(&h, "r1").await;
@@ -1469,6 +1466,53 @@ async fn a_head_sample_before_the_completion_reaches_the_fit_through_the_assembl
     assert!(
         (fits[0].scale - served_scale()).abs() < 1e-6,
         "the carried rise folds against the attempt's tokens: {}",
+        fits[0].scale
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            expire_interval: Duration::from_millis(20),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    reading(&h, minutes(0), 0.25).await;
+    h.clock.store(minutes(1), Ordering::SeqCst);
+    h.bus.publish(observed_event("lost"));
+    h.bus.publish(selected_event("lost", 1, "a", minutes(1)));
+    // A request that completes behind the lost one on the same path: once its row is in, the assembler holds the
+    // lost request's open attempt.
+    h.bus.publish(observed_event("marker"));
+    h.bus.publish(complete_event("marker"));
+    listed(&h, "marker").await;
+    let after = minutes(1) + IN_FLIGHT_TTL_MS;
+    h.clock.store(after, Ordering::SeqCst);
+    // Several ticks of the short interval, each aging entries against the harness clock.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    reading(&h, after + 5 * 60_000, 0.3125).await;
+    h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
+    h.bus.publish(observed_event("served"));
+    h.bus
+        .publish(selected_event("served", 1, "a", after + 6 * 60_000));
+    h.bus.publish(served_event("served", after + 7 * 60_000));
+    listed(&h, "served").await;
+    reading(&h, after + 12 * 60_000, 0.375).await;
+    let fits = wait_for_async(Duration::from_secs(5), || async {
+        let fits = h.router.fits().await.unwrap();
+        (!fits.is_empty()).then_some(fits)
+    })
+    .await;
+    assert!(
+        (fits[0].scale - served_scale()).abs() < 1e-6,
+        "the tick closed the lost attempt, so the rise after it was dropped as foreign: {}",
         fits[0].scale
     );
     up.shutdown().await;

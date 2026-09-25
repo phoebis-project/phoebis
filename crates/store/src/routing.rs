@@ -108,6 +108,30 @@ pub struct FitRow {
     pub band_outside_delta: f64,
 }
 
+impl FitRow {
+    /// Every number finite and the scale positive: a row that fails this can seed no denominator, so the
+    /// fitter starts its window over and the router serves it to no reader.
+    pub fn sound(&self) -> bool {
+        [
+            self.scale,
+            self.confidence,
+            self.carry_weighted,
+            self.carry_inside,
+            self.carry_outside,
+            self.carry_delta,
+            self.band_inside_tokens,
+            self.band_inside_delta,
+            self.band_outside_tokens,
+            self.band_outside_delta,
+        ]
+        .into_iter()
+        .chain(self.carry_utilization)
+        .chain(self.band_factor)
+        .all(f64::is_finite)
+            && self.scale > 0.0
+    }
+}
+
 const FIT_COLUMNS: &str = "account_id, window, scale, confidence, intervals, corrections_json, fitted_at, \
      incarnation, band_factor, carry_weighted, carry_inside, carry_outside, carry_delta, carry_since, \
      carry_utilization, carry_reset, band_inside_tokens, band_inside_delta, band_outside_tokens, band_outside_delta";
