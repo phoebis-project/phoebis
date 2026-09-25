@@ -8,8 +8,8 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
-use phoebis_routing::listing::undated;
 pub use phoebis_routing::listing::CatalogRow;
+use phoebis_routing::listing::{snapshot_date, undated};
 use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
 use phoebis_transport::control::Resolver;
@@ -62,12 +62,6 @@ pub fn derive_all(listing: &[CatalogRow]) -> HashMap<String, String> {
         }
     }
     out
-}
-
-/// The `YYYYMMDD` a dated id ends in, as an integer, so two snapshots of one spelling order by date.
-fn snapshot_date(id: &str) -> Option<u32> {
-    let (_, suffix) = id.rsplit_once('-')?;
-    (suffix.len() == 8).then(|| suffix.parse().ok()).flatten()
 }
 
 const SLOTS_POISONED: &str = "catalog slots lock poisoned by a prior panic";
@@ -376,7 +370,7 @@ impl CatalogService {
     /// service's clock; the handle ends with the service. Accounts refresh one after another, a known bound: a
     /// slow upstream stretches the sweep by its own round trips, and nothing shrinks it meanwhile, since a
     /// published spelling never moves back to an older snapshot. A due account with nothing already filling it
-    /// is read through `refresh` (evict then fetch), since the cache window (`routing.catalog_cache_seconds`,
+    /// is read through `refresh` (the listing invalidated, then fetched), since the cache window (`routing.catalog_cache_seconds`,
     /// up to a day) can outlast `every` and a plain fetch would answer from the cache without a request; a due
     /// account with a fill already in flight is skipped, since that fill's own landing is a fresher read than
     /// this tick could force.
