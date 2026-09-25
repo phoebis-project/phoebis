@@ -1493,10 +1493,23 @@ async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
     h.bus.publish(observed_event("marker"));
     h.bus.publish(complete_event("marker"));
     listed(&h, "marker").await;
+    // The writer counts a batch once it has walked it through the fitter and landed it: so far the anchor
+    // reading, the lost request's start and the marker's request.
+    let stats = h.ledger.stats();
+    let written = || stats.written.load(Ordering::SeqCst);
+    wait_for_async(Duration::from_secs(5), || async {
+        (written() >= 3).then_some(())
+    })
+    .await;
+    assert_eq!(written(), 3, "nothing else reached the writer");
     let after = minutes(1) + IN_FLIGHT_TTL_MS;
     h.clock.store(after, Ordering::SeqCst);
-    // Several ticks of the short interval, each aging entries against the harness clock.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The next tick ages the lost request out against the harness clock; its dropped attempt is the one record
+    // left to count, and the fitter has closed the attempt by the time it is counted.
+    wait_for_async(Duration::from_secs(5), || async {
+        (written() >= 4).then_some(())
+    })
+    .await;
     reading(&h, after + 5 * 60_000, 0.3125).await;
     h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
     h.bus.publish(observed_event("served"));

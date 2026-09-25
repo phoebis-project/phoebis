@@ -647,7 +647,7 @@ fn an_attempt_after_the_announced_reset_folds_and_one_straddling_it_drops_the_ru
     assert_eq!((row.scale, row.intervals), (MAX_5X_FIVE_HOUR, 1));
 
     // A stream sent before the announced reset and answered after it, landing in a run that already carries
-    // three quanta and another attempt's tokens.
+    // four quanta and another attempt's tokens.
     let mut r = Run::at(EARLY);
     r.read_reset(FIVE_HOUR, 0.5, Some(announced));
     r.now = EARLY + 50 * MINUTE;
@@ -676,4 +676,36 @@ fn an_attempt_after_the_announced_reset_folds_and_one_straddling_it_drops_the_ru
         .interval(SIXTEENTH, 0.04 + SHARE)
         .expect("the run after the drop fits on its own tokens");
     assert_eq!((row.scale, row.intervals), (MAX_5X_FIVE_HOUR, 1));
+}
+
+#[test]
+fn a_single_model_fold_after_a_mixed_one_moves_the_scale_rather_than_a_correction() {
+    let mut r = Run::at(EARLY);
+    r.read(FIVE_HOUR, 0.0);
+    for n in 1..=3u32 {
+        r.interval(SIXTEENTH, n as f64 * SHARE).unwrap();
+    }
+    // Opus and Fable 5.1 about half each: no model dominates, so this fold names no baseline model.
+    r.step(10 * MINUTE);
+    r.send(OPUS, 382_125);
+    r.send(FABLE, 100_000);
+    r.step(MINUTE);
+    let mixed = r
+        .read(FIVE_HOUR, 4.0 * SHARE)
+        .expect("the mixed interval folds");
+    assert!(mixed.confidence >= 0.5, "confident: {}", mixed.confidence);
+    // A single-model fold whose reading runs 10 % high against its tokens.
+    let row = r
+        .interval(SIXTEENTH, 4.0 * SHARE + 1.1 * SHARE)
+        .expect("the Opus interval folds");
+    assert_eq!(
+        row.corrections_json, "{}",
+        "a mixed baseline attributes no shift to one model"
+    );
+    let observed = SIXTEENTH as f64 / (1.1 * SHARE);
+    assert!(
+        close(row.scale, mixed.scale + (observed - mixed.scale) / 5.0),
+        "the scale takes the fold at its weight: {}",
+        row.scale
+    );
 }

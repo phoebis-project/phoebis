@@ -114,7 +114,8 @@ struct WindowFit {
     band_outside_tokens: f64,
     band_outside_delta: f64,
     /// The model that dominated the previous fold; `None` when none did or the fitter does not know, as after a
-    /// restart, and then no fold counts as a change of mix.
+    /// restart, and then no fold counts as a change of mix. A mixed baseline attributes no shift to one model, so
+    /// a correction moves only between two single-model folds whose dominant models differ.
     dominant: Option<String>,
     /// The latest reading judged, which the next one's rise is measured from.
     last: Option<Reading>,
