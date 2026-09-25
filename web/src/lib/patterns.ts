@@ -1,5 +1,10 @@
 import type { ModelRule, ModelRulesMode } from '@/api/types';
 
+/** Shown wherever a rule list is edited or read: the router names an undated model by its dated snapshot. */
+export const UNDATED_MODEL_NOTE =
+  'An entry naming an undated model is written with a trailing * (claude-sonnet-4-5*), ' +
+  'because the router routes, prices and records that model under its dated snapshot.';
+
 /** One entry of a processed list, in the order it applies, with the level it came from. */
 export interface LevelledRule extends ModelRule {
   level: 'key' | 'pool';

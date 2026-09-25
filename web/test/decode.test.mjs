@@ -8,10 +8,12 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.js
 const isIso = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s)) && s.endsWith('Z');
 
 test('an account decodes with its windows, plan, pools, and models', () => {
-  const a = d.decodeAccount(fixture('account'));
+  const body = fixture('account');
+  const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
   assert.equal(a.kind, 'oauth');
-  assert.equal(a.plan, 'Max 5x');
+  assert.equal(a.plan, 'Max', "the profile's plan flag names the plan, so the badge, the search and the chips read one name");
+  assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, 'Max 5x', "a document without the flags reads the tier's own label");
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
   assert.deepEqual(
     Object.keys(a.subscription).sort(),
@@ -107,6 +109,14 @@ test('plan labels read the tier', () => {
   assert.equal(d.planLabel('default_claude_max_20x'), 'Max 20x');
   assert.equal(d.planLabel('claude_pro'), 'Pro');
   assert.equal(d.planLabel('something_else'), 'something_else');
+});
+
+test('plan names read the flag, then the tier, and nothing without either', () => {
+  const sub = { billingType: '', organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
+  assert.equal(d.planName({ ...sub, plan: 'pro', rateLimitTier: 'default_claude_max_5x' }), 'Pro', 'the flag wins over the tier');
+  assert.equal(d.planName({ ...sub, rateLimitTier: 'claude_team' }), 'Team');
+  assert.equal(d.planName(sub), null, 'an empty tier names no plan');
+  assert.equal(d.planName(null), null);
 });
 
 test('keys carry status, totals, and the created secret stays out of the row', () => {

@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { ModelRule } from '@/api/types';
-import { IconChevron, IconPlus, IconX } from '@/components/ui/icons';
+import { IconChevron, IconInfo, IconPlus, IconX } from '@/components/ui/icons';
 import { Button, Input, Segmented } from '@/components/ui/primitives';
-import { checkPattern } from '@/lib/patterns';
+import { UNDATED_MODEL_NOTE, checkPattern } from '@/lib/patterns';
 
 type Effect = 'allow' | 'deny';
 
@@ -105,6 +105,10 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
       <span id={summaryId} className="sr-only">
         {summary}
       </span>
+      <div className="callout callout--info" role="note">
+        <IconInfo size={16} />
+        {UNDATED_MODEL_NOTE}
+      </div>
       {(value.length > 0 || inherited.length > 0) && (
         <ol className="pattern-editor__rows">
           {value.map((rule, i) => {

@@ -178,8 +178,9 @@ the dated id the catalog lists substituted. One entry therefore covers a model a
 for a model the API lists under a dated id is written as a glob: `NOT claude-sonnet-4-5*` covers
 `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, and the twin of either. An entry that spells an undated id
 exactly (`claude-sonnet-4-5`) never matches, because the router names that model by its dated snapshot, so an
-exact entry for an undated model is written as a glob (`claude-sonnet-4-5*`) too. A model the list denies
-answers `404 model_not_allowed` without reaching an upstream.
+exact entry for an undated model is written as a glob (`claude-sonnet-4-5*`) too, and the rule editors and the
+Models view say so beside the list. A model the list denies answers `404 model_not_allowed` without reaching an
+upstream.
 
 The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?`
 one character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches
@@ -190,8 +191,9 @@ at save time when it is empty, longer than 256 characters, ends in an unquoted b
 in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
 The Models view shows the processed list for a chosen key, each entry with the level it came from and the upstreams
-cooling for a model it matches, then every model-scoped cooldown grouped by model with a clear button per row, and
-the last rejections and permits the ledger recorded.
+cooling for a model it matches, and a note that an entry for an undated model is written with a trailing `*`; then
+every model-scoped cooldown grouped by model with a clear button per row, and the last rejections and permits the
+ledger recorded.
 
 ![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][ml]
 ![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][md]

@@ -11,7 +11,7 @@ import { CoolingDown } from '@/components/CoolingDown';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCredits, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE } from '@/lib/quota';
 
@@ -375,8 +375,13 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
               isOauth
                 ? [
                     { label: 'Type', value: 'OAuth login' },
-                    { label: 'Plan', value: account.subscription ? (account.plan ?? '-') : 'unknown until paired' },
+                    {
+                      label: 'Plan',
+                      title: account.subscription?.rateLimitTier || undefined,
+                      value: account.subscription ? `${account.plan ?? '-'}${account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}` : 'unknown until paired',
+                    },
                     { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
+                    ...(account.subscription?.trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(account.subscription.trialEndsAt), value: fmtDate(account.subscription.trialEndsAt) }] : []),
                     { label: 'Organization', value: account.subscription?.organizationType ?? '-' },
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]

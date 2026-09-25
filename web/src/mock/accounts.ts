@@ -1,3 +1,4 @@
+import { planName } from '@/api/decode';
 import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
 import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
 import { createRng } from './rng';
@@ -15,14 +16,15 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
   };
 }
 
-export const ACCOUNTS: Account[] = [
+// Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
+// console draw one name.
+export const ACCOUNTS: Account[] = ([
   {
     ...ACCOUNT_SAMPLE,
     id: 'business',
     kind: 'oauth',
     label: 'business',
     email: 'business@example.com',
-    plan: 'Max 20x',
     status: 'cooldown',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
@@ -56,7 +58,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'oauth',
     label: 'mail',
     email: 'mail@example.com',
-    plan: 'Pro 5x',
     status: 'cooldown',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
@@ -96,7 +97,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'oauth',
     label: 'personal',
     email: 'personal@example.com',
-    plan: 'Max 5x',
     status: 'funding_required',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
@@ -121,7 +121,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'api_key',
     label: 'Console workspace',
     email: null,
-    plan: null,
     status: 'ready',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 1 }],
@@ -139,7 +138,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'api_key',
     label: 'Evals workspace',
     email: null,
-    plan: null,
     status: 'ready',
     routingEnabled: true,
     pools: [{ poolId: 'codex', priority: 0 }],
@@ -157,7 +155,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'oauth',
     label: 'team',
     email: 'team@example.com',
-    plan: 'Team',
     status: 'reauth_required',
     routingEnabled: false,
     pools: [],
@@ -171,7 +168,7 @@ export const ACCOUNTS: Account[] = [
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'team', since: null, trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'claude_team', since: null, trialEndsAt: null },
     requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
     cooldowns: [],
   },
@@ -182,7 +179,6 @@ export const ACCOUNTS: Account[] = [
     kind: 'oauth',
     label: 'spare',
     email: null,
-    plan: null,
     status: 'unpaired',
     routingEnabled: true,
     pools: [],
@@ -194,7 +190,7 @@ export const ACCOUNTS: Account[] = [
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-];
+] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription) }));
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 

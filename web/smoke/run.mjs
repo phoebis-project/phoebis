@@ -273,7 +273,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max 20x', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
+expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max', 'since', 'Trial ends', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -360,7 +360,7 @@ results.push({
   missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max 20x', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
 await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -373,7 +373,11 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   results.push({ name: '/upstreams Disconnect and Delete upstream are danger, and Delete upstream is last', ok: dangers.join('|') === 'Disconnect|Delete upstream' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete upstream', missing: dangers });
   const statuses = [...(m.container.querySelector('select[aria-label="Status filter"]')?.options ?? [])].map((o) => o.value);
   results.push({ name: '/upstreams the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
-  results.push({ name: '/upstreams the identity card draws no field the route never answers', ok: !m.text().includes('Subscription since') && !m.text().includes('Trial end'), missing: [] });
+  {
+    const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
+    results.push({ name: '/upstreams/business the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
+  }
   const pair = m.container.querySelector('.detail__pair');
   results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
   const fable = m.container.querySelector('.detail .wbars--3');
@@ -511,10 +515,15 @@ expect('/upstreams/mail', m.text(), [
   "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
   'rate_limited',
   'n/a',
+  'Pro since',
+  'Trial ends',
 ]);
 {
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+  const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
+  results.push({ name: '/upstreams/mail the identity card reads the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Trial ends|Organization|Billing type', missing: labels });
 }
 {
   // Each row clears its own scope by name, so the upstream's other scope stays through the clear.
@@ -688,7 +697,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = dlg?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1151,7 +1160,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
   {
     const poolSelect = dlg?.querySelector('select');
@@ -1406,7 +1415,7 @@ m = await mount('/models');
   results.push({ name: '/models sits in the nav after API keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('API keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
-  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', story?.canonicalModel ?? 'no story request']);
+  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
   const select = m.container.querySelector('select[aria-label="Key"]');

@@ -122,6 +122,7 @@ export function decodeAccount(v: unknown): Account {
   const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
   const identity = rec(a.identity);
   const credential = rec(a.credential);
+  const subscription = decodeSubscription(profile, sub);
   return {
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
@@ -133,14 +134,22 @@ export function decodeAccount(v: unknown): Account {
     kind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'oauth',
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
-    plan: profile ? planLabel(str(profile.rate_limit_tier)) : null,
+    plan: planName(subscription),
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     routingEnabled: bool(a.enabled, true),
     status: accountStatus(a, cooldowns),
-    subscription: decodeSubscription(profile, sub),
+    subscription,
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
+}
+
+/** "Max" or "Pro" from the typed subscription's plan; the tier's own label when the document has no flags. */
+export function planName(sub: Subscription | null): string | null {
+  if (sub === null) return null;
+  if (sub.plan === 'max') return 'Max';
+  if (sub.plan === 'pro') return 'Pro';
+  return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
 }
 
 /** `default_claude_max_5x` reads as "Max 5x"; anything else is shown as sent. */

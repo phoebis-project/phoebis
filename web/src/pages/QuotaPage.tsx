@@ -5,7 +5,7 @@ import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCredits, fmtDayShort, fmtPct, fmtRelative, fmtShortTime } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtPct, fmtRelative, fmtShortTime } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
 
@@ -142,6 +142,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const w5 = windowOf(account, '5h');
   const w7 = windowOf(account, '7d');
   const extra = account.extraUsage;
+  const since = account.subscription?.since ?? null;
+  const trialEndsAt = account.subscription?.trialEndsAt ?? null;
   return (
     <article className={`qcard ${status === 'error' ? 'is-error' : ''}`}>
       <header className="qcard__head">
@@ -187,12 +189,19 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         )}
       </div>
 
-      {status !== 'loading' && (account.plan || extra?.enabled) && (
+      {status !== 'loading' && (account.plan || trialEndsAt || extra?.enabled) && (
         <div className="qcard__chips">
           {account.plan && (
-            <span className="chip">
+            <span className="chip" title={account.subscription?.rateLimitTier || undefined}>
               <span className="chip__label">Plan</span>
               {account.plan}
+              {since && ` since ${fmtDate(since)}`}
+            </span>
+          )}
+          {trialEndsAt && (
+            <span className={`chip ${Date.parse(trialEndsAt) - now < 7 * DAY ? 'chip--serious' : ''}`} title={fmtAbsolute(trialEndsAt)}>
+              <span className="chip__label">Trial ends</span>
+              {fmtDate(trialEndsAt)}
             </span>
           )}
           {extra?.enabled && (

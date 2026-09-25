@@ -4,9 +4,11 @@ import { api } from '@/api';
 import type { KeyModels, ModelEvent, ProcessedRule } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDown';
+import { IconInfo } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
+import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
 
 const RULE_COLUMNS = 4;
 
@@ -114,6 +116,11 @@ export function ModelsPage() {
             ))}
           </Select>
         </div>
+      </div>
+
+      <div className="callout callout--info" role="note">
+        <IconInfo size={16} />
+        {UNDATED_MODEL_NOTE}
       </div>
 
       <Card padded={false} className="card--table models__rules" title={key ? `Processed rules for ${key.name}` : 'Processed rules'} subtitle={processed ? subtitleOf(processed) : undefined}>

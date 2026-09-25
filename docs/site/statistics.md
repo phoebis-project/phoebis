@@ -163,8 +163,9 @@ that fails after its 200 head keeps that status, so a finished request with an e
 ### Quota
 
 A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts,
-and API-key accounts. Below the cards, a reset timeline lays the same windows across a calendar, zoomable between a
-two-week weekly view and a three-day 5-hour view.
+and API-key accounts. Each card names the account's plan with the date its subscription started and, for an account
+on the Claude Code trial, when the trial ends. Below the cards, a reset timeline lays the same windows across a
+calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)
