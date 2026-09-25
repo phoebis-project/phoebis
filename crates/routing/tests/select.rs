@@ -3724,6 +3724,52 @@ fn a_body_without_a_chain_refreshes_on_every_request() {
 }
 
 #[test]
+fn a_chained_request_on_a_pin_without_hashes_refreshes_it_and_stamps_them() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let chained = |now: i64, boundaries: &[&str]| {
+        with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            None,
+            false,
+            Some("s0"),
+            boundaries,
+        )
+    };
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.static_hash.as_deref(), pin.tail_hash.as_deref()),
+        (None, None),
+        "a body without a chain leaves the pin no hashes"
+    );
+    select(&mut st, &s, &chained(T + 1_000, &["m1"]), &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (
+            pin.last_refresh_at,
+            pin.static_hash.as_deref(),
+            pin.tail_hash.as_deref()
+        ),
+        (T + 1_000, Some("s0"), Some("m1")),
+        "the pin has nothing the chain could be foreign to, so the request refreshes it and stamps its hashes"
+    );
+    select(&mut st, &s, &chained(T + 2_000, &["x1"]), &mut rng());
+    assert!(
+        !warm(&pinned(&st, "s1"), T + 2_000),
+        "the next request compares against the stamped hashes: the same prefix without the tail is a restart"
+    );
+}
+
+#[test]
 fn a_probe_never_colds_a_pin() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
@@ -4014,6 +4060,56 @@ fn the_overage_move_waits_out_the_grace_and_lands_on_plan_funded_siblings_only()
         landed(select(&mut st, &now_s, &at(&now_s, "s1", T + 1_000), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Overage)),
         "a grace of 0 moves the pin at once"
+    );
+}
+
+#[test]
+fn the_overage_move_lands_only_on_a_sibling_holding_allowance() {
+    // b outranks c, so a destination set that kept the spent b would land the pin there.
+    let placed = |members: Vec<(&'static str, u32)>| {
+        let s = snapshot(Pool {
+            members,
+            ..Pool::default()
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        st.record_overage("a", overage(true, T + 500, Some(T + 40 * MINUTE)));
+        st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("c", sample(0.2, 0.2, T + 500));
+        (s, st)
+    };
+    let (s, mut st) = placed(vec![("a", 0), ("b", 1), ("c", 2)]);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("c".into(), Some(MigrateReason::Overage)),
+        "b is out of overage but spent, which is no plan to return to"
+    );
+    let (s, mut st) = placed(vec![("a", 0), ("b", 1)]);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "with only the spent sibling the pin renews in place"
     );
 }
 

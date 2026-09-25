@@ -82,7 +82,7 @@ pub enum Warmth {
 /// says; the class decides when present; without it, a request whose boundaries contain the pin's tail
 /// continues the conversation, one that matches the static prefix without the tail restarted it, and one
 /// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
-/// fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
+/// fact, and so does a chained request on a pin that stores no hashes, which it cannot be foreign to. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
 /// its own, so it is judged by none of this: its renewal report stamps the refresh instead.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
     if request.probe {
@@ -99,6 +99,11 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
         };
     }
     if request.static_hash.is_none() && request.boundaries.is_empty() {
+        return Warmth::Refresh;
+    }
+    // A body without a chain left the pin no hashes; judging this request foreign would keep the pin from ever
+    // learning the conversation's, so it refreshes and `renew` stamps them.
+    if current.static_hash.is_none() && current.tail_hash.is_none() {
         return Warmth::Refresh;
     }
     if request
@@ -765,7 +770,8 @@ fn move_of<'a>(
     }
 
     // A subscription account in overage hands the session back to plan quota, warm or cold, onto a plan-funded
-    // subscription sibling. While the evidence's reset falls within the grace the session keeps its cache: its
+    // subscription sibling: one out of overage with allowance left, since a spent one would move the pin again
+    // on its next request. While the evidence's reset falls within the grace the session keeps its cache: its
     // account is about to get its plan back, and moving now would move it twice.
     if prefer_plan
         && kind(&current.account_id) == Some(AccountKind::Oauth)
@@ -777,6 +783,7 @@ fn move_of<'a>(
             let set = destinations(state, &|c| {
                 kind(&c.account_id) == Some(AccountKind::Oauth)
                     && !state.in_overage(&c.account_id, now, fallback_ms)
+                    && holds_allowance(state, &c.account_id, window, now)
             });
             if !set.is_empty() {
                 return Some((MigrateReason::Overage, set));
