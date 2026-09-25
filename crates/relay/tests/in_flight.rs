@@ -269,6 +269,104 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
 }
 
 #[tokio::test]
+async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at_once() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 2),
+            ..PoolSpec::default()
+        },
+        phoebis_relay::Limits {
+            max_attempts: 1,
+            ..default_limits()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    let app = h.app.clone();
+    let held = tokio::spawn(async move {
+        let started = Instant::now();
+        let resp = app.oneshot(request_for(KEY, MODEL, "s2")).await.unwrap();
+        (resp, started.elapsed())
+    });
+    // A slot frees inside the bound: a request that waited would find it and still have no attempt to dial.
+    tokio::time::sleep(HELD_FOR).await;
+    up.release_one().await;
+    let (resp, waited) = tokio::time::timeout(Duration::from_secs(5), held)
+        .await
+        .expect("answered")
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable"),
+        "the exhaustion path's answer, not the budget's"
+    );
+    assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
+    assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
+    drain(first).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    // Both fresh placements are held on a. Ending the one stream frees one slot and wakes both waiters, which
+    // select again in the same turn: the account is one below its cap for both of them.
+    let (two, three, ()) = tokio::join!(
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
+        async {
+            tokio::time::sleep(HELD_FOR).await;
+            assert_eq!(posts(&up), 1, "both placements are held");
+            up.release_one().await;
+        },
+    );
+    let (two, three) = (two.unwrap(), three.unwrap());
+    let mut statuses = [two.status().as_u16(), three.status().as_u16()];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [200, 503],
+        "one takes the freed slot; the other, held again past the bound, is answered as exhausted"
+    );
+    assert_eq!(
+        (posts(&up), h.router.in_flight().account("a")),
+        (2, 1),
+        "the cap held: one stream open on a"
+    );
+    drop((first, two, three));
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_committed_stream_holds_its_key_permit_and_its_account_ticket_until_its_end() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;

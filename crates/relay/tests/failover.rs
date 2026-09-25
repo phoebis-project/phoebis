@@ -1234,6 +1234,37 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
 }
 
 #[tokio::test]
+async fn a_committed_answer_the_relay_drained_renews_its_pin_where_the_answer_ends() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"messages: text content blocks must be non-empty"}}"#
+                .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "the client's own rejection, committed");
+    resp.into_body().collect().await.unwrap();
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(pins.len(), 1);
+    assert_eq!(
+        (pins[0].account_id.as_str(), pins[0].cache_ttl_ms),
+        ("a", 3_600_000),
+        "the drained answer's renewal named the body's one-hour markers over the fresh pin's five minutes"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe_folds_no_burn() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

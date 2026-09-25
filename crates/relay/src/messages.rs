@@ -1216,40 +1216,18 @@ impl Relay {
                         .await
                 }
                 SelectResult::Exhausted(exhaustion) => {
-                    let code = match exhaustion {
-                        Exhaustion::ModelRejected => MODEL_REJECTED.code,
-                        Exhaustion::Timed { .. } => "accounts_exhausted",
-                        Exhaustion::Untimed => "accounts_unavailable",
-                    };
-                    let outcome = self.outcome(
-                        &trace,
-                        Some(&key),
-                        Some(&identity),
-                        "",
-                        0,
-                        attempt,
-                        false,
-                        None,
-                        admitted.client_version.clone(),
-                        Some(code),
-                        None,
-                        None,
-                        None,
-                    );
-                    return self
-                        .answer(
-                            &trace,
-                            exhaustion_response(&exhaustion, now, &trace.request_id),
-                            outcome,
-                            None,
-                            ResponseFacts::default(),
-                            None,
-                        )
-                        .await;
+                    return self.exhausted(&admitted, attempt, &exhaustion, now).await;
                 }
                 // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
                 // selection place there; past it the account is attempted and the next selection looks elsewhere.
                 SelectResult::Held { account_id } => {
+                    // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
+                    // so the pool answers as the exhausted one it is, at once.
+                    if spent + 1 >= self.limits.max_attempts {
+                        return self
+                            .exhausted(&admitted, attempt, &Exhaustion::Untimed, now)
+                            .await;
+                    }
                     spent += 1;
                     let deadline = tokio::time::Instant::now() + admitted.retry_in_place;
                     if !self
@@ -1277,6 +1255,7 @@ impl Relay {
                     &admitted,
                     &selection,
                     &answer.cancel,
+                    answer.ticket,
                     &mut attempt,
                     &mut spent,
                     &mut key_permit,
@@ -1289,14 +1268,56 @@ impl Relay {
         }
     }
 
+    /// The answer for a pool with nothing to select, the outcome carrying the exhaustion's code.
+    async fn exhausted(
+        &self,
+        admitted: &Admitted<'_>,
+        attempt: u8,
+        exhaustion: &Exhaustion,
+        now: i64,
+    ) -> Response {
+        let code = match exhaustion {
+            Exhaustion::ModelRejected => MODEL_REJECTED.code,
+            Exhaustion::Timed { .. } => "accounts_exhausted",
+            Exhaustion::Untimed => "accounts_unavailable",
+        };
+        let outcome = self.outcome(
+            admitted.trace,
+            Some(admitted.key),
+            Some(admitted.identity),
+            "",
+            0,
+            attempt,
+            false,
+            None,
+            admitted.client_version.clone(),
+            Some(code),
+            None,
+            None,
+            None,
+        );
+        self.answer(
+            admitted.trace,
+            exhaustion_response(exhaustion, now, admitted.request_id),
+            outcome,
+            None,
+            ResponseFacts::default(),
+            None,
+        )
+        .await
+    }
+
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
     /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone. `key_permit` is the
-    /// request's own, which a committed stream takes into its body.
+    /// request's own, which a committed stream takes into its body; `selected` is the ticket the selection charged
+    /// for the leg's first pass.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
         selection: &Selection,
         cancel: &CancellationToken,
+        mut selected: Option<AccountTicket>,
         attempt: &mut u8,
         spent: &mut u8,
         key_permit: &mut Option<KeyPermit>,
@@ -1488,12 +1509,14 @@ impl Relay {
                 *spent += 1;
             }
             stripping = false;
-            // Per wire attempt, taken before the dial: a pass that ends without committing a stream drops it
-            // with its response half, before the next pass or leg takes one.
-            let ticket = self
-                .router
-                .in_flight()
-                .dispatched(&account.id, (self.clock)());
+            // One per wire attempt. The first pass's was charged by its selection, so the count the selector read
+            // is the one it charged; a later pass takes its own before the dial. A pass that ends without
+            // committing a stream drops it with its response half, before the next pass or leg takes one.
+            let ticket = selected.take().unwrap_or_else(|| {
+                self.router
+                    .in_flight()
+                    .dispatched(&account.id, (self.clock)())
+            });
             admitted
                 .trace
                 .selected(
@@ -2777,8 +2800,8 @@ impl Responding<'_> {
     /// Both counts for a body that outlives the response half, so they are released when it ends.
     fn guards(&mut self) -> Guards {
         Guards {
-            key: self.key_permit.take(),
-            account: self.ticket.take(),
+            _key: self.key_permit.take(),
+            _account: self.ticket.take(),
         }
     }
 }
@@ -2786,11 +2809,8 @@ impl Responding<'_> {
 /// The in-flight guards a committed stream carries to its end; dropped with the body, whichever way it ends.
 #[derive(Default)]
 pub(crate) struct Guards {
-    // Never read: held for their drops, which are the releases.
-    #[allow(dead_code)]
-    key: Option<KeyPermit>,
-    #[allow(dead_code)]
-    account: Option<AccountTicket>,
+    _key: Option<KeyPermit>,
+    _account: Option<AccountTicket>,
 }
 
 /// What the response half decided the account loop should do next.

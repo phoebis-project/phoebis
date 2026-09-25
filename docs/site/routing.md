@@ -414,14 +414,18 @@ a throttle that names no `Retry-After`, and a request bound to its account all t
 
 ### In-flight caps
 
-**Per account.** Every wire submission counts against its account from its dispatch until its response ends: a buffered
-answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The count
-is kept by the relay itself; no report is involved. An account at the pool's `in_flight_cap` (default 16) is passed over
-while a sibling is under it, even a sibling above `select_below_utilization`: the cap is a bound, the ceiling a
-preference. Only when every account that could serve is at its cap is the request held: it waits up to
-`retry_in_place_seconds` for a slot on the account it would have chosen and lands there when one frees; past the bound
-it is selected again with that account passed over. A hold costs one attempt of `routing.max_attempts`. A session
-already pinned to the account is never held: the cap steers new placements and never moves a pin.
+**Per account.** Every wire submission counts against its account from its charge until its response ends: a buffered
+answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first
+attempt on an account is charged by the selection that chose it, so two selections answered together never read the same
+free slot; a retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is
+involved. An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a
+sibling above `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that
+could serve is at its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it
+would have chosen and lands there when one frees; past the bound it is selected again with that account passed over, and
+with every account passed over it is answered `503 accounts_unavailable`. A hold costs one attempt of
+`routing.max_attempts`, and a hold that would leave none for the dial is answered `503 accounts_unavailable` at once. A
+session already pinned to the account is never held, and a move whose every destination is at its cap is not made: the
+pin renews in place and the next request judges the move again.
 
 **Per key.** A key's own `in_flight_cap`, unset by default, counts each request once, from its admission, before
 anything is selected, until its response ends. The count is held across every attempt, retry, and hold, so a request

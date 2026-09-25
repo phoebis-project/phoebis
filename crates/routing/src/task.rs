@@ -15,8 +15,8 @@ use crate::select::{
     release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
 };
 use crate::state::{
-    burn_folded, EvidenceSource, InFlight, OverageEvidence, PinRef, PinUsage, RateTable,
-    RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
+    burn_folded, AccountTicket, EvidenceSource, InFlight, OverageEvidence, PinRef, PinUsage,
+    RateTable, RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE,
 };
 use crate::{resolve, Presented, RegistrySnapshot};
@@ -134,6 +134,9 @@ impl Default for BurnRates {
 pub struct SelectAnswer {
     pub result: SelectResult,
     pub cancel: CancellationToken,
+    /// The selected account's in-flight ticket, taken where the selection read the count, for the request's
+    /// first wire attempt on it; `None` for any other answer.
+    pub ticket: Option<AccountTicket>,
 }
 
 /// Every report that names an account names its holder too: an id is reusable, and a report whose
@@ -275,7 +278,7 @@ impl RouterHandle {
     }
 
     /// The shared in-flight table: a key permit reserved after authentication and before selection, held across
-    /// every attempt; an account ticket taken per leg at dispatch.
+    /// every attempt; an account ticket per wire attempt, a leg's first handed out with its selection.
     pub fn in_flight(&self) -> &InFlight {
         &self.in_flight
     }
@@ -663,6 +666,7 @@ impl Task {
                         let _ = reply.send(SelectAnswer {
                             result: SelectResult::Exhausted(Exhaustion::Untimed),
                             cancel: CancellationToken::new(),
+                            ticket: None,
                         });
                         return;
                     };
@@ -672,6 +676,7 @@ impl Task {
                         let _ = reply.send(SelectAnswer {
                             result: SelectResult::Exhausted(Exhaustion::Untimed),
                             cancel: CancellationToken::new(),
+                            ticket: None,
                         });
                         return;
                     }
@@ -688,6 +693,7 @@ impl Task {
                             let _ = reply.send(SelectAnswer {
                                 result: SelectResult::Refused(refusal),
                                 cancel: CancellationToken::new(),
+                                ticket: None,
                             });
                             return;
                         }
@@ -799,15 +805,27 @@ impl Task {
                         _ => {}
                     }
                 }
-                let cancel = match &result {
-                    SelectResult::Selected(selection) => {
-                        self.token(&selection.account.id).child_token()
-                    }
+                let (cancel, ticket) = match &result {
+                    // Charged here, in the one place selections are serialized, so the count the next selection
+                    // reads already holds this one: a ticket taken at the dial, awaits later, would let every
+                    // selection answered in between read the same count and land over the cap.
+                    SelectResult::Selected(selection) => (
+                        self.token(&selection.account.id).child_token(),
+                        Some(
+                            self.state
+                                .in_flight()
+                                .dispatched(&selection.account.id, request.now),
+                        ),
+                    ),
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
-                    | SelectResult::Refused(_) => CancellationToken::new(),
+                    | SelectResult::Refused(_) => (CancellationToken::new(), None),
                 };
-                let _ = reply.send(SelectAnswer { result, cancel });
+                let _ = reply.send(SelectAnswer {
+                    result,
+                    cancel,
+                    ticket,
+                });
             }
             Command::Report(report) => self.report(report),
             Command::Resolve {

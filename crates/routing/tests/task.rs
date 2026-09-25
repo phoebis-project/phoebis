@@ -2273,6 +2273,60 @@ async fn a_completion_wakes_a_waiter_and_the_bound_ends_the_wait() {
 }
 
 #[tokio::test]
+async fn two_selections_answered_together_read_the_slot_the_first_one_charged() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let cap = phoebis_store::Failover::default().in_flight_cap;
+    let _busy: Vec<_> = (1..cap)
+        .map(|_| handle.in_flight().dispatched("a", 1_000))
+        .collect();
+    assert_eq!(
+        handle.in_flight().account("a"),
+        cap - 1,
+        "one below its cap"
+    );
+    let (one, two) = tokio::join!(
+        handle.select(request(&handle, Some("s1"), 1_000)),
+        handle.select(request(&handle, Some("s2"), 1_000)),
+    );
+    let (one, two) = (one.unwrap(), two.unwrap());
+    let landed = [&one, &two]
+        .iter()
+        .filter(|answer| matches!(answer.result, SelectResult::Selected(_)))
+        .count();
+    let held = [&one, &two]
+        .iter()
+        .filter(|answer| matches!(&answer.result, SelectResult::Held { account_id } if account_id == "a"))
+        .count();
+    assert_eq!(
+        (landed, held),
+        (1, 1),
+        "the second selection read the slot the first one charged: {:?} {:?}",
+        one.result,
+        two.result
+    );
+    assert_eq!(
+        handle.in_flight().account("a"),
+        cap,
+        "the selection's ticket is the one charge"
+    );
+    assert!(
+        [&one, &two]
+            .iter()
+            .all(|answer| answer.ticket.is_some()
+                == matches!(answer.result, SelectResult::Selected(_))),
+        "only a selection carries a ticket"
+    );
+    drop((one, two));
+    assert_eq!(
+        handle.in_flight().account("a"),
+        cap - 1,
+        "an answer nobody dialled releases its charge"
+    );
+}
+
+#[tokio::test]
 async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);

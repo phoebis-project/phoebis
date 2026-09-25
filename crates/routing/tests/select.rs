@@ -3554,6 +3554,58 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
 }
 
 #[test]
+fn a_move_whose_every_destination_is_at_its_cap_is_not_made_and_the_pin_renews_in_place() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
+    let epoch = st.pin("k", "s1", "claude-sonnet-5").unwrap().epoch;
+    // a's window is spent and b holds allowance, so the spent move is due; b is at its cap.
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    let on_b = st.in_flight().dispatched("b", 1_500);
+    let (result, writes) = pick(&mut st, 2_000);
+    let SelectResult::Selected(sel) = result else {
+        panic!("the pin renews in place rather than holding: {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.renewed),
+        ("a", None, true),
+        "no move is made onto a destination set that is entirely at its cap"
+    );
+    assert!(
+        !writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(..))),
+        "the pin is never deleted, so no release is reported: {writes:?}"
+    );
+    assert_eq!(st.pin("k", "s1", "claude-sonnet-5").unwrap().epoch, epoch);
+    drop(on_b);
+    let SelectResult::Selected(sel) = pick(&mut st, 3_000).0 else {
+        panic!("b has a slot again")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "the move is judged again at the next request"
+    );
+}
+
+#[test]
 fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 0), ("c", 1)],

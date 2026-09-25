@@ -316,8 +316,9 @@ impl InFlightShared {
 
 /// Requests in flight per key and per account, counted from the relay's synchronous calls; shared by the
 /// handle and the task. A key permit is one per request, reserved before selection and held across every
-/// attempt; an account ticket is one per leg, taken at dispatch. Each is released exactly once, by its guard's
-/// drop, when the response it counts ends.
+/// attempt; an account ticket is one per wire attempt, a leg's first taken by the selection that chose the
+/// account and each later one at its dial. Each is released exactly once, by its guard's drop, when the
+/// response it counts ends.
 #[derive(Clone, Default)]
 pub struct InFlight(Arc<InFlightShared>);
 
@@ -404,7 +405,8 @@ impl InFlight {
     }
 
     /// Resolves when `account_id`'s count is under `cap` or at `deadline`, whichever first; true for a slot.
-    /// The slot is read, not reserved: the caller's next selection takes it or finds it gone.
+    /// The slot is read, not reserved: the caller's next selection charges it, or finds that another request's
+    /// selection already did.
     pub async fn wait_for_slot(&self, account_id: &str, cap: u32, deadline: Instant) -> bool {
         loop {
             // Registered before the count is read, so a release landing between the read and the wait still

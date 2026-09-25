@@ -475,9 +475,15 @@ pub fn select(
             .is_some_and(|term| term::ended(term, request.now))
     }) {
         let cold = !warm_on(current, verdict, request.now);
+        // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
+        // renews in place at step 5, and the next request judges the move again.
         if let Some((reason, set)) = move_of(
             state, snapshot, pool, request, current, &eligible, window, cold,
-        ) {
+        )
+        .filter(|(_, set)| {
+            set.iter()
+                .any(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
+        }) {
             state.remove_pin(&current.key_id, &current.session_id, &current.model);
             writes.push(StateWrite::DeletePin(
                 current.key_id.clone(),
