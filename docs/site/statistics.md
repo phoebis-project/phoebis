@@ -99,12 +99,12 @@ account once it folds.
 sent to the account, booked when each request completes, against the rise of the account's utilization readings. A run
 of readings folds once it has risen by three hundredths of the window, reading the booked tokens over the summed rise,
 so no fold rests on a single rounding step. The fit drops a run when a reset falls inside it (the reset time moved or
-the utilization fell), when it outgrows its window, when the utilization rose while the router had nothing booked or in
-flight on the account, and when a request that went out before a reset finished after it. The ratios between token types
-stay the table's; a per-model correction moves only once the fit is confident and the model mix changed between folds.
-Spend another client sends while one of the router's requests is in flight counts as the router's, since the usage
-endpoint reports no per-surface breakdown. Each fit keeps its carried run and its band sums in the registry beside the
-size, so a restart continues them.
+the utilization fell by a hundredth or more; a smaller fall is rounding and reads as flat), when it outgrows its window,
+when the utilization rose while the router had nothing booked or in flight on the account, and when a request that went
+out before a reset finished after it. The ratios between token types stay the table's; a per-model correction moves only
+once the fit is confident and the model mix changed between folds. Spend another client sends while one of the router's
+requests is in flight counts as the router's, since the usage endpoint reports no per-surface breakdown. Each fit keeps
+its carried run and its band sums in the registry beside the size, so a restart continues them.
 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
 UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and

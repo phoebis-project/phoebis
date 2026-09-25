@@ -14,12 +14,15 @@ use crate::record::AttemptRecord;
 /// readings' rounding.
 pub const MIN_INTERVAL_MS: i64 = 60_000;
 
-/// Three steps of the readings' 0.01 rounding: a run folds once its delta reaches this, so no fold rests on a
-/// single rounding step.
-const FOLD_DELTA: f64 = 0.03;
+/// The readings' rounding step. The head and the poll can round one value a step apart, so a fall smaller than
+/// this is noise rather than a reset.
+const QUANTUM: f64 = 0.01;
 
-/// Slack under `FOLD_DELTA`, so three steps of 0.01 summed in floating point still reach it.
-const FOLD_SLACK: f64 = 1e-9;
+/// Three quanta: a run folds once its delta reaches this, so no fold rests on a single rounding step.
+const FOLD_DELTA: f64 = 3.0 * QUANTUM;
+
+/// Slack under a whole number of quanta, so steps of 0.01 summed or subtracted in floating point still reach it.
+const SLACK: f64 = 1e-9;
 
 /// The floor of a running average's weight, so a fit keeps following a plan change after a few dozen folds
 /// rather than freezing on its history.
@@ -332,8 +335,9 @@ impl WindowFit {
 /// it, weighted by the band in force at that instant; an attempt still open tells the fitter that a rise
 /// meanwhile is its own. A reading at least `MIN_INTERVAL_MS` past the previous one adds its rise to the run, and
 /// the run folds once its delta reaches three quanta with tokens booked. A run is dropped when a reset falls
-/// inside it (the reset moved, or the utilization fell), when it outgrows the window, when it rose with nothing
-/// booked and nothing open (spend the router did not send), or when a stream that straddles a reset lands in it.
+/// inside it (the reset moved, or the utilization fell by a quantum or more; a smaller fall reads as flat), when it
+/// outgrows the window, when it rose with nothing booked and nothing open (spend the router did not send), or when
+/// a stream that straddles a reset lands in it.
 /// A window that has folded answers its row, carry included, at every reading judged, so a restart continues
 /// the run rather than starting it over.
 pub struct Fitter {
@@ -493,7 +497,7 @@ impl Fitter {
             (last.reset, reset),
             (Some(was), Some(now)) if (was - now).abs() > RESET_TOLERANCE_MS
         );
-        if reset_moved || utilization < last.utilization {
+        if reset_moved || last.utilization - utilization + SLACK >= QUANTUM {
             fit.restart(reading);
             fit.reset_at = Some(at);
             return fit.report(account_id, window);
@@ -509,7 +513,12 @@ impl Fitter {
         if at - last.at < MIN_INTERVAL_MS {
             return None;
         }
-        let rise = utilization - last.utilization;
+        // A smaller fall is one value rounded two ways: the run keeps the level it had and carries on.
+        let reading = Reading {
+            utilization: utilization.max(last.utilization),
+            ..reading
+        };
+        let rise = reading.utilization - last.utilization;
         fit.last = Some(reading);
         fit.run.delta += rise;
         let booked = fit.booked().weighted;
@@ -525,7 +534,7 @@ impl Fitter {
                     fit.run.since = Some(at);
                 }
             }
-        } else if booked.is_finite() && fit.run.delta + FOLD_SLACK >= FOLD_DELTA {
+        } else if booked.is_finite() && fit.run.delta + SLACK >= FOLD_DELTA {
             fit.fold(reading);
         }
         fit.report(account_id, window)

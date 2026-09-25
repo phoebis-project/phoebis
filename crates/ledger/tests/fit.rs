@@ -518,6 +518,33 @@ fn a_fold_waits_for_three_quanta_of_delta_and_reads_the_ratio_of_sums() {
 }
 
 #[test]
+fn a_fall_smaller_than_a_quantum_is_rounding_noise_and_the_run_keeps_carrying() {
+    let mut r = Run::at(EARLY);
+    r.read(FIVE_HOUR, 0.25);
+    assert!(
+        r.interval(200_000, 0.27).is_none(),
+        "two hundredths carried"
+    );
+    assert!(
+        r.interval(28_040, 0.266).is_none(),
+        "a reading 0.004 lower is rounding between the head and the poll: carried as flat"
+    );
+    let row = r
+        .interval(200_000, 0.286)
+        .expect("the run folds over all three intervals");
+    assert_eq!(
+        row.intervals, 1,
+        "one fold, the accumulator never restarted"
+    );
+    let expected = (200_000.0 + 28_040.0 + 200_000.0) / (0.286 - 0.25);
+    assert!(
+        close(row.scale, expected),
+        "every interval's tokens over the run's net rise: {} against {expected}",
+        row.scale
+    );
+}
+
+#[test]
 fn a_charge_is_weighed_by_the_band_at_its_completion() {
     let mut r = Run::at(NOON - 10 * MINUTE);
     r.read(FIVE_HOUR, 0.25);

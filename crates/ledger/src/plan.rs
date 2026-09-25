@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use phoebis_routing::{RateTable, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use jiff::civil::{Date, Weekday};
-use jiff::tz::TimeZone;
+use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
 
 use crate::LedgerError;
@@ -139,6 +139,16 @@ pub struct Band {
     pub zone: String,
     #[serde(default)]
     pub effective_from: Option<String>,
+    /// Set by `PlanWindows::from_yaml`, so a lookup never parses a name or a date.
+    #[serde(skip)]
+    resolved: Option<Resolved>,
+}
+
+/// A band's zone and the first instant it is in force, `None` for a row in force since always.
+#[derive(Clone, Debug, PartialEq)]
+struct Resolved {
+    zone: TimeZone,
+    from: Option<i64>,
 }
 
 impl Band {
@@ -146,29 +156,31 @@ impl Band {
         self.windows.iter().any(|w| w == window)
     }
 
-    fn zone(&self) -> Result<TimeZone, LedgerError> {
-        TimeZone::get(&self.zone)
-            .map_err(|e| LedgerError::Plan(format!("band zone `{}`: {e}", self.zone)))
-    }
-
-    /// The first instant the row is in force: the start of `effective_from` in the row's zone, `None` for a
-    /// row in force since always.
-    fn effective_at(&self) -> Result<Option<i64>, LedgerError> {
-        let Some(date) = &self.effective_from else {
-            return Ok(None);
+    /// The zone comes from the database bundled into the binary, so the hours a row names never depend on the
+    /// host's copy, or on the host having one; `effective_from` starts at midnight in that zone.
+    fn resolve(&self) -> Result<Resolved, LedgerError> {
+        let zone = TimeZoneDatabase::bundled()
+            .get(&self.zone)
+            .map_err(|e| LedgerError::Plan(format!("band zone `{}`: {e}", self.zone)))?;
+        let from = match &self.effective_from {
+            None => None,
+            Some(date) => {
+                let refused = |e: jiff::Error| {
+                    LedgerError::Plan(format!("band effective_from `{date}`: {e}"))
+                };
+                let day: Date = date.parse().map_err(refused)?;
+                let start = day.to_zoned(zone.clone()).map_err(refused)?;
+                Some(start.timestamp().as_millisecond())
+            }
         };
-        let refused =
-            |e: jiff::Error| LedgerError::Plan(format!("band effective_from `{date}`: {e}"));
-        let day: Date = date.parse().map_err(refused)?;
-        let start = day.to_zoned(self.zone()?).map_err(refused)?;
-        Ok(Some(start.timestamp().as_millisecond()))
+        Ok(Resolved { zone, from })
     }
 
-    fn covers(&self, at: i64) -> bool {
-        let (Ok(instant), Ok(zone)) = (Timestamp::from_millisecond(at), self.zone()) else {
+    fn covers(&self, zone: &TimeZone, at: i64) -> bool {
+        let Ok(instant) = Timestamp::from_millisecond(at) else {
             return false;
         };
-        let local = instant.to_zoned(zone);
+        let local = instant.to_zoned(zone.clone());
         if self.weekdays && matches!(local.weekday(), Weekday::Saturday | Weekday::Sunday) {
             return false;
         }
@@ -190,14 +202,13 @@ impl PlanWindows {
         PlanWindows::from_yaml(SHIPPED_WINDOWS).expect("the shipped plan windows parse")
     }
 
-    /// Refuses a band whose zone the time-zone database does not know or whose `effective_from` is not a date,
-    /// so a lookup never meets either.
+    /// Refuses a band whose zone the bundled time-zone database does not know or whose `effective_from` is not
+    /// a date, and resolves every other band's once, so a lookup never meets either.
     pub fn from_yaml(text: &str) -> Result<PlanWindows, LedgerError> {
-        let windows: PlanWindows =
+        let mut windows: PlanWindows =
             serde_norway::from_str(text).map_err(|e| LedgerError::Plan(e.to_string()))?;
-        for band in &windows.bands {
-            band.zone()?;
-            band.effective_at()?;
+        for band in &mut windows.bands {
+            band.resolved = Some(band.resolve()?);
         }
         Ok(windows)
     }
@@ -225,20 +236,18 @@ impl PlanWindows {
     /// The weight the meter puts on a charge landing on `window` at `at`: among the rows naming the window, the
     /// one in force at `at` (the latest `effective_from` at or before it, a row without one being the oldest,
     /// the later in the file among equals), its factor when its hours cover `at`, else 1. The one lookup every
-    /// reader of the band goes through, so how the rows spell their edges stays this function's business.
+    /// reader of the band goes through, so how the rows spell their edges stays this function's business. A row
+    /// `from_yaml` did not resolve is never in force.
     pub fn band_factor(&self, window: &str, at: i64) -> f64 {
         let in_force = self
             .bands
             .iter()
             .filter(|band| band.names(window))
-            .filter_map(|band| match band.effective_at() {
-                Ok(from) if from.is_none_or(|from| from <= at) => Some((from, band)),
-                _ => None,
-            })
-            .max_by_key(|(from, _)| *from)
-            .map(|(_, band)| band);
+            .filter_map(|band| Some((band, band.resolved.as_ref()?)))
+            .filter(|(_, resolved)| resolved.from.is_none_or(|from| from <= at))
+            .max_by_key(|(_, resolved)| resolved.from);
         in_force
-            .filter(|band| band.covers(at))
-            .map_or(1.0, |band| band.factor)
+            .filter(|(band, resolved)| band.covers(&resolved.zone, at))
+            .map_or(1.0, |(band, _)| band.factor)
     }
 }
