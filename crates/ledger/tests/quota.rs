@@ -405,3 +405,49 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
     .await;
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_further_request() {
+    let up = FakeUpstream::start(vec![usage_gated(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage
+            .clone()
+            .expect("the harness was built with the poll"),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 0,
+            failed: 0,
+            pending: 1
+        }
+    );
+    h.ledger.clone().shutdown().await.unwrap();
+    // Released only now: an aborted task never reaches the profile half, even once the fetch it never
+    // awaited the end of is free to finish.
+    up.release();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count(),
+        1,
+        "the aborted fetch made no retry"
+    );
+    assert_eq!(
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
+            .count(),
+        0,
+        "the aborted fetch never reached the profile endpoint"
+    );
+    up.shutdown().await;
+}

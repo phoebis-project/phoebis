@@ -96,6 +96,13 @@ impl Ledger {
         self.stats.dropped.load(Ordering::Relaxed)
     }
 
+    /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it the same way it aborts the
+    /// periodic poll: a fetch still running when the process stops must not keep a strong reference (the
+    /// store, for instance) alive past that.
+    pub(crate) fn track(&self, handle: tokio::task::JoinHandle<()>) {
+        self.tasks.lock().expect(TASKS_POISONED).push(handle);
+    }
+
     /// Never waits: the relay's body task and the assembler both call this for an event or a sample, and
     /// neither may stall on disk.
     pub fn record(&self, record: Record) {

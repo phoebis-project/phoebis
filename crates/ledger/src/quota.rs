@@ -159,7 +159,7 @@ impl QuotaPoll {
                     continue;
                 };
                 for account in accounts.into_iter().filter(|a| polled(a.kind, a.state)) {
-                    Self::poll_account(&store, &usage, &ledger, None, &account).await;
+                    Self::poll_account(&usage, &ledger, None, &account).await;
                     Self::refresh_profile(&store, &usage, &account).await;
                 }
             }
@@ -170,7 +170,6 @@ impl QuotaPoll {
     /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage`, before this
     /// returns; the clean snapshot is answered. The profile is `refresh_profile`'s.
     pub async fn poll_account(
-        _store: &Store,
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
@@ -245,19 +244,22 @@ impl QuotaPoll {
         let total = accounts.len();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
         for account in accounts {
-            let (store, usage, ledger, router, tx) = (
+            let (store, usage, task_ledger, router, tx) = (
                 store.clone(),
                 usage.clone(),
                 ledger.clone(),
                 router.clone(),
                 tx.clone(),
             );
-            tokio::spawn(async move {
+            // Tracked so a fetch still stalled when `ledger.shutdown` runs is aborted with it, rather than
+            // outliving the process holding its `Arc<Store>`.
+            let handle = tokio::spawn(async move {
                 let answer =
-                    Self::poll_account(&store, &usage, &ledger, Some(&router), &account).await;
+                    Self::poll_account(&usage, &task_ledger, Some(&router), &account).await;
                 let _ = tx.send(answer.is_some());
                 Self::refresh_profile(&store, &usage, &account).await;
             });
+            ledger.track(handle);
         }
         drop(tx);
         let mut sampled = Sampled::default();
