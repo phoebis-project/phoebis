@@ -1065,13 +1065,13 @@ async fn a_pool_defaults_to_pace_with_the_kind_order_on_and_the_flag_is_the_oper
 }
 
 #[tokio::test]
-async fn a_pool_refuses_an_old_strategy_name_and_the_sub_strategy_field_is_unknown() {
+async fn a_pool_refuses_an_unknown_strategy_name_and_an_unknown_field() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let refused = post(
         &app,
         "/admin/pools",
-        r#"{"id":"legacy","label":"x","strategy":"least_utilized"}"#, // refused name
+        r#"{"id":"legacy","label":"x","strategy":"foo"}"#,
         Some(&cookie),
     )
     .await;
@@ -1092,13 +1092,13 @@ async fn a_pool_refuses_an_old_strategy_name_and_the_sub_strategy_field_is_unkno
         patch(
             &app,
             "/admin/pools/main2",
-            r#"{"api_key_sub_strategy":"round_robin"}"#, // refused name
+            r#"{"unknown_field":1}"#,
             Some(&cookie),
         )
         .await
         .status(),
         400,
-        "the sub-strategy field no longer exists"
+        "an unknown field is refused"
     );
     let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
     let pool = listed["pools"]
@@ -1107,10 +1107,13 @@ async fn a_pool_refuses_an_old_strategy_name_and_the_sub_strategy_field_is_unkno
         .iter()
         .find(|p| p["id"] == "main2")
         .unwrap();
-    let carries_sub_strategy = pool.get("api_key_sub_strategy").is_some(); // refused name
-    let carries_effective_flag = pool.get("prefer_subscription_effective").is_some(); // refused name
+    let carries_a_removed_field = pool
+        .as_object()
+        .unwrap()
+        .keys()
+        .any(|k| k.contains("sub_strategy") || k.contains("_effective"));
     assert!(
-        !carries_sub_strategy && !carries_effective_flag,
+        !carries_a_removed_field,
         "a GET carries neither removed field"
     );
 }
