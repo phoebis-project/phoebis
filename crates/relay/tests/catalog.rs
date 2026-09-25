@@ -570,6 +570,57 @@ async fn a_failed_startup_fetch_answers_at_once_and_is_retried_in_the_background
 }
 
 #[tokio::test]
+async fn a_startup_fetch_still_pending_at_the_bound_is_retried_once_it_lands_an_error() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        })),
+    }])
+    .await;
+    catalog_up.set_rule_after(
+        1,
+        "/v1/models?limit=1000",
+        json_list(&["claude-sonnet-4-5-20250929"]),
+    );
+    let h = harness_with_catalog_window(
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        Duration::from_millis(50),
+    )
+    .await;
+    assert_eq!(
+        h.catalog.warmth(),
+        Warmth::Filling,
+        "still gated past the startup bound"
+    );
+    h.catalog_up.release();
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.warmth() == Warmth::Warm).then_some(())
+    })
+    .await;
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some("claude-sonnet-4-5-20250929"),
+        "the retry landed once the gated answer's error was seen"
+    );
+    assert_eq!(
+        listings_for(&h.catalog_up),
+        2,
+        "the gated answer, then one retry, with no request in between"
+    );
+}
+
+#[tokio::test]
 async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_and_cooldown_still_apply(
 ) {
     let up = FakeUpstream::start(vec![Rule {
@@ -738,6 +789,40 @@ async fn a_move_the_router_never_acknowledged_stays_unpublished() {
     h.catalog.refresh(&a).await;
     assert_eq!(h.catalog.lookup("claude-sonnet-4-5"), None);
     assert!(h.store.resolutions().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_router_already_past_the_catalogs_own_bookkeeping_is_never_walked_back() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: json_list(&["claude-sonnet-4-5-20250601"]),
+    }])
+    .await;
+    // Kept out of the harness's own accounts, so nothing publishes for this spelling before the router's own
+    // mapping is set directly below: the catalog's `published` map starts this test with no entry to compare
+    // against, standing in for a publication whose acknowledgement never reached it.
+    let h = harness_with_catalog(&up, catalog_up, &[], PoolSpec::default()).await;
+    h.store
+        .insert_account(&test_account_row(&api_key("a", "sk-ant-api03-A", 0)))
+        .unwrap();
+    h.store
+        .set_api_key_secret("a", &Secret::new("sk-ant-api03-A"))
+        .unwrap();
+    let a = h.store.account("a").unwrap().unwrap();
+    h.router
+        .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", NOW)
+        .await
+        .unwrap();
+    h.catalog.fetch(&a).await;
+    assert_eq!(
+        h.router
+            .canonicals(vec!["claude-sonnet-4-5".into()])
+            .await
+            .unwrap(),
+        vec!["claude-sonnet-4-5-20250929".to_string()],
+        "an older listing derived without the router's own advance in view moves nothing"
+    );
 }
 
 #[tokio::test]
@@ -1008,6 +1093,55 @@ async fn a_retry_sleeping_its_backoff_ends_at_shutdown() {
         listings_for(&h.catalog_up) == 1
     })
     .await;
+}
+
+#[tokio::test]
+async fn the_first_retry_is_clamped_to_one_hour_even_with_a_window_above_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    catalog_up.set_rule_after(
+        1,
+        "/v1/models?limit=1000",
+        json_list(&["claude-sonnet-4-5-20250929"]),
+    );
+    let h = harness_with_catalog_window(
+        &up,
+        catalog_up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        Duration::from_secs(7_200),
+    )
+    .await;
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5"),
+        None,
+        "the first fetch failed"
+    );
+    tokio::time::pause();
+    // Gives the retry's own task its first poll (registering its sleep) against the now-frozen clock before
+    // the jump below, since nothing has awaited anything since it was spawned.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(3_600) + Duration::from_secs(1)).await;
+    tokio::time::resume();
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.warmth() == Warmth::Warm).then_some(())
+    })
+    .await;
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some("claude-sonnet-4-5-20250929"),
+        "the retry landed within the one-hour clamp, not the two-hour window"
+    );
 }
 
 #[tokio::test]
@@ -1405,6 +1539,93 @@ async fn a_response_naming_another_snapshot_refreshes_the_account_once_per_minut
     resp.into_body().collect().await.unwrap();
     wait_for(Duration::from_secs(2), || {
         (listings_for(&h2.catalog_up) == 2).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn three_mismatches_while_the_first_refresh_is_gated_cost_one_request_then_one_more_past_the_minute(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5-20251101","usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: json_list(&["claude-sonnet-4-5-20250929"]),
+    }])
+    .await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+    h.catalog_up.set_rule_after(
+        1,
+        "/v1/models?limit=1000",
+        Respond::Gated(Box::new(json_list(&[
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-5-20251101",
+        ]))),
+    );
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+
+    // Two more mismatching answers land while that refresh is still gated: the reservation the first one
+    // took out must still stand, so neither starts a request of its own.
+    for session in ["s2", "s3"] {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-sonnet-4-5", session))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        stays_for(Duration::from_millis(100), || {
+            listings_for(&h.catalog_up) == 2
+        })
+        .await;
+    }
+
+    h.catalog_up.release();
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.lookup("claude-sonnet-4-5").as_deref() == Some("claude-sonnet-4-5-20251101"))
+            .then_some(())
+    })
+    .await;
+
+    // Past the minute, a fresh mismatch (the alias having just moved again) costs one more request.
+    h.clock.fetch_add(61_000, Ordering::SeqCst);
+    up.set_rule_after(
+        3,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_2","type":"message","model":"claude-sonnet-4-5-20251201","usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec(),
+        },
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s4"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 3).then_some(())
     })
     .await;
 }

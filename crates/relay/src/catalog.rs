@@ -34,6 +34,8 @@ pub const MAX_BODY: usize = 4 * 1024 * 1024;
 pub const REFRESH_TICK: Duration = Duration::from_secs(60);
 /// The least time between two served-model refreshes of one account.
 pub const SERVED_REFRESH_INTERVAL_MS: i64 = 60_000;
+/// The retry backoff's ceiling, and the clamp on its first sleep.
+const ONE_HOUR: Duration = Duration::from_secs(3_600);
 
 /// The dated id `spelling` resolves to under `listing`: the newest `<spelling>-YYYYMMDD` entry, or `None` when
 /// the listing holds no dated entry for it (a dateless id of the 4.6 generation and later is its own snapshot).
@@ -269,8 +271,11 @@ impl CatalogService {
 
     /// The account's entry when younger than the window, else one fill (coalesced per account, and dropped
     /// unstored when `evict` ran under it) whose answer, rows or an error, is stored and returned; a fill that
-    /// lands rows also derives and publishes the union's resolutions before the fetch is counted done.
-    pub async fn fetch(&self, account: &AccountRow) -> Catalog {
+    /// lands rows also derives and publishes the union's resolutions before the fetch is counted done. The
+    /// publication itself runs on a tracked task: a caller whose own future is dropped mid-wait (the three
+    /// HTTP handlers below, on a client disconnect) leaves the publication to finish rather than abandoning it
+    /// mid-way.
+    pub async fn fetch(self: &Arc<Self>, account: &AccountRow) -> Catalog {
         let key = SlotKey {
             account_id: account.id.clone(),
             incarnation: account.incarnation,
@@ -340,7 +345,13 @@ impl CatalogService {
                 },
             );
             if !catalog.models.is_empty() {
-                self.publish(fetched_at).await;
+                let service = Arc::clone(self);
+                let handle = self
+                    .tasks
+                    .spawn(async move { service.publish(fetched_at).await });
+                if let Err(error) = handle.await {
+                    tracing::warn!(%error, "a catalog publication task did not finish cleanly");
+                }
                 if reread.as_ref().is_some_and(|row| row.enabled) {
                     self.warmth.send_if_modified(|w| match w {
                         Warmth::Warm => false,
@@ -355,9 +366,9 @@ impl CatalogService {
         catalog
     }
 
-    /// `evict` then `fetch`.
-    pub async fn refresh(&self, account: &AccountRow) -> Catalog {
-        self.evict(&account.id);
+    /// `invalidate_listing` then `fetch`.
+    pub async fn refresh(self: &Arc<Self>, account: &AccountRow) -> Catalog {
+        self.invalidate_listing(&account.id);
         self.fetch(account).await
     }
 
@@ -482,37 +493,22 @@ impl CatalogService {
             if !row.enabled || row.state != AccountState::Ready {
                 return;
             }
-            // Taken out before `refresh`'s own eviction would otherwise erase every one of the account's
-            // other remembered triples along with this one, leaving only the triggering triple re-judged
-            // and the rest to alternate back into the once-a-minute cadence they were meant to escape.
-            let carried: Vec<(String, String, String)> = {
-                let mut mismatched = service.mismatched.lock().expect(MISMATCHED_POISONED);
-                let carried = mismatched
-                    .iter()
-                    .filter(|(id, _, _)| id == &triple.0)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                for entry in &carried {
-                    mismatched.remove(entry);
-                }
-                carried
-            };
             let refreshed = service.refresh(&row).await;
-            // `refresh`'s own eviction just cleared this account's entry as account churn would; restored so
-            // the rate limit still holds against a second mismatched answer landing right behind this one.
-            service
-                .served_refreshed
-                .lock()
-                .expect(SERVED_REFRESHED_POISONED)
-                .insert(triple.0.clone(), now);
             // A refresh that ended in an error leaves `lookup` at the old mapping, which would misjudge
             // every carried triple as still mismatched; nothing is remembered from a refresh that answered
             // no rows, so the next occurrence past the minute retries as before rather than staying silent.
             if refreshed.error.is_none() {
                 let mut mismatched = service.mismatched.lock().expect(MISMATCHED_POISONED);
+                let carried: Vec<(String, String, String)> = mismatched
+                    .iter()
+                    .filter(|(id, _, _)| id == &triple.0)
+                    .cloned()
+                    .collect();
                 for candidate in carried.into_iter().chain(std::iter::once(triple)) {
                     let spelling = undated(&candidate.1).unwrap_or(&candidate.1).to_string();
-                    if service.lookup(&spelling).as_deref() != Some(candidate.2.as_str()) {
+                    if service.lookup(&spelling).as_deref() == Some(candidate.2.as_str()) {
+                        mismatched.remove(&candidate);
+                    } else {
                         mismatched.insert(candidate);
                     }
                 }
@@ -524,6 +520,18 @@ impl CatalogService {
     /// wins over any fill in flight; the account writers (create, delete, disconnect, secret patch, pairing)
     /// call it.
     pub fn evict(&self, account_id: &str) {
+        self.invalidate_listing(account_id);
+        self.served_refreshed
+            .lock()
+            .expect(SERVED_REFRESHED_POISONED)
+            .remove(account_id);
+    }
+
+    /// `evict` without the served-model rate limit: bumps the account's generation and drops its cached
+    /// listing and any fill in flight, but leaves `served_refreshed` untouched. `refresh` uses this rather
+    /// than `evict`, so a served-model refresh stalled on its own I/O does not also drop the reservation that
+    /// keeps a second mismatching answer from starting another one meanwhile.
+    fn invalidate_listing(&self, account_id: &str) {
         *self
             .generations
             .lock()
@@ -533,13 +541,6 @@ impl CatalogService {
         let mut slots = self.slots.lock().expect(SLOTS_POISONED);
         slots.retain(|key, _| key.account_id != account_id);
         drop(slots);
-        self.served_refreshed
-            .lock()
-            .expect(SERVED_REFRESHED_POISONED)
-            .remove(account_id);
-        // Not cleared here: `refresh` (evict then fetch) is also how a served-model refresh re-judges one
-        // triple of the account's mismatches, and wiping the whole set on every eviction would erase the
-        // others it is not judging this time. The periodic sweep clears the set outright on its own turn.
         // Best effort: a fill lock this misses is merely unused from here on, never looked up again under
         // the evicted holder's key, so leaving it costs nothing but a little memory.
         if let Ok(mut fills) = self.fills.try_lock() {
@@ -599,9 +600,10 @@ impl CatalogService {
     }
 
     /// One `fetch` per enabled `Ready` account, concurrently, awaited up to the startup bound; a fetch still
-    /// running at the bound finishes in the background, and an account whose fetch failed is retried there on a
-    /// doubling backoff from the cache window, capped at one hour, until it lands, the row leaves `Ready`, or
-    /// `shutdown` cancels it.
+    /// running at the bound is tracked further and, once it lands, retried the same way if it failed. An
+    /// account whose fetch failed inside the bound is retried at once, on a doubling backoff from the cache
+    /// window, clamped to one hour from the first sleep, until it lands, the row leaves `Ready`, or `shutdown`
+    /// cancels it.
     pub async fn prefetch(self: &Arc<Self>) -> Prefetched {
         let deadline = tokio::time::Instant::now() + self.startup_bound;
         let accounts: Vec<AccountRow> = self
@@ -623,8 +625,8 @@ impl CatalogService {
             })
             .collect();
         let mut out = Prefetched::default();
-        for (account, handle) in handles {
-            match tokio::time::timeout_at(deadline, handle).await {
+        for (account, mut handle) in handles {
+            match tokio::time::timeout_at(deadline, &mut handle).await {
                 Ok(Ok(catalog)) if catalog.error.is_none() => out.landed += 1,
                 Ok(Ok(_)) => {
                     out.failed += 1;
@@ -634,10 +636,29 @@ impl CatalogService {
                     out.failed += 1;
                     self.spawn_retry(account);
                 }
-                Err(_) => out.pending += 1,
+                Err(_) => {
+                    out.pending += 1;
+                    self.spawn_pending_retry(account, handle);
+                }
             }
         }
         out
+    }
+
+    /// A fetch still running at the startup bound: tracked here so its answer, once it lands, still enters the
+    /// retry loop on an error the way a fetch that failed inside the bound already does.
+    fn spawn_pending_retry(self: &Arc<Self>, account: AccountRow, handle: JoinHandle<Catalog>) {
+        let service = Arc::clone(self);
+        self.tasks.spawn(async move {
+            match handle.await {
+                Ok(catalog) if catalog.error.is_none() => {}
+                Ok(_) => service.spawn_retry(account),
+                Err(error) => {
+                    tracing::warn!(%error, "a startup catalog fetch past the bound did not finish cleanly");
+                    service.spawn_retry(account);
+                }
+            }
+        });
     }
 
     /// Cancels every tracked fill and retry: a sleeping retry ends at once; a fill in flight ends with its
@@ -653,12 +674,13 @@ impl CatalogService {
         self.tasks.wait().await;
     }
 
-    /// One fetch failed inside the startup bound: retried here on a doubling backoff until rows land, the
-    /// account leaves `Ready`, or `cancel` ends it with everything else the tracker holds.
+    /// One fetch failed: retried here on a doubling backoff from the cache window, clamped to one hour from
+    /// the first sleep, until rows land, the account leaves `Ready`, or `cancel` ends it with everything else
+    /// the tracker holds.
     fn spawn_retry(self: &Arc<Self>, account: AccountRow) {
         let service = Arc::clone(self);
         self.tasks.spawn(async move {
-            let mut backoff = service.window;
+            let mut backoff = service.window.min(ONE_HOUR);
             loop {
                 tokio::select! {
                     _ = service.stop.cancelled() => return,
@@ -673,7 +695,7 @@ impl CatalogService {
                 if service.refresh(&row).await.error.is_none() {
                     return;
                 }
-                backoff = (backoff * 2).min(Duration::from_secs(3_600));
+                backoff = (backoff * 2).min(ONE_HOUR);
             }
         });
     }

@@ -8,6 +8,7 @@ use phoebis_store::{
     AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
 };
 
+use crate::listing::snapshot_date;
 use crate::RegistrySnapshot;
 
 /// The sample TTL a state nobody configured ages readings on. The router task replaces it with its own
@@ -442,6 +443,25 @@ impl RoutingState {
     /// still keyed on the literal spelling; rows already moved under the previous dated id stay there, since
     /// a new snapshot is a new model.
     pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> RekeyWrite {
+        if let Some(current) = self.resolutions.get(spelling) {
+            // A caller whose own bookkeeping of the last move it saw was lost (its future dropped between
+            // this state moving and its own record of the move landing) can resubmit a snapshot older than
+            // what already stands; walking pins and cooldowns back to it would be a real regression, so the
+            // move is ignored and the mapping is reasserted as it already stands.
+            if snapshot_date(dated_id) <= snapshot_date(current) {
+                return RekeyWrite {
+                    resolution: ResolutionRow {
+                        spelling: spelling.to_string(),
+                        dated_id: current.clone(),
+                        resolved_at: at,
+                    },
+                    delete_pins: Vec::new(),
+                    upsert_pins: Vec::new(),
+                    delete_cooldowns: Vec::new(),
+                    upsert_cooldowns: Vec::new(),
+                };
+            }
+        }
         let mut rekey = RekeyWrite {
             resolution: ResolutionRow {
                 spelling: spelling.to_string(),

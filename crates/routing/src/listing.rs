@@ -23,6 +23,13 @@ pub fn undated(id: &str) -> Option<&str> {
     (suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit())).then_some(base)
 }
 
+/// The `YYYYMMDD` a dated id ends in, as an integer, so two snapshots of one spelling order by date; `None`
+/// when the id carries no eight-digit suffix.
+pub fn snapshot_date(id: &str) -> Option<u32> {
+    let (_, suffix) = id.rsplit_once('-')?;
+    (suffix.len() == 8).then(|| suffix.parse().ok()).flatten()
+}
+
 /// Input tokens above which a model gets a `[1m]` twin: Claude Code sizes its window at 200K unless the id ends
 /// in the suffix, so the twin is what lets it use the window the catalog reports.
 pub const LONG_CONTEXT_ABOVE: u64 = 200_000;
@@ -147,5 +154,25 @@ mod tests {
             "no trailing digits at all"
         );
         assert_eq!(undated("no-dash-here"), None);
+    }
+
+    #[test]
+    fn snapshot_date_reads_the_eight_digit_suffix_as_an_integer() {
+        assert_eq!(snapshot_date("claude-sonnet-4-5-20250929"), Some(20250929));
+        assert_eq!(snapshot_date("claude-sonnet-4-5-20250601"), Some(20250601));
+        assert!(
+            snapshot_date("claude-sonnet-4-5-20250929")
+                > snapshot_date("claude-sonnet-4-5-20250601")
+        );
+        assert_eq!(
+            snapshot_date("claude-sonnet-4-5"),
+            None,
+            "no suffix to read"
+        );
+        assert_eq!(
+            snapshot_date("claude-x-2025"),
+            None,
+            "a four-digit suffix is not a date"
+        );
     }
 }

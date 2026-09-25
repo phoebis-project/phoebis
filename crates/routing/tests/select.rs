@@ -2960,6 +2960,56 @@ fn a_resolution_moves_every_row_in_one_rekey_and_a_repeat_carries_only_the_resol
 }
 
 #[test]
+fn a_resolution_never_moves_a_spelling_to_a_dated_id_that_is_not_newer() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut r = rng();
+    let SelectResult::Selected(_) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-4-5", true, &[], 1_000),
+        &mut r,
+    )
+    .0
+    else {
+        panic!()
+    };
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-sonnet-4-5",
+        1_000 + HOUR,
+        "model_rejection",
+        MODEL_REJECTED_REASON,
+    ));
+    st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+    let regressed = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250601", 3_000);
+    assert!(
+        regressed.delete_pins.is_empty()
+            && regressed.upsert_pins.is_empty()
+            && regressed.delete_cooldowns.is_empty()
+            && regressed.upsert_cooldowns.is_empty(),
+        "an older snapshot moves nothing: {regressed:?}"
+    );
+    assert_eq!(
+        (
+            regressed.resolution.dated_id.as_str(),
+            regressed.resolution.resolved_at
+        ),
+        ("claude-sonnet-4-5-20250929", 3_000),
+        "the mapping stays at the newer snapshot"
+    );
+    assert_eq!(
+        st.canonical("claude-sonnet-4-5"),
+        "claude-sonnet-4-5-20250929",
+        "a lookup still answers the newer snapshot"
+    );
+}
+
+#[test]
 fn a_rejection_cooldown_under_the_folded_spelling_still_excludes_the_member_under_the_dated_id() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 0)],
