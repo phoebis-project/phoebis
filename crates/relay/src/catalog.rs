@@ -158,7 +158,8 @@ pub struct CatalogService {
     /// snapshot, never shrunk.
     published: Mutex<HashMap<String, String>>,
     /// Every id the enabled union's listings carry, rewritten under the `publishing` lock each time `publish`
-    /// derives: an id here is proven never to gain a mapping of its own, so a miss on it need not wait.
+    /// derives: the API lists a spelling either dated or dateless, never a base beside its dated sibling, so
+    /// an id here is already its own snapshot and a miss on it need not wait.
     listed: Mutex<HashSet<String>>,
     /// Held across the whole of `publish`, so two fills landing together derive, hand to the router, and insert
     /// one after the other rather than racing each other's read of `published`.
@@ -170,7 +171,8 @@ pub struct CatalogService {
     served_refreshed: Mutex<HashMap<String, i64>>,
     /// Every `(account_id, resolved, served)` triple whose served-model refresh landed rows without the union
     /// ever deriving `served` for `resolved`'s spelling: a mismatch no further refresh can fix. Cleared for an
-    /// account by the periodic sweep's next refresh of it and by `evict`.
+    /// account outright by the periodic sweep's next refresh of it; a served-model refresh instead re-judges
+    /// the account's triples one by one, since it must not erase the ones it did not just answer for.
     mismatched: Mutex<HashSet<(String, String, String)>>,
     tasks: TaskTracker,
     stop: CancellationToken,
@@ -383,9 +385,9 @@ impl CatalogService {
                 for account in accounts {
                     if service.slot_due(&account, every, now) && !service.fill_in_flight(&account) {
                         service.refresh(&account).await;
-                        // A due account's own turn is the sweep's chance to judge a remembered mismatch
-                        // afresh, rather than carrying it until the account happens to serve a mismatched
-                        // answer again.
+                        // The one place an account's mismatches are dropped outright: a fresh listing on
+                        // a due account's own turn deserves to judge everything afresh, unlike a
+                        // served-model refresh, which re-judges one triple beside the others it carries.
                         service.clear_mismatched(&account.id);
                     }
                 }
@@ -480,7 +482,22 @@ impl CatalogService {
             if !row.enabled || row.state != AccountState::Ready {
                 return;
             }
-            service.refresh(&row).await;
+            // Taken out before `refresh`'s own eviction would otherwise erase every one of the account's
+            // other remembered triples along with this one, leaving only the triggering triple re-judged
+            // and the rest to alternate back into the once-a-minute cadence they were meant to escape.
+            let carried: Vec<(String, String, String)> = {
+                let mut mismatched = service.mismatched.lock().expect(MISMATCHED_POISONED);
+                let carried = mismatched
+                    .iter()
+                    .filter(|(id, _, _)| id == &triple.0)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for entry in &carried {
+                    mismatched.remove(entry);
+                }
+                carried
+            };
+            let refreshed = service.refresh(&row).await;
             // `refresh`'s own eviction just cleared this account's entry as account churn would; restored so
             // the rate limit still holds against a second mismatched answer landing right behind this one.
             service
@@ -488,13 +505,17 @@ impl CatalogService {
                 .lock()
                 .expect(SERVED_REFRESHED_POISONED)
                 .insert(triple.0.clone(), now);
-            let spelling = undated(&triple.1).unwrap_or(&triple.1);
-            if service.lookup(spelling).as_deref() != Some(triple.2.as_str()) {
-                service
-                    .mismatched
-                    .lock()
-                    .expect(MISMATCHED_POISONED)
-                    .insert(triple);
+            // A refresh that ended in an error leaves `lookup` at the old mapping, which would misjudge
+            // every carried triple as still mismatched; nothing is remembered from a refresh that answered
+            // no rows, so the next occurrence past the minute retries as before rather than staying silent.
+            if refreshed.error.is_none() {
+                let mut mismatched = service.mismatched.lock().expect(MISMATCHED_POISONED);
+                for candidate in carried.into_iter().chain(std::iter::once(triple)) {
+                    let spelling = undated(&candidate.1).unwrap_or(&candidate.1).to_string();
+                    if service.lookup(&spelling).as_deref() != Some(candidate.2.as_str()) {
+                        mismatched.insert(candidate);
+                    }
+                }
             }
         });
     }
@@ -516,7 +537,9 @@ impl CatalogService {
             .lock()
             .expect(SERVED_REFRESHED_POISONED)
             .remove(account_id);
-        self.clear_mismatched(account_id);
+        // Not cleared here: `refresh` (evict then fetch) is also how a served-model refresh re-judges one
+        // triple of the account's mismatches, and wiping the whole set on every eviction would erase the
+        // others it is not judging this time. The periodic sweep clears the set outright on its own turn.
         // Best effort: a fill lock this misses is merely unused from here on, never looked up again under
         // the evicted holder's key, so leaving it costs nothing but a little memory.
         if let Ok(mut fills) = self.fills.try_lock() {
@@ -524,8 +547,8 @@ impl CatalogService {
         }
     }
 
-    /// Forgets every mismatch remembered for the account, so a fresh listing is judged on its own merits
-    /// rather than one carried from before: `evict` and the periodic sweep's own refresh of the account call it.
+    /// Forgets every mismatch remembered for the account outright, so a fresh listing is judged on its own
+    /// merits rather than one carried from before: the periodic sweep's own refresh of a due account calls it.
     fn clear_mismatched(&self, account_id: &str) {
         self.mismatched
             .lock()
@@ -548,9 +571,9 @@ impl CatalogService {
         if let Some(dated) = self.lookup(spelling) {
             return dated;
         }
-        // A dated id resolves to itself by definition, and an id the union already lists exactly can never
-        // gain a mapping of its own (`derive` never returns the id it was asked about); waiting for a fill
-        // buys neither of them anything.
+        // A dated id resolves to itself by definition; the API lists a spelling either dated or dateless,
+        // never a base beside its dated sibling, so an id the union already lists exactly is already its
+        // own snapshot. Waiting for a fill buys neither of them anything.
         if undated(spelling).is_some()
             || self
                 .listed

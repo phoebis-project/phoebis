@@ -1424,9 +1424,39 @@ async fn a_live_alias_move_resolves_after_one_refresh_and_further_answers_naming
     let catalog_up = FakeUpstream::start(catalog_rules()).await;
     let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
-    // The account's listing catches up to the served snapshot by the time the triggered refresh lands.
+    // The triggered refresh fails first: nothing about a failed refresh is remembered, so the mismatch is
+    // still live once the interval opens again.
     h.catalog_up.set_rule_after(
         1,
+        "/v1/models?limit=1000",
+        Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+    assert_eq!(
+        h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some("claude-sonnet-4-5-20250929"),
+        "the failed refresh moved nothing"
+    );
+
+    // The account's listing catches up to the served snapshot by the time the next answer past the minute
+    // triggers a second refresh, since the failed first one left nothing remembered to skip it.
+    h.catalog_up.set_rule_after(
+        2,
         "/v1/models?limit=1000",
         json_list(&[
             "claude-sonnet-4-5-20250929",
@@ -1434,7 +1464,7 @@ async fn a_live_alias_move_resolves_after_one_refresh_and_further_answers_naming
             "claude-opus-5",
         ]),
     );
-
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
     let resp = h
         .app
         .clone()
@@ -1449,8 +1479,8 @@ async fn a_live_alias_move_resolves_after_one_refresh_and_further_answers_naming
     .await;
     assert_eq!(
         listings_for(&h.catalog_up),
-        2,
-        "one refresh landed the moved alias"
+        3,
+        "the second refresh landed the moved alias"
     );
 
     // The alias is resolved now, so a further answer naming the same snapshot is the ordinary match case.
@@ -1464,7 +1494,94 @@ async fn a_live_alias_move_resolves_after_one_refresh_and_further_answers_naming
         assert_eq!(resp.status(), 200);
     }
     stays_for(Duration::from_millis(100), || {
-        listings_for(&h.catalog_up) == 2
+        listings_for(&h.catalog_up) == 3
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn two_spellings_one_account_can_never_resolve_cost_one_refresh_a_minute_then_none() {
+    let served_a = "claude-sonnet-4-5-20260101";
+    let served_b = "claude-opus-5-20260101";
+    let body_naming = |msg: &str, model: &str| -> Vec<u8> {
+        format!(
+            r#"{{"id":"{msg}","type":"message","model":"{model}","usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        )
+        .into_bytes()
+    };
+    let up = FakeUpstream::start(vec![]).await;
+    // Four requests, queued in the order the test sends them below: A, B, then A and B once each is
+    // remembered, so a request reusing a session still names the pair it started with.
+    for (msg, model) in [
+        ("msg_1", served_a),
+        ("msg_2", served_b),
+        ("msg_3", served_a),
+        ("msg_4", served_b),
+    ] {
+        up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: body_naming(msg, model),
+            },
+        );
+    }
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
+
+    // The first minute: A's mismatch costs the account's one refresh, which cannot resolve it, since the
+    // default listing never carries `served_a`.
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 2).then_some(())
+    })
+    .await;
+
+    // The second minute: B's mismatch, seen for the first time, still costs only the one refresh the
+    // interval allows, and that refresh re-judges A's carried triple alongside B's rather than losing it.
+    h.clock.store(NOW + 61_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-opus-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    wait_for(Duration::from_secs(2), || {
+        (listings_for(&h.catalog_up) == 3).then_some(())
+    })
+    .await;
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 3
+    })
+    .await;
+
+    // The third minute: both triples are already remembered, so neither mismatch costs a fetch.
+    h.clock.store(NOW + 122_000, Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-opus-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    stays_for(Duration::from_millis(100), || {
+        listings_for(&h.catalog_up) == 3
     })
     .await;
 }
