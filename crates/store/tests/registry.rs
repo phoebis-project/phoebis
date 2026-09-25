@@ -4,6 +4,12 @@ use phoebis_store::{
     Store, StoreError, Strategy, SubStrategy, SubscriptionRow,
 };
 
+// Read by both the roll-back chains below and the standalone direct-open test further down.
+const UNDO_V24: &str = "ALTER TABLE accounts DROP COLUMN subscription_plan; \
+     ALTER TABLE accounts DROP COLUMN subscription_tier; \
+     ALTER TABLE accounts DROP COLUMN subscription_since; \
+     ALTER TABLE accounts DROP COLUMN trial_ends_at;";
+
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
         id: id.into(),
@@ -70,10 +76,6 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let path = dir.path().join("router.sqlite");
     // Every migration above the stored version runs again on the next open, and an `ALTER TABLE ADD COLUMN`
     // cannot run twice, so each older database below is rolled back past every column it would re-add.
-    const UNDO_V24: &str = "ALTER TABLE accounts DROP COLUMN subscription_plan; \
-         ALTER TABLE accounts DROP COLUMN subscription_tier; \
-         ALTER TABLE accounts DROP COLUMN subscription_since; \
-         ALTER TABLE accounts DROP COLUMN trial_ends_at;";
     const UNDO_V23: &str = "DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -253,10 +255,6 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
 
 #[test]
 fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_the_first_write() {
-    const UNDO_V24: &str = "ALTER TABLE accounts DROP COLUMN subscription_plan; \
-         ALTER TABLE accounts DROP COLUMN subscription_tier; \
-         ALTER TABLE accounts DROP COLUMN subscription_since; \
-         ALTER TABLE accounts DROP COLUMN trial_ends_at;";
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
