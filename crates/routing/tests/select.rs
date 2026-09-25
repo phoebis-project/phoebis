@@ -4486,6 +4486,84 @@ fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
 }
 
 #[test]
+fn a_hot_api_key_sibling_is_not_preferred() {
+    let s = snapshot(cool_preference_pool(vec![("b", AccountKind::ApiKey)]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    // b reads no plan window at all; its worst live bucket is what says it is hot.
+    st.record_sample(
+        "b",
+        UtilizationSample {
+            observed_at: T + 500,
+            ..Default::default()
+        }
+        .with(
+            "itpm:claude-sonnet-5",
+            WindowReading {
+                utilization: 0.9,
+                reset: Some(T + MINUTE),
+                observed_at: T + 500,
+            },
+        ),
+    );
+    st.record_sample("c", sample(0.1, 0.1, T + 500));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "the api_key sibling's bucket reads above the band, so the cool one is preferred over it"
+    );
+}
+
+#[test]
+fn a_cool_sibling_at_its_cap_is_passed_over_for_a_hot_one_under_it() {
+    let s = snapshot(Pool {
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..cool_preference_pool(vec![])
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    hot_b_cool_c(&mut st, T + 500);
+    let on_c = st.in_flight().dispatched("c", T + 500);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "c is cool but has no room, so the move falls through to b rather than being dropped at the cap"
+    );
+    drop(on_c);
+}
+
+#[test]
 fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed() {
     let s = snapshot(shedding_pool(Shedding::default()));
     // Two cold pins, so the round has one to spare: it marks the hotter.

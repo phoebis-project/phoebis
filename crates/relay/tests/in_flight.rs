@@ -272,13 +272,16 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
 #[tokio::test]
 async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at_once() {
     let up = FakeUpstream::start(messages(held_stream())).await;
-    let h = harness_with_limits(
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
         PoolSpec {
             failover: account_cap(1, 2),
             ..PoolSpec::default()
         },
+        bus,
         phoebis_relay::Limits {
             max_attempts: 1,
             ..default_limits()
@@ -319,6 +322,7 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
         Some("accounts_at_cap"),
         "the row names the code"
     );
+    let at_cap_id = outcome(&resp).request_id;
     let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
     assert_eq!(
         (&body["error"]["type"], &body["error"]["message"]),
@@ -327,9 +331,89 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
             &serde_json::json!("every account in this pool is at its in-flight cap")
         )
     );
+    let mut events = Vec::new();
+    let complete = wait_for(Duration::from_secs(5), || {
+        while let Ok(e) = sub.events.try_recv() {
+            events.push(e);
+        }
+        events.iter().find_map(|e| match e {
+            Event::RequestComplete(c) if c.request_id == at_cap_id => Some(c.clone()),
+            _ => None,
+        })
+    })
+    .await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.status,
+            complete.error_code.as_deref()
+        ),
+        (phoebis_bus::Outcome::Exhausted, 429, Some("accounts_at_cap")),
+        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+    );
     assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
     assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
     drain(first).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_that_dialled_before_its_hold_ran_out_answers_accounts_unavailable() {
+    const KEYED: &str = "sk-ant-api03-PLACEHOLDER";
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", held_stream());
+    // A refused key marks its account and names no cooldown, so the exhaustion that follows is untimed.
+    up.add_credential_rule(
+        KEYED,
+        "/v1/messages",
+        Respond::Json {
+            status: 401,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#
+                .to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[oauth("b", B, 0), api_key("a", KEYED, 1)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "b");
+    assert_eq!(h.router.in_flight().account("b"), 1, "b is at its cap");
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
+    )
+    .await
+    .expect("the bound ends the hold")
+    .unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "a was dialled and refused, then the request was held for the one-second bound on b: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable"),
+        "a request that reached an account is no longer a pool merely at its cap"
+    );
+    assert_eq!(credentials_seen(&up), [B, KEYED]);
+    drop(first);
+    up.release();
     up.shutdown().await;
 }
 

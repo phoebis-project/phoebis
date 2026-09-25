@@ -1150,11 +1150,15 @@ impl Task {
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 // The epoch names the one pin the request created, and with it the account the generations are
-                // checked against; a pin replaced since is another placement's to keep.
+                // checked against; a pin replaced since is another placement's to keep. A pin some selection
+                // renewed after its placement is serving another turn of the session, so the error that ended
+                // the first turn no longer speaks for it.
                 let Some(account_id) = self
                     .state
                     .pin(&pin.key_id, &pin.session_id, &pin.model)
-                    .filter(|current| current.epoch == pin.epoch)
+                    .filter(|current| {
+                        current.epoch == pin.epoch && current.last_used_at == current.created_at
+                    })
                     .map(|current| current.account_id.clone())
                 else {
                     return;
@@ -1245,10 +1249,19 @@ impl Task {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
-                // A head that read both shared windows says what a usage fetch would, so it holds the poll off
-                // for a TTL as a fetch does; one that read fewer leaves the poll due.
-                if sample.windows.contains_key(FIVE_HOUR) && sample.windows.contains_key(SEVEN_DAY)
-                {
+                // A head that read both shared windows and every window the account's sample already holds says
+                // what a usage fetch would, so it holds the poll off for a TTL as a fetch does. One that leaves a
+                // known window unread leaves the poll due: a head may not carry the Fable reading, and only the
+                // poll would re-read it while the account stays busy.
+                let covers = sample.windows.contains_key(FIVE_HOUR)
+                    && sample.windows.contains_key(SEVEN_DAY)
+                    && self.state.sample(&account_id).is_none_or(|stored| {
+                        stored
+                            .windows
+                            .keys()
+                            .all(|window| sample.windows.contains_key(window))
+                    });
+                if covers {
                     self.sampling.stamp(&account_id, sample.observed_at);
                 }
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it

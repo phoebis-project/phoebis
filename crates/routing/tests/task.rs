@@ -1505,21 +1505,8 @@ fn usage_against(up: &FakeUpstream, store: &Arc<Store>, clock: Clock) -> Arc<Usa
 
 #[tokio::test]
 async fn a_head_sample_within_the_ttl_defers_the_usage_poll_and_one_past_it_does_not() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/api/oauth/usage".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: control_response(ControlFixture::Usage).to_vec(),
-        },
-    }])
-    .await;
-    let fetches = || {
-        up.requests()
-            .iter()
-            .filter(|r| r.line.contains("/api/oauth/usage"))
-            .count()
-    };
+    let up = usage_endpoint().await;
+    let fetches = || usage_fetches(&up);
     // Under `prefer_plan` every selection needs a sample, so only the sampler's own clock holds a fetch back.
     let store = seeded_oauth(&["a"]);
     let start = 1_000_000;
@@ -1533,15 +1520,7 @@ async fn a_head_sample_within_the_ttl_defers_the_usage_poll_and_one_past_it_does
         config,
     )
     .unwrap();
-    let head = sample_with(start, FIVE_HOUR, 0.2, None).with(
-        SEVEN_DAY,
-        WindowReading {
-            utilization: 0.1,
-            reset: None,
-            observed_at: start,
-        },
-    );
-    handle.report(observed("a", head));
+    handle.report(observed("a", shared_windows(start)));
     let inside = start + ttl - 1_000;
     now.store(inside, Ordering::SeqCst);
     handle
@@ -1558,6 +1537,101 @@ async fn a_head_sample_within_the_ttl_defers_the_usage_poll_and_one_past_it_does
         .unwrap();
     wait_for(WRITTEN, || (fetches() == 1).then_some(())).await;
     stays_for(Duration::from_millis(100), || fetches() == 1).await;
+    up.shutdown().await;
+}
+
+/// A fake control plane whose usage endpoint answers the recorded document.
+async fn usage_endpoint() -> FakeUpstream {
+    FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Usage).to_vec(),
+        },
+    }])
+    .await
+}
+
+fn usage_fetches(up: &FakeUpstream) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.contains("/api/oauth/usage"))
+        .count()
+}
+
+/// The two shared windows as a head reads them, at `observed_at`.
+fn shared_windows(observed_at: i64) -> UtilizationSample {
+    sample_with(observed_at, FIVE_HOUR, 0.2, None).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 0.1,
+            reset: None,
+            observed_at,
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_head_that_leaves_a_stored_window_unread_leaves_the_usage_poll_due() {
+    let up = usage_endpoint().await;
+    let store = seeded_oauth(&["a"]);
+    let start = 1_000_000;
+    let now = Arc::new(AtomicI64::new(start));
+    let config = RouterConfig::default();
+    let ttl = config.sample_ttl.as_millis() as i64;
+    let handle = spawn(
+        store.clone(),
+        Some(usage_against(&up, &store, clock(&now))),
+        clock(&now),
+        config,
+    )
+    .unwrap();
+    // A TTL ago the account's sample read the Fable window too; the heads since read the shared windows alone.
+    let earlier = start - ttl;
+    handle.report(observed(
+        "a",
+        shared_windows(earlier).with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization: 0.3,
+                reset: None,
+                observed_at: earlier,
+            },
+        ),
+    ));
+    handle.report(observed("a", shared_windows(start)));
+    let inside = start + 1_000;
+    now.store(inside, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), inside))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_head_that_reads_one_shared_window_leaves_the_usage_poll_due() {
+    let up = usage_endpoint().await;
+    let store = seeded_oauth(&["a"]);
+    let start = 1_000_000;
+    let now = Arc::new(AtomicI64::new(start));
+    let handle = spawn(
+        store.clone(),
+        Some(usage_against(&up, &store, clock(&now))),
+        clock(&now),
+        RouterConfig::default(),
+    )
+    .unwrap();
+    handle.report(observed("a", sample_with(start, FIVE_HOUR, 0.2, None)));
+    let inside = start + 1_000;
+    now.store(inside, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), inside))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
     up.shutdown().await;
 }
 

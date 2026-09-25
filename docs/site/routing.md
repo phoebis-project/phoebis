@@ -251,10 +251,12 @@ checked in this order: spent, overage, return to plan, drain, and shed. The firs
 moves the pin and names the move after itself. A pin on an account past its subscription end reaches none of
 them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
 
-With `migrate_above_utilization` set, every rule prefers a cool destination: a sibling that reads below the threshold
-minus 0.05 (`MIGRATE_BAND`) on both windows and has run no shedding round of its own within `source_dwell_seconds`, so a
-moved session does not land where the next round would shed it again. When none of a rule's destinations is cool, the
-rule still moves the pin to one of them; only the shed rule insists on a cool one.
+With `migrate_above_utilization` set, every rule prefers a cool destination, so a moved session does not land where the
+next round would shed it again. A cool sibling reads below the threshold minus 0.05 (`MIGRATE_BAND`) on every reading it
+holds (the 5-hour and 7-day windows of a subscription account, the worst live rate-limit bucket of an API-key account;
+an unsampled account reads as under), has run no shedding round of its own within `source_dwell_seconds`, and has room
+under the pool's `in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of them, so
+a full cool sibling never keeps a free hot one from the session; only the shed rule insists on a cool one.
 
 **Spent** The pinned account's window for the session's model is spent: the Fable window for a Fable session and the
 shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands (until
@@ -290,13 +292,12 @@ whose burn carries the total past the share stays marked, and the round stops th
 order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
 orders every pin by burn over rewrite cost, cold or warm.
 
-A marked session moves at its next request, onto a sibling that reads below the threshold minus 0.05 (`MIGRATE_BAND`) on
-both windows, that did not shed this pin within `source_dwell_seconds`, and that has run no round of its own within that
-dwell. A marked pin whose account is cooling for the session's model is released instead, with `cooldown` among its
-reasons, and its mark goes with it; the round on the account still runs, since a cooldown can hold one model alone. An
-unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked session that stays idle never
-moves, no new round runs on the account until the dwell passes, and a restart forgets the marks, so the next request
-after it may start a fresh round.
+A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
+`source_dwell_seconds`. A marked pin whose account is cooling for the session's model is released instead, with
+`cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can hold
+one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked session
+that stays idle never moves, no new round runs on the account until the dwell passes, and a restart forgets the marks,
+so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it alone. Without the
@@ -319,10 +320,10 @@ that moved it. A pin released without a move records `pin_expired` with `reasons
 against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`, `paused`, `spent`, `subscription_ended`,
 `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`,
 `unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
-emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on the account,
-records the single reason `client_error`: it never served, so the session's next request is placed afresh rather than
-moved. Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires
-its pin the same way.
+emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on the account and no
+other turn of the session renewing it meanwhile, records the single reason `client_error`: it never served, so the
+session's next request is placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -375,8 +376,10 @@ A response head also lands a selection sample on the account it answered for, wh
 OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports one; an api_key head's
 `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}` headers, one bucket per canonical
 model. A later head for another model adds that model's buckets beside the ones already on file rather than replacing
-them. An OAuth head that reads both shared windows stands in for the router's own usage fetch: the account is fetched
-again only once its latest sample, from a head or a fetch, is older than the sample interval.
+them. An OAuth head that reads both shared windows, and every other window the account's sample already holds, stands in
+for the router's own usage fetch: the account is fetched again only once its latest sample, from a head or a fetch, is
+older than the sample interval. A head that leaves a known window unread, such as a Fable reading the response does not
+report, leaves the fetch due, so that window is still re-read while the account is busy.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
 the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
@@ -399,7 +402,7 @@ says. Each attempt goes through these steps:
    response instead. Any other row commits and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
    request. A pin this request created and whose answer is `400`, `401`, `403`, or `404` is released instead, since
-   it never served; a `429` keeps the cooldown path of step 3.
+   it never served, unless another turn of the session renewed it meanwhile; a `429` keeps the cooldown path of step 3.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

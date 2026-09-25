@@ -7,6 +7,7 @@ mod common;
 use std::time::Duration;
 
 use phoebis_routing::{resolve, RouterEvent, SelectRequest, SelectResult, SelectionTrace};
+use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{stays_for_async, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -286,6 +287,157 @@ async fn a_429_on_a_fresh_pin_takes_the_cooldown_path_as_before() {
             .iter()
             .any(|c| c.account_id == "a" && c.reason == "rate_limit"),
         "the cooldown row is on a"
+    );
+    up.shutdown().await;
+}
+
+const EXPIRED: &str =
+    r#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#;
+
+/// Fails the test on any release of the session's pin within `window`.
+async fn no_release_within(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    session: &str,
+    window: Duration,
+) {
+    let until = tokio::time::Instant::now() + window;
+    loop {
+        match tokio::time::timeout_at(until, events.recv()).await {
+            Err(_) => return,
+            Ok(Ok(RouterEvent::PinExpired {
+                session_id,
+                reasons,
+                ..
+            })) if session_id == session => panic!("the pin was released: {reasons:?}"),
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => panic!("{error}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_401_whose_refresh_answers_invalid_grant_leaves_the_pin_to_the_mark() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json(401, EXPIRED),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: json(
+                400,
+                r#"{"error":"invalid_grant","error_description":"revoked"}"#,
+            ),
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401, "the upstream's own answer");
+    drain(resp).await;
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
+    no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
+    assert!(
+        pinned(&h, "s1").await,
+        "the mark ends the pin at the next selection, under its own reason"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_401_on_an_account_disconnected_meanwhile_leaves_the_pin_to_its_state() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Gated(Box::new(json(401, EXPIRED))),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: json(503, "{}"),
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let app = h.app.clone();
+    let inflight =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    // The router has not reloaded, so the answer still reaches the refresh, which finds the account disconnected.
+    h.store.set_state("a", AccountState::Disconnected).unwrap();
+    up.release();
+    let resp = inflight.await.unwrap();
+    assert_eq!(resp.status().as_u16(), 401, "the upstream's own answer");
+    drain(resp).await;
+    no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
+    assert!(
+        pinned(&h, "s1").await,
+        "the account's state ends the pin at the next selection, under its own reason"
+    );
+    assert!(
+        up.requests()
+            .iter()
+            .all(|r| !r.line.starts_with("POST /v1/oauth/token")),
+        "the refresh stopped at the account's state"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_fresh_pin_a_later_request_renewed_survives_the_first_requests_400() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(json(400, INVALID_REQUEST))),
+    );
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let app = h.app.clone();
+    let first =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    let pin = h.router.pins().await.unwrap()[0].clone();
+    // A second turn of the session renews the pin a second later, while the first is still upstream.
+    h.clock
+        .store(NOW + 1_000, std::sync::atomic::Ordering::SeqCst);
+    let second = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(second.status().as_u16(), 200);
+    drain(second).await;
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status().as_u16(), 400);
+    drain(first).await;
+    no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.epoch == pin.epoch),
+        "the pin served the second turn, so the first turn's 400 leaves it"
     );
     up.shutdown().await;
 }

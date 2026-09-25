@@ -754,6 +754,29 @@ fn move_of<'a>(
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
+    // A sibling the next round would not shed from again soon: every reading its sample holds under the band
+    // (the shared windows of a subscription account, the worst live bucket of an api_key one; an unsampled
+    // account reads as under), no round of its own within the dwell, and room under the cap. A full sibling
+    // counts as hot, so a move whose cool siblings are all full falls through to a free one rather than being
+    // dropped at the cap.
+    let cool = |state: &RoutingState, c: &Candidate, threshold: f64| -> bool {
+        let band = threshold - MIGRATE_BAND;
+        let under = match kind(&c.account_id) {
+            Some(AccountKind::ApiKey) => state
+                .sample(&c.account_id)
+                .and_then(|s| s.worst_bucket(now, state.sample_ttl_ms()))
+                .is_none_or(|r| r.utilization < band),
+            _ => {
+                reading_under(state, &c.account_id, FIVE_HOUR, band)
+                    && reading_under(state, &c.account_id, SEVEN_DAY, band)
+            }
+        };
+        under
+            && state
+                .last_shed(&c.account_id)
+                .is_none_or(|at| now - at >= dwell_ms)
+            && state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
+    };
     let destinations =
         |state: &RoutingState, keep: &dyn Fn(&Candidate) -> bool| -> Vec<&'a Candidate> {
             let set: Vec<&'a Candidate> = eligible
@@ -772,21 +795,15 @@ fn move_of<'a>(
             let Some(threshold) = pool.migrate_above_utilization else {
                 return set;
             };
-            let cool: Vec<&'a Candidate> = set
+            let preferred: Vec<&'a Candidate> = set
                 .iter()
                 .copied()
-                .filter(|c| {
-                    reading_under(state, &c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
-                        && reading_under(state, &c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
-                        && state
-                            .last_shed(&c.account_id)
-                            .is_none_or(|at| now - at >= dwell_ms)
-                })
+                .filter(|c| cool(state, c, threshold))
                 .collect();
-            if cool.is_empty() {
+            if preferred.is_empty() {
                 set
             } else {
-                cool
+                preferred
             }
         };
 
@@ -898,12 +915,7 @@ fn move_of<'a>(
     let set = destinations(state, &|c| {
         let shed_it_here = current.shed_from.as_deref() == Some(c.account_id.as_str())
             && current.shed_at.is_some_and(|at| now - at < dwell_ms);
-        reading_under(state, &c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
-            && reading_under(state, &c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
-            && !shed_it_here
-            && state
-                .last_shed(&c.account_id)
-                .is_none_or(|at| now - at >= dwell_ms)
+        cool(state, c, threshold) && !shed_it_here
     });
     (!set.is_empty()).then_some((MigrateReason::Shed, set))
 }

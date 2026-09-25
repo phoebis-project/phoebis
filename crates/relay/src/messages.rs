@@ -47,8 +47,8 @@ use crate::classify::{
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure,
-    ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND,
-    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED,
+    NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -512,7 +512,11 @@ fn client_facts(
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
         Some("account_cancelled") => Outcome::Canceled,
-        Some("accounts_exhausted") | Some("accounts_unavailable") => Outcome::Exhausted,
+        // A pool whose every account is at its in-flight cap had nothing to place the request on either, and the
+        // pool alert and the rollups count it with the other exhaustions.
+        Some("accounts_exhausted") | Some("accounts_unavailable") | Some(ACCOUNTS_AT_CAP) => {
+            Outcome::Exhausted
+        }
         // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
         // selection) or after the last one (the budget's end): the account that answered it is
         // conclusive either way, not a transport or upstream failure.
@@ -2005,11 +2009,18 @@ impl Relay {
                     // it came, and the account keeps its state and a pin that already served. Failing over
                     // would spend another account on a request whose own credential may work again in a
                     // minute, and invalidating the pin would move a session that has no reason to move; a pin
-                    // this request created is released as any client error's is. The manager marks the account
-                    // itself when the refresh ended in invalid_grant, and that mark ends the pin instead.
+                    // this request created is released as any client error's is. An account the refresh found
+                    // marked, by its own invalid_grant or by a disconnect meanwhile, is left to the next selection,
+                    // which ends the pin under the account's state.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        let release = (!matches!(error, AcquireError::ReauthRequired))
+                        let marked = matches!(
+                            error,
+                            AcquireError::Disconnected
+                                | AcquireError::ReauthRequired
+                                | AcquireError::Unpaired
+                        );
+                        let release = (!marked)
                             .then(|| self.release_on(&ctx, head.status))
                             .flatten();
                         return Next::Respond(
