@@ -273,10 +273,28 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Max', 'since', 'Trial ends', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
+expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Trial ends', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
+}
+{
+  // The story dates each subscription by its distance from the anchor, so each needle is the pinned origin moved by
+  // that distance and rendered with fmtDate's own options.
+  const dayOf = (days) => new Date(CLOCK_ORIGIN + days * 86_400_000).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  const chipsOf = (label) => {
+    const card = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    return [...(card?.querySelectorAll('.qcard__chips .chip') ?? [])]
+      .filter((c) => ['Plan', 'Trial ends'].includes(c.querySelector('.chip__label')?.textContent?.trim() ?? ''))
+      .map((c) => [...c.childNodes].map((n) => n.textContent?.trim()).filter(Boolean).join(' '));
+  };
+  const drawn = { business: chipsOf('business'), mail: chipsOf('mail'), team: chipsOf('team') };
+  const wanted = { business: [`Plan Max since ${dayOf(-200)}`], mail: [`Plan Pro since ${dayOf(-20)}`, `Trial ends ${dayOf(8)}`], team: ['Plan Team'] };
+  results.push({
+    name: '/quota each card names its plan with the subscription start, and the trial end where the profile reports one',
+    ok: JSON.stringify(drawn) === JSON.stringify(wanted),
+    missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
+  });
 }
 {
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
