@@ -3127,8 +3127,8 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    // a's shared window is exhausted with a reset a moment behind now: the old clamp-to-a-minute arm ranked
-    // this first on remaining over an inflated score; live_at instead reads it as untouched, on the full week.
+    // a's window is half used with a reset a moment behind now, exactly the case a minute's clamp on hours
+    // would rank first on an inflated score (0.5 over a minute is 30, dwarfing any real remaining allowance).
     st.record_sample(
         "a",
         UtilizationSample {
@@ -3138,7 +3138,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
         .with(
             SEVEN_DAY,
             WindowReading {
-                utilization: 1.0,
+                utilization: 0.5,
                 reset: Some(999),
                 observed_at: 999,
             },
@@ -3280,23 +3280,50 @@ fn the_pace_floor_makes_an_account_last_resort_and_places_by_pace_inside_the_flo
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", sample(0.0, 0.95, 1_000)); // remaining 0.05, below the floor
+    // a's raw score (0.05 remaining over a live 1h reset) beats c's (0.5 remaining over the untouched 168h
+    // default, ~0.003), so only the floor keeps c ahead of it; without the floor a would win outright.
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.95,
+                reset: Some(1_000 + HOUR),
+                observed_at: 1_000,
+            },
+        ),
+    );
     st.record_sample("b", sample(0.0, 0.92, 1_000)); // remaining 0.08, below the floor
     st.record_sample("c", sample(0.0, 0.5, 1_000)); // remaining 0.5, above the floor
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!()
+    };
     assert_eq!(
-        picked(&select(&mut st, &s, &req, &mut rng()).0),
-        "c",
-        "an almost-spent account is kept for when nothing else can serve, so c places first"
+        sel.account.id, "c",
+        "a's raw score would win without the floor, so only the floor keeps c, the sole account above it, ahead"
+    );
+    assert!(
+        sel.trace
+            .skipped
+            .iter()
+            .any(|s| s.account_id == "a" && s.obstacle == "floor"),
+        "{:?}",
+        sel.trace.skipped
     );
 
-    // All three below the floor: the floor partition keeps the wider set, and pace ranks among them.
+    // All three below the floor: the floor partition keeps the wider set, and pace ranks among them by real
+    // score, a's live reset included.
     st.record_sample("c", sample(0.0, 0.97, 1_100)); // remaining 0.03, now below the floor too
     let req2 = request(&s, None, "claude-sonnet-5", true, &[], 1_100);
     assert_eq!(
         picked(&select(&mut st, &s, &req2, &mut rng()).0),
-        "b",
-        "nothing is above the floor, so pace places b, the least spent of the three"
+        "a",
+        "nothing is above the floor, so pace places a, whose live-reset score still beats b's and c's"
     );
 }
 
@@ -3541,4 +3568,63 @@ fn a_fresh_placement_prefers_an_account_under_its_in_flight_cap_and_the_trace_na
         sel.account.id, "a",
         "the ticket dropped, so a is under its cap again"
     );
+}
+
+#[test]
+fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 0), ("c", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a: spent with a reset, the case that read as "cooldown" in the trace.
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(2_000),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    // b: spent with no reset, the case the trace carried nothing for at all.
+    st.record_sample(
+        "b",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization: 1.0,
+                reset: None,
+                observed_at: 1_000,
+            },
+        ),
+    );
+    let req = request(&s, None, "claude-fable-5-1", true, &[], 1_000);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        sel.account.id, "c",
+        "a and b are both spent, so c is the only one left to choose"
+    );
+    for id in ["a", "b"] {
+        assert!(
+            sel.trace
+                .skipped
+                .iter()
+                .any(|sk| sk.account_id == id && sk.obstacle == "spent"),
+            "{id}: {:?}",
+            sel.trace.skipped
+        );
+    }
 }

@@ -45,7 +45,7 @@ impl MigrateReason {
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
-/// relay can put the trace on the bus as JSON without the ledger task touching this crate.
+/// relay can put the trace on the bus as JSON without this crate's callers needing to depend on the ledger.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct SelectionTrace {
     pub strategy: &'static str,
@@ -481,27 +481,35 @@ pub fn select(
     // narrowed when it would otherwise empty the selection, and every candidate a partition drops joins the
     // trace under that partition's name.
     let mut skipped: Vec<Skipped> = Vec::new();
+    // A dated deadline for the accounts the Fable partition drops, kept apart from `skipped`: it answers
+    // `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
+    // `spent` whether or not its reading names a reset, so the deadline never doubles as its own trace label.
+    let mut spent_deadlines: Vec<(String, Obstacle)> = Vec::new();
     if window == SEVEN_DAY_FABLE {
         let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
             .iter()
             .copied()
             .partition(|c| holds_allowance(state, &c.account_id, window, request.now));
-        obstacles.extend(spent.iter().filter_map(|c| {
-            state
+        for c in &spent {
+            skipped.push(Skipped {
+                account_id: c.account_id.clone(),
+                obstacle: "spent",
+            });
+            if let Some(until) = state
                 .sample(&c.account_id)
                 .and_then(|s| s.reading(SEVEN_DAY_FABLE))
                 .and_then(|r| r.reset)
-                .map(|until| {
-                    (
-                        c.account_id.clone(),
-                        Obstacle::Cooldown {
-                            reason: "spent".into(),
-                            until,
-                            window: SEVEN_DAY_FABLE.to_string(),
-                        },
-                    )
-                })
-        }));
+            {
+                spent_deadlines.push((
+                    c.account_id.clone(),
+                    Obstacle::Cooldown {
+                        reason: "spent".into(),
+                        until,
+                        window: SEVEN_DAY_FABLE.to_string(),
+                    },
+                ));
+            }
+        }
         selection_set = left;
     }
     // The threshold is a preference, not a refusal: with every account above it the request goes to the least
@@ -563,7 +571,11 @@ pub fn select(
         request.fallback_ms,
         rng,
     ) else {
-        let obstacles = obstacles.into_iter().map(|(_, o)| o).collect();
+        let obstacles = obstacles
+            .into_iter()
+            .chain(spent_deadlines)
+            .map(|(_, o)| o)
+            .collect();
         return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
     };
     for c in &selection_set {
