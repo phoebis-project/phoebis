@@ -8,6 +8,7 @@ use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use phoebis_bus::{Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
+use phoebis_routing::{PinRef, PinUsage, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
@@ -20,7 +21,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
 use crate::hold::Inspect;
-use crate::messages::{RelayOutcome, Trace};
+use crate::messages::{Guards, RelayOutcome, Trace};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
 use crate::sse::{SseEvent, SseParser};
 
@@ -89,6 +90,41 @@ pub(crate) struct Publish {
     /// session reads the id before this body has finished, so the hand-off cannot wait for `finish`, and a
     /// flush must not overtake it.
     pub on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
+    /// The pin a committed answer renews, sent with the usage `finish` assembled.
+    pub renewal: Option<Renewal>,
+}
+
+/// A committed answer's renewal of its pin, sent once the answer has ended and its usage is known.
+pub(crate) struct Renewal {
+    pub router: RouterHandle,
+    pub pin: PinRef,
+    /// `client` or `keepalive`.
+    pub origin: &'static str,
+    pub canonical_model: String,
+    pub cache_ttl_ms: i64,
+}
+
+impl Renewal {
+    pub(crate) fn send(self, now: i64, usage: Option<&Usage>) {
+        self.router.report(Report::PinRenewed {
+            pin: self.pin,
+            now,
+            usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
+            origin: self.origin,
+            canonical_model: self.canonical_model,
+            cache_ttl_ms: self.cache_ttl_ms,
+        });
+    }
+}
+
+fn pin_usage(usage: &Usage) -> PinUsage {
+    PinUsage {
+        input: usage.input_tokens.unwrap_or(0),
+        cache_read: usage.cache_read_tokens.unwrap_or(0),
+        write_5m: usage.cache_write_5m_tokens.unwrap_or(0),
+        write_1h: usage.cache_write_1h_tokens.unwrap_or(0),
+        output: usage.output_tokens.unwrap_or(0),
+    }
 }
 
 impl Publish {
@@ -250,6 +286,9 @@ impl Publish {
             .first_content_at
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
+        if let Some(renewal) = self.renewal.take() {
+            renewal.send((self.clock)(), usage.as_ref());
+        }
         self.trace
             .complete(
                 &self.outcome,
@@ -322,6 +361,8 @@ pub(crate) struct Relayed<C> {
     pub cancel: CancellationToken,
     pub checkin: Checkin,
     pub decoder: Option<Box<dyn Decoder>>,
+    /// The response's in-flight counts, released when this body ends.
+    pub guards: Guards,
     pub idle_timeout: Duration,
     pub keep_alive: bool,
     pub observer: Option<PostCommit>,
@@ -344,6 +385,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             cancel,
             checkin,
             mut decoder,
+            guards,
             idle_timeout,
             keep_alive,
             mut observer,
@@ -460,6 +502,8 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
         if let Some(publish) = publish {
             publish.finish(&end).await;
         }
+        // Ahead of the sender's drop, so a caller that has read the body's end finds both counts released.
+        drop(guards);
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))

@@ -202,6 +202,10 @@ pub enum Exhaustion {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SelectResult {
     Exhausted(Exhaustion),
+    /// Every account the selection could place on holds its cap; `account_id` is the one it would have chosen.
+    Held {
+        account_id: String,
+    },
     Refused(ResolveError),
     Selected(Selection),
 }
@@ -543,6 +547,12 @@ pub fn select(
         }
         selection_set = left;
     }
+    // With every account that could serve at its cap the request waits for a slot rather than piling onto one.
+    // Judged before the preferences below narrow the set: a hold is for no slot anywhere, never for a
+    // preference that ran out of them. A pinned request never gets here: step 5 renewed it.
+    let held = selection_set
+        .iter()
+        .all(|c| state.in_flight().account(&c.account_id) >= pool.failover.in_flight_cap);
     // The threshold is a preference, not a refusal: with every account above it the request goes to the least
     // bad one rather than answering exhausted while capacity remains.
     if let Some(threshold) = pool.select_below_utilization {
@@ -609,6 +619,14 @@ pub fn select(
             .collect();
         return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
     };
+    if held {
+        return (
+            SelectResult::Held {
+                account_id: chosen.account_id.clone(),
+            },
+            writes,
+        );
+    }
     for c in &selection_set {
         if c.account_id != chosen.account_id {
             skipped.push(Skipped {

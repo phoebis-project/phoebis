@@ -803,9 +803,9 @@ impl Task {
                     SelectResult::Selected(selection) => {
                         self.token(&selection.account.id).child_token()
                     }
-                    SelectResult::Exhausted(_) | SelectResult::Refused(_) => {
-                        CancellationToken::new()
-                    }
+                    SelectResult::Exhausted(_)
+                    | SelectResult::Held { .. }
+                    | SelectResult::Refused(_) => CancellationToken::new(),
                 };
                 let _ = reply.send(SelectAnswer { result, cancel });
             }

@@ -25,6 +25,8 @@ pub struct BodyFacts {
     pub shape: RequestShape,
     /// `None` for a body that is not a JSON object; the same parse `shape` and the rest above read.
     pub chains: Option<Chains>,
+    /// The largest `cache_control.ttl` the body carries, `None` without a marker.
+    pub markers_ttl_ms: Option<i64>,
 }
 
 /// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
@@ -50,6 +52,7 @@ impl BodyFacts {
                 carries_line: false,
                 shape: RequestShape::default(),
                 chains: None,
+                markers_ttl_ms: None,
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
@@ -108,6 +111,7 @@ impl BodyFacts {
             service_tier: text(root.get("service_tier")),
         };
         let chains = Chains::read(&root);
+        let markers_ttl_ms = markers_ttl_ms(&root);
         BodyFacts {
             fresh_user_turn,
             prompt_units,
@@ -116,7 +120,32 @@ impl BodyFacts {
             carries_line,
             shape,
             chains,
+            markers_ttl_ms,
         }
+    }
+}
+
+/// A marker without a `ttl` is the upstream's five-minute default; `1h` is the one other value it takes.
+fn marker_ttl_ms(marker: &Value) -> i64 {
+    match marker.get("ttl").and_then(Value::as_str) {
+        Some("1h") => 3_600_000,
+        _ => 300_000,
+    }
+}
+
+/// The largest TTL of any `cache_control` object anywhere in the body: the tools, the system blocks, the
+/// messages' blocks and a top-level marker all write an entry the pin's cache lives by.
+fn markers_ttl_ms(value: &Value) -> Option<i64> {
+    match value {
+        Value::Object(members) => members
+            .iter()
+            .filter_map(|(name, member)| match (name.as_str(), member) {
+                ("cache_control", Value::Object(_)) => Some(marker_ttl_ms(member)),
+                _ => markers_ttl_ms(member),
+            })
+            .max(),
+        Value::Array(items) => items.iter().filter_map(markers_ttl_ms).max(),
+        _ => None,
     }
 }
 
@@ -393,6 +422,42 @@ mod tests {
             ),
             (None, None, None, None)
         );
+    }
+
+    #[test]
+    fn the_markers_ttl_is_the_largest_marker_anywhere_and_absent_without_one() {
+        let ttl = |body: &str| BodyFacts::read(body.as_bytes()).markers_ttl_ms;
+        assert_eq!(
+            ttl(r#"{"messages":[{"role":"user","content":"hi"}]}"#),
+            None
+        );
+        assert_eq!(
+            ttl(
+                r#"{"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}],"messages":[]}"#
+            ),
+            Some(300_000),
+            "a marker without a ttl is the five-minute default"
+        );
+        assert_eq!(
+            ttl(
+                r#"{"tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"5m"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#
+            ),
+            Some(3_600_000),
+            "the largest wins wherever it sits"
+        );
+        assert_eq!(
+            ttl(r#"{"cache_control":{"type":"ephemeral"},"messages":[]}"#),
+            Some(300_000),
+            "a top-level marker counts"
+        );
+        assert_eq!(
+            BodyFacts::read(phoebis_profile::fixtures::body(
+                phoebis_profile::fixtures::BodyFixture::Oauth
+            ))
+            .markers_ttl_ms,
+            Some(3_600_000)
+        );
+        assert_eq!(BodyFacts::read(b"not json").markers_ttl_ms, None);
     }
 
     #[test]

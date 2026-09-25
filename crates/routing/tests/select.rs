@@ -3472,6 +3472,46 @@ fn a_fresh_placement_prefers_an_account_under_its_in_flight_cap_and_the_trace_na
 }
 
 #[test]
+fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
+    let s = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0), ("c", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut tickets: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .map(|id| st.in_flight().dispatched(id, 1_000))
+        .collect();
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000);
+    let (result, writes) = select(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Held {
+            account_id: "b".into()
+        },
+        "b is the one priority would have chosen"
+    );
+    assert!(
+        writes.is_empty(),
+        "a held answer places nothing: {writes:?}"
+    );
+    assert!(
+        st.pin("k", "s1", "claude-sonnet-5").is_none(),
+        "no pin is made for a request that is held"
+    );
+    drop(tickets.remove(2));
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "c",
+        "a slot on any candidate ends the hold"
+    );
+}
+
+#[test]
 fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 0), ("c", 1)],

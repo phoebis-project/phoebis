@@ -20,8 +20,9 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, EvidenceSource, Exhaustion, KeyRefusal, OverageEvidence, PinRef, Presented, Report,
-    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, MODEL_REJECTED_REASON,
+    resolve, AccountTicket, EvidenceSource, Exhaustion, KeyPermit, KeyRefusal, OverageEvidence,
+    PinRef, Presented, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
@@ -40,11 +41,14 @@ use tokio_util::task::TaskTracker;
 use crate::billing::{restorable_version, Restore};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
-use crate::classify::{classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict};
+use crate::classify::{
+    classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict, MARGIN_MS,
+};
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    auth_failure, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED,
+    METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE,
+    UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -55,11 +59,11 @@ use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
 use crate::observe::{answer_from_json, published_headers, wants_stream};
-use crate::ratelimit::{head_sample, upstream_date, UnifiedHeaders};
+use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, ReturnToPool,
-    MAX_BUFFERED_BODY,
+    drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, Renewal,
+    ReturnToPool, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
@@ -577,6 +581,9 @@ fn latches(trace: &Trace) -> bool {
     trace.kind == Kind::Inference
 }
 
+/// The TTL a renewal names when neither a rewrite nor a marker of the client's own says one.
+const DEFAULT_CACHE_TTL_MS: i64 = 300_000;
+
 /// The wire value a coupled TTL dispatches as, for the bus and the outcome; `None` when the body went as sent.
 fn cache_ttl_ms(ttl: Option<CacheTtl>) -> Option<i64> {
     ttl.map(|t| match t {
@@ -896,6 +903,46 @@ impl Relay {
                 )
                 .await;
         }
+        let pool = snapshot.pool(&key.pool_id);
+        let failover = pool.map(|p| p.failover).unwrap_or_default();
+        // One permit for the whole request, held across every attempt, retry in place and hold until the
+        // response ends. Taken once the body is read, so a refusal is observed with it, and before anything is
+        // selected; the check and the increment are one call under the table's lock.
+        let mut key_permit = match self.router.in_flight().try_acquire_key(
+            &key.id,
+            key.in_flight_cap,
+            (self.clock)(),
+        ) {
+            Some(permit) => Some(permit),
+            None => {
+                trace
+                    .observed(
+                        Some(&key),
+                        None,
+                        &parts.headers,
+                        raw.clone(),
+                        stream,
+                        capture_hours,
+                        facts.shape.clone(),
+                        None,
+                        Vec::new(),
+                        client_facts(&parts.headers, None, Some(&facts)),
+                        presented == Presented::Retired,
+                        key.rotated_at,
+                    )
+                    .await;
+                let seconds = pool.map_or(1, |p| p.failover.retry_in_place_seconds.max(1));
+                return self
+                    .refused(
+                        &trace,
+                        key_in_flight_cap(seconds),
+                        Some(&key),
+                        None,
+                        client_version.as_deref(),
+                    )
+                    .await;
+            }
+        };
         let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
@@ -1079,12 +1126,14 @@ impl Relay {
             fallback_ms,
             identity: &identity,
             key: &key,
+            markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
             original,
             portable,
             raw: &raw,
             request_id: &trace.request_id,
             restore,
+            retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             target: &target,
             trace: &trace,
         };
@@ -1198,6 +1247,21 @@ impl Relay {
                         )
                         .await;
                 }
+                // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
+                // selection place there; past it the account is attempted and the next selection looks elsewhere.
+                SelectResult::Held { account_id } => {
+                    spent += 1;
+                    let deadline = tokio::time::Instant::now() + admitted.retry_in_place;
+                    if !self
+                        .router
+                        .in_flight()
+                        .wait_for_slot(&account_id, failover.in_flight_cap, deadline)
+                        .await
+                    {
+                        attempted.push(account_id);
+                    }
+                    continue;
+                }
             };
             attempted.push(selection.account.id.clone());
             // A reload between admission and this select recomputes candidates from the current registry, past
@@ -1215,6 +1279,7 @@ impl Relay {
                     &answer.cancel,
                     &mut attempt,
                     &mut spent,
+                    &mut key_permit,
                 )
                 .await
             {
@@ -1225,7 +1290,8 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone.
+    /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone. `key_permit` is the
+    /// request's own, which a committed stream takes into its body.
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
@@ -1233,6 +1299,7 @@ impl Relay {
         cancel: &CancellationToken,
         attempt: &mut u8,
         spent: &mut u8,
+        key_permit: &mut Option<KeyPermit>,
     ) -> Leg {
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
         // request goes out to and the credential it carries have to be the pair one snapshot held.
@@ -1408,6 +1475,7 @@ impl Relay {
         };
         let mut fresh = false;
         let mut retried = false;
+        let mut retried_in_place = false;
         let mut replayed = false;
         let mut stripped_once = false;
         let mut stripping = false;
@@ -1420,6 +1488,12 @@ impl Relay {
                 *spent += 1;
             }
             stripping = false;
+            // Per wire attempt, taken before the dial: a pass that ends without committing a stream drops it
+            // with its response half, before the next pass or leg takes one.
+            let ticket = self
+                .router
+                .in_flight()
+                .dispatched(&account.id, (self.clock)());
             admitted
                 .trace
                 .selected(
@@ -1466,6 +1540,7 @@ impl Relay {
                 attempt: *attempt,
                 cache_ttl_ms: cache_ttl_ms(ttl),
                 caller: admitted.caller,
+                can_retry_in_place: !retried_in_place,
                 can_strip: !stripped_once,
                 cancel,
                 client_version: admitted.client_version.clone(),
@@ -1474,6 +1549,8 @@ impl Relay {
                 identity: admitted.identity,
                 injected: &injected,
                 key: admitted.key,
+                key_permit: &mut *key_permit,
+                markers_ttl_ms: admitted.markers_ttl_ms,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
                 memory_key: admitted
@@ -1485,7 +1562,9 @@ impl Relay {
                 portable: admitted.portable,
                 replayed,
                 request_id: admitted.request_id,
+                retry_in_place: admitted.retry_in_place,
                 spent: *spent,
+                ticket: Some(ticket),
                 trace: admitted.trace,
             };
             let request = RawRequest {
@@ -1587,6 +1666,43 @@ impl Relay {
                 }
                 Next::FailOver => return Leg::FailOver,
                 Next::Respond(response) => return Leg::Respond(response),
+                // The same account and the same credential once the throttle has passed; the loop top spends the
+                // slot for the next pass as it does for every pass that is not a strip.
+                Next::RetryInPlace(delay) => {
+                    if until_cancelled(tokio::time::sleep(delay), cancel)
+                        .await
+                        .is_none()
+                    {
+                        let outcome = self.outcome(
+                            admitted.trace,
+                            Some(admitted.key),
+                            Some(admitted.identity),
+                            &account.id,
+                            0,
+                            *attempt,
+                            true,
+                            None,
+                            admitted.client_version.clone(),
+                            Some("account_cancelled"),
+                            pin_epoch,
+                            None,
+                            cache_ttl_ms(ttl),
+                        );
+                        return Leg::Respond(
+                            self.answer(
+                                admitted.trace,
+                                ACCOUNT_CANCELLED.response(admitted.request_id),
+                                outcome,
+                                None,
+                                ResponseFacts::default(),
+                                None,
+                            )
+                            .await,
+                        );
+                    }
+                    retried_in_place = true;
+                    fresh = false;
+                }
                 Next::Strip(items) => {
                     for item in items {
                         skip.insert(item);
@@ -1629,7 +1745,7 @@ impl Relay {
     /// the response or the decision to move on.
     async fn respond<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
         &self,
-        ctx: Responding<'_>,
+        mut ctx: Responding<'_>,
         sent: Sent<C>,
         checkin: Checkin,
     ) -> Next {
@@ -1690,6 +1806,7 @@ impl Relay {
                             caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
+                            guards: ctx.guards(),
                             head: &head,
                             keep_alive: reusable,
                             observer: None,
@@ -1697,6 +1814,7 @@ impl Relay {
                             outcome,
                             prefix,
                             reader,
+                            renewal: None,
                             trace: ctx.trace,
                         })
                         .await,
@@ -1843,6 +1961,7 @@ impl Relay {
                                 buffered.unwrap_or_default(),
                                 ctx.caller,
                                 outcome,
+                                None,
                             )
                             .await,
                         );
@@ -1859,6 +1978,7 @@ impl Relay {
                         buffered.unwrap_or_default(),
                         ctx.caller,
                         outcome,
+                        None,
                     )
                     .await,
                 )
@@ -1912,16 +2032,20 @@ impl Relay {
                     })
                         as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
                 });
-                if let Some(pin) = ctx.pin {
-                    self.router.report(Report::PinRenewed {
-                        pin: pin.clone(),
-                        now: (self.clock)(),
-                        usage: None,
-                        origin: "client",
-                        canonical_model: ctx.identity.canonical_model.clone(),
-                        cache_ttl_ms: ctx.cache_ttl_ms.unwrap_or(300_000),
-                    });
-                }
+                // Sent where the answer ends, the only place its usage is known.
+                let renewal = ctx.pin.map(|pin| Renewal {
+                    router: self.router.clone(),
+                    pin: pin.clone(),
+                    origin: match ctx.trace.kind {
+                        Kind::Probe => "keepalive",
+                        Kind::CountTokens | Kind::Inference => "client",
+                    },
+                    canonical_model: ctx.identity.canonical_model.clone(),
+                    cache_ttl_ms: ctx
+                        .cache_ttl_ms
+                        .or(ctx.markers_ttl_ms)
+                        .unwrap_or(DEFAULT_CACHE_TTL_MS),
+                });
                 let (prefix, observer) = match held {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
@@ -1996,14 +2120,18 @@ impl Relay {
                 };
                 let responded = match buffered {
                     Some(buffered) => {
-                        self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)
-                            .await
+                        self.forward_buffered(
+                            ctx.trace, &head, buffered, ctx.caller, outcome, renewal,
+                        )
+                        .await
                     }
                     None => {
+                        let guards = ctx.guards();
                         self.stream(Forward {
                             caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
+                            guards,
                             head: &head,
                             keep_alive: reusable,
                             observer,
@@ -2013,6 +2141,7 @@ impl Relay {
                             reader: reader.expect(
                                 "a head the table reads no body for still holds its reader",
                             ),
+                            renewal,
                             trace: ctx.trace,
                         })
                         .await
@@ -2025,19 +2154,28 @@ impl Relay {
         let rejected = cooldown
             .as_ref()
             .is_some_and(|c| c.reason == MODEL_REJECTED_REASON);
+        let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
         // A non-portable request keeps its pin: the failed response goes back to the client on the
-        // account that holds its state, and only the cooldown is recorded.
+        // account that holds its state, and only the cooldown is recorded. So does one about to retry in place:
+        // the row is there for the siblings, and the pin stays where the retry lands.
         report_failover(
             &self.router,
             &ctx.account.id,
             &ctx.identity.canonical_model,
             cooldown,
             mark,
-            ctx.portable.then(|| ctx.pin.cloned()).flatten(),
+            ctx.portable
+                .then(|| ctx.pin.cloned())
+                .flatten()
+                .filter(|_| retry_in_place.is_none()),
             ctx.request_id,
             generations,
             arrived,
         );
+        if let Some(delay) = retry_in_place {
+            drop(reader);
+            return Next::RetryInPlace(delay);
+        }
         // A held stream cannot be rewound onto another connection, so the only way not to commit it is
         // to drop it unread; once the budget is spent it goes to the caller as it came.
         if let Some(held) = held {
@@ -2045,11 +2183,13 @@ impl Relay {
                 drop(reader);
                 return Next::FailOver;
             }
+            let guards = ctx.guards();
             return Next::Respond(
                 self.stream(Forward {
                     caller: ctx.caller,
                     cancel: ctx.cancel.clone(),
                     checkin,
+                    guards,
                     head: &head,
                     keep_alive: false,
                     observer: None,
@@ -2058,6 +2198,7 @@ impl Relay {
                     prefix: held.bytes,
                     reader: reader
                         .expect("a streaming head still holds the reader the hold read from"),
+                    renewal: None,
                     trace: ctx.trace,
                 })
                 .await,
@@ -2088,9 +2229,36 @@ impl Relay {
             );
         }
         Next::Respond(
-            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome)
+            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None)
                 .await,
         )
+    }
+
+    /// How long to wait before trying the same account again, for a fail-over this leg can wait out instead: a
+    /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound, no
+    /// mark on the account, no retry in place on this leg yet, and a slot of the budget for the retry. Anything
+    /// else fails over.
+    fn retry_in_place(
+        &self,
+        ctx: &Responding<'_>,
+        head: &ResponseHead,
+        cooldown: Option<&Cooldown>,
+        mark: Option<AccountState>,
+        now: i64,
+    ) -> Option<Duration> {
+        let cooldown = cooldown?;
+        if !ctx.portable
+            || mark.is_some()
+            || !ctx.can_retry_in_place
+            || ctx.spent >= self.limits.max_attempts
+            || cooldown.window != "retry_after"
+            || retry_after(head, now).is_none()
+        {
+            return None;
+        }
+        let delay = cooldown.until.saturating_sub(now).saturating_sub(MARGIN_MS);
+        let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
+        (delay <= ctx.retry_in_place).then_some(delay)
     }
 
     /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
@@ -2350,6 +2518,7 @@ impl Relay {
             caller,
             cancel,
             checkin,
+            guards,
             head,
             keep_alive,
             observer,
@@ -2357,6 +2526,7 @@ impl Relay {
             outcome,
             prefix,
             reader,
+            renewal,
             trace,
         } = forward;
         let (builder, decoder) = match forward_head(head, caller) {
@@ -2379,45 +2549,51 @@ impl Relay {
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
         // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
-        // for it, and a committed 200 needs it too, since the served-model check reads the answer.
-        let publish =
-            (trace.bus_attached() || on_message_id.is_some() || head.status == 200).then(|| {
-                Publish {
-                    trace: trace.clone(),
-                    clock: self.clock.clone(),
-                    outcome: outcome.clone(),
-                    catalog: self.catalog.clone(),
-                    decoder: decoder
-                        .is_none()
-                        .then(|| {
-                            encoding(head)
-                                .ok()
-                                .filter(|e| !matches!(e, Encoding::Identity))
-                                .map(phoebis_transport::decode::decoder)
-                        })
-                        .flatten(),
-                    decode_failed: false,
-                    parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
-                    // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
-                    json: (!event_stream && head.status == 200).then(Vec::new),
-                    usage: Usage::default(),
-                    response: ResponseFacts::default(),
-                    index: 0,
-                    bytes: 0,
-                    first_content_at: None,
-                    saw_tool_use: false,
-                    stream_error: None,
-                    status: head.status,
-                    message_id: None,
-                    pending_message_id: None,
-                    on_message_id,
-                }
-            });
+        // for it, a committed 200 needs it too, since the served-model check reads the answer, and so does a
+        // renewal, which carries the usage the parse assembles.
+        let publish = (trace.bus_attached()
+            || on_message_id.is_some()
+            || head.status == 200
+            || renewal.is_some())
+        .then(|| {
+            Publish {
+                trace: trace.clone(),
+                clock: self.clock.clone(),
+                outcome: outcome.clone(),
+                catalog: self.catalog.clone(),
+                decoder: decoder
+                    .is_none()
+                    .then(|| {
+                        encoding(head)
+                            .ok()
+                            .filter(|e| !matches!(e, Encoding::Identity))
+                            .map(phoebis_transport::decode::decoder)
+                    })
+                    .flatten(),
+                decode_failed: false,
+                parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
+                json: (!event_stream && head.status == 200).then(Vec::new),
+                usage: Usage::default(),
+                response: ResponseFacts::default(),
+                index: 0,
+                bytes: 0,
+                first_content_at: None,
+                saw_tool_use: false,
+                stream_error: None,
+                status: head.status,
+                message_id: None,
+                pending_message_id: None,
+                on_message_id,
+                renewal,
+            }
+        });
         let body = relay_body(
             Relayed {
                 cancel,
                 checkin,
                 decoder,
+                guards,
                 idle_timeout: self.limits.idle_timeout,
                 keep_alive,
                 observer,
@@ -2430,6 +2606,7 @@ impl Relay {
         with_outcome(built(builder, body), outcome)
     }
 
+    /// `renewal` is sent once the answer's usage is read, beside the completion.
     async fn forward_buffered(
         &self,
         trace: &Trace,
@@ -2437,6 +2614,7 @@ impl Relay {
         raw: Bytes,
         caller: &HeaderMap,
         outcome: RelayOutcome,
+        renewal: Option<Renewal>,
     ) -> Response {
         let (builder, decoder) = match forward_head(head, caller) {
             Ok(parts) => parts,
@@ -2497,6 +2675,9 @@ impl Relay {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
         };
+        if let Some(renewal) = renewal {
+            renewal.send((self.clock)(), usage.as_ref());
+        }
         let response = built(builder, Body::from(payload.clone()));
         // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but
         // this path published one above, and a bus that drops it must be detectable rather than uncounted.
@@ -2531,6 +2712,8 @@ struct Forward<'a, C> {
     caller: &'a HeaderMap,
     cancel: CancellationToken,
     checkin: Checkin,
+    /// The response's in-flight counts, which ride the body to its end.
+    guards: Guards,
     head: &'a ResponseHead,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
@@ -2539,6 +2722,8 @@ struct Forward<'a, C> {
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,
+    /// Set for a committed answer on a pinned request; sent when the body ends.
+    renewal: Option<Renewal>,
     trace: &'a Trace,
 }
 
@@ -2558,6 +2743,8 @@ struct Responding<'a> {
     /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
     cache_ttl_ms: Option<i64>,
     caller: &'a HeaderMap,
+    /// Whether this leg has not retried in place yet: one retry per leg.
+    can_retry_in_place: bool,
     /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
     /// not read here; the one-round rule is the only gate.
     can_strip: bool,
@@ -2569,15 +2756,41 @@ struct Responding<'a> {
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],
     key: &'a ApiKeyRow,
+    /// The request's permit, which a committed stream takes into its body.
+    key_permit: &'a mut Option<KeyPermit>,
+    markers_ttl_ms: Option<i64>,
     memory_key: Option<&'a MemoryKey>,
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
     replayed: bool,
     request_id: &'a str,
+    retry_in_place: Duration,
     /// The budget slots spent so far, which the failover and the refresh replay read; a strip retry spends none.
     spent: u8,
+    /// This pass's account ticket, which a committed stream takes into its body.
+    ticket: Option<AccountTicket>,
     trace: &'a Trace,
+}
+
+impl Responding<'_> {
+    /// Both counts for a body that outlives the response half, so they are released when it ends.
+    fn guards(&mut self) -> Guards {
+        Guards {
+            key: self.key_permit.take(),
+            account: self.ticket.take(),
+        }
+    }
+}
+
+/// The in-flight guards a committed stream carries to its end; dropped with the body, whichever way it ends.
+#[derive(Default)]
+pub(crate) struct Guards {
+    // Never read: held for their drops, which are the releases.
+    #[allow(dead_code)]
+    key: Option<KeyPermit>,
+    #[allow(dead_code)]
+    account: Option<AccountTicket>,
 }
 
 /// What the response half decided the account loop should do next.
@@ -2587,6 +2800,8 @@ enum Next {
     /// The refreshed token goes back to the same account.
     Replay(Credential),
     Respond(Response),
+    /// A short throttle: wait this long and try again on the same account with the same credential.
+    RetryInPlace(Duration),
     /// A 400 named these items; strip them and try again on the same account.
     Strip(Vec<Injected>),
 }
@@ -2615,6 +2830,8 @@ struct Admitted<'a> {
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
+    /// The largest TTL of the client's own cache markers, the renewal's TTL when no rewrite applied.
+    markers_ttl_ms: Option<i64>,
     /// The session memory key this request reads under, absent when the request carries no session; a probe
     /// reads under its session's key and the response half records nothing for it.
     memory_key: Option<MemoryKey>,
@@ -2626,6 +2843,9 @@ struct Admitted<'a> {
     request_id: &'a str,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
     restore: Option<RestoreContext>,
+    /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
+    /// longest a held selection waits for a slot.
+    retry_in_place: Duration,
     target: &'a str,
     trace: &'a Trace,
 }

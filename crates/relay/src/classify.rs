@@ -10,7 +10,7 @@ use crate::memory::Injected;
 use crate::ratelimit::{retry_after, UnifiedHeaders};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
-const MARGIN_MS: i64 = 1_000;
+pub(crate) const MARGIN_MS: i64 = 1_000;
 const PERMISSION_MS: i64 = 3_600_000;
 
 /// The window name a rejection row carries; the console shows it beside the deadline.

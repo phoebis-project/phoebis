@@ -3,12 +3,14 @@
 //! reports whether it changed anything so the task knows what to write through.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use phoebis_store::{
     AccountKind, AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow,
     RoutingLoad,
 };
+use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use crate::listing::{row_for, snapshot_date};
 use crate::RegistrySnapshot;
@@ -299,17 +301,30 @@ struct InFlightTable {
     accounts: HashMap<String, HashMap<u64, i64>>,
 }
 
+/// The table and the notifier a freed account slot wakes, shared by the handle, the task and every guard.
+#[derive(Default)]
+struct InFlightShared {
+    table: Mutex<InFlightTable>,
+    freed: Notify,
+}
+
+impl InFlightShared {
+    fn table(&self) -> MutexGuard<'_, InFlightTable> {
+        self.table.lock().expect("in-flight table lock poisoned")
+    }
+}
+
 /// Requests in flight per key and per account, counted from the relay's synchronous calls; shared by the
 /// handle and the task. A key permit is one per request, reserved before selection and held across every
 /// attempt; an account ticket is one per leg, taken at dispatch. Each is released exactly once, by its guard's
 /// drop, when the response it counts ends.
 #[derive(Clone, Default)]
-pub struct InFlight(Arc<Mutex<InFlightTable>>);
+pub struct InFlight(Arc<InFlightShared>);
 
 impl InFlight {
     /// Check and increment under the one lock: the permit, or `None` when `cap` is reached (`None` is no cap).
     pub fn try_acquire_key(&self, key_id: &str, cap: Option<u32>, now: i64) -> Option<KeyPermit> {
-        let mut table = self.0.lock().expect("in-flight table lock poisoned");
+        let mut table = self.0.table();
         let held = table.keys.get(key_id).map(HashMap::len).unwrap_or(0) as u32;
         if cap.is_some_and(|cap| held >= cap) {
             return None;
@@ -322,14 +337,14 @@ impl InFlight {
             .or_default()
             .insert(id, now);
         Some(KeyPermit {
-            table: self.0.clone(),
+            shared: self.0.clone(),
             key_id: key_id.to_string(),
             id,
         })
     }
 
     pub fn dispatched(&self, account_id: &str, now: i64) -> AccountTicket {
-        let mut table = self.0.lock().expect("in-flight table lock poisoned");
+        let mut table = self.0.table();
         let id = table.next_id;
         table.next_id += 1;
         table
@@ -338,15 +353,15 @@ impl InFlight {
             .or_default()
             .insert(id, now);
         AccountTicket {
-            table: self.0.clone(),
+            shared: self.0.clone(),
             account_id: account_id.to_string(),
             id,
         }
     }
 
     pub fn account(&self, account_id: &str) -> u32 {
-        let table = self.0.lock().expect("in-flight table lock poisoned");
-        table
+        self.0
+            .table()
             .accounts
             .get(account_id)
             .map(HashMap::len)
@@ -354,41 +369,69 @@ impl InFlight {
     }
 
     pub fn key(&self, key_id: &str) -> u32 {
-        let table = self.0.lock().expect("in-flight table lock poisoned");
-        table.keys.get(key_id).map(HashMap::len).unwrap_or(0) as u32
+        self.0
+            .table()
+            .keys
+            .get(key_id)
+            .map(HashMap::len)
+            .unwrap_or(0) as u32
     }
 
     /// Drops permits and tickets older than `IN_FLIGHT_RECLAIM_MS` (one hour): a guard whose drop never
     /// landed.
     pub fn expire(&self, now: i64) -> usize {
-        let mut table = self.0.lock().expect("in-flight table lock poisoned");
-        let mut reclaimed = 0;
-        for slots in table.keys.values_mut() {
-            let before = slots.len();
-            slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
-            reclaimed += before - slots.len();
+        let reclaimed = {
+            let mut table = self.0.table();
+            let mut reclaimed = 0;
+            for slots in table.keys.values_mut() {
+                let before = slots.len();
+                slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
+                reclaimed += before - slots.len();
+            }
+            table.keys.retain(|_, slots| !slots.is_empty());
+            for slots in table.accounts.values_mut() {
+                let before = slots.len();
+                slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
+                reclaimed += before - slots.len();
+            }
+            table.accounts.retain(|_, slots| !slots.is_empty());
+            reclaimed
+        };
+        if reclaimed > 0 {
+            self.0.freed.notify_waiters();
         }
-        table.keys.retain(|_, slots| !slots.is_empty());
-        for slots in table.accounts.values_mut() {
-            let before = slots.len();
-            slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
-            reclaimed += before - slots.len();
-        }
-        table.accounts.retain(|_, slots| !slots.is_empty());
         reclaimed
+    }
+
+    /// Resolves when `account_id`'s count is under `cap` or at `deadline`, whichever first; true for a slot.
+    /// The slot is read, not reserved: the caller's next selection takes it or finds it gone.
+    pub async fn wait_for_slot(&self, account_id: &str, cap: u32, deadline: Instant) -> bool {
+        loop {
+            // Registered before the count is read, so a release landing between the read and the wait still
+            // wakes this waiter.
+            let freed = self.0.freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if self.account(account_id) < cap {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, freed).await.is_err() {
+                return self.account(account_id) < cap;
+            }
+        }
     }
 }
 
 /// Dropping releases the key's count once; a permit the purge already reclaimed releases nothing.
 pub struct KeyPermit {
-    table: Arc<Mutex<InFlightTable>>,
+    shared: Arc<InFlightShared>,
     key_id: String,
     id: u64,
 }
 
 impl Drop for KeyPermit {
     fn drop(&mut self) {
-        let mut table = self.table.lock().expect("in-flight table lock poisoned");
+        let mut table = self.shared.table();
         if let Some(slots) = table.keys.get_mut(&self.key_id) {
             slots.remove(&self.id);
             if slots.is_empty() {
@@ -398,21 +441,28 @@ impl Drop for KeyPermit {
     }
 }
 
-/// Dropping releases the account's count once; same reclaim rule.
+/// Dropping releases the account's count once and wakes every waiter on a slot; same reclaim rule.
 pub struct AccountTicket {
-    table: Arc<Mutex<InFlightTable>>,
+    shared: Arc<InFlightShared>,
     account_id: String,
     id: u64,
 }
 
 impl Drop for AccountTicket {
     fn drop(&mut self) {
-        let mut table = self.table.lock().expect("in-flight table lock poisoned");
-        if let Some(slots) = table.accounts.get_mut(&self.account_id) {
-            slots.remove(&self.id);
+        let released = {
+            let mut table = self.shared.table();
+            let Some(slots) = table.accounts.get_mut(&self.account_id) else {
+                return;
+            };
+            let released = slots.remove(&self.id).is_some();
             if slots.is_empty() {
                 table.accounts.remove(&self.account_id);
             }
+            released
+        };
+        if released {
+            self.shared.freed.notify_waiters();
         }
     }
 }

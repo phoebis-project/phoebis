@@ -2191,6 +2191,88 @@ fn the_purge_reclaims_a_permit_and_a_ticket_whose_guard_never_dropped() {
 }
 
 #[tokio::test]
+async fn a_completion_wakes_a_waiter_and_the_bound_ends_the_wait() {
+    use phoebis_routing::{InFlight, IN_FLIGHT_RECLAIM_MS};
+    use tokio::time::Instant;
+    let in_flight = InFlight::default();
+
+    // A completion: the waiter resolves with a slot as soon as the ticket drops, long before its bound.
+    let ticket = in_flight.dispatched("a", 1_000);
+    let waiter = tokio::spawn({
+        let in_flight = in_flight.clone();
+        async move {
+            in_flight
+                .wait_for_slot("a", 1, Instant::now() + Duration::from_secs(30))
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !waiter.is_finished(),
+        "a is at its cap, so the waiter waits"
+    );
+    let freed = Instant::now();
+    drop(ticket);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("the drop wakes the waiter")
+            .unwrap(),
+        "a slot opened"
+    );
+    assert!(freed.elapsed() < Duration::from_secs(2));
+
+    // The purge: a reclaimed ticket frees its slot the way a drop does.
+    let stale = in_flight.dispatched("a", 1_000);
+    let waiter = tokio::spawn({
+        let in_flight = in_flight.clone();
+        async move {
+            in_flight
+                .wait_for_slot("a", 1, Instant::now() + Duration::from_secs(30))
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished());
+    assert_eq!(in_flight.expire(1_000 + IN_FLIGHT_RECLAIM_MS + 1), 1);
+    assert!(tokio::time::timeout(Duration::from_secs(2), waiter)
+        .await
+        .expect("the purge wakes the waiter")
+        .unwrap());
+    drop(stale);
+
+    // The bound: with the slot still taken the wait ends at its deadline without one, and a release on
+    // another account does not end it early.
+    let held = in_flight.dispatched("a", 2_000);
+    let other = in_flight.dispatched("b", 2_000);
+    let started = Instant::now();
+    let waiter = tokio::spawn({
+        let in_flight = in_flight.clone();
+        async move {
+            in_flight
+                .wait_for_slot("a", 1, Instant::now() + Duration::from_millis(300))
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(other);
+    assert!(
+        !waiter.await.unwrap(),
+        "the bound passed with a still at its cap"
+    );
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert_eq!(in_flight.account("a"), 1);
+
+    // Under the cap already: no wait at all.
+    assert!(
+        in_flight
+            .wait_for_slot("a", 2, Instant::now() + Duration::from_secs(30))
+            .await
+    );
+    drop(held);
+}
+
+#[tokio::test]
 async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);

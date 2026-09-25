@@ -14,7 +14,7 @@ use bytes::{Buf, BytesMut};
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{watch, Notify};
+use tokio::sync::{oneshot, watch, Notify};
 use tokio::task::JoinHandle;
 
 /// Waits for something a background task of the router or the fake produces. The deadline is generous because
@@ -193,6 +193,7 @@ impl FakeUpstream {
             connections: AtomicU64::new(0),
             conns: Mutex::new(HashMap::new()),
             gate: Notify::new(),
+            held: Mutex::new(VecDeque::new()),
             released: AtomicBool::new(false),
         });
         let wire = Arc::new(wire);
@@ -300,6 +301,31 @@ impl FakeUpstream {
         self.shared.gate.notify_waiters();
     }
 
+    /// Lets the oldest responder still held at its gate continue and leaves the rest held, so a test can end one
+    /// stream of several. Waits for a responder to reach its gate first: the client can hold a committed head
+    /// a moment before the responder that wrote it has parked.
+    pub async fn release_one(&self) {
+        let give_up = Instant::now() + Duration::from_secs(5);
+        loop {
+            let next = self.shared.held.lock().unwrap().pop_front();
+            match next {
+                Some(open) => {
+                    // A responder the latch already let go, or one whose connection ended, dropped its end.
+                    if open.send(()).is_ok() {
+                        return;
+                    }
+                }
+                None => {
+                    assert!(
+                        Instant::now() < give_up,
+                        "fake-upstream: no responder was held to release"
+                    );
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
+    }
+
     /// Answers only the requests that carry `credential`, ahead of every prefix-only rule, so several accounts
     /// can be scripted independently against one listener.
     pub fn add_credential_rule(&self, credential: &str, path_prefix: &str, respond: Respond) {
@@ -398,6 +424,8 @@ struct Shared {
     connections: AtomicU64,
     conns: Mutex<HashMap<u64, ConnHandle>>,
     gate: Notify,
+    /// One opener per responder parked at its gate, oldest first, for `release_one`.
+    held: Mutex<VecDeque<oneshot::Sender<()>>>,
     released: AtomicBool,
 }
 
@@ -554,18 +582,24 @@ impl Shared {
         });
     }
 
-    /// Blocks until `release()` has latched the gate open. The `Notified` future is created before the flag
-    /// check on every loop iteration, so a `release()` landing between the check and the `.await` is still
-    /// observed (`Notify` captures that ordering); the flag itself covers a `release()` that already happened
-    /// before this call started, which `notify_waiters()` alone would miss since it only wakes listeners that
-    /// existed at the time it was called.
+    /// Blocks until `release()` has latched the gate open or `release_one()` picked this responder. The
+    /// `Notified` future is created before the flag check on every loop iteration, so a `release()` landing
+    /// between the check and the `.await` is still observed (`Notify` captures that ordering); the flag itself
+    /// covers a `release()` that already happened before this call started, which `notify_waiters()` alone would
+    /// miss since it only wakes listeners that existed at the time it was called.
     async fn wait_for_release(&self) {
+        let (open, opened) = oneshot::channel();
+        self.held.lock().unwrap().push_back(open);
+        tokio::pin!(opened);
         loop {
             let notified = self.gate.notified();
             if self.released.load(Ordering::SeqCst) {
                 return;
             }
-            notified.await;
+            tokio::select! {
+                _ = notified => {}
+                _ = &mut opened => return,
+            }
         }
     }
 }

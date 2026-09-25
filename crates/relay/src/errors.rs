@@ -20,6 +20,8 @@ pub(crate) struct Failure {
     pub error_type: &'static str,
     pub code: &'static str,
     pub message: &'static str,
+    /// The `Retry-After` the answer carries, in seconds.
+    pub retry_after: Option<u64>,
 }
 
 pub fn anthropic_error(
@@ -48,13 +50,34 @@ pub fn anthropic_error(
 
 impl Failure {
     pub(crate) fn response(&self, request_id: &str) -> Response {
-        anthropic_error(
+        let mut response = anthropic_error(
             self.status,
             self.error_type,
             self.code,
             self.message,
             request_id,
-        )
+        );
+        if let Some(seconds) = self.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        }
+        response
+    }
+}
+
+/// The error code of the per-key cap refusal.
+pub const KEY_IN_FLIGHT_CAP: &str = "key_in_flight_cap";
+
+/// The per-key cap refusal: 429 `rate_limit_error`, code `key_in_flight_cap`, `Retry-After` in seconds. No
+/// `x-should-retry`: the client's own retry policy for a 429 decides.
+pub(crate) fn key_in_flight_cap(retry_after_seconds: u64) -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: KEY_IN_FLIGHT_CAP,
+        message: "this key has as many requests in flight as it allows",
+        retry_after: Some(retry_after_seconds),
     }
 }
 
@@ -72,6 +95,7 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
         error_type: "authentication_error",
         code,
         message,
+        retry_after: None,
     }
 }
 
@@ -91,6 +115,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "api_error",
             code: "accounts_unavailable",
             message: "the bound account cannot serve requests",
+            retry_after: None,
         },
         // The caller is already gone; the answer exists so the request still gets a row in the ledger.
         RelayError::BodyIncomplete => Failure {
@@ -98,6 +123,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "request_incomplete",
             message: "the request body ended before it was complete",
+            retry_after: None,
         },
         // Naming the member is what lets a client author see which part of its body the relay has to find;
         // no value of the body is echoed back.
@@ -119,18 +145,21 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                     ),
                 },
             },
+            retry_after: None,
         },
         RelayError::BodyTimeout => Failure {
             status: StatusCode::REQUEST_TIMEOUT,
             error_type: "invalid_request_error",
             code: "request_timeout",
             message: "the request body did not arrive in time",
+            retry_after: None,
         },
         RelayError::BodyTooLarge => Failure {
             status: StatusCode::PAYLOAD_TOO_LARGE,
             error_type: "request_too_large",
             code: "request_too_large",
             message: "the request body is too large",
+            retry_after: None,
         },
         // An unfinished scan proves nothing about the members past where it stopped, so it is refused rather
         // than admitted on what was read so far.
@@ -139,12 +168,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "invalid_body",
             message: "the request body nests deeper than the relay reads",
+            retry_after: None,
         },
         RelayError::Cch(_) | RelayError::NotAnObject => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "invalid_body",
             message: "the request body is not a valid Messages request",
+            retry_after: None,
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
         // the profile, and the operator re-pins rather than the relay guessing what the upstream now expects.
@@ -153,24 +184,28 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "client_drift",
             message: "the client's version suffix does not reproduce from the prompt and the user agent; re-pin the router to this client version",
+            retry_after: None,
         },
         RelayError::ClientDrift { .. } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
             message: "the client's billing hash does not match the pinned profile; re-pin the router to this client version",
+            retry_after: None,
         },
         RelayError::InvalidModel => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "invalid_model",
             message: "the request body's model is not a usable model name",
+            retry_after: None,
         },
         RelayError::NoModel => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "missing_model",
             message: "the request body has no model",
+            retry_after: None,
         },
     }
 }
@@ -183,6 +218,7 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         error_type: "authentication_error",
         code: "auth_unknown",
         message: "the presented API key is not valid",
+        retry_after: None,
     }
 }
 
@@ -203,6 +239,7 @@ pub(crate) const ACCOUNT_CANCELLED: Failure = Failure {
     error_type: "api_error",
     code: "account_cancelled",
     message: "the bound account was disconnected while the request was in flight",
+    retry_after: None,
 };
 
 pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
@@ -210,6 +247,7 @@ pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     error_type: "invalid_request_error",
     code: "method_not_allowed",
     message: "the method is not supported on this route",
+    retry_after: None,
 };
 
 pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
@@ -217,6 +255,7 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
     error_type: "not_found_error",
     code: "model_not_allowed",
     message: "model not allowed for this key",
+    retry_after: None,
 };
 
 pub(crate) const MODEL_REJECTED: Failure = Failure {
@@ -224,6 +263,7 @@ pub(crate) const MODEL_REJECTED: Failure = Failure {
     error_type: "not_found_error",
     code: "model_rejected",
     message: "every account in this pool rejected the model",
+    retry_after: None,
 };
 
 pub(crate) const NOT_FOUND: Failure = Failure {
@@ -231,6 +271,7 @@ pub(crate) const NOT_FOUND: Failure = Failure {
     error_type: "not_found_error",
     code: "not_found",
     message: "the requested resource was not found",
+    retry_after: None,
 };
 
 pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
@@ -238,6 +279,7 @@ pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
     error_type: "api_error",
     code: "router_unavailable",
     message: "the router is not available",
+    retry_after: None,
 };
 
 /// The upstream may or may not have received the request; either way the relay has no response to forward.
@@ -246,6 +288,7 @@ pub(crate) const UPSTREAM_UNREACHABLE: Failure = Failure {
     error_type: "api_error",
     code: "upstream_unreachable",
     message: "the upstream did not answer",
+    retry_after: None,
 };
 
 #[cfg(test)]

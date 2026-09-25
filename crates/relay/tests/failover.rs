@@ -1232,3 +1232,78 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe_folds_no_burn() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":100,"cache_read_input_tokens":50,"output_tokens":20}}"#
+                .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let pin = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.burn > 0.0)
+    })
+    .await;
+    assert_eq!(
+        pin.last_input_tokens, 150,
+        "the answer's usage reached the pin"
+    );
+    assert_eq!(
+        pin.cache_ttl_ms, 3_600_000,
+        "no rewrite applied, so the client's own one-hour markers name the TTL"
+    );
+    h.clock
+        .store(NOW + 60_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                allow_oauth: false,
+            },
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let probed = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.last_refresh_at == NOW + 60_000)
+    })
+    .await;
+    assert_eq!(
+        (probed.epoch, probed.burn, probed.last_input_tokens),
+        (pin.epoch, pin.burn, pin.last_input_tokens),
+        "a probe's renewal stamps the refresh and folds none of its usage"
+    );
+    up.shutdown().await;
+}

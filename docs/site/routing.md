@@ -63,6 +63,8 @@ Every field, in the order the request body takes them:
 | `source_dwell_seconds` | `900` | at least 60 |
 | `migrate_when_spent` | `true` | `true` or `false` |
 | `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
+| `retry_in_place_seconds` | `10` | 0 to 300; see Retry in place |
+| `in_flight_cap` | `16` | at least 1; see In-flight caps |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
@@ -208,11 +210,12 @@ A pin lasts `affinity_ttl_seconds` from its last use: while it is live and its a
 request returns to that account, and stickiness wins over priority even across a later priority change. A pool
 with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins at all.
 
-Narrowing then trims what is left, each a preference that falls back to the wider set rather than stranding the
-request: a model-specific window (a canonical id containing `fable`) at or above 1 drops the account outright;
-`select_below_utilization` drops every account at or above that threshold in 5-hour utilization; an account
-already at the pool's `in_flight_cap` is skipped for a fresh placement; and an account winding down toward its
-subscription end (see **Subscription end**, below) is skipped for a fresh placement too.
+Narrowing then trims what is left, each a preference that falls back to the wider set rather than stranding the request:
+a model-specific window (a canonical id containing `fable`) at or above 1 drops the account outright;
+`select_below_utilization` drops every account at or above that threshold in 5-hour utilization; an account already at
+the pool's `in_flight_cap` is skipped for a fresh placement, and with every account at its cap the request is held for a
+slot instead (see **In-flight caps**, below); and an account winding down toward its subscription end (see
+**Subscription end**, below) is skipped for a fresh placement too.
 
 What remains is ordered in three kind groups, plan quota, overage, then API key, whenever `prefer_subscription`
 is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier. `pace`
@@ -376,15 +379,17 @@ Each client request runs at most `routing.max_attempts` wire submissions; a same
 failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps
 says. Each attempt goes through these steps:
 
-1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified
-   rate-limit headers the client's automatic continue reads; `untimed` answers `503` with error code
-   `accounts_unavailable` and no `Retry-After`, since only an operator can clear it. Both carry an
-   Anthropic-shaped error body.
+1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified rate-limit
+   headers the client's automatic continue reads; `untimed` answers `503` with error code `accounts_unavailable` and no
+   `Retry-After`, since only an operator can clear it. Both carry an Anthropic-shaped error body. `held` waits for a
+   slot and asks again ([in-flight caps](#in-flight-caps)).
 2. Acquire the account's credential, apply its body edits, and send on its dispatch path.
-3. Classify the head. A failover row on a portable request records the cooldown, invalidates the matching pin,
-   and returns to step 1; on a non-portable request it records the cooldown and commits the failed response
-   instead. Any other row commits and relays the response.
-4. On commit, renew the pin: the served account is final for this request.
+3. Classify the head. A short throttle on a portable request is waited out on the same account
+   ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
+   the matching pin, and returns to step 1; on a non-portable request it records the cooldown and commits the failed
+   response instead. Any other row commits and relays the response.
+4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
+   request.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -397,6 +402,32 @@ it corrects the router's own edit rather than trying another upstream.
 The Upstreams view shows what an upstream is cooling under in a cooling-down block: one line per scope, the whole
 upstream or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
 by model.
+
+### Retry in place
+
+A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
+waited out on the same account and retried there once, with the same credential. The cooldown row is still recorded, so
+a sibling request selecting meanwhile skips the account, and the session's pin stays where it is. The retry is a wire
+submission like any other and costs one attempt of `routing.max_attempts`, so it runs only while the budget has one
+left; without one, the throttle is the client's answer. A second throttle on the retry, a `Retry-After` past the bound,
+a throttle that names no `Retry-After`, and a request bound to its account all take the failover path above.
+
+### In-flight caps
+
+**Per account.** Every wire submission counts against its account from its dispatch until its response ends: a buffered
+answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The count
+is kept by the relay itself; no report is involved. An account at the pool's `in_flight_cap` (default 16) is passed over
+while a sibling is under it. Only when every account that could serve is at its cap is the request held: it waits up to
+`retry_in_place_seconds` for a slot on the account it would have chosen and lands there when one frees; past the bound
+it is selected again with that account passed over. A hold costs one attempt of `routing.max_attempts`. A session
+already pinned to the account is never held: the cap steers new placements and never moves a pin.
+
+**Per key.** A key's own `in_flight_cap`, unset by default, counts each request once, from its admission, before
+anything is selected, until its response ends. The count is held across every attempt, retry, and hold, so a request
+sleeping in a retry in place keeps its key's slot. A request past the cap is refused before it reaches an account: `429`
+with the error type `rate_limit_error`, the error code `key_in_flight_cap`, and a `Retry-After` of the pool's
+`retry_in_place_seconds`, one second when that is 0. The refused request is observed with its body and gets its own
+request row under that code.
 
 ### When nothing can serve
 
