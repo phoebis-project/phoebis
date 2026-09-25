@@ -1425,6 +1425,11 @@ m = await mount('/models');
     // Each upstream in the cooling column is its own link, so the operator reaches the block that clears it.
     const links = [...(rulesCard()?.querySelectorAll('tbody td:last-child a') ?? [])].map((a) => a.getAttribute('href'));
     results.push({ name: '/models the cooling column links each upstream', ok: links.length > 0 && links.every((h) => /^\/upstreams\/[a-z]+$/.test(h ?? '')), missing: links });
+    results.push({
+      name: '/models a deny entry carries no cooling upstream even when one cools a model it matches',
+      ok: drawn.includes('key | Deny | * | -'),
+      missing: drawn,
+    });
   }
   const state = await api.getModelsState();
   const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === c.querySelector('.card__title')?.textContent));
@@ -3000,7 +3005,7 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
   const want = {
     Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Outbound gzip=off', 'compatibility.outbound_gzip'], ['Profile=claude-code-2.1.269-linux-x64', ''], ['Usage entrypoint=cli', '']],
     Quota: [['Poll interval (seconds)=3,600', 'quota.poll_interval_seconds'], ['Sample retention (days)=30', 'quota.sample_retention_days']],
-    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts']],
+    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
     Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
     Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
   };

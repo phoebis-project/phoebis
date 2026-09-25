@@ -512,7 +512,8 @@ export class MockApi implements Api {
     const memberIds = new Set((pool?.members ?? []).map((m) => m.accountId));
     const cooldowns = this.modelCooldowns().filter((c) => memberIds.has(c.accountId));
     const rules = processRules(key.modelRules, key.modelRulesMode, poolRules).map((r) => ({
-      cooldowns: cooldowns.filter((c) => matchesModelPattern(r.pattern, c.scope.slice(MODEL_SCOPE_PREFIX.length))),
+      // A denied model is never routed, so its cooldowns say nothing about the key.
+      cooldowns: r.not ? [] : cooldowns.filter((c) => matchesModelPattern(r.pattern, c.scope.slice(MODEL_SCOPE_PREFIX.length))),
       level: r.level,
       not: r.not,
       pattern: r.pattern,

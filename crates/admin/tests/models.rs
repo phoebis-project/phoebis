@@ -10,6 +10,7 @@ use common::{get, json, login, NOW};
 use serde_json::json as j;
 
 const MODEL: &str = "claude-haiku-4-5-20251001";
+const OPUS_MODEL: &str = "claude-opus-5-20260301";
 
 fn report_cooldown(account_id: &str, scope: &str, until: i64) -> Report {
     Report::Cooldown {
@@ -47,10 +48,16 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 overage_policy: OveragePolicy::Allow,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
-                model_rules: vec![ModelRule {
-                    pattern: "claude-haiku-*".into(),
-                    not: true,
-                }],
+                model_rules: vec![
+                    ModelRule {
+                        pattern: "claude-haiku-*".into(),
+                        not: true,
+                    },
+                    ModelRule {
+                        pattern: "claude-opus-*".into(),
+                        not: true,
+                    },
+                ],
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
@@ -85,7 +92,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 expires_at: None,
                 model_rules: vec![ModelRule {
                     pattern: "claude-opus-*".into(),
-                    not: true,
+                    not: false,
                 }],
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
@@ -107,6 +114,11 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
         &format!("model:{MODEL}"),
         NOW + 1_800_000,
     ));
+    parts.router.report(report_cooldown(
+        "business",
+        &format!("model:{OPUS_MODEL}"),
+        NOW + 1_800_000,
+    ));
 
     let body = json(get(&parts.app, "/admin/keys/desktop/models", Some(&cookie)).await).await;
     assert_eq!(body["key_id"], "desktop");
@@ -116,21 +128,30 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
     let rules = body["rules"].as_array().unwrap();
     assert_eq!(
         rules.len(),
-        2,
-        "the key's own entry, then the pool's under extend"
+        3,
+        "the key's allow entry, then the pool's two entries under extend"
     );
     assert_eq!(rules[0]["level"], "key");
     assert_eq!(rules[0]["pattern"], "claude-opus-*");
-    assert_eq!(rules[0]["not"], true);
-    assert!(
-        rules[0]["cooldowns"].as_array().unwrap().is_empty(),
-        "the haiku cooldown matches no opus entry"
+    assert_eq!(rules[0]["not"], false);
+    assert_eq!(
+        rules[0]["cooldowns"],
+        j!([{ "account_id": "business", "scope": format!("model:{OPUS_MODEL}"), "reason": "model_rejected", "until": NOW + 1_800_000, "window": "model_rejection", "set_at": NOW }]),
+        "the key's allow entry answers the opus cooldown its pattern matches"
     );
     assert_eq!(rules[1]["level"], "pool");
     assert_eq!(rules[1]["pattern"], "claude-haiku-*");
-    assert_eq!(
-        rules[1]["cooldowns"],
-        j!([{ "account_id": "business", "scope": format!("model:{MODEL}"), "reason": "model_rejected", "until": NOW + 1_800_000, "window": "model_rejection", "set_at": NOW }]),
+    assert_eq!(rules[1]["not"], true);
+    assert!(
+        rules[1]["cooldowns"].as_array().unwrap().is_empty(),
+        "a denied model is never routed, so the matching haiku cooldown says nothing about this deny entry"
+    );
+    assert_eq!(rules[2]["level"], "pool");
+    assert_eq!(rules[2]["pattern"], "claude-opus-*");
+    assert_eq!(rules[2]["not"], true);
+    assert!(
+        rules[2]["cooldowns"].as_array().unwrap().is_empty(),
+        "a denied model is never routed, so the matching opus cooldown says nothing about this deny entry"
     );
 
     assert_eq!(

@@ -179,14 +179,9 @@ test('a key\'s processed rule list decodes with the level, the rule, and the coo
   assert.equal(km.longContextTwins, true);
   assert.deepEqual(
     km.rules.map((r) => [r.level, r.pattern, r.not, r.cooldowns.length]),
-    [['key', 'claude-opus-*', true, 0], ['pool', 'claude-haiku-*', true, 1]],
-    'the opus entry matches no cooldown and the haiku entry carries the live one',
+    [['key', 'claude-opus-*', true, 0], ['pool', 'claude-haiku-*', true, 0]],
+    'a denied model is never routed, so neither deny entry carries the live haiku cooldown',
   );
-  const cooldown = km.rules[1].cooldowns[0];
-  assert.equal(cooldown.accountId, 'business');
-  assert.equal(cooldown.scope, 'model:claude-haiku-4-5-20251001');
-  assert.equal(cooldown.reason, 'model_rejected');
-  assert.ok(isIso(cooldown.until) && isIso(cooldown.setAt));
 });
 
 test('the model state decodes the cooldowns grouped by model, and the rejections and permits with their detail lifted', () => {
@@ -632,7 +627,7 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.deepEqual(s.quota, { pollIntervalSeconds: wire.quota.poll_interval_seconds, sampleRetentionDays: wire.quota.sample_retention_days });
-  assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds });
+  assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');

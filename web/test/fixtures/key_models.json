@@ -16,16 +16,7 @@
         "level": "pool",
         "pattern": "claude-haiku-*",
         "not": true,
-        "cooldowns": [
-          {
-            "account_id": "business",
-            "scope": "model:claude-haiku-4-5-20251001",
-            "reason": "model_rejected",
-            "until": 2800000,
-            "window": "model_rejection",
-            "set_at": 1000000
-          }
-        ]
+        "cooldowns": []
       }
     ]
   }

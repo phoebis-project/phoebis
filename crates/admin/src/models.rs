@@ -67,15 +67,20 @@ pub(crate) async fn key_models(
     let rule_rows: Vec<Value> = processed
         .iter()
         .map(|entry| {
-            let mut matching: Vec<&CooldownRow> = cooldowns
-                .iter()
-                .filter(|c| {
-                    c.until > now
-                        && members.iter().any(|m| m.account_id == c.account_id)
-                        && model_of(&c.scope)
-                            .is_some_and(|model| pattern::matches(&entry.rule.pattern, model))
-                })
-                .collect();
+            // A denied model is never routed, so its cooldowns say nothing about the key.
+            let mut matching: Vec<&CooldownRow> = if entry.rule.not {
+                Vec::new()
+            } else {
+                cooldowns
+                    .iter()
+                    .filter(|c| {
+                        c.until > now
+                            && members.iter().any(|m| m.account_id == c.account_id)
+                            && model_of(&c.scope)
+                                .is_some_and(|model| pattern::matches(&entry.rule.pattern, model))
+                    })
+                    .collect()
+            };
             matching.sort_by(|a, b| a.account_id.cmp(&b.account_id));
             json!({
                 "level": entry.level.as_str(),

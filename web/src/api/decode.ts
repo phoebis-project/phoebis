@@ -420,7 +420,7 @@ export function decodeSettings(v: unknown): Settings {
     pricing: decodePricing(s.pricing),
     quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
-    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds) },
+    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), catalogRefreshSeconds: num(route.catalog_refresh_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds), startupFetchSeconds: num(route.startup_fetch_seconds) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
     usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },
