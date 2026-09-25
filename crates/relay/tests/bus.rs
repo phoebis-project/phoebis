@@ -772,7 +772,11 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
     );
 
     // The compacted flag reaches the router: a request naming it is cold and restamps the pin to its own
-    // hashes, whatever the static hash says.
+    // hashes, whatever the static hash says. This body continues the pin's own tail (it is the auxiliary
+    // request's body, unchanged), so the hash-restamp alone does not tell `Cold` from the continuation
+    // fallback's own `Refresh`, which stamps identical hashes; `last_refresh_at` is the one field `renew` sets
+    // differently between the two verdicts (0 for `Cold`, the clock for `Refresh`), so it is what actually
+    // proves the flag was read.
     let compacted_root = auxiliary_body;
     let compacted_chains =
         phoebis_relay::Chains::read(&compacted_root).expect("the body is a JSON object");
@@ -794,7 +798,11 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
     assert_eq!(
         (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),
         (compacted_chains.static_hash(), compacted_chains.tail_hash()),
-        "a compacted request is cold and restamps the pin to its own hashes"
+        "a compacted request restamps the pin to its own hashes"
+    );
+    assert_eq!(
+        pins[0].last_refresh_at, 0,
+        "cold zeroes the refresh; the continuation fallback's own Refresh would leave it at the clock instead"
     );
 
     // The header-less path: no class and no compacted header selects with neither fact.

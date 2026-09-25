@@ -90,10 +90,10 @@ pub struct Bucket {
     pub reset: Option<i64>,
 }
 
-/// `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`; `None` when no family is
-/// present, when its `limit` does not parse to a nonzero value, or when its `remaining` does not parse: a
-/// malformed header must not move a pin, so a family it cannot trust is dropped rather than read as some
-/// particular utilization.
+/// `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`. A family is `None` when
+/// its `limit` does not parse to a nonzero value or its `remaining` does not parse: a malformed header must not
+/// move a pin, so a family it cannot trust is dropped rather than read as some particular utilization. The
+/// whole answer is `None` only once every family has dropped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BucketHeaders {
     pub requests: Option<Bucket>,
