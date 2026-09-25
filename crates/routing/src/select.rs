@@ -3,8 +3,9 @@
 use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy};
 use rand::{Rng, RngExt};
 
-use crate::state::{PinRef, RoutingState, StateWrite, Tier};
-use crate::{Candidate, RegistrySnapshot, ResolveError};
+use crate::state::{PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use crate::windows::window_for;
+use crate::{term, Candidate, RegistrySnapshot, ResolveError};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRequest {
@@ -30,8 +31,43 @@ pub enum MigrateReason {
     Utilization,
 }
 
+impl MigrateReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MigrateReason::Overage => "overage",
+            MigrateReason::Spent => "spent",
+            MigrateReason::Utilization => "utilization",
+        }
+    }
+}
+
 /// The hysteresis band under the migrate threshold: a destination counts only below `threshold - MIGRATE_BAND`.
 pub const MIGRATE_BAND: f64 = 0.05;
+
+/// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
+/// relay can put the trace on the bus as JSON without the ledger task touching this crate.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct SelectionTrace {
+    pub strategy: &'static str,
+    /// The tier the choice was made in (group, priority, overage bit) as a three-element array; `None` for a
+    /// renewed pin.
+    pub tier: Option<Tier>,
+    pub renewed: bool,
+    pub moved: Option<&'static str>,
+    /// Every candidate the choice passed over.
+    pub skipped: Vec<Skipped>,
+}
+
+/// One candidate a choice passed over, and why; serializes as `{"account_id": ..., "obstacle": ...}` so the
+/// console decodes a named object, not a tuple.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Skipped {
+    pub account_id: String,
+    /// A step-2 obstacle (`attempted`, `cooldown`, `operator`, `overage`, `subscription_ended`), or a
+    /// partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`, or `ranked` for an
+    /// eligible sibling the strategy did not pick.
+    pub obstacle: &'static str,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
@@ -44,6 +80,7 @@ pub struct Selection {
     /// The account's overage state at this selection, so an edit that prices a write reads the same fact the
     /// selector did.
     pub in_overage: bool,
+    pub trace: SelectionTrace,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -78,73 +115,42 @@ enum Obstacle {
         until: i64,
         window: String,
     },
+    /// Cancelled and past the saved end.
+    Ended,
     Operator,
 }
 
-/// The window whose reset refunds an account's allowance for a model. The 5h window is not among them: its
-/// expiry does not refund the plan, so an earlier 5h reset does not mean capacity comes back sooner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Window {
-    Fable,
-    SevenDay,
-}
-
-/// The classifier's name for the model-scoped weekly window, so an account excluded here dates an exhaustion
-/// the way the 7d_oi rejection it anticipates would.
-const FABLE_WINDOW: &str = "seven_day_fable";
-
-fn window_of(canonical_model: &str) -> Window {
-    if canonical_model.contains("fable") {
-        Window::Fable
-    } else {
-        Window::SevenDay
-    }
-}
-
-/// Whether an account can still serve a request for the model-scoped window. No sample, or a sample that never
-/// read that window, counts as allowance, the way `Strategy::Pace` scores an unsampled account as untouched.
-///
-/// A window read full excludes only while the reading stands for it: the reset the sample announced is the
-/// moment the window refunds, and a reading that announced none is worth no more than the interval the router
-/// re-reads on, or one full window would keep an account out until the process restarts.
-fn holds_fable_allowance(state: &RoutingState, account_id: &str, now: i64) -> bool {
-    let Some(sample) = state.sample(account_id) else {
-        return true;
-    };
-    if sample.fable.unwrap_or(0.0) < 1.0 {
-        return true;
-    }
-    match sample.fable_reset {
-        Some(reset) => reset <= now,
-        None => now - sample.observed_at >= state.sample_ttl_ms(),
+/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `cooldown`, `operator`,
+/// `overage`, or `subscription_ended`.
+fn obstacle_name(obstacle: &Obstacle) -> &'static str {
+    match obstacle {
+        Obstacle::Attempted => "attempted",
+        Obstacle::Cooldown { reason, .. } if reason == "overage" => "overage",
+        Obstacle::Cooldown { .. } => "cooldown",
+        Obstacle::Ended => "subscription_ended",
+        Obstacle::Operator => "operator",
     }
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
-/// window for a fable request, the shared plan otherwise, either of whose two readings at 1.0 is spent. As
-/// `holds_fable_allowance`: no sample, or one that never read the window, counts as allowance, and a window
-/// read full excludes only while the reading stands for it, until the reset it named or, absent one, until the
-/// reading ages out.
-fn holds_allowance(state: &RoutingState, account_id: &str, window: Window, now: i64) -> bool {
-    match window {
-        Window::Fable => holds_fable_allowance(state, account_id, now),
-        Window::SevenDay => {
-            let Some(sample) = state.sample(account_id) else {
-                return true;
-            };
-            // The shared plan has two readings and either one at 1.0 means the upstream refuses the request
-            // until that window refunds; `Strategy::Pace` reads the weekly reset for its own ordering, this
-            // reads both for the one question of whether the account can serve at all.
-            let standing = |reading: Option<f64>, reset: Option<i64>| {
-                reading.unwrap_or(0.0) >= 1.0
-                    && match reset {
-                        Some(reset) => reset > now,
-                        None => now - sample.observed_at < state.sample_ttl_ms(),
-                    }
-            };
-            !standing(sample.five_hour, sample.five_hour_reset)
-                && !standing(sample.seven_day, sample.seven_day_reset)
-        }
+/// window for a fable request, both shared plan windows otherwise, either of whose two readings at 1.0 is
+/// spent. No sample, or a sample that never read the window, counts as allowance (an api_key account, whose
+/// sample carries no plan window of its own, always holds it here), and a window read full excludes only while
+/// the reading stands for it, through `WindowReading::live_at`.
+fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
+    let Some(sample) = state.sample(account_id) else {
+        return true;
+    };
+    let ttl = state.sample_ttl_ms();
+    let spent = |name: &str| {
+        sample
+            .reading(name)
+            .is_some_and(|r| r.utilization >= 1.0 && r.live_at(now, ttl))
+    };
+    if window == SEVEN_DAY_FABLE {
+        !spent(SEVEN_DAY_FABLE)
+    } else {
+        !spent(FIVE_HOUR) && !spent(SEVEN_DAY)
     }
 }
 
@@ -171,10 +177,10 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `cooldown` (a live row blocks the model on the account), `overage` (in overage under a policy other than
-/// `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the request's
-/// window). Never empty: a pin released by a move whose destination then answered nothing carries `released`,
-/// the one fact the list above does not evaluate.
+/// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
+/// account), `overage` (in overage under a policy other than `allow`), `attempted` (this request already tried
+/// it), and `spent` (no allowance left in the request's window). Never empty: a pin released by a move whose
+/// destination then answered nothing carries `released`, the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -206,6 +212,12 @@ pub fn release_reasons(
             }
         }
     }
+    if snapshot
+        .term(&pin.account_id)
+        .is_some_and(|term| term::ended(term, request.now))
+    {
+        reasons.push("subscription_ended");
+    }
     if state
         .cooldown(&pin.account_id, &request.canonical_model, request.now)
         .is_some()
@@ -213,7 +225,7 @@ pub fn release_reasons(
         reasons.push("cooldown");
     }
     if pool.is_some_and(|p| p.overage_policy != OveragePolicy::Allow)
-        && state.in_overage(&pin.account_id)
+        && state.in_overage(&pin.account_id, request.now, request.fallback_ms)
     {
         reasons.push("overage");
     }
@@ -223,7 +235,7 @@ pub fn release_reasons(
     if !holds_allowance(
         state,
         &pin.account_id,
-        window_of(&request.canonical_model),
+        window_for(&request.canonical_model),
         request.now,
     ) {
         reasons.push("spent");
@@ -277,9 +289,10 @@ pub fn select(
         }
     }
 
-    // Step 2: the eligible set and the obstacle of everything outside it.
+    // Step 2: the eligible set and the obstacle of everything outside it, each kept with its account id for
+    // the release event and the trace.
     let mut eligible: Vec<&Candidate> = Vec::new();
-    let mut obstacles: Vec<Obstacle> = Vec::new();
+    let mut obstacles: Vec<(String, Obstacle)> = Vec::new();
     for candidate in &request.candidates {
         match obstacle(
             state,
@@ -292,7 +305,7 @@ pub fn select(
             request.fallback_ms,
         ) {
             None => eligible.push(candidate),
-            Some(o) => obstacles.push(o),
+            Some(o) => obstacles.push((candidate.account_id.clone(), o)),
         }
     }
     let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
@@ -307,6 +320,7 @@ pub fn select(
                     current,
                     &request.candidates,
                     request.now,
+                    request.fallback_ms,
                     &mut writes,
                 )),
                 writes,
@@ -340,14 +354,14 @@ pub fn select(
         return (SelectResult::Exhausted(exhaustion), writes);
     }
 
-    let window = window_of(&request.canonical_model);
+    let window = window_for(&request.canonical_model);
 
     // Step 4: the migrate rule, for a portable request with a live pin.
     let mut migrated = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
     if let Some(current) = pin.as_ref() {
         let leaving_overage = pool.overage_policy == OveragePolicy::PreferPlan
-            && state.in_overage(&current.account_id);
+            && state.in_overage(&current.account_id, request.now, request.fallback_ms);
         let mut destination: Option<Vec<&Candidate>> = None;
         let mut reason = None;
         if leaving_overage {
@@ -355,24 +369,33 @@ pub fn select(
                 eligible
                     .iter()
                     .copied()
-                    .filter(|c| !state.in_overage(&c.account_id))
+                    .filter(|c| !state.in_overage(&c.account_id, request.now, request.fallback_ms))
                     .collect(),
             );
             reason = Some(MigrateReason::Overage);
         }
         if let Some(threshold) = pool.migrate_above_utilization {
-            let hot = state.sample(&current.account_id).is_some_and(|s| {
-                s.five_hour.unwrap_or(0.0) >= threshold || s.seven_day.unwrap_or(0.0) >= threshold
-            });
+            let reading_at_least = |account_id: &str, name: &str, threshold: f64| {
+                state
+                    .sample(account_id)
+                    .and_then(|s| s.reading(name))
+                    .is_some_and(|r| r.utilization >= threshold)
+            };
+            let reading_under = |account_id: &str, name: &str, threshold: f64| {
+                state
+                    .sample(account_id)
+                    .and_then(|s| s.reading(name))
+                    .is_none_or(|r| r.utilization < threshold)
+            };
+            let hot = reading_at_least(&current.account_id, FIVE_HOUR, threshold)
+                || reading_at_least(&current.account_id, SEVEN_DAY, threshold);
             if hot {
                 let cool: Vec<&Candidate> = eligible
                     .iter()
                     .copied()
                     .filter(|c| {
-                        state.sample(&c.account_id).is_none_or(|s| {
-                            s.five_hour.unwrap_or(0.0) < threshold - MIGRATE_BAND
-                                && s.seven_day.unwrap_or(0.0) < threshold - MIGRATE_BAND
-                        })
+                        reading_under(&c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
+                            && reading_under(&c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
                     })
                     .collect();
                 destination = Some(match destination {
@@ -402,7 +425,7 @@ pub fn select(
                     c.account_id != current.account_id
                         && holds_allowance(state, &c.account_id, window, request.now)
                         && !(pool.overage_policy == OveragePolicy::PreferPlan
-                            && state.in_overage(&c.account_id))
+                            && state.in_overage(&c.account_id, request.now, request.fallback_ms))
                 })
                 .collect();
             if !with_allowance.is_empty() {
@@ -414,10 +437,10 @@ pub fn select(
         }
         // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
         // releasing the pin for a set of them would strand the request on nothing.
-        if window == Window::Fable {
+        if window == SEVEN_DAY_FABLE {
             destination = destination.map(|set| {
                 set.into_iter()
-                    .filter(|c| holds_fable_allowance(state, &c.account_id, request.now))
+                    .filter(|c| holds_allowance(state, &c.account_id, window, request.now))
                     .collect()
             });
         }
@@ -444,6 +467,7 @@ pub fn select(
                     current,
                     &request.candidates,
                     request.now,
+                    request.fallback_ms,
                     &mut writes,
                 )),
                 writes,
@@ -451,21 +475,31 @@ pub fn select(
         }
     }
 
-    // Step 6: a model with its own window needs allowance left in it, the depletion threshold prefers the
-    // accounts under it, then tiers and the strategy inside the first non-empty one.
-    if window == Window::Fable {
+    // Step 6: a model with its own window needs allowance left in it, the ceiling prefers the accounts under
+    // it, the cap and the wind-down prefer accounts that can take a fresh session, and under Pace the floor
+    // keeps an almost-spent account as the last resort. Each partition falls through to the wider set it
+    // narrowed when it would otherwise empty the selection, and every candidate a partition drops joins the
+    // trace under that partition's name.
+    let mut skipped: Vec<Skipped> = Vec::new();
+    if window == SEVEN_DAY_FABLE {
         let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
             .iter()
             .copied()
-            .partition(|c| holds_fable_allowance(state, &c.account_id, request.now));
+            .partition(|c| holds_allowance(state, &c.account_id, window, request.now));
         obstacles.extend(spent.iter().filter_map(|c| {
             state
                 .sample(&c.account_id)
-                .and_then(|s| s.fable_reset)
-                .map(|until| Obstacle::Cooldown {
-                    reason: "spent".into(),
-                    until,
-                    window: FABLE_WINDOW.to_string(),
+                .and_then(|s| s.reading(SEVEN_DAY_FABLE))
+                .and_then(|r| r.reset)
+                .map(|until| {
+                    (
+                        c.account_id.clone(),
+                        Obstacle::Cooldown {
+                            reason: "spent".into(),
+                            until,
+                            window: SEVEN_DAY_FABLE.to_string(),
+                        },
+                    )
                 })
         }));
         selection_set = left;
@@ -479,24 +513,67 @@ pub fn select(
             .filter(|c| {
                 state
                     .sample(&c.account_id)
-                    .is_none_or(|s| s.five_hour.unwrap_or(0.0) < threshold)
+                    .and_then(|s| s.reading(FIVE_HOUR))
+                    .is_none_or(|r| r.utilization < threshold)
             })
             .collect();
-        if !below.is_empty() {
-            selection_set = below;
-        }
+        narrow(&mut selection_set, &mut skipped, below, "above_ceiling");
     }
-    let Some(chosen) = choose(
+    // An account at its cap is no place to put a session.
+    let under_cap: Vec<&Candidate> = selection_set
+        .iter()
+        .copied()
+        .filter(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
+        .collect();
+    narrow(&mut selection_set, &mut skipped, under_cap, "at_cap");
+    // A session should not start on an account about to end.
+    let not_winding_down: Vec<&Candidate> = selection_set
+        .iter()
+        .copied()
+        .filter(|c| {
+            snapshot.term(&c.account_id).is_none_or(|term| {
+                !term::winding_down(term, request.now, pool.failover.wind_down_minutes)
+            })
+        })
+        .collect();
+    narrow(
+        &mut selection_set,
+        &mut skipped,
+        not_winding_down,
+        "winding_down",
+    );
+    // An almost-spent account is kept for when nothing else can serve.
+    if pool.strategy == Strategy::Pace {
+        let above_floor: Vec<&Candidate> = selection_set
+            .iter()
+            .copied()
+            .filter(|c| {
+                remaining(state, &c.account_id, window, request.now).0 > pool.failover.pace_floor
+            })
+            .collect();
+        narrow(&mut selection_set, &mut skipped, above_floor, "floor");
+    }
+    let Some((chosen, tier)) = choose(
         state,
         snapshot,
         pool,
         window,
         &selection_set,
         request.now,
+        request.fallback_ms,
         rng,
     ) else {
+        let obstacles = obstacles.into_iter().map(|(_, o)| o).collect();
         return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
     };
+    for c in &selection_set {
+        if c.account_id != chosen.account_id {
+            skipped.push(Skipped {
+                account_id: c.account_id.clone(),
+                obstacle: "ranked",
+            });
+        }
+    }
 
     // Step 7: a fresh pin with a fresh epoch.
     let pin_ref = session.map(|session| {
@@ -533,13 +610,28 @@ pub fn select(
             epoch,
         }
     });
+    let mut trace_skipped: Vec<Skipped> = obstacles
+        .iter()
+        .map(|(account_id, o)| Skipped {
+            account_id: account_id.clone(),
+            obstacle: obstacle_name(o),
+        })
+        .collect();
+    trace_skipped.extend(skipped);
     (
         SelectResult::Selected(Selection {
             account: selected_row(snapshot, &chosen.account_id),
             upstream_model: chosen.upstream_model.clone(),
             pin: pin_ref,
             migrated,
-            in_overage: state.in_overage(&chosen.account_id),
+            in_overage: state.in_overage(&chosen.account_id, request.now, request.fallback_ms),
+            trace: SelectionTrace {
+                strategy: pool.strategy.as_str(),
+                tier: Some(tier),
+                renewed: false,
+                moved: migrated.map(MigrateReason::as_str),
+                skipped: trace_skipped,
+            },
         }),
         writes,
     )
@@ -564,6 +656,12 @@ fn obstacle(
     };
     if !account.enabled || account.state != AccountState::Ready {
         return Some(Obstacle::Operator);
+    }
+    if snapshot
+        .term(&candidate.account_id)
+        .is_some_and(|term| term::ended(term, now))
+    {
+        return Some(Obstacle::Ended);
     }
     if let Some(cooldown) = state.cooldown(&candidate.account_id, model, now) {
         return Some(Obstacle::Cooldown {
@@ -592,12 +690,14 @@ fn obstacle(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn renew(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
     current: &PinRow,
     candidates: &[Candidate],
     now: i64,
+    fallback_ms: i64,
     writes: &mut Vec<StateWrite>,
 ) -> Selection {
     let renewed = PinRow {
@@ -622,7 +722,11 @@ fn renew(
             epoch: current.epoch,
         }),
         migrated: None,
-        in_overage: state.in_overage(&current.account_id),
+        in_overage: state.in_overage(&current.account_id, now, fallback_ms),
+        trace: SelectionTrace {
+            renewed: true,
+            ..SelectionTrace::default()
+        },
     }
 }
 
@@ -635,18 +739,59 @@ fn selected_row(snapshot: &RegistrySnapshot, account_id: &str) -> AccountRow {
         .expect("a selected account is one the snapshot the selection ran against holds")
 }
 
+/// Replaces `selection_set` with `kept` when `kept` is not empty (a preference that falls through rather than
+/// stranding the request when it would empty the set), recording every dropped candidate under `label`.
+fn narrow<'a>(
+    selection_set: &mut Vec<&'a Candidate>,
+    skipped: &mut Vec<Skipped>,
+    kept: Vec<&'a Candidate>,
+    label: &'static str,
+) {
+    if kept.is_empty() {
+        return;
+    }
+    for c in selection_set.iter() {
+        if !kept.iter().any(|k| k.account_id == c.account_id) {
+            skipped.push(Skipped {
+                account_id: c.account_id.clone(),
+                obstacle: label,
+            });
+        }
+    }
+    *selection_set = kept;
+}
+
 const WEEK_HOURS: f64 = 168.0;
+
+/// Pace's remaining allowance for a candidate at `now`, and the live reading's reset when it came from the
+/// candidate's own `window` (an api_key account's worst-bucket reset never enters the score). A subscription
+/// account whose window was refunded or aged out, an api_key account with every bucket refunded or aged out, or
+/// an account never sampled, all read as untouched: remaining 1, no reset.
+fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> (f64, Option<i64>) {
+    let ttl = state.sample_ttl_ms();
+    let Some(sample) = state.sample(account_id) else {
+        return (1.0, None);
+    };
+    if let Some(reading) = sample.reading(window).filter(|r| r.live_at(now, ttl)) {
+        return ((1.0 - reading.utilization).max(0.0), reading.reset);
+    }
+    match sample.worst_bucket(now, ttl) {
+        Some(reading) => ((1.0 - reading.utilization).max(0.0), None),
+        None => (1.0, None),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
-    window: Window,
+    window: &str,
     set: &[&'a Candidate],
     now: i64,
+    fallback_ms: i64,
     rng: &mut impl Rng,
-) -> Option<&'a Candidate> {
+) -> Option<(&'a Candidate, Tier)> {
     let kind_ordered = pool.kind_ordered();
     // Group one: oauth with plan quota; two: oauth in overage; three: api_key. The split holds under any
     // overage_policy, because it orders by cost, not eligibility: `allow` still demotes an overage oauth
@@ -666,7 +811,7 @@ fn choose<'a>(
     // The kind order puts the group ahead of the priority; within a group, `prefer_plan` still orders an
     // overage account behind a plan-quota one, group three (api_key) included.
     let key_of = |c: &Candidate| -> Tier {
-        let in_overage = state.in_overage(&c.account_id);
+        let in_overage = state.in_overage(&c.account_id, now, fallback_ms);
         let overage_bit = u8::from(pool.overage_policy == OveragePolicy::PreferPlan && in_overage);
         let group = group_of(c, in_overage);
         if kind_ordered {
@@ -677,25 +822,28 @@ fn choose<'a>(
     };
     let first = set.iter().map(|c| key_of(c)).min()?;
     let tier: Vec<&Candidate> = set.iter().copied().filter(|c| key_of(c) == first).collect();
-    match pool.strategy {
+    let chosen = match pool.strategy {
         Strategy::Pace => {
-            // Remaining allowance over the hours until the window refunds it, so an account that resets sooner is
-            // spent first; a reading nobody sampled is a freshly reset account, remaining 1 over the full week.
+            // Remaining allowance over the hours to the earlier of the window's reset and the account's derived
+            // end, so an account that runs out sooner is spent first; an api_key account scores by its worst
+            // live bucket alone (a bucket refills within a minute, so Pace degrades to least utilized on it,
+            // and the bucket's own reset never enters the score).
             let score = |c: &Candidate| -> f64 {
-                let sample = state.sample(&c.account_id);
-                let (reading, reset) = match window {
-                    Window::Fable => (
-                        sample.and_then(|s| s.fable),
-                        sample.and_then(|s| s.fable_reset),
-                    ),
-                    Window::SevenDay => (
-                        sample.and_then(|s| s.seven_day),
-                        sample.and_then(|s| s.seven_day_reset),
-                    ),
+                let (remaining, reset) = remaining(state, &c.account_id, window, now);
+                if snapshot.account(&c.account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+                    return remaining;
+                }
+                let end = snapshot
+                    .term(&c.account_id)
+                    .and_then(|term| term::end_of(term, now));
+                let deadline = match (reset, end) {
+                    (Some(r), Some(e)) => Some(r.min(e)),
+                    (Some(r), None) => Some(r),
+                    (None, Some(e)) => Some(e),
+                    (None, None) => None,
                 };
-                let remaining = (1.0 - reading.unwrap_or(0.0)).max(0.0);
-                let hours = reset
-                    .map(|r| ((r - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
+                let hours = deadline
+                    .map(|d| ((d - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
                     .unwrap_or(WEEK_HOURS);
                 remaining / hours
             };
@@ -715,7 +863,8 @@ fn choose<'a>(
             let i = state.round_robin_next(&pool.id, first, &cohort);
             tier.iter().copied().find(|c| c.account_id == cohort[i])
         }
-    }
+    };
+    chosen.map(|c| (c, first))
 }
 
 fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {

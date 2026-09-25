@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use phoebis_store::{digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad};
+use phoebis_store::{
+    digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, SubscriptionTerm,
+};
 use subtle::ConstantTimeEq;
 
 /// Which secret the caller presented: the key's live one, or the one a rotation retired and the grace still
@@ -46,6 +48,7 @@ pub struct RegistrySnapshot {
     /// Retired secrets by digest, with the key each belonged to and the end of its grace; consulted only after
     /// the current digests miss.
     retired_by_digest: HashMap<[u8; 32], (String, i64)>,
+    terms: HashMap<String, SubscriptionTerm>,
 }
 
 impl RegistrySnapshot {
@@ -96,6 +99,11 @@ impl RegistrySnapshot {
             revision,
             pools: load.pools.into_iter().map(|p| (p.id.clone(), p)).collect(),
             retired_by_digest,
+            terms: load
+                .terms
+                .into_iter()
+                .map(|t| (t.account_id.clone(), t))
+                .collect(),
         }
     }
 
@@ -178,6 +186,9 @@ impl RegistrySnapshot {
     }
     pub fn members(&self, pool_id: &str) -> &[PoolMember] {
         self.members.get(pool_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+    pub fn term(&self, account_id: &str) -> Option<&SubscriptionTerm> {
+        self.terms.get(account_id)
     }
     pub fn body_capture_hours(&self, key: &ApiKeyRow) -> u32 {
         key.body_capture_hours.unwrap_or_else(|| {

@@ -1,7 +1,7 @@
 use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::{
     digest_with, ApiKeyRow, Failover, OveragePolicy, PoolRow, RegistryLoad, RetiredSecret,
-    RulesMode, Shedding, Strategy,
+    RulesMode, Shedding, Strategy, SubscriptionTerm,
 };
 
 const DIGEST_KEY: [u8; 32] = [0; 32];
@@ -60,7 +60,13 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             expires_at: 2_000,
         }],
         reused_key_ids: Vec::new(),
-        terms: Vec::new(),
+        terms: vec![SubscriptionTerm {
+            account_id: "x".into(),
+            since: Some(500),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_000),
+        }],
     }
 }
 
@@ -91,4 +97,20 @@ fn a_retired_secret_of_a_revoked_key_is_refused_as_revoked() {
         s.authenticate("one", 1_600),
         Err(KeyRefusal::Revoked)
     ));
+}
+
+#[test]
+fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
+    let s = RegistrySnapshot::from_load(load(None), DIGEST_KEY, 0, 1);
+    assert_eq!(
+        s.term("x"),
+        Some(&SubscriptionTerm {
+            account_id: "x".into(),
+            since: Some(500),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_000),
+        })
+    );
+    assert_eq!(s.term("y"), None);
 }

@@ -124,7 +124,7 @@ impl Default for Failover {
             in_flight_cap: 16,
             pace_floor: 0.05,
             overage_move_grace_minutes: 30,
-            wind_down_minutes: 60,
+            wind_down_minutes: 30,
         }
     }
 }

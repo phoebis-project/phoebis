@@ -7,7 +7,7 @@ use phoebis_alerts::{
     question_subject, spawn_inputs, AlertInputs, BusArm, Kind, Poller, ScopeType, Tracked,
 };
 use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
-use phoebis_routing::{Report, UtilizationSample};
+use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountState, AlertEventRow};
 use common::*;
 
@@ -27,6 +27,30 @@ fn chunk(id: &str, body: &'static [u8]) -> Event {
         body: bytes::Bytes::from_static(body),
         phase: None,
     })
+}
+
+/// A sample carrying only the two shared windows, reset-less, the way the utilization rule reads them.
+fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample {
+    UtilizationSample {
+        observed_at,
+        ..Default::default()
+    }
+    .with(
+        FIVE_HOUR,
+        WindowReading {
+            utilization: five_hour,
+            reset: None,
+            observed_at,
+        },
+    )
+    .with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: seven_day,
+            reset: None,
+            observed_at,
+        },
+    )
 }
 
 #[tokio::test]
@@ -592,15 +616,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
         .unwrap();
     rig.router.report(Report::Sample {
         account_id: "business".into(),
-        sample: UtilizationSample {
-            five_hour: Some(0.5),
-            five_hour_reset: None,
-            seven_day: Some(0.95),
-            seven_day_reset: None,
-            fable: None,
-            fable_reset: None,
-            observed_at: NOW,
-        },
+        sample: sample(0.5, 0.95, NOW),
         incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -671,15 +687,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
         .unwrap();
     rig.router.report(Report::Sample {
         account_id: "business".into(),
-        sample: UtilizationSample {
-            five_hour: Some(0.5),
-            five_hour_reset: None,
-            seven_day: Some(0.86),
-            seven_day_reset: None,
-            fable: None,
-            fable_reset: None,
-            observed_at: NOW + 1,
-        },
+        sample: sample(0.5, 0.86, NOW + 1),
         incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -713,15 +721,7 @@ async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     assert!(!left.iter().any(|k| k != "utilization_above"), "{left:?}");
     rig.router.report(Report::Sample {
         account_id: "business".into(),
-        sample: UtilizationSample {
-            five_hour: Some(0.5),
-            five_hour_reset: None,
-            seven_day: Some(0.84),
-            seven_day_reset: None,
-            fable: None,
-            fable_reset: None,
-            observed_at: NOW + 2,
-        },
+        sample: sample(0.5, 0.84, NOW + 2),
         incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -925,15 +925,7 @@ async fn a_tick_with_no_open_event_issues_no_clear_and_one_with_open_events_clea
     rig.alerts.reload().unwrap();
     rig.router.report(Report::Sample {
         account_id: "business".into(),
-        sample: UtilizationSample {
-            five_hour: Some(0.5),
-            five_hour_reset: None,
-            seven_day: Some(0.5),
-            seven_day_reset: None,
-            fable: None,
-            fable_reset: None,
-            observed_at: NOW,
-        },
+        sample: sample(0.5, 0.5, NOW),
         incarnation: 1,
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

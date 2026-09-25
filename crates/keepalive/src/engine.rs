@@ -166,6 +166,9 @@ reasons! {
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
+    /// The overage predicate's fallback: how long evidence naming no reset stands past its observation, the
+    /// same value the relay's `Limits` gets, so the probe gate and the selector read one account the same way.
+    pub cooldown_fallback: Duration,
     pub ledger: Ledger,
     /// Where the companion's reports reach the alert inputs; `None` when nothing is listening.
     pub lifecycle: Option<LifecycleSender>,
@@ -1603,6 +1606,7 @@ impl Engine {
             .filter(|c| c.until > now)
             .map(|c| (c.account_id, c.scope))
             .collect();
+        let fallback_ms = self.parts.cooldown_fallback.as_millis() as i64;
         let overage = self
             .parts
             .router
@@ -1610,7 +1614,7 @@ impl Engine {
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|(_, e)| e.in_use)
+            .filter(|(_, e)| e.stands(now, fallback_ms))
             .map(|(id, _)| id)
             .collect();
         RouterView {

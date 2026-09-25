@@ -828,6 +828,7 @@ async fn app_with_webhook_policy(
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
+        cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
         lifecycle: None,
         limits: KeepaliveLimits::default(),

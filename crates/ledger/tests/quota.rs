@@ -4,7 +4,7 @@ mod common;
 use std::time::Duration;
 
 use phoebis_ledger::{LedgerConfig, QuotaPoll, Sampled};
-use phoebis_routing::EvidenceSource;
+use phoebis_routing::{EvidenceSource, FIVE_HOUR};
 use phoebis_store::AccountKind;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -291,7 +291,11 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     let samples = h.router.samples().await.unwrap();
     for id in ["a", "b"] {
         let (_, sample) = samples.iter().find(|(named, _)| named == id).unwrap();
-        assert_eq!(sample.five_hour, Some(0.125), "{id}");
+        assert_eq!(
+            sample.reading(FIVE_HOUR).map(|r| r.utilization),
+            Some(0.125),
+            "{id}"
+        );
         let overage = h.router.overage(id).await.unwrap().unwrap();
         assert!(!overage.in_use, "{id}");
         assert_eq!(overage.source, EvidenceSource::Sample, "{id}");

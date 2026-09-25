@@ -1,8 +1,9 @@
-//! What the router task owns between selections: pins, cooldowns, the newest overage evidence per account, and
-//! the newest utilization sample per account. Every mutation reports whether it changed anything so the task
-//! knows what to write through.
+//! What the router task owns between selections: pins, cooldowns, the newest overage evidence per account, the
+//! newest utilization sample per account, and the in-flight counts per key and per account. Every mutation
+//! reports whether it changed anything so the task knows what to write through.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 use phoebis_store::{
     AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
@@ -49,16 +50,76 @@ pub struct OverageEvidence {
     pub incarnation: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct UtilizationSample {
-    /// The model-scoped weekly window, present only for an account whose plan carries one.
-    pub fable: Option<f64>,
-    pub fable_reset: Option<i64>,
-    pub five_hour: Option<f64>,
-    pub five_hour_reset: Option<i64>,
-    pub seven_day: Option<f64>,
-    pub seven_day_reset: Option<i64>,
+impl OverageEvidence {
+    /// The one overage predicate: the flag stands while the reset the evidence names is ahead of `now`, or,
+    /// when it names none, for `fallback_ms` past the observation. Every reader, the keepalive's included,
+    /// applies this so the probe gate and the selector never disagree about the same evidence.
+    pub fn stands(&self, now: i64, fallback_ms: i64) -> bool {
+        if !self.in_use {
+            return false;
+        }
+        match self.reset {
+            Some(reset) => reset > now,
+            None => now - self.observed_at < fallback_ms,
+        }
+    }
+}
+
+pub const FIVE_HOUR: &str = "five_hour";
+pub const SEVEN_DAY: &str = "seven_day";
+pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
+
+/// One window's reading: utilization as a fraction, the reset that refunds it when the source named one, and
+/// when it was read; a reading is replaced only by a newer one for the same window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowReading {
+    pub utilization: f64,
+    pub reset: Option<i64>,
     pub observed_at: i64,
+}
+
+impl WindowReading {
+    /// Whether the reading still describes the window at `now`: its reset is ahead, or it names none and was
+    /// read within `ttl_ms`. A reading past its reset is refunded; one that aged out says nothing.
+    pub fn live_at(&self, now: i64, ttl_ms: i64) -> bool {
+        match self.reset {
+            Some(reset) => reset > now,
+            None => now - self.observed_at < ttl_ms,
+        }
+    }
+}
+
+/// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` for a subscription
+/// account; `rpm:<model>`, `itpm:<model>`, `otpm:<model>` per canonical model for an api_key account.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UtilizationSample {
+    pub windows: BTreeMap<String, WindowReading>,
+    pub observed_at: i64,
+}
+
+impl UtilizationSample {
+    /// The stored reading, live or not; the callers that rank or gate pass it through `live_at`.
+    pub fn reading(&self, window: &str) -> Option<WindowReading> {
+        self.windows.get(window).copied()
+    }
+
+    /// The worst of the api_key buckets still live at `now`, the account's reading under Pace's api_key
+    /// degradation; `None` when every bucket was refunded or aged out, which reads as untouched.
+    pub fn worst_bucket(&self, now: i64, ttl_ms: i64) -> Option<WindowReading> {
+        self.windows
+            .iter()
+            .filter(|(name, _)| {
+                name.starts_with("rpm:") || name.starts_with("itpm:") || name.starts_with("otpm:")
+            })
+            .filter_map(|(_, reading)| reading.live_at(now, ttl_ms).then_some(*reading))
+            .max_by(|a, b| a.utilization.total_cmp(&b.utilization))
+    }
+
+    /// A builder for tests.
+    pub fn with(mut self, window: &str, reading: WindowReading) -> UtilizationSample {
+        self.windows.insert(window.to_string(), reading);
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,8 +155,139 @@ pub struct Purged {
 /// and the overage bit otherwise.
 pub type Tier = (u8, u32, u8);
 
+/// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
+/// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
+/// gives up waiting on.
+pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
+
+#[derive(Default)]
+struct InFlightTable {
+    next_id: u64,
+    keys: HashMap<String, HashMap<u64, i64>>,
+    accounts: HashMap<String, HashMap<u64, i64>>,
+}
+
+/// Requests in flight per key and per account, counted from the relay's synchronous calls; shared by the
+/// handle and the task. A key permit is one per request, reserved before selection and held across every
+/// attempt; an account ticket is one per leg, taken at dispatch. Each is released exactly once, by its guard's
+/// drop, when the response it counts ends.
+#[derive(Clone, Default)]
+pub struct InFlight(Arc<Mutex<InFlightTable>>);
+
+impl InFlight {
+    /// Check and increment under the one lock: the permit, or `None` when `cap` is reached (`None` is no cap).
+    pub fn try_acquire_key(&self, key_id: &str, cap: Option<u32>, now: i64) -> Option<KeyPermit> {
+        let mut table = self.0.lock().expect("in-flight table lock poisoned");
+        let held = table.keys.get(key_id).map(HashMap::len).unwrap_or(0) as u32;
+        if cap.is_some_and(|cap| held >= cap) {
+            return None;
+        }
+        let id = table.next_id;
+        table.next_id += 1;
+        table
+            .keys
+            .entry(key_id.to_string())
+            .or_default()
+            .insert(id, now);
+        Some(KeyPermit {
+            table: self.0.clone(),
+            key_id: key_id.to_string(),
+            id,
+        })
+    }
+
+    pub fn dispatched(&self, account_id: &str, now: i64) -> AccountTicket {
+        let mut table = self.0.lock().expect("in-flight table lock poisoned");
+        let id = table.next_id;
+        table.next_id += 1;
+        table
+            .accounts
+            .entry(account_id.to_string())
+            .or_default()
+            .insert(id, now);
+        AccountTicket {
+            table: self.0.clone(),
+            account_id: account_id.to_string(),
+            id,
+        }
+    }
+
+    pub fn account(&self, account_id: &str) -> u32 {
+        let table = self.0.lock().expect("in-flight table lock poisoned");
+        table
+            .accounts
+            .get(account_id)
+            .map(HashMap::len)
+            .unwrap_or(0) as u32
+    }
+
+    pub fn key(&self, key_id: &str) -> u32 {
+        let table = self.0.lock().expect("in-flight table lock poisoned");
+        table.keys.get(key_id).map(HashMap::len).unwrap_or(0) as u32
+    }
+
+    /// Drops permits and tickets older than `IN_FLIGHT_RECLAIM_MS` (one hour): a guard whose drop never
+    /// landed.
+    pub fn expire(&self, now: i64) -> usize {
+        let mut table = self.0.lock().expect("in-flight table lock poisoned");
+        let mut reclaimed = 0;
+        for slots in table.keys.values_mut() {
+            let before = slots.len();
+            slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
+            reclaimed += before - slots.len();
+        }
+        table.keys.retain(|_, slots| !slots.is_empty());
+        for slots in table.accounts.values_mut() {
+            let before = slots.len();
+            slots.retain(|_, taken_at| now - *taken_at <= IN_FLIGHT_RECLAIM_MS);
+            reclaimed += before - slots.len();
+        }
+        table.accounts.retain(|_, slots| !slots.is_empty());
+        reclaimed
+    }
+}
+
+/// Dropping releases the key's count once; a permit the purge already reclaimed releases nothing.
+pub struct KeyPermit {
+    table: Arc<Mutex<InFlightTable>>,
+    key_id: String,
+    id: u64,
+}
+
+impl Drop for KeyPermit {
+    fn drop(&mut self) {
+        let mut table = self.table.lock().expect("in-flight table lock poisoned");
+        if let Some(slots) = table.keys.get_mut(&self.key_id) {
+            slots.remove(&self.id);
+            if slots.is_empty() {
+                table.keys.remove(&self.key_id);
+            }
+        }
+    }
+}
+
+/// Dropping releases the account's count once; same reclaim rule.
+pub struct AccountTicket {
+    table: Arc<Mutex<InFlightTable>>,
+    account_id: String,
+    id: u64,
+}
+
+impl Drop for AccountTicket {
+    fn drop(&mut self) {
+        let mut table = self.table.lock().expect("in-flight table lock poisoned");
+        if let Some(slots) = table.accounts.get_mut(&self.account_id) {
+            slots.remove(&self.id);
+            if slots.is_empty() {
+                table.accounts.remove(&self.account_id);
+            }
+        }
+    }
+}
+
 pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
+    in_flight: InFlight,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
@@ -116,6 +308,7 @@ impl RoutingState {
                 .into_iter()
                 .map(|c| ((c.account_id.clone(), c.scope.clone()), c))
                 .collect(),
+            in_flight: InFlight::default(),
             next_epoch,
             overage: load
                 .overage
@@ -262,7 +455,7 @@ impl RoutingState {
         sample: &UtilizationSample,
         now: i64,
     ) -> Vec<CooldownRow> {
-        let below = |window: Option<f64>| window.is_some_and(|u| u < 1.0);
+        let below = |window: &str| sample.reading(window).is_some_and(|r| r.utilization < 1.0);
         let recovered = |row: &CooldownRow| {
             // A deadline the upstream handed out names no window, whatever the row's scope, so a reading is a
             // guess about which window the rejection was for.
@@ -270,14 +463,14 @@ impl RoutingState {
                 return false;
             }
             if row.scope.starts_with("model:") {
-                return below(sample.fable);
+                return below(SEVEN_DAY_FABLE);
             }
             match row.window.as_str() {
-                "five_hour" => below(sample.five_hour),
-                "seven_day" => below(sample.seven_day),
+                "five_hour" => below(FIVE_HOUR),
+                "seven_day" => below(SEVEN_DAY),
                 // Any other representative claim: it does not say which shared window was exhausted, so the
                 // account is only back once both have allowance.
-                _ => below(sample.five_hour) && below(sample.seven_day),
+                _ => below(FIVE_HOUR) && below(SEVEN_DAY),
             }
         };
         let mut rows: Vec<_> = self
@@ -351,8 +544,11 @@ impl RoutingState {
         true
     }
 
-    pub fn in_overage(&self, account_id: &str) -> bool {
-        self.overage.get(account_id).is_some_and(|e| e.in_use)
+    /// `OverageEvidence::stands` over the account's evidence; false without evidence.
+    pub fn in_overage(&self, account_id: &str, now: i64, fallback_ms: i64) -> bool {
+        self.overage
+            .get(account_id)
+            .is_some_and(|e| e.stands(now, fallback_ms))
     }
     pub fn overage(&self, account_id: &str) -> Option<&OverageEvidence> {
         self.overage.get(account_id)
@@ -376,14 +572,34 @@ impl RoutingState {
         Some(evidence.reset.unwrap_or(evidence.observed_at + fallback_ms))
     }
 
+    /// Folds `sample` in window by window; true when any reading moved. A reading lands only when it is newer
+    /// than the one already stored for that name, so an api_key head that carries one model's buckets never
+    /// erases another model's.
     pub fn record_sample(&mut self, account_id: &str, sample: UtilizationSample) -> bool {
-        match self.samples.get(account_id) {
-            Some(current) if current.observed_at >= sample.observed_at => false,
-            _ => {
-                self.samples.insert(account_id.to_string(), sample);
-                true
+        if sample.windows.is_empty() {
+            return false;
+        }
+        let current = self.samples.entry(account_id.to_string()).or_default();
+        let mut changed = false;
+        for (window, reading) in sample.windows {
+            let newer = current
+                .windows
+                .get(&window)
+                .is_none_or(|existing| reading.observed_at > existing.observed_at);
+            if newer {
+                current.windows.insert(window, reading);
+                changed = true;
             }
         }
+        if changed {
+            current.observed_at = current
+                .windows
+                .values()
+                .map(|r| r.observed_at)
+                .max()
+                .unwrap_or(0);
+        }
+        changed
     }
 
     pub fn sample(&self, account_id: &str) -> Option<&UtilizationSample> {
@@ -407,12 +623,22 @@ impl RoutingState {
 
     /// How long a reading stands when it dates no refund of its own: the interval the router pulls samples
     /// on, so a window read full is re-read rather than believed for ever.
-    pub(crate) fn sample_ttl_ms(&self) -> i64 {
+    pub fn sample_ttl_ms(&self) -> i64 {
         self.sample_ttl_ms
     }
 
     pub(crate) fn set_sample_ttl_ms(&mut self, ms: i64) {
         self.sample_ttl_ms = ms;
+    }
+
+    /// The shared in-flight table this state's selections read the cap against: the same one the handle a test
+    /// dispatches through would hold a ticket on, so a test can seed the cap without a handle.
+    pub fn in_flight(&self) -> &InFlight {
+        &self.in_flight
+    }
+
+    pub(crate) fn set_in_flight(&mut self, in_flight: InFlight) {
+        self.in_flight = in_flight;
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
@@ -647,5 +873,121 @@ fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Op
     match current {
         Some(current) if current.in_use => current.since,
         _ => evidence.since.or(Some(evidence.observed_at)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_head_sample_for_one_model_keeps_the_buckets_of_another_and_an_older_reading_never_replaces_a_newer_one(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let reading = |utilization: f64, observed_at: i64| WindowReading {
+            utilization,
+            reset: None,
+            observed_at,
+        };
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 2_000,
+                ..Default::default()
+            }
+            .with("itpm:x", reading(0.4, 2_000)),
+        );
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 2_100,
+                ..Default::default()
+            }
+            .with("itpm:y", reading(0.6, 2_100)),
+        );
+        let stored = state.sample("a").expect("a sample was recorded");
+        assert_eq!(
+            stored.reading("itpm:x").map(|r| r.utilization),
+            Some(0.4),
+            "the head sample for y kept x's bucket"
+        );
+        assert_eq!(stored.reading("itpm:y").map(|r| r.utilization), Some(0.6));
+
+        let changed = state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 1_000,
+                ..Default::default()
+            }
+            .with("itpm:x", reading(0.9, 1_000)),
+        );
+        assert!(!changed, "1_000 is older than the 2_000 x already carries");
+        assert_eq!(
+            state
+                .sample("a")
+                .unwrap()
+                .reading("itpm:x")
+                .map(|r| r.utilization),
+            Some(0.4)
+        );
+
+        let changed = state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 3_000,
+                ..Default::default()
+            }
+            .with("itpm:x", reading(0.1, 3_000)),
+        );
+        assert!(changed);
+        assert_eq!(
+            state
+                .sample("a")
+                .unwrap()
+                .reading("itpm:x")
+                .map(|r| r.utilization),
+            Some(0.1)
+        );
+    }
+
+    #[test]
+    fn a_bucket_past_its_reset_is_refunded_and_a_reading_without_a_reset_ages_out_after_the_sample_ttl(
+    ) {
+        let ttl_ms = 1_000;
+        let sample = UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            "itpm:x",
+            WindowReading {
+                utilization: 0.9,
+                reset: Some(1_400),
+                observed_at: 1_000,
+            },
+        )
+        .with(
+            "itpm:y",
+            WindowReading {
+                utilization: 0.3,
+                reset: None,
+                observed_at: 1_000,
+            },
+        );
+        assert_eq!(
+            sample.worst_bucket(1_300, ttl_ms).map(|r| r.utilization),
+            Some(0.9),
+            "x is live and worse than y before its reset"
+        );
+        assert_eq!(
+            sample.worst_bucket(1_500, ttl_ms).map(|r| r.utilization),
+            Some(0.3),
+            "past x's reset it is refunded, so y answers as the worst live bucket"
+        );
+        assert_eq!(
+            sample.worst_bucket(1_000 + ttl_ms + 1, ttl_ms),
+            None,
+            "y names no reset and ages out ttl_ms after it was observed, leaving nothing live"
+        );
     }
 }

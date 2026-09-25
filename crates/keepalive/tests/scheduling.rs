@@ -4,7 +4,9 @@
 mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
-use phoebis_routing::{EvidenceSource, OverageEvidence, Report};
+use phoebis_routing::{
+    resolve, EvidenceSource, MigrateReason, OverageEvidence, Report, SelectRequest, SelectResult,
+};
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
 use common::*;
 
@@ -124,7 +126,9 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
             evidence: OverageEvidence {
                 in_use: true,
                 since: Some(r.now()),
-                reset: None,
+                // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
+                // not the predicate's own reset or fallback handling.
+                reset: Some(r.now() + 1_000_000),
                 observed_at: r.now(),
                 source: EvidenceSource::Head,
                 incarnation: 1,
@@ -183,6 +187,122 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
             );
         }
     }
+}
+
+/// A selection for the session `main`'s pin belongs to, through the same router handle the scheduler reads.
+async fn select_main(r: &Rig) -> SelectResult {
+    let pins = r.h.router.pins().await.unwrap();
+    let pin = pins
+        .iter()
+        .find(|p| p.session_id == "session")
+        .expect("observe pinned a session");
+    let model = pin.model.clone();
+    let snapshot = r.h.router.snapshot();
+    let key = snapshot.key("desktop").unwrap();
+    let candidates = resolve(&snapshot, key, &model, &model).unwrap();
+    r.h.router
+        .select(SelectRequest {
+            key_id: "desktop".into(),
+            key_generation: key.created_at,
+            session_id: Some("session".into()),
+            canonical_model: model,
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now: r.now(),
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+        })
+        .await
+        .unwrap()
+        .result
+}
+
+#[tokio::test]
+async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_and_selection_agrees()
+{
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.h.router.report(Report::Overage {
+        account_id: "a".into(),
+        evidence: OverageEvidence {
+            in_use: true,
+            since: Some(r.now()),
+            reset: Some(r.now() - 1),
+            observed_at: r.now(),
+            source: EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("a")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Scheduled),
+        "the named reset has passed, so the probe is no longer held for overage"
+    );
+    let SelectResult::Selected(sel) = select_main(&r).await else {
+        panic!("a serves the model")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "and a selection through the same handle renews the pin rather than moving it"
+    );
+
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.h.router.report(Report::Overage {
+        account_id: "a".into(),
+        evidence: OverageEvidence {
+            in_use: true,
+            since: Some(r.now()),
+            // Ahead of the `now` the gate reads after the advance below, not just of the report's own `now`.
+            reset: Some(r.now() + 270_001),
+            observed_at: r.now(),
+            source: EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("a")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Overage),
+        "the named reset still stands, so the probe holds"
+    );
+    let SelectResult::Selected(sel) = select_main(&r).await else {
+        panic!("b serves the model")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Overage)),
+        "and a selection through the same handle moves the pin off the account still in overage"
+    );
 }
 
 #[tokio::test]

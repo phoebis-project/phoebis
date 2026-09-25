@@ -8,7 +8,9 @@ version.workspace = true
 [dependencies]
 phoebis-oauth = { path = "../oauth" }
 phoebis-store = { path = "../store" }
+jiff = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }

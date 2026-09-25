@@ -5,7 +5,8 @@ use std::time::Duration;
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     resolve, sample_from_usage, spawn, Exhaustion, Presented, ReloadError, Report, ResolveError,
-    RouterConfig, SelectRequest, SelectResult, UtilizationSample,
+    RouterConfig, SelectRequest, SelectResult, UtilizationSample, WindowReading, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, ModelRule,
@@ -930,7 +931,11 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
     };
     let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true), 1);
     assert_eq!(
-        (sample.five_hour, sample.seven_day, sample.observed_at),
+        (
+            sample.reading(FIVE_HOUR).map(|r| r.utilization),
+            sample.reading(SEVEN_DAY).map(|r| r.utilization),
+            sample.observed_at,
+        ),
         (Some(1.0), Some(0.4), 5_000)
     );
     assert!(overage
@@ -958,13 +963,16 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
     );
     let (distinct, _) = sample_from_usage(&both, 1);
     assert_eq!(
-        (distinct.five_hour_reset, distinct.seven_day_reset),
+        (
+            distinct.reading(FIVE_HOUR).and_then(|r| r.reset),
+            distinct.reading(SEVEN_DAY).and_then(|r| r.reset),
+        ),
         (Some(9_000), Some(90_000)),
         "each window's reset travels with its own utilization"
     );
     assert_eq!(
-        (sample.fable, sample.fable_reset),
-        (None, None),
+        sample.reading(SEVEN_DAY_FABLE),
+        None,
         "an account without a fable window has no fable allowance to read"
     );
     let fable = UsageSnapshot {
@@ -977,7 +985,10 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
     };
     let (fable, _) = sample_from_usage(&fable, 1);
     assert_eq!(
-        (fable.fable, fable.fable_reset),
+        (
+            fable.reading(SEVEN_DAY_FABLE).map(|r| r.utilization),
+            fable.reading(SEVEN_DAY_FABLE).and_then(|r| r.reset),
+        ),
         (Some(0.75), Some(80_000)),
         "and the fable window is a fraction like the shared ones, with its own reset"
     );
@@ -1322,13 +1333,7 @@ async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_hold
         },
         incarnation: 1,
     });
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(1.0),
-            ..sample(1_100)
-        },
-    ));
+    handle.report(observed("a", sample_with(1_100, FIVE_HOUR, 1.0, None)));
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     assert_eq!(handle.overages().await.unwrap().len(), 1);
     assert_eq!(handle.samples().await.unwrap().len(), 1);
@@ -1399,10 +1404,7 @@ async fn a_fetch_started_under_a_previous_incarnation_changes_nothing() {
     // The answers of a usage fetch that left under the first holder and landed after the reload.
     handle.report(Report::Sample {
         account_id: "a".into(),
-        sample: UtilizationSample {
-            five_hour: Some(1.0),
-            ..sample(1_500)
-        },
+        sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
         incarnation: 1,
     });
     handle.report(Report::Overage {
@@ -1585,15 +1587,14 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     // need still standing.
     handle.report(Report::Sample {
         account_id: a.clone(),
-        sample: UtilizationSample {
-            five_hour: Some(0.7),
-            five_hour_reset: Some(9_000),
-            seven_day: Some(0.2),
-            seven_day_reset: None,
-            fable: None,
-            fable_reset: None,
-            observed_at: 1_500,
-        },
+        sample: sample_with(1_500, FIVE_HOUR, 0.7, Some(9_000)).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.2,
+                reset: None,
+                observed_at: 1_500,
+            },
+        ),
         incarnation: 1,
     });
     // The report and the ask share one sender, so the task has applied the sample before it answers this.
@@ -1601,7 +1602,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     assert_eq!(
         samples
             .iter()
-            .map(|(id, s)| (id.as_str(), s.five_hour))
+            .map(|(id, s)| (id.as_str(), s.reading(FIVE_HOUR).map(|r| r.utilization)))
             .collect::<Vec<_>>(),
         vec![(a.as_str(), Some(0.7))],
         "one ask answers every account's latest sample, by id"
@@ -1610,7 +1611,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
 
 #[tokio::test]
 async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
-    use phoebis_routing::{Report, RouterEvent, UtilizationSample};
+    use phoebis_routing::{Report, RouterEvent};
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
@@ -1628,14 +1629,15 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
     ));
-    let spent = |five_hour: f64, at: i64| UtilizationSample {
-        fable: None,
-        fable_reset: None,
-        five_hour: Some(five_hour),
-        five_hour_reset: Some(at + 3_600_000),
-        seven_day: Some(0.1),
-        seven_day_reset: Some(at + 7 * 86_400_000),
-        observed_at: at,
+    let spent = |five_hour: f64, at: i64| {
+        sample_with(at, FIVE_HOUR, five_hour, Some(at + 3_600_000)).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.1,
+                reset: Some(at + 7 * 86_400_000),
+                observed_at: at,
+            },
+        )
     };
     handle.report(Report::Sample {
         account_id: a.clone(),
@@ -1660,7 +1662,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
 
 #[tokio::test]
 async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_with_both_facts() {
-    use phoebis_routing::{Report, RouterEvent, UtilizationSample};
+    use phoebis_routing::{Report, RouterEvent};
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
@@ -1678,14 +1680,15 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
     ));
-    let spent = |at: i64| UtilizationSample {
-        fable: None,
-        fable_reset: None,
-        five_hour: Some(1.0),
-        five_hour_reset: Some(at + 3_600_000),
-        seven_day: Some(0.1),
-        seven_day_reset: Some(at + 7 * 86_400_000),
-        observed_at: at,
+    let spent = |at: i64| {
+        sample_with(at, FIVE_HOUR, 1.0, Some(at + 3_600_000)).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.1,
+                reset: Some(at + 7 * 86_400_000),
+                observed_at: at,
+            },
+        )
     };
     handle.report(cooled(
         &a,
@@ -1747,14 +1750,26 @@ fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) ->
 /// A sample that read no window; each test fills in the ones its rule turns on.
 fn sample(observed_at: i64) -> UtilizationSample {
     UtilizationSample {
-        fable: None,
-        fable_reset: None,
-        five_hour: None,
-        five_hour_reset: None,
-        seven_day: None,
-        seven_day_reset: None,
         observed_at,
+        ..Default::default()
     }
+}
+
+/// `sample(observed_at)` with one window's reading folded in.
+fn sample_with(
+    observed_at: i64,
+    window: &str,
+    utilization: f64,
+    reset: Option<i64>,
+) -> UtilizationSample {
+    sample(observed_at).with(
+        window,
+        WindowReading {
+            utilization,
+            reset,
+            observed_at,
+        },
+    )
 }
 
 fn observed(account: &str, sample: UtilizationSample) -> Report {
@@ -1795,13 +1810,7 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
     );
     // Anthropic moved the reset in: hours before the deadline the 429 announced, the window reads below 1.
     now.store(2_000, Ordering::SeqCst);
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(2_000)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 2_000)
     );
@@ -1833,25 +1842,13 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
     now.store(3_000, Ordering::SeqCst);
     handle.report(rejection());
     // The usage fetch behind this reading left before the second rejection and landed after it.
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(2_000)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a reading older than the latest rejection is not evidence the account recovered"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(3_001)
-        },
-    ));
+    handle.report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)));
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "one taken after it is"
@@ -1873,25 +1870,13 @@ async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_n
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     // The usage endpoint serves a cached view for a minute, so the snapshot that arrives first can be older
     // than the rejection.
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(1_999)
-        },
-    ));
+    handle.report(observed("a", sample_with(1_999, FIVE_HOUR, 0.4, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a reading from before the row was set is not evidence about it"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(2_001)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)));
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "the same reading taken after it is"
@@ -1911,37 +1896,19 @@ async fn a_window_at_its_limit_keeps_the_cooldown() {
         "seven_day",
     ));
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            seven_day: Some(1.0),
-            ..sample(2_000)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_000, SEVEN_DAY, 1.0, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a window that is exactly full has nothing left to serve with"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.1),
-            ..sample(2_001)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.1, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "and the row names the window that is read, not whichever one recovered"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            seven_day: Some(0.99),
-            ..sample(2_002)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_002, SEVEN_DAY, 0.99, None)));
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
 
@@ -1962,24 +1929,21 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     handle.report(observed(
         "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            seven_day: Some(1.0),
-            ..sample(2_000)
-        },
+        sample_with(2_000, FIVE_HOUR, 0.4, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 1.0,
+                reset: None,
+                observed_at: 2_000,
+            },
+        ),
     ));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "one shared window still full is enough to hold the account out"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(2_001)
-        },
-    ));
+    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
@@ -1987,11 +1951,14 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
     );
     handle.report(observed(
         "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            seven_day: Some(0.9),
-            ..sample(2_002)
-        },
+        sample_with(2_002, FIVE_HOUR, 0.4, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.9,
+                reset: None,
+                observed_at: 2_002,
+            },
+        ),
     ));
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
@@ -2029,12 +1996,23 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
     assert_eq!(handle.cooldowns().await.unwrap().len(), 3);
     handle.report(observed(
         "a",
-        UtilizationSample {
-            fable: Some(0.0),
-            five_hour: Some(0.0),
-            seven_day: Some(0.0),
-            ..sample(2_000)
-        },
+        sample_with(2_000, SEVEN_DAY_FABLE, 0.0, None)
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.0,
+                    reset: None,
+                    observed_at: 2_000,
+                },
+            )
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.0,
+                    reset: None,
+                    observed_at: 2_000,
+                },
+            ),
     ));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
@@ -2058,32 +2036,14 @@ async fn a_sample_older_than_the_one_already_stored_releases_nothing() {
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     // Two pulls in flight, the newer one back first: the older one is still later than the row was set, and
     // its reading is the one the window has already moved past.
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(1.0),
-            ..sample(3_000)
-        },
-    ));
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(2_000)
-        },
-    ));
+    handle.report(observed("a", sample_with(3_000, FIVE_HOUR, 1.0, None)));
+    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "the account's newest reading is what the row is answered against"
     );
-    handle.report(observed(
-        "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(3_001)
-        },
-    ));
+    handle.report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)));
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "and the next reading past the stored one releases it"
@@ -2120,10 +2080,7 @@ async fn a_sample_that_arrives_after_the_deadline_leaves_the_row_to_the_purge_ti
     now.store(1_000 + HOUR + 1, Ordering::SeqCst);
     handle.report(observed(
         "a",
-        UtilizationSample {
-            five_hour: Some(0.4),
-            ..sample(1_000 + HOUR + 1)
-        },
+        sample_with(1_000 + HOUR + 1, FIVE_HOUR, 0.4, None),
     ));
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { cause, .. } if cause == "expired"),
@@ -2146,11 +2103,14 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     handle.report(observed(
         "a",
-        UtilizationSample {
-            five_hour: Some(0.1),
-            seven_day: Some(0.1),
-            ..sample(2_000)
-        },
+        sample_with(2_000, FIVE_HOUR, 0.1, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.1,
+                reset: None,
+                observed_at: 2_000,
+            },
+        ),
     ));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
@@ -2159,18 +2119,116 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
     );
     handle.report(observed(
         "a",
-        UtilizationSample {
-            fable: Some(1.0),
-            ..sample(2_001)
-        },
+        sample_with(2_001, SEVEN_DAY_FABLE, 1.0, None),
     ));
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     handle.report(observed(
         "a",
-        UtilizationSample {
-            fable: Some(0.5),
-            ..sample(2_002)
-        },
+        sample_with(2_002, SEVEN_DAY_FABLE, 0.5, None),
     ));
     assert!(handle.cooldowns().await.unwrap().is_empty());
+}
+
+#[test]
+fn a_key_permit_is_reserved_atomically_and_released_once_by_its_drop() {
+    use phoebis_routing::InFlight;
+    let in_flight = InFlight::default();
+    assert_eq!(in_flight.key("k"), 0);
+    let first = in_flight.try_acquire_key("k", Some(1), 1_000);
+    assert!(first.is_some());
+    assert_eq!(in_flight.key("k"), 1);
+    let second = in_flight.try_acquire_key("k", Some(1), 1_000);
+    assert!(second.is_none(), "the cap is reached");
+    assert_eq!(in_flight.key("k"), 1);
+    drop(first);
+    assert_eq!(in_flight.key("k"), 0);
+    let third = in_flight.try_acquire_key("k", Some(1), 1_000);
+    assert!(third.is_some());
+    assert_eq!(in_flight.key("k"), 1);
+
+    // No cap always answers a permit and still counts.
+    let uncapped = in_flight.try_acquire_key("other", None, 1_000);
+    assert!(uncapped.is_some());
+    assert_eq!(in_flight.key("other"), 1);
+}
+
+#[test]
+fn the_purge_reclaims_a_permit_and_a_ticket_whose_guard_never_dropped() {
+    use phoebis_routing::{InFlight, IN_FLIGHT_RECLAIM_MS};
+    let in_flight = InFlight::default();
+    let taken_at = 1_000 - IN_FLIGHT_RECLAIM_MS - 1;
+    let permit = in_flight.try_acquire_key("k", None, taken_at).unwrap();
+    let ticket = in_flight.dispatched("a", taken_at);
+    assert_eq!((in_flight.key("k"), in_flight.account("a")), (1, 1));
+    assert_eq!(
+        in_flight.expire(1_000),
+        2,
+        "both are older than the reclaim age"
+    );
+    assert_eq!((in_flight.key("k"), in_flight.account("a")), (0, 0));
+    drop(permit);
+    drop(ticket);
+    assert_eq!(
+        (in_flight.key("k"), in_flight.account("a")),
+        (0, 0),
+        "the purge already reclaimed both rows, so the late drops find nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let a = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
+    let pin = match &first.result {
+        SelectResult::Selected(s) => s.pin.clone().unwrap(),
+        _ => unreachable!(),
+    };
+    handle.report(Report::Cooldown {
+        account_id: a.clone(),
+        row: CooldownRow {
+            account_id: a.clone(),
+            scope: "account".into(),
+            until: 1_000 + HOUR,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(pin),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { .. }
+    ));
+    let second = handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &second.result else {
+        panic!("{:?}", second.result)
+    };
+    assert_eq!(sel.trace.moved, Some("cooldown"));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
+    ));
 }

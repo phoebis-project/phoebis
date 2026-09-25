@@ -12,7 +12,7 @@ use phoebis_bus::{
     spawn_subscriber, Bus, Event, Kind as RequestKind, LifecycleReceiver, Origin, Outcome,
     RequestObserved, SessionLifecycle,
 };
-use phoebis_routing::RouterHandle;
+use phoebis_routing::{RouterHandle, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountState, AlertEventRow};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -1056,9 +1056,9 @@ impl Poller {
                 };
                 for (account_id, sample) in &samples {
                     let value = match rule.window.as_deref() {
-                        Some("5h") => sample.five_hour,
-                        Some("7d") => sample.seven_day,
-                        Some("7d_oi") => sample.fable,
+                        Some("5h") => sample.reading(FIVE_HOUR).map(|r| r.utilization),
+                        Some("7d") => sample.reading(SEVEN_DAY).map(|r| r.utilization),
+                        Some("7d_oi") => sample.reading(SEVEN_DAY_FABLE).map(|r| r.utilization),
                         _ => None,
                     };
                     let Some(value) = value else { continue };

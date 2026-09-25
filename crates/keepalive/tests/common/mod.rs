@@ -159,6 +159,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
     let engine = Engine::new(EngineParts {
         bus: bus.clone(),
         clock,
+        cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
         lifecycle: spec.lifecycle,
         limits: spec.limits,

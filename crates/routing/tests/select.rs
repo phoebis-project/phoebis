@@ -1,11 +1,12 @@
 use phoebis_routing::{
     release_reasons, resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence,
     PinRef, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, MODEL_REJECTED_REASON,
+    UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, OveragePolicy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, OveragePolicy, PinRow,
     PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
+    SubscriptionTerm,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -14,6 +15,8 @@ const HOUR: i64 = 3_600_000;
 /// `RoutingState::from_load` seeds this from `DEFAULT_SAMPLE_TTL_MS`, private to that crate; duplicated here
 /// since a state built with no override reads that default.
 const SAMPLE_TTL_MS: i64 = 60_000;
+/// The fallback `request()` carries, for a call to `in_overage` outside a full `SelectRequest`.
+const FALLBACK_MS: i64 = 60_000;
 
 struct Pool {
     policy: OveragePolicy,
@@ -24,6 +27,7 @@ struct Pool {
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
     kinds: Vec<(&'static str, AccountKind)>,
+    failover: Failover,
 }
 
 impl Default for Pool {
@@ -37,6 +41,7 @@ impl Default for Pool {
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
             kinds: vec![],
+            failover: Failover::default(),
         }
     }
 }
@@ -45,8 +50,20 @@ fn snapshot(pool: Pool) -> RegistrySnapshot {
     snapshot_with(pool, &[])
 }
 
-/// `unavailable` names accounts inserted disabled or in a state the eligible set excludes.
 fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistrySnapshot {
+    RegistrySnapshot::from_load(load_of(pool, unavailable), [0; 32], 0, 1)
+}
+
+/// As `snapshot_with`, but with a `SubscriptionTerm` per account, for a test over the end, the wind-down, or
+/// the cancelled obstacle.
+fn snapshot_with_terms(pool: Pool, terms: Vec<SubscriptionTerm>) -> RegistrySnapshot {
+    let mut load = load_of(pool, &[]);
+    load.terms = terms;
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// `unavailable` names accounts inserted disabled or in a state the eligible set excludes.
+fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLoad {
     let account = |id: &str| {
         let (enabled, state) = unavailable
             .iter()
@@ -71,7 +88,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             state,
         }
     };
-    let load = RegistryLoad {
+    RegistryLoad {
         accounts: ["a", "b", "c"].map(account).to_vec(),
         credential_generations: Vec::new(),
         keys: vec![ApiKeyRow {
@@ -118,7 +135,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,
             shedding: Shedding::default(),
-            failover: Failover::default(),
+            failover: pool.failover,
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
             created_at: 0,
@@ -127,8 +144,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
-    };
-    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+    }
 }
 
 /// `s` rebuilt with `id` entirely missing from `accounts` and from every pool's membership, the way a deleted
@@ -224,14 +240,25 @@ fn overage(in_use: bool, observed_at: i64, reset: Option<i64>) -> OverageEvidenc
 
 fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample {
     UtilizationSample {
-        fable: None,
-        fable_reset: None,
-        five_hour: Some(five_hour),
-        five_hour_reset: None,
-        seven_day: Some(seven_day),
-        seven_day_reset: None,
         observed_at,
+        ..Default::default()
     }
+    .with(
+        FIVE_HOUR,
+        WindowReading {
+            utilization: five_hour,
+            reset: None,
+            observed_at,
+        },
+    )
+    .with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: seven_day,
+            reset: None,
+            observed_at,
+        },
+    )
 }
 
 /// The window resets the refresh order reads, over the utilization `sample` already carries.
@@ -241,20 +268,36 @@ fn refreshing(
     seven_day_reset: i64,
     observed_at: i64,
 ) -> UtilizationSample {
-    UtilizationSample {
-        five_hour_reset: Some(five_hour_reset),
-        seven_day_reset: Some(seven_day_reset),
-        ..sample(five_hour, 0.1, observed_at)
-    }
+    sample(five_hour, 0.1, observed_at)
+        .with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization: five_hour,
+                reset: Some(five_hour_reset),
+                observed_at,
+            },
+        )
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.1,
+                reset: Some(seven_day_reset),
+                observed_at,
+            },
+        )
 }
 
 /// The fable allowance and its reset over a sample that already carries the shared windows.
 fn with_fable(base: UtilizationSample, fable: f64, fable_reset: Option<i64>) -> UtilizationSample {
-    UtilizationSample {
-        fable: Some(fable),
-        fable_reset,
-        ..base
-    }
+    let observed_at = base.observed_at;
+    base.with(
+        SEVEN_DAY_FABLE,
+        WindowReading {
+            utilization: fable,
+            reset: fable_reset,
+            observed_at,
+        },
+    )
 }
 
 fn picked(result: &SelectResult) -> &str {
@@ -371,15 +414,20 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
         strategy: Strategy::Pace,
         ..Pool::default()
     });
-    // `window_of` reads the shared plan for a non-fable model, so only `seven_day` and its reset matter here.
-    let reading = |seven_day: f64, reset_at: i64, observed_at: i64| UtilizationSample {
-        fable: None,
-        fable_reset: None,
-        five_hour: None,
-        five_hour_reset: None,
-        seven_day: Some(seven_day),
-        seven_day_reset: Some(reset_at),
-        observed_at,
+    // `window_for` reads the shared plan for a non-fable model, so only `seven_day` and its reset matter here.
+    let reading = |seven_day: f64, reset_at: i64, observed_at: i64| {
+        UtilizationSample {
+            observed_at,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: seven_day,
+                reset: Some(reset_at),
+                observed_at,
+            },
+        )
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_sample("a", reading(0.5, 1_000 + 24 * HOUR, 1));
@@ -1240,9 +1288,9 @@ fn overage_evidence_only_moves_forward_and_a_pin_is_invalidated_only_by_its_own_
         !st.record_overage("a", overage(false, 90, None)),
         "a late head cannot clear it"
     );
-    assert!(st.in_overage("a"));
+    assert!(st.in_overage("a", 100, FALLBACK_MS));
     assert!(st.record_overage("a", overage(false, 110, None)));
-    assert!(!st.in_overage("a"));
+    assert!(!st.in_overage("a", 110, FALLBACK_MS));
     let s = snapshot(Pool::default());
     let (result, _) = select(
         &mut st,
@@ -2322,10 +2370,14 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
     // a's five-hour reading is well under 1.0; its seven-day reading is the spent one, with its reset ahead.
     st.record_sample(
         "a",
-        UtilizationSample {
-            seven_day_reset: Some(9 * HOUR),
-            ..sample(0.3, 1.0, 1_500)
-        },
+        sample(0.3, 1.0, 1_500).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(9 * HOUR),
+                observed_at: 1_500,
+            },
+        ),
     );
     st.record_sample("b", sample(0.2, 0.2, 1_500));
     let (result, writes) = pick(&mut st, 2_000);
@@ -2427,7 +2479,7 @@ fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_
     // `in_overage` never expires evidence of its own and the quota poll writes the ledger, not routing state,
     // so this sample is the only thing that can retire it. `needs_sample` has to ask for it.
     st.record_overage("a", sampled(false, 2_000));
-    assert!(!st.in_overage("a"));
+    assert!(!st.in_overage("a", 2_000, FALLBACK_MS));
     let mut served = std::collections::HashSet::new();
     for i in 0..20 {
         served.insert(pick(&mut st, &mut r, 2_000 + i));
@@ -2860,5 +2912,633 @@ fn a_rejection_cooldown_under_the_folded_spelling_still_excludes_the_member_unde
             .map(|c| c.until),
         Some(2_000 + HOUR),
         "a cooldown recorded under the folded scope after the landing is stored under the dated scope"
+    );
+}
+
+#[test]
+fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_tier() {
+    let s = snapshot(Pool {
+        prefer_subscription: true,
+        members: vec![("a", 5), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_overage("a", overage(true, 1_000, Some(999)));
+    st.record_overage("b", overage(true, 1_000, Some(2_000)));
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "a",
+        "a's evidence no longer stands, so it sits in the plan tier ahead of b's overage tier despite the worse priority"
+    );
+
+    // Evidence naming no reset stands for the request's fallback and then not.
+    st.record_overage("b", overage(true, 1_500, None));
+    let still = request(
+        &s,
+        None,
+        "claude-sonnet-5",
+        true,
+        &[],
+        1_500 + FALLBACK_MS - 1,
+    );
+    assert_eq!(
+        picked(&select(&mut st, &s, &still, &mut rng()).0),
+        "a",
+        "b's fallback has not passed, so it still sits below a"
+    );
+    let expired = request(
+        &s,
+        None,
+        "claude-sonnet-5",
+        true,
+        &[],
+        1_500 + FALLBACK_MS + 1,
+    );
+    assert_eq!(
+        picked(&select(&mut st, &s, &expired, &mut rng()).0),
+        "b",
+        "b's fallback has passed, so it now outranks a on priority alone"
+    );
+}
+
+#[test]
+fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_move() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::PreferPlan,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pick = |st: &mut RoutingState, session: &str, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some(session), "claude-sonnet-5", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&pick(&mut st, "s1", 1_000).0), "a");
+    st.record_overage("a", overage(true, 1_000, Some(1_999)));
+    let SelectResult::Selected(sel) = pick(&mut st, "s1", 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "the named reset is behind now, so a's evidence no longer stands and the pin renews rather than moving"
+    );
+
+    // Evidence naming no reset stands for the request's fallback and then not.
+    assert_eq!(picked(&pick(&mut st, "s2", 3_000).0), "a");
+    st.record_overage("a", overage(true, 3_000, None));
+    let SelectResult::Selected(sel) = pick(&mut st, "s2", 3_000 + FALLBACK_MS - 1).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Overage)),
+        "inside the fallback a is still leaving overage"
+    );
+
+    assert_eq!(picked(&pick(&mut st, "s3", 4_000).0), "a");
+    st.record_overage("a", overage(true, 4_000, None));
+    let SelectResult::Selected(sel) = pick(&mut st, "s3", 4_000 + FALLBACK_MS + 1).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("a", None),
+        "past the fallback a's evidence no longer stands, so its pin renews too"
+    );
+}
+
+#[test]
+fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reasons() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::PreferPlan,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let pin = PinRow {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 0,
+        last_used_at: 0,
+        key_generation: 0,
+        incarnation: 1,
+        burn: 0.0,
+        burn_at: None,
+        last_input_tokens: 0,
+        last_refresh_at: 0,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+    };
+    st.record_overage("a", overage(true, 1_000, Some(1_999)));
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert!(
+        !release_reasons(&st, &s, &pin, &req).contains(&"overage"),
+        "the named reset is behind now, so a's evidence no longer stands"
+    );
+
+    // Evidence naming no reset stands for the request's fallback and then not.
+    st.record_overage("a", overage(true, 2_000, None));
+    let still = request(
+        &s,
+        Some("s1"),
+        "claude-sonnet-5",
+        true,
+        &[],
+        2_000 + FALLBACK_MS - 1,
+    );
+    assert!(
+        release_reasons(&st, &s, &pin, &still).contains(&"overage"),
+        "inside the fallback the evidence still stands"
+    );
+    let expired = request(
+        &s,
+        Some("s1"),
+        "claude-sonnet-5",
+        true,
+        &[],
+        2_000 + FALLBACK_MS + 1,
+    );
+    assert!(!release_reasons(&st, &s, &pin, &expired).contains(&"overage"));
+}
+
+#[test]
+fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let bucket = |utilization: f64, reset: Option<i64>, observed_at: i64| {
+        UtilizationSample {
+            observed_at,
+            ..Default::default()
+        }
+        .with(
+            "itpm:x",
+            WindowReading {
+                utilization,
+                reset,
+                observed_at,
+            },
+        )
+    };
+    st.record_sample("a", bucket(0.3, Some(5_000), 1_000));
+    st.record_sample("b", bucket(0.6, Some(1_000_000), 1_000));
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            "a",
+            "0.3 utilization beats 0.6 utilization whatever the resets, since a bucket's own reset never enters the score"
+        );
+    }
+
+    // Two at the same utilization with different resets draw at random over a seeded rng, both seen.
+    st.record_sample("a", bucket(0.5, Some(5_000), 2_000));
+    st.record_sample("b", bucket(0.5, Some(9_000_000), 2_000));
+    let mut seen = std::collections::HashSet::new();
+    for seed in 0..16u64 {
+        seen.insert(
+            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0).to_string(),
+        );
+    }
+    assert_eq!(seen.len(), 2, "both accounts are seen: {seen:?}");
+}
+
+#[test]
+fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_clamp() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a's shared window is exhausted with a reset a moment behind now: the old clamp-to-a-minute arm ranked
+    // this first on remaining over an inflated score; live_at instead reads it as untouched, on the full week.
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            observed_at: 999,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(999),
+                observed_at: 999,
+            },
+        ),
+    );
+    // b holds real remaining allowance resetting soon, which would lose to a's clamp-inflated score.
+    st.record_sample(
+        "b",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.9,
+                reset: Some(1_000 + HOUR),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "b",
+        "a reads as untouched (1/168 \u{2248} 0.006), which loses to b's real remaining over an hour (0.1/1 = 0.1)"
+    );
+}
+
+#[test]
+fn the_five_hour_ceiling_demotes_an_account_under_pace() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        select_below: Some(0.9),
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a: above the ceiling but the best Pace score (almost nothing used).
+    st.record_sample("a", sample(0.95, 0.01, 1_000));
+    // b: below the ceiling but a worse Pace score (more used).
+    st.record_sample("b", sample(0.5, 0.5, 1_000));
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "b",
+        "the ceiling prefers b even though a scores better under pace"
+    );
+
+    // With no sibling below the ceiling, a is not stranded.
+    let solo = snapshot(Pool {
+        strategy: Strategy::Pace,
+        select_below: Some(0.9),
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    st2.record_sample("a", sample(0.95, 0.01, 1_000));
+    let req2 = request(&solo, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st2, &solo, &req2, &mut rng()).0),
+        "a",
+        "and a wins once no sibling is below it"
+    );
+}
+
+#[test]
+fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free_capacity_ranks_the_account(
+) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            "itpm:x",
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(1_030),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    st.record_sample(
+        "a",
+        UtilizationSample {
+            observed_at: 1_031,
+            ..Default::default()
+        }
+        .with(
+            "itpm:y",
+            WindowReading {
+                utilization: 0.1,
+                reset: None,
+                observed_at: 1_031,
+            },
+        ),
+    );
+    st.record_sample(
+        "b",
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            "itpm:z",
+            WindowReading {
+                utilization: 0.5,
+                reset: None,
+                observed_at: 1_000,
+            },
+        ),
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_031);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "a",
+        "x is refunded at its reset, so a ranks by y's 0.9 remaining, above b's 0.5 and above the floor"
+    );
+}
+
+#[test]
+fn the_pace_floor_makes_an_account_last_resort_and_places_by_pace_inside_the_floor_group() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        failover: Failover {
+            pace_floor: 0.1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.0, 0.95, 1_000)); // remaining 0.05, below the floor
+    st.record_sample("b", sample(0.0, 0.92, 1_000)); // remaining 0.08, below the floor
+    st.record_sample("c", sample(0.0, 0.5, 1_000)); // remaining 0.5, above the floor
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "c",
+        "an almost-spent account is kept for when nothing else can serve, so c places first"
+    );
+
+    // All three below the floor: the floor partition keeps the wider set, and pace ranks among them.
+    st.record_sample("c", sample(0.0, 0.97, 1_100)); // remaining 0.03, now below the floor too
+    let req2 = request(&s, None, "claude-sonnet-5", true, &[], 1_100);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req2, &mut rng()).0),
+        "b",
+        "nothing is above the floor, so pace places b, the least spent of the three"
+    );
+}
+
+#[test]
+fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
+    let s = snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_000 + 6 * HOUR),
+        }],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample(
+        "a",
+        sample(0.0, 0.5, 1_000).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.5,
+                reset: Some(1_000 + 96 * HOUR),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    st.record_sample(
+        "b",
+        sample(0.0, 0.5, 1_000).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.5,
+                reset: Some(1_000 + 24 * HOUR),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "a",
+        "a's end at 6h outranks its own 96h reset and b's 24h reset alike"
+    );
+}
+
+#[test]
+fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_every_strategy() {
+    for strategy in [Strategy::Pace, Strategy::Priority, Strategy::RoundRobin] {
+        let term = vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
+        }];
+        let failover = Failover {
+            wind_down_minutes: 30,
+            ..Failover::default()
+        };
+        let s = snapshot_with_terms(
+            Pool {
+                strategy,
+                members: vec![("a", 0), ("b", 0)],
+                failover,
+                ..Pool::default()
+            },
+            term.clone(),
+        );
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+        assert_eq!(
+            picked(&select(&mut st, &s, &req, &mut rng()).0),
+            "b",
+            "{strategy:?}: a is winding down, so a fresh session prefers b"
+        );
+
+        // With no sibling, the winding-down account still serves rather than the request going unserved.
+        let solo = snapshot_with_terms(
+            Pool {
+                strategy,
+                members: vec![("a", 0)],
+                failover,
+                ..Pool::default()
+            },
+            term,
+        );
+        let mut st2 = RoutingState::from_load(RoutingLoad::default());
+        let req2 = request(&solo, None, "claude-sonnet-5", true, &[], 1_000);
+        assert_eq!(
+            picked(&select(&mut st2, &solo, &req2, &mut rng()).0),
+            "a",
+            "{strategy:?}: as the last resort a still serves"
+        );
+    }
+}
+
+#[test]
+fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_subscription_ended() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            // Isolated from the wind-down partition, which would otherwise demote a on its own well before
+            // its end.
+            failover: Failover {
+                wind_down_minutes: 0,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(5_000),
+        }],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "a still serves before its end"
+    );
+    let pin = st
+        .pin("k", "s1", "claude-sonnet-5")
+        .cloned()
+        .expect("the first select pinned a");
+    let after_end = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 6_000);
+    assert!(
+        release_reasons(&st, &s, &pin, &after_end).contains(&"subscription_ended"),
+        "past its saved end, a is the obstacle subscription_ended"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &after_end, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "the pin moves off a once it can no longer serve"
+    );
+}
+
+#[test]
+fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone() {
+    let pool = || Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            wind_down_minutes: 30,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    };
+    let future = snapshot_with_terms(
+        pool(),
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: Some(1_000 + 10 * 60_000),
+            cancelled: false,
+            ends_at: None,
+        }],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(&select(&mut st, &future, &request(&future, None, "claude-sonnet-5", true, &[], 1_000), &mut rng()).0),
+        "b",
+        "a's trial end is still ahead, so it counts and a fresh session prefers b despite the worse priority"
+    );
+
+    let past = snapshot_with_terms(
+        pool(),
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: Some(500),
+            cancelled: false,
+            ends_at: None,
+        }],
+    );
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st2,
+                &past,
+                &request(&past, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "a's trial end has passed, so it no longer counts and a wins on priority as usual"
+    );
+}
+
+#[test]
+fn a_fresh_placement_prefers_an_account_under_its_in_flight_cap_and_the_trace_names_the_skipped_ones(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let ticket = st.in_flight().dispatched("a", 1_000);
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "a is at its cap, so a fresh placement prefers b"
+    );
+    assert!(
+        sel.trace
+            .skipped
+            .iter()
+            .any(|s| s.account_id == "a" && s.obstacle == "at_cap"),
+        "{:?}",
+        sel.trace.skipped
+    );
+    drop(ticket);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        sel.account.id, "a",
+        "the ticket dropped, so a is under its cap again"
     );
 }

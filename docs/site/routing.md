@@ -63,6 +63,7 @@ Every field, in the order the request body takes them:
 | `cache_ttl` | off | a policy object; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
+| `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
 `cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
@@ -201,15 +202,22 @@ A pin lasts `affinity_ttl_seconds` from its last use: while it is live and its a
 request returns to that account, and stickiness wins over priority even across a later priority change. A pool
 with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins at all.
 
-Narrowing then trims what is left: a model-specific window (a canonical id containing `fable`) at or above 1
-drops the account outright, and `select_below_utilization` drops every account at or above that threshold in
-5-hour utilization, unless doing so would empty the set.
+Narrowing then trims what is left, each a preference that falls back to the wider set rather than stranding the
+request: a model-specific window (a canonical id containing `fable`) at or above 1 drops the account outright;
+`select_below_utilization` drops every account at or above that threshold in 5-hour utilization; an account
+already at the pool's `in_flight_cap` is skipped for a fresh placement; and an account winding down toward its
+subscription end (see **Subscription end**, below) is skipped for a fresh placement too.
 
 What remains is ordered in three kind groups, plan quota, overage, then API key, whenever `prefer_subscription`
-is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier: `pace`
-ranks by remaining allowance over the hours until the applicable window resets, the model's own window when it
-has one, else the shared 7-day window, higher first, an unsampled upstream scoring as untouched with the full
-window remaining, ties random; `priority` and `round_robin` read no sample at all.
+is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier. `pace`
+reads each account's sample as a window map: a subscription account scores by remaining allowance in its own
+window (the model's own window when it has one, else the shared 7-day window) over the hours to the earlier of
+that window's reset and the account's derived end; an api_key account scores by one minus its worst live
+rate-limit bucket's utilization alone, with no division by hours, since a bucket refills within a minute and its
+own reset never enters the score. Either way a window nobody has sampled, or one whose reset has already passed,
+reads as untouched: remaining 1 over the full week. Ties are random. An account whose score falls at or below the
+pool's `pace_floor` is kept as the last resort, ranked by the same score among the others below it, once no
+account above the floor remains; `priority` and `round_robin` read no sample and no floor at all.
 
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.
@@ -217,6 +225,15 @@ only.
 A non-portable request, one whose body references a `file_id`, a `container`, or a server-tool result, is
 answered by its live pin's account or not at all. With affinity off, an expired pin, or no session id, it runs
 the normal selection instead, and the account-scoped reference it carries may then not resolve.
+
+**Subscription end** An operator can mark an OAuth account cancelled and save the end it stops serving at; the
+account form prefills that end from the profile's start, or a trial end already passed, advanced to the next
+occurrence of the same day of the month and time of day, editable before it is saved. A trial end still ahead of
+now counts as an end the same way, even on an account nobody has cancelled. Inside `wind_down_minutes` (default
+30) of its end, an account takes a fresh session only as the last resort, and a cold pin moves off it once
+another account can serve; a warm session stays. Past the end, a cancelled account is the obstacle
+`subscription_ended`, and the upstream refuses the now-dead credential, so the session's next request fails over
+to a sibling.
 
 ### Migration
 
@@ -237,10 +254,10 @@ stays and the upstream's answer decides.
 Any move records a `pin_migrated` event with reason `cooldown` or `mark` (a failover or a credential mark moved
 it), `overage`, `spent`, or `utilization`. A pin released without a move records `pin_expired` with `reasons`,
 every fact the selection found against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`,
-`paused`, `spent`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
-`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a
-utilization move whose destination emptied. Releasing a session by hand, from the Sessions view or
-`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+`paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`,
+`funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against
+the account, as with a utilization move whose destination emptied. Releasing a session by hand, from the Sessions
+view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -355,3 +372,8 @@ present. A usage sample sets the flag when `extra_usage.is_enabled` is true and 
 has reached 1.0, and clears it when both shared windows are below 1.0. An account with extra usage enabled never
 answers `429` once its plan quota empties: it keeps serving with the flag set, so `prefer_plan` and `never` act
 through this flag rather than through a cooldown.
+
+Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
+included: an account counts as in overage while the reset its evidence names is ahead of now; evidence that names
+none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past its observation, and is then
+re-read against the same rule.

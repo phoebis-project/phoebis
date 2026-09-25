@@ -15,7 +15,8 @@ use crate::select::{
     release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
 };
 use crate::state::{
-    EvidenceSource, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
+    EvidenceSource, InFlight, OverageEvidence, PinRef, RoutingState, StateWrite, UtilizationSample,
+    WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, Presented, RegistrySnapshot};
 
@@ -230,6 +231,7 @@ enum Command {
 #[derive(Clone)]
 pub struct RouterHandle {
     events: broadcast::Sender<RouterEvent>,
+    in_flight: InFlight,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     tx: mpsc::Sender<Command>,
 }
@@ -240,6 +242,12 @@ impl RouterHandle {
             .read()
             .expect("snapshot lock poisoned")
             .clone()
+    }
+
+    /// The shared in-flight table: a key permit reserved after authentication and before selection, held across
+    /// every attempt; an account ticket taken per leg at dispatch.
+    pub fn in_flight(&self) -> &InFlight {
+        &self.in_flight
     }
 
     /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
@@ -405,6 +413,10 @@ pub fn spawn(
     let mut state = RoutingState::from_load(store.load_routing()?);
     // Selection ages a full-window reading that dates no refund on the same interval the pulls below run on.
     state.set_sample_ttl_ms(config.sample_ttl.as_millis() as i64);
+    // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
+    // selector's cap partition), so a count is exact wherever it is read.
+    let in_flight = InFlight::default();
+    state.set_in_flight(in_flight.clone());
     let (tx, mut rx) = mpsc::channel(COMMANDS);
     // Unbounded so the loop never blocks on SQLite: a stalled store grows this queue in memory rather than
     // stalling selection, and bounding the process's memory is the operator's call, not this channel's.
@@ -413,6 +425,7 @@ pub fn spawn(
     let (events, _) = broadcast::channel(EVENTS);
     let handle = RouterHandle {
         events: events.clone(),
+        in_flight,
         snapshot: snapshot.clone(),
         tx: tx.clone(),
     };
@@ -667,20 +680,26 @@ impl Task {
                     .as_ref()
                     .map(|old| release_reasons(&self.state, &snapshot, old, &request))
                     .unwrap_or_default();
-                let (result, writes) =
+                let (mut result, writes) =
                     select(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
                 if let Some((k, s, m)) = &triple {
                     let after = self.state.pin(k, s, m).cloned();
                     let now = request.now;
-                    match (before, after, &result) {
-                        (None, Some(new), SelectResult::Selected(_)) => {
+                    let selected = matches!(result, SelectResult::Selected(_));
+                    match (before, after) {
+                        (None, Some(new)) if selected => {
                             match self
                                 .invalidated
                                 .remove(&(k.clone(), s.clone(), m.clone()))
                                 .filter(|(_, _, at)| now - at <= MIGRATION_WINDOW_MS)
                             {
                                 Some((from, reason, _)) => {
+                                    // A hard fail-over's move is named on the attempt row the same way a
+                                    // selector's move is.
+                                    if let SelectResult::Selected(selection) = &mut result {
+                                        selection.trace.moved = Some(reason);
+                                    }
                                     self.emit(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
@@ -702,46 +721,44 @@ impl Task {
                                 }),
                             }
                         }
-                        (Some(old), Some(new), SelectResult::Selected(selection))
-                            if old.epoch != new.epoch =>
-                        {
-                            let reason = match selection.migrated {
-                                Some(MigrateReason::Overage) => "overage",
-                                Some(MigrateReason::Spent) => "spent",
-                                Some(MigrateReason::Utilization) => "utilization",
-                                None => "expired",
-                            };
-                            if reason == "expired" {
-                                self.emit(RouterEvent::PinExpired {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    model: m.clone(),
-                                    account_id: old.account_id.clone(),
-                                    reasons: released.clone(),
-                                    at: now,
-                                });
-                                self.emit(RouterEvent::PinCreated {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    model: m.clone(),
-                                    account_id: new.account_id.clone(),
-                                    epoch: new.epoch,
-                                    at: now,
-                                });
-                            } else {
-                                self.emit(RouterEvent::PinMigrated {
-                                    key_id: k.clone(),
-                                    session_id: s.clone(),
-                                    model: m.clone(),
-                                    from_account: old.account_id.clone(),
-                                    to_account: new.account_id.clone(),
-                                    epoch: new.epoch,
-                                    reason: reason.into(),
-                                    at: now,
-                                });
+                        (Some(old), Some(new)) if old.epoch != new.epoch => {
+                            if let SelectResult::Selected(selection) = &result {
+                                let reason = selection
+                                    .migrated
+                                    .map(MigrateReason::as_str)
+                                    .unwrap_or("expired");
+                                if reason == "expired" {
+                                    self.emit(RouterEvent::PinExpired {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        model: m.clone(),
+                                        account_id: old.account_id.clone(),
+                                        reasons: released.clone(),
+                                        at: now,
+                                    });
+                                    self.emit(RouterEvent::PinCreated {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        model: m.clone(),
+                                        account_id: new.account_id.clone(),
+                                        epoch: new.epoch,
+                                        at: now,
+                                    });
+                                } else {
+                                    self.emit(RouterEvent::PinMigrated {
+                                        key_id: k.clone(),
+                                        session_id: s.clone(),
+                                        model: m.clone(),
+                                        from_account: old.account_id.clone(),
+                                        to_account: new.account_id.clone(),
+                                        epoch: new.epoch,
+                                        reason: reason.into(),
+                                        at: now,
+                                    });
+                                }
                             }
                         }
-                        (Some(old), None, _) => self.emit(RouterEvent::PinExpired {
+                        (Some(old), None) => self.emit(RouterEvent::PinExpired {
                             key_id: k.clone(),
                             session_id: s.clone(),
                             model: m.clone(),
@@ -953,7 +970,10 @@ impl Task {
                     None => (false, None),
                 };
                 if self.state.record_overage(&account_id, evidence) {
-                    match (was, self.state.in_overage(&account_id)) {
+                    // The flag as it now stands on the record just folded, not the predicate: this detects the
+                    // report's own edge, which a reset passing quietly between reports must not retrigger.
+                    let now_in_use = self.state.overage(&account_id).is_some_and(|e| e.in_use);
+                    match (was, now_in_use) {
                         (false, true) => self.emit(RouterEvent::OverageStarted {
                             account_id: account_id.clone(),
                             at,
@@ -1227,6 +1247,9 @@ impl Task {
             .expect("snapshot lock poisoned")
             .clone();
         let now = (self.clock)();
+        // A permit or a ticket whose guard's drop never reached the table: a panic, or a stream past the relay's
+        // idle bound with no bound of its own.
+        self.state.in_flight().expire(now);
         // The account a pin names is only readable while it is still held, so the rows come first.
         let held: HashMap<(String, String, String), String> = self
             .state
@@ -1476,7 +1499,8 @@ fn needs_sample(
             .any(|row| row.reason == "rate_limit")
         || state
             .sample(account_id)
-            .is_some_and(|s| s.fable.unwrap_or(0.0) >= 1.0)
+            .and_then(|s| s.reading(SEVEN_DAY_FABLE))
+            .is_some_and(|r| r.utilization >= 1.0)
 }
 
 /// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names.
@@ -1485,29 +1509,53 @@ pub fn sample_from_usage(
     incarnation: u64,
 ) -> (UtilizationSample, Option<OverageEvidence>) {
     let window = |key: &str| snapshot.windows.iter().find(|w| w.key == key);
-    let fraction = |key: &str| window(key).and_then(|w| w.utilization).map(|u| u / 100.0);
-    let reset = |key: &str| window(key).and_then(|w| w.resets_at);
-    let fable = snapshot.fable_window.as_ref();
-    let sample = UtilizationSample {
-        fable: fable.and_then(|w| w.utilization).map(|u| u / 100.0),
-        fable_reset: fable.and_then(|w| w.resets_at),
-        five_hour: fraction("five_hour"),
-        five_hour_reset: reset("five_hour"),
-        seven_day: fraction("seven_day"),
-        seven_day_reset: reset("seven_day"),
+    let mut sample = UtilizationSample {
         observed_at: snapshot.fetched_at,
+        ..Default::default()
     };
-    let overage = match (sample.five_hour, sample.seven_day) {
+    for (name, utilization, reset) in [
+        (
+            FIVE_HOUR,
+            window("five_hour").and_then(|w| w.utilization),
+            window("five_hour").and_then(|w| w.resets_at),
+        ),
+        (
+            SEVEN_DAY,
+            window("seven_day").and_then(|w| w.utilization),
+            window("seven_day").and_then(|w| w.resets_at),
+        ),
+        (
+            SEVEN_DAY_FABLE,
+            snapshot.fable_window.as_ref().and_then(|w| w.utilization),
+            snapshot.fable_window.as_ref().and_then(|w| w.resets_at),
+        ),
+    ] {
+        if let Some(utilization) = utilization {
+            sample = sample.with(
+                name,
+                WindowReading {
+                    utilization: utilization / 100.0,
+                    reset,
+                    observed_at: snapshot.fetched_at,
+                },
+            );
+        }
+    }
+    let overage = match (
+        sample.reading(FIVE_HOUR).map(|r| r.utilization),
+        sample.reading(SEVEN_DAY).map(|r| r.utilization),
+    ) {
         (None, None) => None,
         (five, seven) => {
             let enabled = snapshot.extra_usage.as_ref().is_some_and(|e| e.is_enabled);
             let full = five.unwrap_or(0.0) >= 1.0 || seven.unwrap_or(0.0) >= 1.0;
             // The latest reset among the exhausted windows: under `never` the account stays out until every full
             // window has reset, not until the first one has.
-            let reset = [("five_hour", five), ("seven_day", seven)]
+            let reset = [FIVE_HOUR, SEVEN_DAY]
                 .into_iter()
-                .filter(|(_, u)| u.unwrap_or(0.0) >= 1.0)
-                .filter_map(|(key, _)| window(key).and_then(|w| w.resets_at))
+                .filter_map(|name| sample.reading(name))
+                .filter(|r| r.utilization >= 1.0)
+                .filter_map(|r| r.reset)
                 .max();
             Some(OverageEvidence {
                 in_use: enabled && full,
@@ -1574,14 +1622,33 @@ mod tests {
         spent.record_sample(
             "a",
             UtilizationSample {
-                fable: Some(1.0),
-                fable_reset: None,
-                five_hour: Some(0.1),
-                five_hour_reset: None,
-                seven_day: Some(0.1),
-                seven_day_reset: None,
                 observed_at: 1_000,
-            },
+                ..Default::default()
+            }
+            .with(
+                SEVEN_DAY_FABLE,
+                WindowReading {
+                    utilization: 1.0,
+                    reset: None,
+                    observed_at: 1_000,
+                },
+            )
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.1,
+                    reset: None,
+                    observed_at: 1_000,
+                },
+            )
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.1,
+                    reset: None,
+                    observed_at: 1_000,
+                },
+            ),
         );
         assert!(
             needs_sample(&plain_pool(), &spent, "a", 2_000),

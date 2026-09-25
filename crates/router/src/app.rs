@@ -274,6 +274,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
+        cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
         ledger: ledger.clone(),
         lifecycle: Some(lifecycle_tx),
         limits: config.keepalive.clone(),
