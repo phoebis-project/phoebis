@@ -74,6 +74,49 @@ the LiteLLM `model_prices_and_context_window.json` or a models.dev catalog"; a s
 5-minute cache write has its 1-hour price derived as 1.6 times it. An attempt on a model the table does not price
 carries no cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
+## Plan meter
+
+The plan side of every figure is counted in meter tokens: one plain input token of Claude Opus 5 on the 5-hour meter of
+a subscription. Two dated tables ship beside the price table. `plan_factors` says what one token of each type costs in
+meter tokens, the same ratios for every model: an input token 1, a cache read 0.026, a 5-minute or 1-hour cache write
+1.23 and an output token 4.67, each times the model's factor.
+
+| Model | Factor | Measured |
+| --- | --- | --- |
+| `claude-fable-5` | 2.0 | Not measured: the list-price ratio |
+| `claude-fable-5-1` | 3.61 | 2026-09-19 |
+| `claude-haiku-4-5` | 0.36 | 2026-09-24 |
+| `claude-opus-5` | 1 | 2026-09-19 |
+| `claude-sonnet-5` | 0.54 | 2026-09-24 |
+
+A row flagged `unmeasured` carries the list-price ratio until a meter run fills it. A dated model id reads the row of
+its undated base, and a model the table lacks weighs as Claude Opus 5. `plan_windows` holds each subscription tier's
+window sizes as measured on Max 5x, Max 20x and Pro: the 5-hour and 7-day windows in meter tokens, the Fable-scoped week
+in Fable tokens, since the weekly meter may weigh Fable differently from the 5-hour one. The live fit replaces them per
+account once it folds.
+
+**Live fit** The ledger fits each subscription account's window sizes from its own traffic: the meter tokens the router
+sent to the account, booked when each request completes, against the rise of the account's utilization readings. A run
+of readings folds once it has risen by three hundredths of the window, reading the booked tokens over the summed rise,
+so no fold rests on a single rounding step. The fit drops a run when a reset falls inside it (the reset time moved or
+the utilization fell), when it outgrows its window, when the utilization rose while the router had nothing booked or in
+flight on the account, and when a request that went out before a reset finished after it. The ratios between token types
+stay the table's; a per-model correction moves only once the fit is confident and the model mix changed between folds.
+Spend another client sends while one of the router's requests is in flight counts as the router's, since the usage
+endpoint reports no per-surface breakdown. Each fit keeps its carried run and its band sums in the registry beside the
+size, so a restart continues them.
+
+**Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
+UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and
+input 1.33 on 2026-09-25, so the factor lies between 1.3 and 1.45 until one window reads both; the edges are steps, and
+weekends are untested, so the row is provisional. The meter charges a request when it completes, so the band in force
+then sets its weight: the fit books its tokens that way, and a session's burn in meter tokens folds a renewal inside the
+band at the band's factor, so the shedding order reads what the meter charges. A band row with a later date takes over
+from that date and never re-weights an earlier request.
+
+The analytics set each fit beside its tier's row, which shows the drift between the table and the meter, and the band
+factor the fit observes beside the row's.
+
 ## Body capture
 
 Body capture is off until a key or a pool asks for it. Once asked for, a capture holds the request and response

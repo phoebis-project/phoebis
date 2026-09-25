@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
-use phoebis_store::{AccountState, CooldownRow, PinRow, RekeyWrite, Store, StoreError};
+use phoebis_store::{AccountState, CooldownRow, FitRow, PinRow, RekeyWrite, Store, StoreError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -94,6 +94,9 @@ pub enum RouterEvent {
 
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
+    /// The meter's peak band at a renewal's instant: the meter burn folds its price times it, the dollar burn
+    /// does not.
+    pub band: BandWeight,
     pub purge_interval: Duration,
     /// The burn's prices. The task holds them because neither this crate nor the relay can see the ledger's
     /// tables.
@@ -105,6 +108,7 @@ pub struct RouterConfig {
 impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
+            band: BandWeight::default(),
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
             sample_ttl: Duration::from_secs(60),
@@ -128,6 +132,36 @@ impl Default for BurnRates {
             meter: RateTable::unit(),
             dollars: RateTable::unit(),
         }
+    }
+}
+
+/// The weight the meter puts on a charge landing on a window at an instant. The ledger's peak band decides it,
+/// and this crate cannot name the ledger's table, so the band arrives as a function; the default weighs every
+/// instant 1.
+#[derive(Clone)]
+pub struct BandWeight(Arc<Weigh>);
+
+type Weigh = dyn Fn(&str, i64) -> f64 + Send + Sync;
+
+impl BandWeight {
+    pub fn new(weigh: impl Fn(&str, i64) -> f64 + Send + Sync + 'static) -> BandWeight {
+        BandWeight(Arc::new(weigh))
+    }
+
+    pub fn at(&self, window: &str, at: i64) -> f64 {
+        (self.0)(window, at)
+    }
+}
+
+impl Default for BandWeight {
+    fn default() -> BandWeight {
+        BandWeight::new(|_, _| 1.0)
+    }
+}
+
+impl std::fmt::Debug for BandWeight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BandWeight")
     }
 }
 
@@ -157,6 +191,12 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+    },
+    Fit {
+        row: FitRow,
+        /// The account's reload epoch at write time, the same guard every report carries; distinct from
+        /// `row.incarnation`, the fit's own version as stored in `plan_fits`.
+        incarnation: u64,
     },
     Overage {
         account_id: String,
@@ -212,6 +252,9 @@ enum Command {
     },
     Cooldowns {
         reply: oneshot::Sender<Vec<CooldownRow>>,
+    },
+    Fits {
+        reply: oneshot::Sender<Vec<FitRow>>,
     },
     Overage {
         account_id: String,
@@ -366,6 +409,11 @@ impl RouterHandle {
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
+    }
+    /// One ask for every account's fit rows, so a reader never queues one command per account in front of
+    /// selection.
+    pub async fn fits(&self) -> Result<Vec<FitRow>, RouterGone> {
+        self.ask(|reply| Command::Fits { reply }).await
     }
     /// One ask for the whole map: a scrape must not queue one command per account in front of selection.
     pub async fn overages(&self) -> Result<Vec<(String, OverageEvidence)>, RouterGone> {
@@ -620,6 +668,7 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                 }
             }
             StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
+            StateWrite::UpsertFit(row) => store.upsert_fit(&row)?,
             StateWrite::UpsertOverage(row) => {
                 store.upsert_overage(&row)?;
             }
@@ -908,6 +957,9 @@ impl Task {
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
             }
+            Command::Fits { reply } => {
+                let _ = reply.send(self.state.fits());
+            }
             Command::Overages { reply } => {
                 let _ = reply.send(self.state.overages());
             }
@@ -1109,7 +1161,10 @@ impl Task {
                             // Both averages fold whatever the account's kind: the reader picks the unit its
                             // funding selects at read time, so leaving overage needs no reset.
                             let window_ms = self.burn_window_ms(&pin.key_id);
-                            let meter = self.config.rates.meter.price(&canonical_model, usage);
+                            // The meter charges a request inside the peak band more, so the meter burn weighs it
+                            // by the band at the renewal; dollars cost the same at every hour.
+                            let meter = self.config.rates.meter.price(&canonical_model, usage)
+                                * self.config.band.at(FIVE_HOUR, now);
                             let dollars = self.config.rates.dollars.price(&canonical_model, usage);
                             renewed.burn =
                                 burn_folded(renewed.burn, renewed.burn_at, now, window_ms, meter);
@@ -1146,6 +1201,14 @@ impl Task {
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
                     }
+                }
+            }
+            Report::Fit { row, incarnation } => {
+                if self.moved_past(&row.account_id, incarnation) {
+                    return;
+                }
+                if self.state.record_fit(row.clone()) {
+                    self.write(vec![StateWrite::UpsertFit(row)]);
                 }
             }
             Report::AccountState {

@@ -5,10 +5,12 @@ mod assemble;
 mod bodies;
 mod db;
 mod events;
+mod fit;
 mod generations;
 mod histogram;
 mod metrics;
 mod pattern;
+mod plan;
 mod pricing;
 mod query;
 mod quota;
@@ -18,10 +20,11 @@ mod schema;
 mod task;
 mod usage;
 
-pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
+pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY};
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
+pub use fit::{Fitter, MIN_INTERVAL_MS};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
@@ -31,6 +34,7 @@ pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
+pub use plan::{Band, ModelFactor, PlanFactors, PlanWindows, TierWindows};
 pub use pricing::{
     diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
     PriceTable, Pricing,
@@ -68,6 +72,8 @@ pub enum LedgerError {
     ReadCancelled,
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error("plan table: {0}")]
+    Plan(String),
     #[error("pricing table: {0}")]
     Yaml(String),
 }

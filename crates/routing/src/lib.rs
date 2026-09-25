@@ -26,7 +26,7 @@ pub use state::{
     UtilizationSample, WindowReading, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 pub use task::{
-    sample_from_usage, spawn, BurnRates, ReloadError, Report, RouterConfig, RouterEvent,
-    RouterGone, RouterHandle, SelectAnswer,
+    sample_from_usage, spawn, BandWeight, BurnRates, ReloadError, Report, RouterConfig,
+    RouterEvent, RouterGone, RouterHandle, SelectAnswer,
 };
 pub use windows::window_for;

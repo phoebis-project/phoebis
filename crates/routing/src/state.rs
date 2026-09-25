@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use phoebis_store::{
-    AccountKind, AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite, ResolutionRow,
+    AccountKind, AccountState, CooldownRow, FitRow, OverageRow, PinRow, RekeyWrite, ResolutionRow,
     RoutingLoad,
 };
 use tokio::sync::Notify;
@@ -143,6 +143,7 @@ pub enum StateWrite {
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
     UpsertCooldown(CooldownRow),
+    UpsertFit(FitRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
 }
@@ -474,6 +475,8 @@ type ShedRound = (i64, HashSet<(String, String, String)>);
 
 pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
+    /// The ledger's live fit per account and window, kept here because the routing writer persists it.
+    fits: HashMap<(String, String), FitRow>,
     in_flight: InFlight,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
@@ -497,6 +500,13 @@ impl RoutingState {
                 .cooldowns
                 .into_iter()
                 .map(|c| ((c.account_id.clone(), c.scope.clone()), c))
+                .collect(),
+            // The ledger refuses a row it cannot divide by; one refused here too never reaches a reader.
+            fits: load
+                .fits
+                .into_iter()
+                .filter(|f| f.scale.is_finite() && f.confidence.is_finite())
+                .map(|f| ((f.account_id.clone(), f.window.clone()), f))
                 .collect(),
             in_flight: InFlight::default(),
             next_epoch,
@@ -824,6 +834,28 @@ impl RoutingState {
         self.samples.remove(account_id);
     }
 
+    /// Keeps the row unless the one held for its account and window has folded later; a row written for the
+    /// carry alone keeps its fold's `fitted_at`, so an equal time replaces too.
+    pub fn record_fit(&mut self, row: FitRow) -> bool {
+        let key = (row.account_id.clone(), row.window.clone());
+        if self
+            .fits
+            .get(&key)
+            .is_some_and(|held| held.fitted_at > row.fitted_at)
+        {
+            return false;
+        }
+        self.fits.insert(key, row);
+        true
+    }
+
+    /// Every account's fit rows, by account and window.
+    pub fn fits(&self) -> Vec<FitRow> {
+        let mut out: Vec<FitRow> = self.fits.values().cloned().collect();
+        out.sort_by(|a, b| (&a.account_id, &a.window).cmp(&(&b.account_id, &b.window)));
+        out
+    }
+
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
     pub fn samples(&self) -> Vec<(String, UtilizationSample)> {
         let mut out: Vec<_> = self
@@ -1133,13 +1165,15 @@ impl RoutingState {
         for (key, _) in &pins {
             self.take_pin(key);
         }
-        // None of these needs a deletion written: the overage row cascades with the account and the next
+        // None of these needs a deletion written: the overage and fit rows cascade with the account and the next
         // holder's first reading replaces one left under another incarnation, and samples, round-robin cursors
         // and shedding rounds are held in memory only. Samples and cursors are keyed by id alone, so the reload
         // drops the sample of a holder the id has moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
+        self.fits
+            .retain(|(account_id, _), fit| !gone(account_id, fit.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))

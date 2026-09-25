@@ -7,15 +7,17 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::{Clock, UsageService};
-use phoebis_routing::RouterHandle;
-use phoebis_store::Store;
+use phoebis_routing::{Report, RouterHandle};
+use phoebis_store::{AccountKind, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
+use crate::fit::Fitter;
 use crate::metrics::Metrics;
+use crate::plan::{PlanFactors, PlanWindows};
 use crate::pricing::{price_attempts, PriceTable, Pricing};
 use crate::quota::QuotaPoll;
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
@@ -178,8 +180,8 @@ pub fn spawn(
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
-        store,
-        router,
+        store.clone(),
+        router.clone(),
         clock.clone(),
         config.event_poll,
     );
@@ -194,6 +196,8 @@ pub fn spawn(
     tokio::spawn(writer(
         db.clone(),
         pricing,
+        store,
+        router,
         rx,
         stopped,
         assembler,
@@ -242,7 +246,7 @@ async fn assemble(
                 None => break,
             },
             _ = expire.tick() => {
-                assembler.expire(clock());
+                land_all(&ledger, assembler.expire(clock()).records).await;
             }
             _ = stop_requested(&mut stopped) => {
                 while let Ok(event) = subscriber.events.try_recv() {
@@ -269,6 +273,8 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
 async fn writer(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
+    store: Arc<Store>,
+    router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
@@ -287,6 +293,11 @@ async fn writer(
     purge.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
+    let mut fitter = Fitter::new(
+        Arc::new(PlanFactors::shipped()),
+        Arc::new(PlanWindows::shipped()),
+        persisted_fits(store).await,
+    );
     loop {
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
@@ -314,6 +325,7 @@ async fn writer(
                 Err(_) => break,
             }
         }
+        fit_batch(&mut fitter, &router, &clock, &batch);
         land(&db, &pricing, &stats, &metrics, batch).await;
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
@@ -336,8 +348,102 @@ async fn writer(
     let _ = done.send(());
 }
 
+/// The fit rows the router persisted, the fitter's seed; a store that cannot answer starts every window over.
+async fn persisted_fits(store: Arc<Store>) -> Vec<phoebis_store::FitRow> {
+    match tokio::task::spawn_blocking(move || store.fits()).await {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "the window fits could not be read; every window starts over");
+            Vec::new()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "reading the window fits panicked; every window starts over");
+            Vec::new()
+        }
+    }
+}
+
+/// Walks a batch through the fitter in the order it arrived, reporting every row it answers to the router,
+/// whose writer persists it. Runs whether or not the batch then lands: the fit reads what happened, not what
+/// the ledger kept.
+fn fit_batch(fitter: &mut Fitter, router: &RouterHandle, clock: &Clock, batch: &[Record]) {
+    for record in batch {
+        match record {
+            Record::AttemptStarted {
+                account_id,
+                request_id,
+                attempt,
+                at,
+            } => fitter.started(account_id, request_id, *attempt, *at),
+            Record::AttemptDropped {
+                account_id,
+                request_id,
+                attempt,
+                ..
+            } => fitter.dropped(account_id, request_id, *attempt),
+            Record::Request {
+                request, attempts, ..
+            } => {
+                // Probes count, since the meter charges them; an attempt that answered no usage closes and
+                // books nothing, and so does one on an API-key account, which has no plan window to fit.
+                for attempt in attempts {
+                    if attempt.account_kind != "oauth" {
+                        fitter.dropped(&attempt.account_id, &attempt.request_id, attempt.attempt);
+                        continue;
+                    }
+                    let completed = attempt
+                        .finished_at
+                        .or(request.finished_at)
+                        .unwrap_or_else(|| clock());
+                    fitter.dispatched(
+                        &attempt.account_id,
+                        &attempt.request_id,
+                        attempt.attempt,
+                        &request.canonical_model,
+                        attempt,
+                        completed,
+                    );
+                }
+            }
+            Record::Samples { quota, .. } => {
+                let snapshot = router.snapshot();
+                // The record carries only its five-minute bucket; the writer sees it within moments of the
+                // reading, which is the precision the fit's one-minute gate needs.
+                let now = clock();
+                for sample in quota {
+                    let Some(utilization) = sample.utilization else {
+                        continue;
+                    };
+                    let Some(account) = snapshot
+                        .account(&sample.account_id)
+                        .filter(|account| account.kind == AccountKind::Oauth)
+                    else {
+                        continue;
+                    };
+                    if let Some(row) = fitter.sampled(
+                        &sample.account_id,
+                        account.incarnation,
+                        &sample.window,
+                        utilization,
+                        sample.reset_at,
+                        now,
+                    ) {
+                        router.report(Report::Fit {
+                            row,
+                            incarnation: account.incarnation,
+                        });
+                    }
+                }
+            }
+            Record::Event(_) | Record::Keepalive(_) => {}
+        }
+    }
+}
+
 fn table_of(record: &Record) -> &'static str {
     match record {
+        Record::AttemptDropped { .. } => "attempts_dropped",
+        Record::AttemptStarted { .. } => "attempts_started",
         Record::Event(_) => "events",
         Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
@@ -419,6 +525,8 @@ async fn land(
                             quota: quota.clone(),
                         });
                     }
+                    // The fitter's alone: the writer walked them through it before this batch.
+                    Record::AttemptStarted { .. } | Record::AttemptDropped { .. } => {}
                 }
             }
             tx.commit()?;

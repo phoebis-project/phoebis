@@ -72,8 +72,9 @@ pub struct ResolutionRow {
     pub resolved_at: i64,
 }
 
-/// The live fit of one window's size for one account, in meter tokens per full window.
-#[derive(Clone, Debug, PartialEq)]
+/// The live fit of one window's size for one account, in meter tokens per full window. The carried run and the
+/// band sums are kept beside the scale, so a restart continues them rather than starting them over.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FitRow {
     pub account_id: String,
     pub window: String,
@@ -82,8 +83,58 @@ pub struct FitRow {
     pub intervals: u32,
     /// Per-model correction factors as a JSON object, `{}` while the mix never varied.
     pub corrections_json: String,
+    /// The last fold; a row written for the carry alone keeps it.
     pub fitted_at: i64,
     pub incarnation: u64,
+    /// The band factor the fit observes (the row's factor times the out-of-band scale over the in-band one),
+    /// `None` until both sides have folded.
+    pub band_factor: Option<f64>,
+    /// Meter tokens booked since the last fold, each weighted by the band its charge landed in.
+    pub carry_weighted: f64,
+    /// The same tokens unweighted, split by whether the charge landed inside the band or outside it.
+    pub carry_inside: f64,
+    pub carry_outside: f64,
+    /// How far the utilization has risen since the last fold.
+    pub carry_delta: f64,
+    /// When the carried run began, and its latest reading with the reset that reading named.
+    pub carry_since: Option<i64>,
+    pub carry_utilization: Option<f64>,
+    pub carry_reset: Option<i64>,
+    /// Unweighted meter tokens and utilization delta summed over the folds wholly inside the band, and over
+    /// those wholly outside it.
+    pub band_inside_tokens: f64,
+    pub band_inside_delta: f64,
+    pub band_outside_tokens: f64,
+    pub band_outside_delta: f64,
+}
+
+const FIT_COLUMNS: &str = "account_id, window, scale, confidence, intervals, corrections_json, fitted_at, \
+     incarnation, band_factor, carry_weighted, carry_inside, carry_outside, carry_delta, carry_since, \
+     carry_utilization, carry_reset, band_inside_tokens, band_inside_delta, band_outside_tokens, band_outside_delta";
+
+fn fit_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<FitRow> {
+    Ok(FitRow {
+        account_id: r.get(0)?,
+        window: r.get(1)?,
+        scale: r.get(2)?,
+        confidence: r.get(3)?,
+        intervals: r.get::<_, i64>(4)? as u32,
+        corrections_json: r.get(5)?,
+        fitted_at: r.get(6)?,
+        incarnation: r.get::<_, i64>(7)? as u64,
+        band_factor: r.get(8)?,
+        carry_weighted: r.get(9)?,
+        carry_inside: r.get(10)?,
+        carry_outside: r.get(11)?,
+        carry_delta: r.get(12)?,
+        carry_since: r.get(13)?,
+        carry_utilization: r.get(14)?,
+        carry_reset: r.get(15)?,
+        band_inside_tokens: r.get(16)?,
+        band_inside_delta: r.get(17)?,
+        band_outside_tokens: r.get(18)?,
+        band_outside_delta: r.get(19)?,
+    })
 }
 
 /// One landing of a resolution: the spelling row and every pin and model cooldown it moves from the spelling to
@@ -132,12 +183,8 @@ impl Store {
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
                 .query_map([], |r| Ok(ResolutionRow { spelling: r.get(0)?, dated_id: r.get(1)?, resolved_at: r.get(2)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            fits: tx.prepare("SELECT account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation FROM plan_fits ORDER BY account_id, window")?
-                .query_map([], |r| Ok(FitRow {
-                    account_id: r.get(0)?, window: r.get(1)?, scale: r.get(2)?, confidence: r.get(3)?,
-                    intervals: r.get::<_, i64>(4)? as u32, corrections_json: r.get(5)?,
-                    fitted_at: r.get(6)?, incarnation: r.get::<_, i64>(7)? as u64,
-                }))?
+            fits: tx.prepare(&format!("SELECT {FIT_COLUMNS} FROM plan_fits ORDER BY account_id, window"))?
+                .query_map([], fit_of)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -238,12 +285,21 @@ impl Store {
     pub fn upsert_fit(&self, row: &FitRow) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "INSERT INTO plan_fits (account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-             ON CONFLICT(account_id, window) DO UPDATE SET \
-               scale = excluded.scale, confidence = excluded.confidence, intervals = excluded.intervals, \
-               corrections_json = excluded.corrections_json, fitted_at = excluded.fitted_at, \
-               incarnation = excluded.incarnation",
+            &format!(
+                "INSERT INTO plan_fits ({FIT_COLUMNS}) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
+                 ON CONFLICT(account_id, window) DO UPDATE SET \
+                   scale = excluded.scale, confidence = excluded.confidence, intervals = excluded.intervals, \
+                   corrections_json = excluded.corrections_json, fitted_at = excluded.fitted_at, \
+                   incarnation = excluded.incarnation, band_factor = excluded.band_factor, \
+                   carry_weighted = excluded.carry_weighted, carry_inside = excluded.carry_inside, \
+                   carry_outside = excluded.carry_outside, carry_delta = excluded.carry_delta, \
+                   carry_since = excluded.carry_since, carry_utilization = excluded.carry_utilization, \
+                   carry_reset = excluded.carry_reset, band_inside_tokens = excluded.band_inside_tokens, \
+                   band_inside_delta = excluded.band_inside_delta, \
+                   band_outside_tokens = excluded.band_outside_tokens, \
+                   band_outside_delta = excluded.band_outside_delta"
+            ),
             params![
                 row.account_id,
                 row.window,
@@ -252,7 +308,19 @@ impl Store {
                 row.intervals as i64,
                 row.corrections_json,
                 row.fitted_at,
-                row.incarnation as i64
+                row.incarnation as i64,
+                row.band_factor,
+                row.carry_weighted,
+                row.carry_inside,
+                row.carry_outside,
+                row.carry_delta,
+                row.carry_since,
+                row.carry_utilization,
+                row.carry_reset,
+                row.band_inside_tokens,
+                row.band_inside_delta,
+                row.band_outside_tokens,
+                row.band_outside_delta
             ],
         )?;
         Ok(())
@@ -261,22 +329,10 @@ impl Store {
     pub fn fits(&self) -> Result<Vec<FitRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let rows = conn
-            .prepare(
-                "SELECT account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation \
-                 FROM plan_fits ORDER BY account_id, window",
-            )?
-            .query_map([], |r| {
-                Ok(FitRow {
-                    account_id: r.get(0)?,
-                    window: r.get(1)?,
-                    scale: r.get(2)?,
-                    confidence: r.get(3)?,
-                    intervals: r.get::<_, i64>(4)? as u32,
-                    corrections_json: r.get(5)?,
-                    fitted_at: r.get(6)?,
-                    incarnation: r.get::<_, i64>(7)? as u64,
-                })
-            })?
+            .prepare(&format!(
+                "SELECT {FIT_COLUMNS} FROM plan_fits ORDER BY account_id, window"
+            ))?
+            .query_map([], fit_of)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }

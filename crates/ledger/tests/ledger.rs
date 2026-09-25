@@ -1,14 +1,18 @@
 //! The acceptance row "Ledger": every request has one row and one row per attempt; refusals have a row and
 //! no attempt; a saturated channel produces a ledger_gap whose count equals the dropped records.
 mod common;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{
-    Event as BusEvent, Kind, Origin, Outcome as BusOutcome, RequestComplete, RequestObserved,
-    RequestShape, ResponseChunk, ResponseFacts,
+    AccountSelected, AttemptOutcome, Event as BusEvent, Kind, Origin, Outcome as BusOutcome,
+    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead,
+    Usage,
 };
 use phoebis_ledger::{
-    list_requests, EventRecord, LedgerConfig, LiveKeys, Record, RequestFilter, RequestRecord,
+    bucket_of, list_requests, Assembler, EventRecord, LedgerConfig, LiveKeys, QuotaSampleRecord,
+    Record, RequestFilter, RequestRecord, IN_FLIGHT_TTL_MS,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use common::*;
@@ -1199,6 +1203,273 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
     assert!(
         rollups.iter().any(|r| r.kind == "probe" && r.requests == 1),
         "the rollup row is keyed kind = probe"
+    );
+    up.shutdown().await;
+}
+
+/// The harness clock `minutes` past `NOW`.
+fn minutes(n: i64) -> i64 {
+    NOW + n * 60_000
+}
+
+fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
+    BusEvent::AccountSelected(AccountSelected {
+        request_id: id.into(),
+        attempt,
+        account_id: account.into(),
+        account_kind: "oauth".into(),
+        pin_epoch: None,
+        started_at: at,
+        cache_ttl_ms: None,
+    })
+}
+
+/// A head carrying the account's 5-hour reading, which the assembler turns into a header sample.
+fn head_event(id: &str, utilization: f64, at: i64) -> BusEvent {
+    BusEvent::ResponseHead(ResponseHead {
+        request_id: id.into(),
+        attempt: 1,
+        status: 200,
+        headers: vec![(
+            "anthropic-ratelimit-unified-5h-utilization".into(),
+            utilization.to_string(),
+        )],
+        first_event: None,
+        outcome: AttemptOutcome::Succeeded,
+        cooldown: None,
+        written_at: at - 10,
+        observed_at: at,
+    })
+}
+
+/// The first attempt on account `a` served the request with 1,000 input and 100 output tokens.
+fn served_event(id: &str, at: i64) -> BusEvent {
+    BusEvent::RequestComplete(RequestComplete {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: Some("a".into()),
+        outcome: BusOutcome::Succeeded,
+        status: 200,
+        usage: Some(Usage {
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Usage::default()
+        }),
+        response: ResponseFacts::default(),
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: None,
+        client_drift: None,
+        client_version: None,
+        response_bytes: None,
+        response_chunks: None,
+        finished_at: at,
+    })
+}
+
+/// Sonnet 5's meter tokens for `served_event`'s usage, over a sixteenth of the window.
+fn served_scale() -> f64 {
+    0.54 * (1_000.0 + 100.0 * 4.67) / 0.0625
+}
+
+/// Lands a 5-hour reading of account `a` at `at` on the harness clock and waits until the writer has taken it,
+/// so the next step's clock never overtakes it.
+async fn reading(h: &Harness, at: i64, utilization: f64) {
+    h.clock.store(at, Ordering::SeqCst);
+    let bucket = bucket_of(at);
+    h.ledger.record(Record::Samples {
+        quota: vec![QuotaSampleRecord {
+            account_id: "a".into(),
+            bucket,
+            window: "5h".into(),
+            utilization: Some(utilization),
+            reset_at: None,
+            source: "header".into(),
+        }],
+        extra: None,
+    });
+    landed_reading(h, bucket, utilization).await;
+}
+
+async fn landed_reading(h: &Harness, bucket: i64, utilization: f64) {
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.quota_samples("a", bucket, bucket + 1)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|q| q.utilization == Some(utilization))
+    })
+    .await;
+}
+
+fn land(h: &Harness, records: Vec<Record>) {
+    for record in records {
+        h.ledger.record(record);
+    }
+}
+
+/// Rows in the ledger's request, attempt, event and sample tables.
+async fn table_rows(h: &Harness) -> [i64; 4] {
+    h.db.read(|c| {
+        let count = |table: &str| {
+            c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| {
+                r.get::<_, i64>(0)
+            })
+        };
+        Ok([
+            count("requests")?,
+            count("attempts")?,
+            count("events")?,
+            count("quota_samples")?,
+        ])
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn an_attempt_started_record_is_emitted_at_selection_and_stored_nowhere() {
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    assembler.observe(observed_event("r1"));
+    let records = assembler.observe(selected_event("r1", 1, "a", minutes(1)));
+    let [Record::AttemptStarted {
+        account_id,
+        request_id,
+        attempt,
+        at,
+    }] = records.as_slice()
+    else {
+        panic!("{} records at the selection", records.len());
+    };
+    assert_eq!(
+        (account_id.as_str(), request_id.as_str(), *attempt, *at),
+        ("a", "r1", 1, minutes(1))
+    );
+
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.bus.publish(observed_event("open"));
+    h.bus.publish(selected_event("open", 1, "a", minutes(1)));
+    // A request that completes behind it on the same path: once its row is in, the selection has been landed.
+    h.bus.publish(observed_event("done"));
+    h.bus.publish(complete_event("done"));
+    listed(&h, "done").await;
+    assert_eq!(
+        table_rows(&h).await,
+        [1, 0, 0, 0],
+        "the selection wrote nothing: one request row, the completed one, and nothing else"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_expired_request_emits_a_dropped_record_per_attempt_and_the_fit_closes_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The task's own assembler ages entries out on a minute of wall time; this one runs on the harness clock and
+    // hands its records to the same channel the task's tick lands them on.
+    let mut assembler = Assembler::new(clock_of(&h));
+    reading(&h, minutes(0), 0.25).await;
+    h.clock.store(minutes(1), Ordering::SeqCst);
+    land(&h, assembler.observe(observed_event("lost")));
+    land(
+        &h,
+        assembler.observe(selected_event("lost", 1, "a", minutes(1))),
+    );
+    land(
+        &h,
+        assembler.observe(selected_event("lost", 2, "a", minutes(2))),
+    );
+    let expired = assembler.expire(minutes(2) + IN_FLIGHT_TTL_MS);
+    assert_eq!(expired.dropped, 1);
+    let dropped: Vec<(String, String, u32)> = expired
+        .records
+        .iter()
+        .map(|record| match record {
+            Record::AttemptDropped {
+                account_id,
+                request_id,
+                attempt,
+                ..
+            } => (account_id.clone(), request_id.clone(), *attempt),
+            _ => panic!("expire answers dropped attempts only"),
+        })
+        .collect();
+    assert_eq!(
+        dropped,
+        [
+            ("a".into(), "lost".into(), 1),
+            ("a".into(), "lost".into(), 2)
+        ],
+        "one record per attempt the lost request held"
+    );
+    land(&h, expired.records);
+
+    let after = minutes(2) + IN_FLIGHT_TTL_MS;
+    reading(&h, after + 5 * 60_000, 0.3125).await;
+    assert!(
+        h.router.fits().await.unwrap().is_empty(),
+        "a rise with nothing open is spend the router did not send"
+    );
+    h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
+    land(&h, assembler.observe(observed_event("served")));
+    land(
+        &h,
+        assembler.observe(selected_event("served", 1, "a", after + 6 * 60_000)),
+    );
+    for record in assembler.observe(served_event("served", after + 7 * 60_000)) {
+        h.ledger.record_request(record).await;
+    }
+    reading(&h, after + 12 * 60_000, 0.375).await;
+    let fits = wait_for_async(Duration::from_secs(5), || async {
+        let fits = h.router.fits().await.unwrap();
+        (!fits.is_empty()).then_some(fits)
+    })
+    .await;
+    assert!(
+        (fits[0].scale - served_scale()).abs() < 1e-6,
+        "the served tokens over their own rise alone, the foreign rise dropped: {}",
+        fits[0].scale
+    );
+    assert_eq!(
+        table_rows(&h).await[..3],
+        [1, 1, 0],
+        "the lost request's records wrote no row: the served request and its attempt, and no event"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_head_sample_before_the_completion_reaches_the_fit_through_the_assembler_and_the_writer()
+{
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    reading(&h, minutes(0), 0.25).await;
+    h.clock.store(minutes(1), Ordering::SeqCst);
+    h.bus.publish(observed_event("r1"));
+    h.bus.publish(selected_event("r1", 1, "a", minutes(1)));
+    // The stream's head reads the rise before the completion has booked a token.
+    h.clock.store(minutes(6), Ordering::SeqCst);
+    h.bus.publish(head_event("r1", 0.3125, minutes(6)));
+    landed_reading(&h, bucket_of(minutes(6)), 0.3125).await;
+    assert!(h.router.fits().await.unwrap().is_empty());
+    h.clock.store(minutes(7), Ordering::SeqCst);
+    h.bus.publish(served_event("r1", minutes(7)));
+    listed(&h, "r1").await;
+    reading(&h, minutes(12), 0.3125).await;
+    let fits = wait_for_async(Duration::from_secs(5), || async {
+        let fits = h.router.fits().await.unwrap();
+        (!fits.is_empty()).then_some(fits)
+    })
+    .await;
+    assert_eq!(
+        (fits.len(), fits[0].window.as_str(), fits[0].intervals),
+        (1, "five_hour", 1)
+    );
+    assert!(
+        (fits[0].scale - served_scale()).abs() < 1e-6,
+        "the carried rise folds against the attempt's tokens: {}",
+        fits[0].scale
     );
     up.shutdown().await;
 }

@@ -1,0 +1,53 @@
+# Meter tokens per token on the plan side. One plain input token of the reference model on the 5-hour meter is
+# the unit; `factor` is a model's weight against the reference and multiplies every type column. The values are
+# measured on the 5-hour meter of Max and Pro subscriptions on 2026-09-18, 2026-09-19 and 2026-09-24; a row
+# flagged `unmeasured` carries the list-price ratio until a meter run fills it.
+measured: 2026-09-24
+reference: claude-opus-5
+models:
+  claude-fable-5:
+    factor: 2.0
+    input: 1
+    cache_read: 0.026
+    cache_write_5m: 1.23
+    cache_write_1h: 1.23
+    output: 4.67
+    unmeasured: true
+  claude-fable-5-1:
+    # The factor comes from the Max 5x sessions; the Pro account of 2026-09-24 carries no Fable window.
+    factor: 3.61
+    input: 1
+    cache_read: 0.026
+    cache_write_5m: 1.23
+    cache_write_1h: 1.23
+    output: 4.67
+    measured: 2026-09-19
+  claude-haiku-4-5:
+    # 0.352 on input and 0.360 on output, measured inside the peak band and derived outside it through the
+    # band's 1.442; the cache columns were not measured and carry the reference's ratios.
+    factor: 0.36
+    input: 1
+    cache_read: 0.026
+    cache_write_5m: 1.23
+    cache_write_1h: 1.23
+    output: 4.67
+    measured: 2026-09-24
+  claude-opus-5:
+    # The Max 5x sessions of 2026-09-18 and 2026-09-19.
+    factor: 1
+    input: 1
+    cache_read: 0.026
+    cache_write_5m: 1.23
+    cache_write_1h: 1.23
+    output: 4.67
+    measured: 2026-09-19
+  claude-sonnet-5:
+    # Measured on Pro with input and output agreeing at 0.538, inside the peak band and derived outside it
+    # through the band's 1.442; the cache columns were not measured and carry the reference's ratios.
+    factor: 0.54
+    input: 1
+    cache_read: 0.026
+    cache_write_5m: 1.23
+    cache_write_1h: 1.23
+    output: 4.67
+    measured: 2026-09-24

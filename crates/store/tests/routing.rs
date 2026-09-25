@@ -386,6 +386,18 @@ fn a_fit_row_round_trips_and_a_second_write_replaces_it() {
         corrections_json: "{}".into(),
         fitted_at: 1_000,
         incarnation: 1,
+        band_factor: None,
+        carry_weighted: 0.0,
+        carry_inside: 0.0,
+        carry_outside: 0.0,
+        carry_delta: 0.0,
+        carry_since: None,
+        carry_utilization: None,
+        carry_reset: None,
+        band_inside_tokens: 0.0,
+        band_inside_delta: 0.0,
+        band_outside_tokens: 0.0,
+        band_outside_delta: 0.0,
     };
     store.upsert_fit(&fit).unwrap();
     assert_eq!(store.fits().unwrap(), vec![fit.clone()]);
@@ -396,6 +408,18 @@ fn a_fit_row_round_trips_and_a_second_write_replaces_it() {
         corrections_json: r#"{"claude-opus-5":1.1}"#.into(),
         fitted_at: 2_000,
         incarnation: 2,
+        band_factor: Some(1.45),
+        carry_weighted: 145_000.0,
+        carry_inside: 100_000.0,
+        carry_outside: 0.0,
+        carry_delta: 0.01,
+        carry_since: Some(1_500),
+        carry_utilization: Some(0.42),
+        carry_reset: Some(18_000_000),
+        band_inside_tokens: 2_000_000.0,
+        band_inside_delta: 0.25,
+        band_outside_tokens: 3_000_000.0,
+        band_outside_delta: 0.5,
         ..fit
     };
     store.upsert_fit(&refitted).unwrap();

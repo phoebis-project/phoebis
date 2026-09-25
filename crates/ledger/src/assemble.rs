@@ -39,6 +39,21 @@ pub const MAX_CAPTURE_BYTES: usize = 64 << 20;
 // built once per completion and moved once into the writer's bounded channel.
 #[allow(clippy::large_enum_variant)]
 pub enum Record {
+    /// The assembler dropped the request whose completion never arrived; one per attempt it held, so the
+    /// fitter closes what the assembler closes.
+    AttemptDropped {
+        account_id: String,
+        request_id: String,
+        attempt: u32,
+        at: i64,
+    },
+    /// An attempt went out; the fitter opens it so a rise before its completion is the router's own spend.
+    AttemptStarted {
+        account_id: String,
+        request_id: String,
+        attempt: u32,
+        at: i64,
+    },
     Event(EventRecord),
     Keepalive(KeepaliveDelta),
     Request {
@@ -50,6 +65,25 @@ pub enum Record {
         quota: Vec<QuotaSampleRecord>,
         extra: Option<ExtraUsageSampleRecord>,
     },
+}
+
+/// What `expire` aged out: how many requests, and one `Record::AttemptDropped` per attempt they held.
+pub struct Expired {
+    pub dropped: usize,
+    pub records: Vec<Record>,
+}
+
+/// One `Record::AttemptDropped` per attempt of an entry the assembler let go without its completion.
+fn attempts_dropped(entry: &InFlight, at: i64) -> impl Iterator<Item = Record> + '_ {
+    entry
+        .attempts
+        .iter()
+        .map(move |attempt| Record::AttemptDropped {
+            account_id: attempt.account_id.clone(),
+            request_id: attempt.request_id.clone(),
+            attempt: attempt.attempt,
+            at,
+        })
 }
 
 pub(crate) struct InFlight {
@@ -167,7 +201,9 @@ impl Assembler {
                         .min_by_key(|(_, e)| (e.seen_at, e.seq))
                         .map(|(id, _)| id.clone())
                     {
-                        self.remove(&victim);
+                        if let Some(entry) = self.remove(&victim) {
+                            records.extend(attempts_dropped(&entry, now));
+                        }
                         records.push(gap(&victim, "in_flight_cap", now));
                     }
                 }
@@ -204,7 +240,12 @@ impl Assembler {
                     previous.finished_at = Some(selected.started_at);
                 }
                 entry.attempts.push(attempt_row(&selected));
-                Vec::new()
+                vec![Record::AttemptStarted {
+                    account_id: selected.account_id,
+                    request_id: selected.request_id,
+                    attempt: u32::from(selected.attempt),
+                    at: selected.started_at,
+                }]
             }
             Event::ResponseHead(head) => {
                 let Some(entry) = self.in_flight.get_mut(&head.request_id) else {
@@ -304,15 +345,18 @@ impl Assembler {
         records
     }
 
-    pub fn expire(&mut self, now: i64) -> usize {
+    pub fn expire(&mut self, now: i64) -> Expired {
         let stale: Vec<String> = self
             .in_flight
             .iter()
             .filter(|(_, entry)| now - entry.seen_at >= IN_FLIGHT_TTL_MS)
             .map(|(id, _)| id.clone())
             .collect();
+        let mut records = Vec::new();
         for id in &stale {
-            self.remove(id);
+            if let Some(entry) = self.remove(id) {
+                records.extend(attempts_dropped(&entry, now));
+            }
         }
         let dropped = stale.len();
         if dropped > 0 {
@@ -321,7 +365,7 @@ impl Assembler {
                 "requests whose completion never reached the ledger were dropped"
             );
         }
-        dropped
+        Expired { dropped, records }
     }
 }
 
@@ -855,14 +899,20 @@ mod tests {
     fn a_failover_yields_one_request_row_and_one_attempt_row_per_attempt() {
         let mut a = Assembler::new(clock());
         assert!(a.observe(observed("r1", Some("k"))).is_empty());
-        assert!(a.observe(selected("r1", 1, "a", 1_010)).is_empty());
+        assert!(matches!(
+            a.observe(selected("r1", 1, "a", 1_010)).as_slice(),
+            [Record::AttemptStarted { attempt: 1, .. }]
+        ));
         // The fixture head carries unified quota headers, so an oauth attempt's head now also yields a sample.
         assert!(matches!(
             a.observe(head("r1", 1, 429, AttemptOutcome::RateLimited, 1_060))
                 .as_slice(),
             [Record::Samples { .. }]
         ));
-        assert!(a.observe(selected("r1", 2, "b", 1_100)).is_empty());
+        assert!(matches!(
+            a.observe(selected("r1", 2, "b", 1_100)).as_slice(),
+            [Record::AttemptStarted { attempt: 2, .. }]
+        ));
         assert!(matches!(
             a.observe(head("r1", 2, 200, AttemptOutcome::Succeeded, 1_250))
                 .as_slice(),
@@ -1293,19 +1343,19 @@ mod tests {
         };
         let mut a = Assembler::new(clock);
         a.observe(observed("r5", Some("k")));
-        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS - 1), 0);
+        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS - 1).dropped, 0);
         // Twenty minutes of chunks: each one is activity, so the entry outlives the TTL measured from observation.
         for minute in [5, 10, 15, 20] {
             now.store(1_000 + minute * 60_000, std::sync::atomic::Ordering::SeqCst);
             a.observe(chunk("r5", minute as u32));
         }
         assert_eq!(
-            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS - 1),
+            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS - 1).dropped,
             0,
             "still active"
         );
         assert_eq!(
-            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS),
+            a.expire(1_000 + 20 * 60_000 + IN_FLIGHT_TTL_MS).dropped,
             1,
             "silent for the whole TTL"
         );
@@ -1389,6 +1439,35 @@ mod tests {
     }
 
     #[test]
+    fn an_evicted_entry_closes_its_attempts_as_an_expired_one_does() {
+        let mut a = Assembler::new(clock_at(1_000));
+        a.observe(observed("r0", Some("k")));
+        a.observe(selected("r0", 1, "a", 1_010));
+        a.observe(selected("r0", 2, "b", 1_020));
+        let mut records = Vec::new();
+        for i in 1..=MAX_IN_FLIGHT {
+            records.extend(a.observe(observed(&format!("r{i}"), Some("k"))));
+        }
+        let dropped: Vec<(&str, &str, u32)> = records
+            .iter()
+            .filter_map(|record| match record {
+                Record::AttemptDropped {
+                    account_id,
+                    request_id,
+                    attempt,
+                    ..
+                } => Some((account_id.as_str(), request_id.as_str(), *attempt)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dropped,
+            [("a", "r0", 1), ("b", "r0", 2)],
+            "the fitter must not hold open what the assembler let go"
+        );
+    }
+
+    #[test]
     fn the_entry_cap_eviction_releases_the_victims_capture_budget_too() {
         let mut a = Assembler::new(clock_at(1_000));
         for i in 0..MAX_IN_FLIGHT {
@@ -1446,7 +1525,7 @@ mod tests {
         let mut a = Assembler::new(clock_at(1_000));
         a.observe(observed_capturing_with_body("r1", vec![b'x'; 10]));
         a.chunk(&chunk_bytes("r1", 0, b"answer"));
-        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS), 1);
+        assert_eq!(a.expire(1_000 + IN_FLIGHT_TTL_MS).dropped, 1);
         assert_eq!(a.retained_capture_bytes(), 0);
     }
 

@@ -91,6 +91,33 @@ impl PriceTable {
         self.entry(canonical_model).map_or("other", |(key, _)| key)
     }
 
+    /// Dollars per token, the routing task's api_key burn unit. A model the table lacks prices at the dearest
+    /// listed rate of each type, so a model the table has not learned never looks cheap to the shedding order.
+    pub fn rate_table(&self) -> phoebis_routing::RateTable {
+        let per_token = |p: &ModelPrice| phoebis_routing::Rates {
+            input: p.input / 1_000_000.0,
+            cache_read: p.cache_read / 1_000_000.0,
+            write_5m: p.cache_write_5m / 1_000_000.0,
+            write_1h: p.cache_write_1h / 1_000_000.0,
+            output: p.output / 1_000_000.0,
+        };
+        let rows: std::collections::HashMap<String, phoebis_routing::Rates> = self
+            .models
+            .iter()
+            .map(|(model, price)| (model.clone(), per_token(price)))
+            .collect();
+        let dearest =
+            |of: fn(&phoebis_routing::Rates) -> f64| rows.values().map(of).fold(0.0, f64::max);
+        let fallback = phoebis_routing::Rates {
+            input: dearest(|r| r.input),
+            cache_read: dearest(|r| r.cache_read),
+            write_5m: dearest(|r| r.write_5m),
+            write_1h: dearest(|r| r.write_1h),
+            output: dearest(|r| r.output),
+        };
+        phoebis_routing::RateTable { rows, fallback }
+    }
+
     pub fn estimate(
         &self,
         model: &str,
@@ -411,6 +438,32 @@ mod tests {
                 table.model_label("gpt-5")
             ),
             ("claude-opus-5", "other")
+        );
+    }
+
+    #[test]
+    fn the_rate_table_prices_one_token_at_the_list_price_over_a_million() {
+        let rates = PriceTable::shipped().rate_table();
+        let one = |pick: fn(&mut phoebis_routing::PinUsage)| {
+            let mut usage = phoebis_routing::PinUsage::default();
+            pick(&mut usage);
+            usage
+        };
+        let sonnet = |usage| rates.price("claude-sonnet-5", usage);
+        assert_eq!(sonnet(one(|u| u.input = 1)), 2.0 / 1_000_000.0);
+        assert_eq!(sonnet(one(|u| u.cache_read = 1)), 0.2 / 1_000_000.0);
+        assert_eq!(sonnet(one(|u| u.write_5m = 1)), 2.5 / 1_000_000.0);
+        assert_eq!(sonnet(one(|u| u.write_1h = 1)), 4.0 / 1_000_000.0);
+        assert_eq!(sonnet(one(|u| u.output = 1)), 10.0 / 1_000_000.0);
+        assert_eq!(
+            rates.price("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
+            1.0 / 1_000_000.0,
+            "a dated row prices as itself"
+        );
+        assert_eq!(
+            rates.price("gpt-5", one(|u| u.output = 1)),
+            50.0 / 1_000_000.0,
+            "a model the table lacks prices at the dearest listed rate of each type"
         );
     }
 

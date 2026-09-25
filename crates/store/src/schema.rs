@@ -56,11 +56,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (24, V24),
     (25, V25),
     (26, V26),
+    (27, V27),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 26;
+pub const SCHEMA_VERSION: u32 = 27;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -368,4 +369,21 @@ CREATE TABLE plan_fits (
 
 const V26: &str = r#"
 ALTER TABLE pins ADD COLUMN burn_usd REAL NOT NULL DEFAULT 0;
+"#;
+
+// A fit's carried run and its band sums are kept beside the scale, so a restart or a quiet weekend continues them
+// rather than starting over.
+const V27: &str = r#"
+ALTER TABLE plan_fits ADD COLUMN band_factor REAL;
+ALTER TABLE plan_fits ADD COLUMN carry_weighted REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN carry_inside REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN carry_outside REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN carry_delta REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN carry_since INTEGER;
+ALTER TABLE plan_fits ADD COLUMN carry_utilization REAL;
+ALTER TABLE plan_fits ADD COLUMN carry_reset INTEGER;
+ALTER TABLE plan_fits ADD COLUMN band_inside_tokens REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN band_inside_delta REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN band_outside_tokens REAL NOT NULL DEFAULT 0;
+ALTER TABLE plan_fits ADD COLUMN band_outside_delta REAL NOT NULL DEFAULT 0;
 "#;

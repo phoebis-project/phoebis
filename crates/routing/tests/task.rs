@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    resolve, sample_from_usage, spawn, BurnRates, Exhaustion, PinRef, PinUsage, Presented,
-    RateTable, Rates, ReloadError, Report, ResolveError, RouterConfig, SelectRequest, SelectResult,
-    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    resolve, sample_from_usage, spawn, BandWeight, BurnRates, Exhaustion, PinRef, PinUsage,
+    Presented, RateTable, Rates, ReloadError, Report, ResolveError, RouterConfig, SelectRequest,
+    SelectResult, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, ModelRule,
-    OveragePolicy, PoolRow, RulesMode, Shedding, StorageKey, Store, Strategy,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, FitRow,
+    ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding, StorageKey, Store, Strategy,
 };
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 
@@ -2618,5 +2618,119 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
         (reloaded.burn, reloaded.burn_usd),
         (row.burn, row.burn_usd),
         "a restart reads both averages back"
+    );
+}
+
+#[tokio::test]
+async fn a_renewal_inside_the_band_folds_a_heavier_meter_burn_and_the_same_dollars() {
+    // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
+    let (inside, outside) = (1_789_999_200_000_i64, 1_790_020_800_000_i64);
+    let band = BandWeight::new(|window: &str, at: i64| {
+        let hour = at.rem_euclid(86_400_000) / 3_600_000;
+        if window == FIVE_HOUR && (12..18).contains(&hour) {
+            1.45
+        } else {
+            1.0
+        }
+    });
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        band,
+        rates: quarter_dollar_rates(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, None, clock(&now), config).unwrap();
+    let afternoon = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let evening = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let usage = PinUsage {
+        input: 600,
+        ..PinUsage::default()
+    };
+    handle.report(renewal(afternoon, inside, usage, "client", 300_000));
+    handle.report(renewal(evening, outside, usage, "client", 300_000));
+    let pins = handle.pins().await.unwrap();
+    let pin = |session: &str| pins.iter().find(|p| p.session_id == session).unwrap();
+    assert!(
+        (pin("s1").burn - 1.45 * pin("s2").burn).abs() < 1e-9 && pin("s2").burn > 0.0,
+        "the afternoon renewal folds 1.45 times the evening one: {} against {}",
+        pin("s1").burn,
+        pin("s2").burn
+    );
+    assert_eq!(
+        pin("s1").burn_usd,
+        pin("s2").burn_usd,
+        "the dollar average is not weighted by the band"
+    );
+}
+
+#[tokio::test]
+async fn a_fit_report_lands_in_the_store_and_reloads() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let row = FitRow {
+        account_id: "a".into(),
+        window: FIVE_HOUR.into(),
+        scale: 11_890_000.0,
+        confidence: 0.6,
+        intervals: 3,
+        corrections_json: "{}".into(),
+        fitted_at: 2_000,
+        incarnation: 1,
+        band_factor: Some(1.45),
+        carry_weighted: 100_000.0,
+        carry_outside: 100_000.0,
+        carry_delta: 0.01,
+        carry_since: Some(2_000),
+        carry_utilization: Some(0.26),
+        ..FitRow::default()
+    };
+    {
+        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        handle.report(Report::Fit {
+            row: row.clone(),
+            incarnation: 1,
+        });
+        handle.report(Report::Fit {
+            row: FitRow {
+                scale: 1.0,
+                fitted_at: 1_500,
+                ..row.clone()
+            },
+            incarnation: 1,
+        });
+        handle.report(Report::Fit {
+            row: FitRow {
+                window: SEVEN_DAY.into(),
+                ..row.clone()
+            },
+            incarnation: 2,
+        });
+        assert_eq!(
+            handle.fits().await.unwrap(),
+            vec![row.clone()],
+            "an older fold loses, and a report for a holder the id moved past lands nowhere"
+        );
+        wait_for(WRITTEN, || {
+            (store.fits().unwrap() == vec![row.clone()]).then_some(())
+        })
+        .await;
+        handle.shutdown().await.unwrap();
+    }
+    let again = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        again.fits().await.unwrap(),
+        vec![row],
+        "a restart reads the fit back"
     );
 }

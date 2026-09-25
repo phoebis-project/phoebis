@@ -151,19 +151,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         config.usage.refresh_concurrency,
         clock.clone(),
     ));
-    let router_task = phoebis_routing::spawn(
-        store.clone(),
-        Some(usage.clone()),
-        clock.clone(),
-        phoebis_routing::RouterConfig::default(),
-    )?;
-    let bus = Bus::new();
-    let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
-        format!(
-            "opening the ledger at {}",
-            config.stats.ledger_path.display()
-        )
-    })?);
+    // Loaded ahead of the routing task, which prices every burn through it from its first renewal on.
     let pricing = Arc::new(
         Pricing::load(&store, config.stats.pricing_path.as_deref()).with_context(|| {
             format!(
@@ -177,6 +165,19 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             )
         })?,
     );
+    let router_task = phoebis_routing::spawn(
+        store.clone(),
+        Some(usage.clone()),
+        clock.clone(),
+        router_config(&pricing.current()),
+    )?;
+    let bus = Bus::new();
+    let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
+        format!(
+            "opening the ledger at {}",
+            config.stats.ledger_path.display()
+        )
+    })?);
     tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %pricing.current().version, "ledger opened");
     // Rows from before the rollup key carried a generation are stamped with each live key's own, once; the
     // ledger task must not write before this, or a fresh row could collide with a stamped one. An id that had
@@ -647,6 +648,21 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     served
 }
 
+/// The routing task's burn prices and peak band: the shipped plan tables for the meter side and `prices` for
+/// dollars. The task keeps what it was given, so a price import confirmed later reaches the burn at the next
+/// start.
+fn router_config(prices: &phoebis_ledger::PriceTable) -> phoebis_routing::RouterConfig {
+    let windows = Arc::new(phoebis_ledger::PlanWindows::shipped());
+    phoebis_routing::RouterConfig {
+        band: phoebis_routing::BandWeight::new(move |window, at| windows.band_factor(window, at)),
+        rates: phoebis_routing::BurnRates {
+            meter: phoebis_ledger::PlanFactors::shipped().rate_table(),
+            dollars: prices.rate_table(),
+        },
+        ..phoebis_routing::RouterConfig::default()
+    }
+}
+
 /// One listener's outcome: the task either panicked or the serve future itself failed.
 type Listened = Result<std::io::Result<()>, tokio::task::JoinError>;
 
@@ -736,6 +752,47 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_router_config_prices_the_burn_through_the_shipped_meter_table_and_the_price_table() {
+        let prices = phoebis_ledger::PriceTable::shipped();
+        let config = router_config(&prices);
+        let usage = phoebis_routing::PinUsage {
+            input: 1_000,
+            cache_read: 10_000,
+            write_5m: 100,
+            write_1h: 200,
+            output: 500,
+        };
+        let meter = config.rates.meter.price("claude-opus-5", usage);
+        assert_eq!(
+            meter,
+            phoebis_ledger::PlanFactors::shipped()
+                .rate_table()
+                .price("claude-opus-5", usage)
+        );
+        assert_ne!(
+            meter,
+            phoebis_routing::RateTable::unit().price("claude-opus-5", usage),
+            "the meter table, not the unit table's token count"
+        );
+        let (usd, _) = prices
+            .estimate("claude-sonnet-5", 1_000, 10_000, 100, 200, 500)
+            .unwrap();
+        assert!(
+            (config.rates.dollars.price("claude-sonnet-5", usage) - usd).abs() < 1e-12,
+            "the dollar table prices a usage as the price table estimates it"
+        );
+        // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
+        assert_eq!(
+            config.band.at(phoebis_routing::FIVE_HOUR, 1_789_999_200_000),
+            1.45
+        );
+        assert_eq!(
+            config.band.at(phoebis_routing::FIVE_HOUR, 1_790_020_800_000),
+            1.0
+        );
+    }
 
     #[tokio::test]
     async fn the_production_resolver_honours_an_explicit_port_and_defaults_to_443() {
