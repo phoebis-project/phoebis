@@ -36,7 +36,7 @@ export const ACCOUNTS: Account[] = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'max_20x' },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_20x', since: ago(200 * DAY), trialEndsAt: null },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which the Models view and this account's own status fold in like any other cooldown.
@@ -70,7 +70,7 @@ export const ACCOUNTS: Account[] = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'pro_5x' },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'pro_5x', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY) },
     requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
     cooldowns: [
       {
@@ -111,7 +111,7 @@ export const ACCOUNTS: Account[] = [
       quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'max_5x' },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: ago(400 * DAY), trialEndsAt: null },
     requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
     cooldowns: [],
   },
@@ -171,7 +171,7 @@ export const ACCOUNTS: Account[] = [
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_team', rateLimitTier: 'team' },
+    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'team', since: null, trialEndsAt: null },
     requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
     cooldowns: [],
   },

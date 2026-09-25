@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use phoebis_profile::Profile;
-use phoebis_store::Secret;
+use phoebis_store::{Secret, SubscriptionRow};
 use phoebis_transport::request::RawRequest;
 use serde_json::{Map, Value};
 use url::Url;
@@ -203,6 +203,7 @@ pub struct ProfileResponse {
     pub account_uuid: String,
     pub email: String,
     pub organization_uuid: Option<String>,
+    pub subscription: SubscriptionRow,
     /// The whole document, so the admin views can show fields this struct does not name.
     pub raw: Value,
 }
@@ -217,10 +218,28 @@ pub fn parse_profile(body: &[u8]) -> Result<ProfileResponse, OauthError> {
     let email = field("account", "email_address")
         .ok_or_else(|| OauthError::Malformed("profile has no account.email_address".into()))?;
     let organization_uuid = field("organization", "uuid");
+    let millis = |key: &str| -> Option<i64> {
+        field("organization", key)
+            .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+            .map(|t| t.as_millisecond())
+    };
+    let subscription = SubscriptionRow {
+        plan: if raw["account"]["has_claude_max"].as_bool().unwrap_or(false) {
+            Some("max".to_string())
+        } else if raw["account"]["has_claude_pro"].as_bool().unwrap_or(false) {
+            Some("pro".to_string())
+        } else {
+            None
+        },
+        tier: field("organization", "rate_limit_tier"),
+        since: millis("subscription_created_at"),
+        trial_ends_at: millis("claude_code_trial_ends_at"),
+    };
     Ok(ProfileResponse {
         account_uuid,
         email,
         organization_uuid,
+        subscription,
         raw,
     })
 }
@@ -271,5 +290,50 @@ mod tests {
             parse_token_response(body),
             Err(OauthError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn the_plan_the_start_and_the_trial_end_are_read_when_present_and_none_when_absent() {
+        let max_with_dates = br#"{"account":{"uuid":"a","email_address":"a@example.invalid","has_claude_max":true,"has_claude_pro":true},"organization":{"rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#;
+        let parsed = parse_profile(max_with_dates).unwrap().subscription;
+        assert_eq!(parsed.plan.as_deref(), Some("max"));
+        assert_eq!(parsed.tier.as_deref(), Some("default_claude_max_5x"));
+        assert_eq!(parsed.since, Some(1_773_482_400_000));
+        assert_eq!(parsed.trial_ends_at, Some(1_790_899_200_000));
+
+        let pro_only = br#"{"account":{"uuid":"a","email_address":"a@example.invalid","has_claude_pro":true},"organization":{}}"#;
+        assert_eq!(
+            parse_profile(pro_only)
+                .unwrap()
+                .subscription
+                .plan
+                .as_deref(),
+            Some("pro")
+        );
+
+        let unparseable_date = br#"{"account":{"uuid":"a","email_address":"a@example.invalid"},"organization":{"subscription_created_at":"soon"}}"#;
+        let parsed = parse_profile(unparseable_date).unwrap();
+        assert_eq!(parsed.subscription.since, None);
+        assert_eq!(
+            parsed.raw["organization"]["subscription_created_at"],
+            "soon"
+        );
+
+        let pinned = parse_profile(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Profile,
+        ))
+        .unwrap()
+        .subscription;
+        assert_eq!(pinned.tier.as_deref(), Some("default_claude_max_5x"));
+        assert_eq!(
+            (pinned.plan, pinned.since, pinned.trial_ends_at),
+            (None, None, None)
+        );
+
+        let synthetic = br#"{"account":{"uuid":"a","email_address":"a@example.invalid"}}"#;
+        assert_eq!(
+            parse_profile(synthetic).unwrap().subscription,
+            SubscriptionRow::default()
+        );
     }
 }

@@ -26,7 +26,9 @@ use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, KeepaliveLimits};
 use phoebis_ledger::{Ledger, Metrics, ModelPrice, Pricing};
 use phoebis_live::LiveFeed;
-use phoebis_oauth::{Clock, CredentialManager, PairingSessions, PendingIdentity, UsageService};
+use phoebis_oauth::{
+    Clock, CredentialManager, PairingSessions, PendingIdentity, ProfileResponse, UsageService,
+};
 use phoebis_profile::Profile;
 use phoebis_relay::CatalogService;
 use phoebis_routing::RouterHandle;
@@ -147,6 +149,7 @@ pub struct TakenExchange {
     pub bundle: NewBundle,
     pub identity: PendingIdentity,
     pub lifecycle_generation: u64,
+    pub profile: ProfileResponse,
 }
 
 struct PairingRecord {
@@ -165,6 +168,7 @@ struct PairingRecord {
 struct Exchange {
     bundle: NewBundle,
     identity: PendingIdentity,
+    profile: ProfileResponse,
 }
 
 impl Default for PairingVault {
@@ -208,12 +212,17 @@ impl PairingVault {
         session_id: &str,
         identity: PendingIdentity,
         bundle: NewBundle,
+        profile: ProfileResponse,
     ) -> bool {
         let mut records = self.records.lock().expect(LOCK_POISONED);
         let Some(record) = records.get_mut(session_id) else {
             return false;
         };
-        record.exchange = Some(Exchange { bundle, identity });
+        record.exchange = Some(Exchange {
+            bundle,
+            identity,
+            profile,
+        });
         record.status = VaultStatus::Exchanged;
         true
     }
@@ -232,6 +241,7 @@ impl PairingVault {
             bundle: exchange.bundle,
             identity: exchange.identity,
             lifecycle_generation: record.lifecycle_generation,
+            profile: exchange.profile,
         })
     }
 

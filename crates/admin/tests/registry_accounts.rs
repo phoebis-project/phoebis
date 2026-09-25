@@ -586,10 +586,20 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
     use phoebis_ledger::{
         AttemptRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,
     };
+    use phoebis_store::SubscriptionRow;
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    parts.store.set_profile_json("business", r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x"}}"#).unwrap();
+    parts.store.set_profile(
+        "business",
+        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
+        &SubscriptionRow {
+            plan: Some("max".into()),
+            tier: Some("default_claude_max_5x".into()),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: Some(1_790_899_200_000),
+        },
+    ).unwrap();
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":2}]}"#, Some(&cookie)).await;
     let bucket = phoebis_ledger::bucket_of(now - 60_000);
     parts
@@ -724,11 +734,47 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
         (Some(1), Some(2))
     );
     assert_eq!(listed["profile"]["display_name"], "Biz");
+    assert_eq!(
+        listed["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+        })
+    );
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert!(
         direct["profile"].is_null()
             && direct["extra_usage"].is_null()
             && direct["windows"].as_array().unwrap().is_empty()
+            && direct["subscription"].is_null()
+    );
+    // An OAuth account whose profile carries none of the five fields answers every subscription field null,
+    // the same as a row never written.
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts",
+            r#"{"id":"second","kind":"oauth","label":"Second"}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        201
+    );
+    parts
+        .store
+        .set_profile(
+            "second",
+            r#"{"account":{"uuid":"s","email_address":"second@example.invalid"}}"#,
+            &SubscriptionRow::default(),
+        )
+        .unwrap();
+    let second = json(get(&parts.app, "/admin/accounts/second", Some(&cookie)).await).await;
+    assert_eq!(
+        second["subscription"],
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null})
     );
     assert!(
         !json(get(&parts.app, "/admin/accounts", Some(&cookie)).await)

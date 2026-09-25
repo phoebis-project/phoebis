@@ -47,7 +47,13 @@ export interface Credential {
 export interface Subscription {
   billingType: string;
   organizationType: string;
+  /** `max` or `pro` from the profile's account flags; null when the document reports neither. */
+  plan: 'max' | 'pro' | null;
   rateLimitTier: string;
+  /** Epoch milliseconds on the wire, decoded to the ISO string every other timestamp carries; null when the
+   *  profile does not report it. */
+  since: string | null;
+  trialEndsAt: string | null;
 }
 
 export interface PoolMembership {

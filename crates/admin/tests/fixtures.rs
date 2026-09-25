@@ -11,7 +11,7 @@ use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
     RequestRecord,
 };
-use phoebis_store::{AccountState, Identity, NewBundle, Secret};
+use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
 use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use serde_json::{json as j, Value};
@@ -200,7 +200,16 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.store.set_profile_json("business", r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x"}}"#).unwrap();
+    parts.store.set_profile(
+        "business",
+        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
+        &SubscriptionRow {
+            plan: Some("max".into()),
+            tier: Some("default_claude_max_5x".into()),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: None,
+        },
+    ).unwrap();
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"least_utilized","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]

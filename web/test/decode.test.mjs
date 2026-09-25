@@ -13,7 +13,14 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.kind, 'oauth');
   assert.equal(a.plan, 'Max 5x');
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
-  assert.deepEqual(Object.keys(a.subscription).sort(), ['billingType', 'organizationType', 'rateLimitTier'], "the route answers the profile's three labels and nothing more, so the card draws nothing beside them");
+  assert.deepEqual(
+    Object.keys(a.subscription).sort(),
+    ['billingType', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
+    'the route answers the profile and subscription fields and nothing more, so the card draws nothing beside them',
+  );
+  assert.equal(a.subscription.plan, 'max');
+  assert.ok(isIso(a.subscription.since));
+  assert.equal(a.subscription.trialEndsAt, null);
   assert.deepEqual(fixture('account').windows.map((w) => w.id), ['7d', 'fable', 'five_hour'], 'the route passes each sampler spelling through, in the ledger order');
   assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d'], 'the poll spelling folds onto the UI id and the order is the drawn one');
   assert.equal(a.fableWindow.id, '7d_fable');

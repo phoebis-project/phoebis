@@ -53,11 +53,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (21, V21),
     (22, V22),
     (23, V23),
+    (24, V24),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 23;
+pub const SCHEMA_VERSION: u32 = 24;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -308,4 +309,13 @@ CREATE TABLE model_resolutions (
 DROP TABLE account_models;
 ALTER TABLE accounts DROP COLUMN catalog_synced_at;
 ALTER TABLE accounts DROP COLUMN catalog_error;
+"#;
+
+// The two dates travel as epoch milliseconds, the same shape every other timestamp column of this table
+// holds. A row from before this migration reads all four as null until its next poll or pairing confirm.
+const V24: &str = r#"
+ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
+ALTER TABLE accounts ADD COLUMN subscription_tier TEXT;
+ALTER TABLE accounts ADD COLUMN subscription_since INTEGER;
+ALTER TABLE accounts ADD COLUMN trial_ends_at INTEGER;
 "#;

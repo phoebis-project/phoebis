@@ -2,6 +2,6 @@
   "route": "GET /admin/session",
   "body": {
     "role": "admin",
-    "session_id": "VaNIaXPIm_BdgGcKDU29J6W7VF4ISOG7vHP2sndeI-0"
+    "session_id": "BhKVSrPHwwa7hem01wKTsdfSYAI8GL7MghRvDzsWHEs"
   }
 }

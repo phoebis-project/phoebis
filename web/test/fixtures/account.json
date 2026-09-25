@@ -38,6 +38,12 @@
       "organization_type": "claude_max",
       "rate_limit_tier": "default_claude_max_5x"
     },
+    "subscription": {
+      "plan": "max",
+      "tier": "default_claude_max_5x",
+      "since": 1773482400000,
+      "trial_ends_at": null
+    },
     "windows": [
       {
         "id": "7d",

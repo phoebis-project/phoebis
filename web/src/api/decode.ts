@@ -2,7 +2,7 @@ import type {
   Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, ApiKeySubStrategy, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RuleCooldown, Session,
-  SessionLifecycleDetail, Settings, WindowId,
+  SessionLifecycleDetail, Settings, Subscription, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, type KeyInput, type PoolInput } from './client';
@@ -99,6 +99,19 @@ export function decodeModelsState(v: unknown): ModelsState {
 // The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
 export { ACCOUNT_KIND_VALUES };
 
+/** The typed subscription the route's `profile` and `subscription` records fold into; null when both are absent. */
+export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscription | null {
+  if (profile === null && sub === null) return null;
+  return {
+    billingType: str(profile?.billing_type),
+    organizationType: str(profile?.organization_type),
+    plan: sub?.plan === 'max' || sub?.plan === 'pro' ? sub.plan : null,
+    rateLimitTier: str(sub?.tier ?? profile?.rate_limit_tier),
+    since: isoOrNull(sub?.since),
+    trialEndsAt: isoOrNull(sub?.trial_ends_at),
+  };
+}
+
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
@@ -106,6 +119,7 @@ export function decodeAccount(v: unknown): Account {
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
   const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
+  const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
   const identity = rec(a.identity);
   const credential = rec(a.credential);
   return {
@@ -124,7 +138,7 @@ export function decodeAccount(v: unknown): Account {
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     routingEnabled: bool(a.enabled, true),
     status: accountStatus(a, cooldowns),
-    subscription: profile ? { billingType: str(profile.billing_type), organizationType: str(profile.organization_type), rateLimitTier: str(profile.rate_limit_tier) } : null,
+    subscription: decodeSubscription(profile, sub),
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }

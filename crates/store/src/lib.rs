@@ -24,7 +24,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub use accounts::{AccountKind, AccountRow, AccountState, Identity, INFERENCE_HOST};
+pub use accounts::{
+    AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
+};
 pub use alerts::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,

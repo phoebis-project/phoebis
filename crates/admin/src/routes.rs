@@ -19,7 +19,7 @@ use axum::{Extension, Json, Router};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
-    PairingError, PairingSession, PairingStatus, PendingIdentity, UsageSnapshot,
+    PairingError, PairingSession, PairingStatus, PendingIdentity, ProfileResponse, UsageSnapshot,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{OverageEvidence, ReloadError};
@@ -603,7 +603,7 @@ async fn pairing_callback(
             "pairing session did not accept the callback",
         );
     };
-    let (identity, bundle) = match exchange(&state, &session, code).await {
+    let (identity, bundle, profile) = match exchange(&state, &session, code).await {
         Ok(exchanged) => exchanged,
         // The authorization code is spent whether or not the exchange worked, so a rejected one ends the
         // session rather than leaving it in flight: the account would otherwise stay busy for the rest of
@@ -624,7 +624,10 @@ async fn pairing_callback(
         state.vault.discard(&id);
         return pairing_failure(error);
     }
-    if !state.vault.record_exchange(&id, identity.clone(), bundle) {
+    if !state
+        .vault
+        .record_exchange(&id, identity.clone(), bundle, profile)
+    {
         return failure(
             StatusCode::CONFLICT,
             "the pairing session was closed while the code was being exchanged",
@@ -751,6 +754,16 @@ async fn pairing_confirm(
             other => unstored(&state, other),
         };
     }
+    // Stored now rather than left to the poll, so a freshly paired account shows its plan and start at once
+    // instead of waiting out the next interval; a failure here is not the confirm's to fail, since the poll
+    // rewrites the row regardless.
+    if let Err(error) = state.store.set_profile(
+        &row.id,
+        &pending.profile.raw.to_string(),
+        &pending.profile.subscription,
+    ) {
+        tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
+    }
     if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
         return unstored(&state, error);
     }
@@ -832,7 +845,7 @@ async fn exchange(
     state: &AdminState,
     session: &PairingSession,
     code: &str,
-) -> Result<(PendingIdentity, NewBundle), String> {
+) -> Result<(PendingIdentity, NewBundle, ProfileResponse), String> {
     let body = exchange_body(
         state.profile,
         code,
@@ -871,14 +884,16 @@ async fn exchange(
     };
     let profile = parse_profile(&raw).map_err(|error| oauth_detail("profile", error))?;
 
+    // Cloned rather than moved: the confirm route stores the whole document once the credential commits, so
+    // `profile` has to survive this function intact.
     let identity = PendingIdentity {
-        account_uuid: profile.account_uuid,
-        email: profile.email,
+        account_uuid: profile.account_uuid.clone(),
+        email: profile.email.clone(),
         organization_name: token
             .organization
             .as_ref()
             .and_then(|organization| organization.name.clone()),
-        organization_uuid: profile.organization_uuid,
+        organization_uuid: profile.organization_uuid.clone(),
     };
     let now = (state.clock)();
     let bundle = NewBundle {
@@ -893,7 +908,7 @@ async fn exchange(
             .scope
             .unwrap_or_else(|| state.profile.control.default_login_scopes.to_string()),
     };
-    Ok((identity, bundle))
+    Ok((identity, bundle, profile))
 }
 
 async fn control_send(
@@ -1032,6 +1047,23 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 "rate_limit_tier": p["organization"]["rate_limit_tier"],
             })
         });
+    let subscription = (row.kind == AccountKind::Oauth)
+        .then(|| {
+            state
+                .store
+                .subscription(&row.id)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        })
+        .map(|s| {
+            json!({
+                "plan": s.plan,
+                "tier": s.tier,
+                "since": s.since,
+                "trial_ends_at": s.trial_ends_at,
+            })
+        });
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -1075,6 +1107,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "observed_at": overage.observed_at,
         })),
         "profile": profile,
+        "subscription": subscription,
         "windows": ctx.quota.iter().filter(|q| q.account_id == row.id).map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 })).collect::<Vec<_>>(),
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
         "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),

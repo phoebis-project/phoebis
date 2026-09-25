@@ -430,12 +430,27 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    /// The profile write does not bump `revision`: it changes nothing a selection or a credential fence reads.
-    pub fn set_profile_json(&self, id: &str, json: &str) -> Result<(), StoreError> {
+    /// The raw document and what it says about the subscription, in one write; bumps no `revision`, since it
+    /// changes nothing a selection or a credential fence reads.
+    pub fn set_profile(
+        &self,
+        id: &str,
+        json: &str,
+        subscription: &SubscriptionRow,
+    ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         if conn.execute(
-            "UPDATE accounts SET profile_json = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, json, jiff::Timestamp::now().as_millisecond()],
+            "UPDATE accounts SET profile_json = ?2, subscription_plan = ?3, subscription_tier = ?4, \
+             subscription_since = ?5, trial_ends_at = ?6, updated_at = ?7 WHERE id = ?1",
+            params![
+                id,
+                json,
+                subscription.plan,
+                subscription.tier,
+                subscription.since,
+                subscription.trial_ends_at,
+                jiff::Timestamp::now().as_millisecond(),
+            ],
         )? == 0
         {
             return Err(StoreError::AccountNotFound(id.to_string()));
@@ -456,6 +471,36 @@ impl Store {
         .map(Option::flatten)
         .map_err(StoreError::from)
     }
+
+    /// `None` for an unknown id; a row never written answers every field `None`.
+    pub fn subscription(&self, id: &str) -> Result<Option<SubscriptionRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT subscription_plan, subscription_tier, subscription_since, trial_ends_at \
+             FROM accounts WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(SubscriptionRow {
+                    plan: row.get(0)?,
+                    tier: row.get(1)?,
+                    since: row.get(2)?,
+                    trial_ends_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+}
+
+/// What the profile document says about the subscription, stored beside the raw document; each field `None`
+/// where the document lacks it. The dates are epoch milliseconds parsed from the RFC 3339 strings it sends.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubscriptionRow {
+    pub plan: Option<String>,
+    pub tier: Option<String>,
+    pub since: Option<i64>,
+    pub trial_ends_at: Option<i64>,
 }
 
 /// The incarnation a fresh row under `id` takes: one past the tombstone of whatever held that id before,

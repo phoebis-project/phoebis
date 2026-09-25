@@ -553,7 +553,7 @@ mod service {
             1
         );
         store
-            .set_profile_json("business", &profile.raw.to_string())
+            .set_profile("business", &profile.raw.to_string(), &profile.subscription)
             .unwrap();
         assert_eq!(
             store.profile_json("business").unwrap().as_deref(),

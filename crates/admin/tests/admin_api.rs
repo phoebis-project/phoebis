@@ -348,6 +348,74 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
 }
 
 #[tokio::test]
+async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
+    use common::{get, json, login, post};
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let mut profile: serde_json::Value = serde_json::from_slice(
+        phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Profile),
+    )
+    .unwrap();
+    profile["account"]["has_claude_max"] = serde_json::json!(true);
+    profile["organization"]["subscription_created_at"] = serde_json::json!("2026-03-14T10:00:00Z");
+    profile["organization"]["claude_code_trial_ends_at"] =
+        serde_json::json!("2026-10-02T00:00:00+00:00");
+    up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&profile).unwrap(),
+        },
+    );
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let v = json(started).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let redirect = v["redirect_uri"].as_str().unwrap().to_string();
+    let state = v["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let cb = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(cb.status(), 200);
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        acct["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+        }),
+        "the confirm stored the plan and the start with no poll having run"
+    );
+}
+
+#[tokio::test]
 async fn usage_is_cached_and_exposed_without_secrets() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app_paired().await;

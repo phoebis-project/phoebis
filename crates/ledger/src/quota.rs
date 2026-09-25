@@ -215,7 +215,9 @@ impl QuotaPoll {
         // admin views show what it says.
         match usage.profile(&account.id).await {
             Ok(profile) => {
-                if let Err(error) = store.set_profile_json(&account.id, &profile.raw.to_string()) {
+                if let Err(error) =
+                    store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
+                {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
                 }
             }
