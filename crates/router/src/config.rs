@@ -112,6 +112,9 @@ pub struct RoutingConfig {
     /// listing.
     #[serde(default = "default_catalog_cache")]
     pub catalog_cache_seconds: u64,
+    /// How often every enabled upstream's model listing is read again, 60 to 604800.
+    #[serde(default = "default_catalog_refresh")]
+    pub catalog_refresh_seconds: u64,
     #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
     #[serde(default = "default_max_attempts")]
@@ -119,6 +122,9 @@ pub struct RoutingConfig {
     /// How long an account is skipped for a model it answered 404 for.
     #[serde(default = "default_model_rejection")]
     pub model_rejection_seconds: u64,
+    /// How long the proxy listener waits at startup for the model listings and the usage snapshots, 1 to 60.
+    #[serde(default = "default_startup_fetch")]
+    pub startup_fetch_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +184,8 @@ pub enum ConfigError {
     BodyCaptureMaxOutOfRange { value: u32 },
     #[error("routing.catalog_cache_seconds must be between 1 and 86400, not {value}")]
     CatalogCacheOutOfRange { value: u64 },
+    #[error("routing.catalog_refresh_seconds must be between 60 and 604800, not {value}")]
+    CatalogRefreshOutOfRange { value: u64 },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
     #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
@@ -219,6 +227,8 @@ pub enum ConfigError {
     SessionExpiryTooShort,
     #[error("stats.ledger_path and storage.path must name different files, not {path}")]
     SharedDatabasePath { path: PathBuf },
+    #[error("routing.startup_fetch_seconds must be between 1 and 60, not {value}")]
+    StartupFetchOutOfRange { value: u64 },
     #[error("storage.path {path} must name a database file inside a directory")]
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
@@ -271,9 +281,11 @@ impl Default for RoutingConfig {
     fn default() -> Self {
         RoutingConfig {
             catalog_cache_seconds: default_catalog_cache(),
+            catalog_refresh_seconds: default_catalog_refresh(),
             cooldown_fallback_seconds: default_cooldown_fallback(),
             max_attempts: default_max_attempts(),
             model_rejection_seconds: default_model_rejection(),
+            startup_fetch_seconds: default_startup_fetch(),
         }
     }
 }
@@ -349,6 +361,16 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if !(1..=86_400).contains(&config.routing.catalog_cache_seconds) {
         return Err(ConfigError::CatalogCacheOutOfRange {
             value: config.routing.catalog_cache_seconds,
+        });
+    }
+    if !(1..=60).contains(&config.routing.startup_fetch_seconds) {
+        return Err(ConfigError::StartupFetchOutOfRange {
+            value: config.routing.startup_fetch_seconds,
+        });
+    }
+    if !(60..=604_800).contains(&config.routing.catalog_refresh_seconds) {
+        return Err(ConfigError::CatalogRefreshOutOfRange {
+            value: config.routing.catalog_refresh_seconds,
         });
     }
     if config.sessions.expire_after_seconds < 60 {
@@ -515,6 +537,10 @@ fn default_catalog_cache() -> u64 {
     60
 }
 
+fn default_catalog_refresh() -> u64 {
+    21_600
+}
+
 fn default_cooldown_fallback() -> u64 {
     60
 }
@@ -557,6 +583,10 @@ fn default_sample_retention() -> u32 {
 
 fn default_session_expiry() -> u64 {
     86_400
+}
+
+fn default_startup_fetch() -> u64 {
+    5
 }
 
 fn default_memory_cap() -> usize {
@@ -650,9 +680,11 @@ mod tests {
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
                 config.routing.catalog_cache_seconds,
-                config.routing.model_rejection_seconds
+                config.routing.model_rejection_seconds,
+                config.routing.catalog_refresh_seconds,
+                config.routing.startup_fetch_seconds
             ),
-            (3, 60, 60, 3_600)
+            (3, 60, 60, 3_600, 21_600, 5)
         );
         assert_eq!(
             (
@@ -661,16 +693,18 @@ mod tests {
             ),
             (86_400, 72)
         );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
         assert_eq!(
             (
                 config.routing.max_attempts,
                 config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
+                config.routing.catalog_refresh_seconds,
+                config.routing.startup_fetch_seconds,
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
-            (5, 30, 1_800, 7_200, 24)
+            (5, 30, 1_800, 3_600, 2, 7_200, 24)
         );
         assert!(matches!(
             load(&file(
@@ -687,6 +721,38 @@ mod tests {
                 "routing:\n  catalog_cache_seconds: 86401\n"
             )),
             Err(ConfigError::CatalogCacheOutOfRange { value: 86_401 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "startup-zero",
+                "routing:\n  startup_fetch_seconds: 0\n"
+            )),
+            Err(ConfigError::StartupFetchOutOfRange { value: 0 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "startup-too-long",
+                "routing:\n  startup_fetch_seconds: 61\n"
+            )),
+            Err(ConfigError::StartupFetchOutOfRange { value: 61 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "refresh-too-short",
+                "routing:\n  catalog_refresh_seconds: 59\n"
+            )),
+            Err(ConfigError::CatalogRefreshOutOfRange { value: 59 })
+        ));
+        assert!(matches!(
+            load(&file(
+                dir.path(),
+                "refresh-too-long",
+                "routing:\n  catalog_refresh_seconds: 604801\n"
+            )),
+            Err(ConfigError::CatalogRefreshOutOfRange { value: 604_801 })
         ));
         assert!(matches!(
             load(&file(dir.path(), "zero", "routing:\n  max_attempts: 0\n")),

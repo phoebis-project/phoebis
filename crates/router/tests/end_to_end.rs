@@ -1,7 +1,9 @@
 //! The binary from the outside: one fixture request relayed through a configured API-key account, and the
 //! bootstrap rules that refuse a configuration nobody should be able to start.
 
-use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_profile::fixtures::{
+    body, control_response, inference_head, BodyFixture, ControlFixture, FixtureKind,
+};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::net::TcpListener;
 use std::sync::Mutex;
@@ -1589,6 +1591,321 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     );
     assert!(rows.iter().all(|(r, _)| r.bodies_captured));
     up.shutdown().await;
+}
+
+/// One `Ready` OAuth account and its credentials, written before `run` ever opens the store, the way the relay
+/// harness seeds one for its own tests. The lock this takes on the data directory is released when the
+/// returned `Store` drops at the end of the caller's scope, before `run` opens the same file.
+fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
+    let key = phoebis_store::StorageKey::from_file(key_path).unwrap();
+    let store = phoebis_store::Store::open(db_path, &key).unwrap();
+    if store.accounts().unwrap().is_empty() {
+        store
+            .insert_account(&phoebis_store::AccountRow {
+                id: "a".into(),
+                kind: phoebis_store::AccountKind::Oauth,
+                label: "a".into(),
+                enabled: true,
+                identity: Some(phoebis_store::Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "a@example.invalid".into(),
+                    organization_uuid: None,
+                }),
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: phoebis_store::AccountState::Ready,
+            })
+            .unwrap();
+        store
+            .commit_credentials(
+                "a",
+                1,
+                1,
+                None,
+                None,
+                &phoebis_store::NewBundle {
+                    access_token: phoebis_store::Secret::new("sk-ant-oat01-startup-fetch-aaaa"),
+                    refresh_token: Some(phoebis_store::Secret::new(
+                        "sk-ant-oat01-startup-fetch-refresh",
+                    )),
+                    issued_at: 0,
+                    expires_at: i64::MAX / 2,
+                    refresh_expires_at: None,
+                    scopes: "user:inference".into(),
+                },
+            )
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    let ca_path = dir.path().join("ca.pem");
+
+    // Each scenario gets its own ledger: the store file is reused across all three so its process lock is the
+    // one under test, but a shared ledger would carry the previous scenario's quota rows into the next.
+    let config_yaml = |admin_port: u16,
+                       proxy_port: u16,
+                       metrics_port: u16,
+                       addr: std::net::SocketAddr,
+                       ledger_path: &std::path::Path,
+                       routing: &str| {
+        format!(
+            "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_STARTUP_ADMIN\n  plain_http: true\n\
+             compatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\n\
+             proxy:\n  listen: 127.0.0.1:{proxy_port}\n{routing}\
+             stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
+             storage:\n  encryption_key_file: {key}\n  path: {db}\n\
+             upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
+             usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+            ledger = ledger_path.display(),
+            key = key_path.display(),
+            db = db_path.display(),
+            ca = ca_path.display(),
+        )
+    };
+    let load = |cfg_path: &std::path::Path| {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_STARTUP_ADMIN", "admin-secret-001");
+        phoebis_router::config::load(cfg_path).unwrap()
+    };
+    async fn first_success(proxy_port: u16) -> std::time::Duration {
+        let client = reqwest::Client::new();
+        let started = std::time::Instant::now();
+        loop {
+            if let Ok(resp) = client
+                .head(format!("http://127.0.0.1:{proxy_port}/api/hello"))
+                .send()
+                .await
+            {
+                assert_eq!(resp.status(), 200);
+                return started.elapsed();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+    let models_ok = || Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    };
+    let profile_ok = || Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Profile).to_vec(),
+        },
+    };
+    let usage_ok = || Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Usage).to_vec(),
+        },
+    };
+
+    // Every startup fetch answers at once, so the proxy binds with the sample already recorded.
+    {
+        let up = FakeUpstream::start(vec![models_ok(), profile_ok(), usage_ok()]).await;
+        std::fs::write(&ca_path, up.ca_pem()).unwrap();
+        seed_oauth_account(&db_path, &key_path);
+        let (admin_port, proxy_port, metrics_port) = (free_port(), free_port(), free_port());
+        let cfg_path = dir.path().join("startup-immediate.yaml");
+        let ledger_path = dir.path().join("ledger-immediate.sqlite");
+        std::fs::write(
+            &cfg_path,
+            config_yaml(
+                admin_port,
+                proxy_port,
+                metrics_port,
+                up.addr(),
+                &ledger_path,
+                "",
+            ),
+        )
+        .unwrap();
+        let config = load(&cfg_path);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(phoebis_router::app::run(config, async {
+            let _ = stop_rx.await;
+        }));
+        let elapsed = first_success(proxy_port).await;
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+        let client = reqwest::Client::builder()
+            .cookie_store(true)
+            .build()
+            .unwrap();
+        let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+        logged_in(&client, &admin("/session")).await;
+        let account: serde_json::Value = client
+            .get(admin("/accounts/a"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            !account["windows"].as_array().unwrap().is_empty(),
+            "the sample landed before the proxy listener bound: {account}"
+        );
+        let _ = stop_tx.send(());
+        server.await.unwrap().unwrap();
+        up.shutdown().await;
+    }
+
+    // The usage endpoint never answers within the one-second bound the file sets: the proxy still binds at
+    // the bound, and the sample the stalled fetch would have carried has not landed yet.
+    {
+        let up = FakeUpstream::start(vec![
+            models_ok(),
+            profile_ok(),
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Gated(Box::new(usage_ok().respond)),
+            },
+        ])
+        .await;
+        std::fs::write(&ca_path, up.ca_pem()).unwrap();
+        seed_oauth_account(&db_path, &key_path);
+        let (admin_port, proxy_port, metrics_port) = (free_port(), free_port(), free_port());
+        let cfg_path = dir.path().join("startup-gated.yaml");
+        let ledger_path = dir.path().join("ledger-gated.sqlite");
+        std::fs::write(
+            &cfg_path,
+            config_yaml(
+                admin_port,
+                proxy_port,
+                metrics_port,
+                up.addr(),
+                &ledger_path,
+                "routing:\n  startup_fetch_seconds: 1\n",
+            ),
+        )
+        .unwrap();
+        let config = load(&cfg_path);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(phoebis_router::app::run(config, async {
+            let _ = stop_rx.await;
+        }));
+        let elapsed = first_success(proxy_port).await;
+        assert!(
+            elapsed >= std::time::Duration::from_secs(1)
+                && elapsed < std::time::Duration::from_secs(4),
+            "{elapsed:?}"
+        );
+        let client = reqwest::Client::builder()
+            .cookie_store(true)
+            .build()
+            .unwrap();
+        let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+        logged_in(&client, &admin("/session")).await;
+        let account: serde_json::Value = client
+            .get(admin("/accounts/a"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            account["windows"].as_array().unwrap().is_empty(),
+            "the stalled fetch had not reported by the bound: {account}"
+        );
+        let _ = stop_tx.send(());
+        server.await.unwrap().unwrap();
+        // The gated usage fetch still runs in the background, holding the store open; releasing it lets that
+        // fetch finish and drop its hold before the file is reused below.
+        up.release();
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(store) = phoebis_store::Store::open(
+                &db_path,
+                &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+            ) {
+                drop(store);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the background fetch never released the store"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        up.shutdown().await;
+    }
+
+    // The catalog fetch fails and its retry sleeps the cache window: the proxy still binds at the bound, and
+    // the retry does not outlive `run` holding the store and its process lock.
+    {
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/v1/models".into(),
+                respond: Respond::Json {
+                    status: 503,
+                    headers: vec![],
+                    body: b"{}".to_vec(),
+                },
+            },
+            profile_ok(),
+            usage_ok(),
+        ])
+        .await;
+        std::fs::write(&ca_path, up.ca_pem()).unwrap();
+        seed_oauth_account(&db_path, &key_path);
+        let (admin_port, proxy_port, metrics_port) = (free_port(), free_port(), free_port());
+        let cfg_path = dir.path().join("startup-failing-catalog.yaml");
+        let ledger_path = dir.path().join("ledger-failing-catalog.sqlite");
+        std::fs::write(
+            &cfg_path,
+            config_yaml(
+                admin_port,
+                proxy_port,
+                metrics_port,
+                up.addr(),
+                &ledger_path,
+                "",
+            ),
+        )
+        .unwrap();
+        let config = load(&cfg_path);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let started = std::time::Instant::now();
+        let server = tokio::spawn(phoebis_router::app::run(config, async {
+            let _ = stop_rx.await;
+        }));
+        let _ = first_success(proxy_port).await;
+        let _ = stop_tx.send(());
+        server.await.unwrap().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(35),
+            "{:?}",
+            started.elapsed()
+        );
+        // No retry outlived `run` holding the store and its process lock.
+        drop(
+            phoebis_store::Store::open(
+                &db_path,
+                &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+            )
+            .unwrap(),
+        );
+        up.shutdown().await;
+    }
 }
 
 /// A session through the binary is retained, probed on the ticker once its cache entry nears expiry, and shown

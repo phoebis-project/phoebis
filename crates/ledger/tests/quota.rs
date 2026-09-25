@@ -3,7 +3,9 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::LedgerConfig;
+use phoebis_ledger::{LedgerConfig, QuotaPoll, Sampled};
+use phoebis_routing::EvidenceSource;
+use phoebis_store::AccountKind;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -33,6 +35,20 @@ fn profile_rule() -> Rule {
             )
             .to_vec(),
         },
+    }
+}
+
+fn usage_gated() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: Respond::Gated(Box::new(usage_rule().respond)),
+    }
+}
+
+fn profile_gated() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Gated(Box::new(profile_rule().respond)),
     }
 }
 
@@ -230,5 +246,162 @@ async fn a_paused_oauth_account_receives_hourly_samples_and_an_unpaired_one_does
         h.store.profile_json("b").unwrap().is_none(),
         "an unpaired account is not polled"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(
+        &up,
+        &[
+            oauth("a", A, 0),
+            oauth("b", B, 1),
+            Account {
+                id: "c",
+                kind: AccountKind::ApiKey,
+                secret: "sk-ant-api03-cccccccccccccccccccccccccccccccc",
+                priority: 2,
+            },
+        ],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    // A pause leaves the account polled: its quota is still the operator's to watch.
+    h.store.set_enabled("a", false).unwrap();
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage
+            .clone()
+            .expect("the harness was built with the poll"),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 2,
+            failed: 0,
+            pending: 0
+        }
+    );
+    let samples = h.router.samples().await.unwrap();
+    for id in ["a", "b"] {
+        let (_, sample) = samples.iter().find(|(named, _)| named == id).unwrap();
+        assert_eq!(sample.five_hour, Some(0.125), "{id}");
+        let overage = h.router.overage(id).await.unwrap().unwrap();
+        assert!(!overage.in_use, "{id}");
+        assert_eq!(overage.source, EvidenceSource::Sample, "{id}");
+        assert_eq!(overage.observed_at, NOW, "{id}");
+        let bucket = phoebis_ledger::bucket_of(NOW);
+        let rows = wait_for_async(Duration::from_secs(5), || async {
+            let rows = h.db.quota_samples(id, bucket, bucket + 300).await.unwrap();
+            rows.iter().any(|r| r.window == "fable").then_some(rows)
+        })
+        .await;
+        for window in ["five_hour", "seven_day", "fable"] {
+            assert_eq!(
+                rows.iter().filter(|r| r.window == window).count(),
+                1,
+                "{id} {window}"
+            );
+        }
+    }
+    let usages = up
+        .requests()
+        .iter()
+        .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+        .count();
+    assert_eq!(usages, 2, "one usage request per OAuth account");
+    wait_for(Duration::from_secs(2), || {
+        let profiles = up
+            .requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
+            .count();
+        (profiles == 2).then_some(())
+    })
+    .await;
+    assert!(
+        !up.requests()
+            .iter()
+            .any(|r| r.credential() == Some("sk-ant-api03-cccccccccccccccccccccccccccccccc")),
+        "the API-key account was not asked"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
+    let up = FakeUpstream::start(vec![usage_gated(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let started = std::time::Instant::now();
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage
+            .clone()
+            .expect("the harness was built with the poll"),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_millis(300),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_secs(1),
+        "{elapsed:?}"
+    );
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 0,
+            failed: 0,
+            pending: 1
+        }
+    );
+    up.release();
+    wait_for_async(Duration::from_secs(2), || async {
+        h.router
+            .samples()
+            .await
+            .ok()
+            .filter(|s| s.iter().any(|(id, _)| id == "a"))
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_gated()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage
+            .clone()
+            .expect("the harness was built with the poll"),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_millis(300),
+    )
+    .await;
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 1,
+            failed: 0,
+            pending: 0
+        }
+    );
+    let samples = h.router.samples().await.unwrap();
+    assert!(samples.iter().any(|(id, _)| id == "a"));
+    up.release();
+    wait_for(Duration::from_secs(2), || {
+        h.store.profile_json("a").unwrap()
+    })
+    .await;
     up.shutdown().await;
 }

@@ -42,7 +42,7 @@ pub use query::{
     Dashboard, GroupRow, LiveKeys, ProbeCounts, RequestFilter, RollupFilter, SeriesPoint,
     SessionActivity, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
-pub use quota::{samples_from_head, samples_from_poll, QuotaPoll};
+pub use quota::{samples_from_head, samples_from_poll, QuotaPoll, Sampled};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
     QuotaSampleRecord, RequestRecord,

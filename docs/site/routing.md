@@ -20,21 +20,22 @@ The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) wh
 (`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
 derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled upstream,
 else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are fetched at
-startup for every enabled upstream before the proxy listener accepts requests, and a request's model is resolved by a
-lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
+startup for every enabled upstream before the proxy listener accepts requests (waiting `routing.startup_fetch_seconds`,
+five by default, at most; an upstream still fetching then finishes in the background), and a request's model is resolved
+by a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
 pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward the
 upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart carries
 the dated id from the stored mapping even before the listings arrive, and only a fresh installation whose upstreams are
-unreachable at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the
-dated entry never takes a resolution back.
+unreachable at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
+entry never takes a resolution back.
 
-The listings are refreshed on a slow interval (six hours by default), once more within a minute of an upstream
-answering under a different snapshot than the router resolved (the alias moved), and on demand from the Upstreams
-view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`; the popup, the rule editors' suggestions, and
-the proxy's models listing keep reading the cache under `routing.catalog_cache_seconds`. A refresh that finds a newer
-snapshot for a spelling names the next requests by it; the pins and cooldowns already keyed on the previous dated id
-stay where they are, since a snapshot is a model of its own, and the stored mapping is updated in the same
-transaction.
+The listings are refreshed every `routing.catalog_refresh_seconds` (six hours by default), once more within a minute of
+an upstream answering under a different snapshot than the router resolved (the alias moved), and on demand from the
+Upstreams view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`; the popup, the rule editors'
+suggestions, and the proxy's models listing keep reading the cache under `routing.catalog_cache_seconds`. A refresh that
+finds a newer snapshot for a spelling names the next requests by it; the pins and cooldowns already keyed on the
+previous dated id stay where they are, since a snapshot is a model of its own, and the stored mapping is updated in the
+same transaction.
 
 ## Pools
 

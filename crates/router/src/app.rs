@@ -11,7 +11,9 @@ use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
-use phoebis_ledger::{metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing};
+use phoebis_ledger::{
+    metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
+};
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, REFRESH_TICK};
@@ -66,9 +68,6 @@ const POOL_MAX_IDLE: usize = 8;
 
 /// A models list is one small request; a host that has not answered by then is not going to.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How long the startup prefetch awaits every enabled account's listing before the proxy listener binds.
-const STARTUP_FETCH_BOUND: Duration = Duration::from_secs(5);
 
 /// An unreachable resolver must not hold a request for longer than this per lookup of an upstream or catalog
 /// host.
@@ -233,7 +232,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock.clone(),
         DISCOVERY_TIMEOUT,
         Duration::from_secs(config.routing.catalog_cache_seconds),
-        STARTUP_FETCH_BOUND,
+        Duration::from_secs(config.routing.startup_fetch_seconds),
     ));
     let relay = Arc::new(
         Relay::new(
@@ -389,15 +388,34 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         confirming: tokio::sync::Mutex::new(()),
     });
 
-    let prefetched = catalog.prefetch().await;
-    tracing::info!(
-        landed = prefetched.landed,
-        failed = prefetched.failed,
-        pending = prefetched.pending,
-        bound_seconds = STARTUP_FETCH_BOUND.as_secs(),
-        "catalog prefetch done"
+    // Before the proxy listener binds, so the first request finds the dated ids and the samples in place; each
+    // half bounds itself by the same clock, and what is still running at the bound finishes in the background.
+    // The store and the usage service live in the admin state by now.
+    let startup = Duration::from_secs(config.routing.startup_fetch_seconds);
+    let (prefetched, sampled) = tokio::join!(
+        catalog.prefetch(),
+        QuotaPoll::sample_all(
+            admin.store.clone(),
+            admin.usage.clone(),
+            ledger.clone(),
+            router_task.clone(),
+            startup,
+        ),
     );
-    let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), REFRESH_TICK);
+    tracing::info!(
+        catalogs_landed = prefetched.landed,
+        catalogs_failed = prefetched.failed,
+        catalogs_pending = prefetched.pending,
+        samples_reported = sampled.reported,
+        samples_failed = sampled.failed,
+        samples_pending = sampled.pending,
+        bound_seconds = config.routing.startup_fetch_seconds,
+        "startup fetch finished"
+    );
+    let refresh = catalog.spawn_refresh(
+        Duration::from_secs(config.routing.catalog_refresh_seconds),
+        REFRESH_TICK,
+    );
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;

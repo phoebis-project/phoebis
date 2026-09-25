@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
-use phoebis_store::{AccountKind, AccountState, Store};
+use phoebis_routing::{sample_from_usage, Report, RouterHandle};
+use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use phoebis_transport::response::ResponseHead;
 
 use crate::assemble::Record;
@@ -130,6 +131,15 @@ fn polled(kind: AccountKind, state: AccountState) -> bool {
         && !matches!(state, AccountState::Disconnected | AccountState::Unpaired)
 }
 
+/// What the startup step found before the bound: `reported` accounts reached the router with a sample,
+/// `failed` answered no clean snapshot, `pending` had reported nothing when the bound passed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sampled {
+    pub reported: usize,
+    pub failed: usize,
+    pub pending: usize,
+}
+
 pub struct QuotaPoll;
 
 impl QuotaPoll {
@@ -149,35 +159,120 @@ impl QuotaPoll {
                     continue;
                 };
                 for account in accounts.into_iter().filter(|a| polled(a.kind, a.state)) {
-                    // The service's own cache, cap, and Retry-After apply; a snapshot with an error is a
-                    // stale one, and a stale sample must not be written under a fresh bucket.
-                    match usage.snapshot(&account.id).await {
-                        Ok(snapshot) if snapshot.error.is_none() => {
-                            let (quota, extra) = samples_from_poll(&snapshot);
-                            ledger.record(Record::Samples { quota, extra });
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            tracing::debug!(account = %account.id, %error, "the quota poll got no snapshot")
-                        }
-                    }
-                    // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing,
-                    // and the admin views show what it says.
-                    match usage.profile(&account.id).await {
-                        Ok(profile) => {
-                            if let Err(error) =
-                                store.set_profile_json(&account.id, &profile.raw.to_string())
-                            {
-                                tracing::warn!(account = %account.id, %error, "the profile could not be stored");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::debug!(account = %account.id, %error, "the quota poll got no profile")
-                        }
-                    }
+                    Self::poll_account(&store, &usage, &ledger, None, &account).await;
+                    Self::refresh_profile(&store, &usage, &account).await;
                 }
             }
         })
+    }
+
+    /// One account's snapshot: recorded to the ledger when it is clean and, when `router` is given, reported
+    /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage`, before this
+    /// returns; the clean snapshot is answered. The profile is `refresh_profile`'s.
+    pub async fn poll_account(
+        _store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: Option<&RouterHandle>,
+        account: &AccountRow,
+    ) -> Option<UsageSnapshot> {
+        // The service's own cache, cap, and Retry-After apply; a snapshot with an error is a stale one, and a
+        // stale sample must not be written under a fresh bucket.
+        match usage.snapshot(&account.id).await {
+            Ok(snapshot) if snapshot.error.is_none() => {
+                let (quota, extra) = samples_from_poll(&snapshot);
+                ledger.record(Record::Samples { quota, extra });
+                if let Some(router) = router {
+                    // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
+                    // from selection; both halves go, as the selection's own pull sends them, so the first
+                    // selection sees the overage state too.
+                    let (sample, overage) = sample_from_usage(&snapshot, account.incarnation);
+                    router.report(Report::Sample {
+                        account_id: account.id.clone(),
+                        sample,
+                        incarnation: account.incarnation,
+                    });
+                    if let Some(evidence) = overage {
+                        router.report(Report::Overage {
+                            account_id: account.id.clone(),
+                            evidence,
+                            incarnation: account.incarnation,
+                        });
+                    }
+                }
+                Some(snapshot)
+            }
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(account = %account.id, %error, "the quota poll got no snapshot");
+                None
+            }
+        }
+    }
+
+    /// The profile row's refresh, made after every snapshot; a failure is logged and nothing else.
+    pub async fn refresh_profile(store: &Store, usage: &UsageService, account: &AccountRow) {
+        // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
+        // admin views show what it says.
+        match usage.profile(&account.id).await {
+            Ok(profile) => {
+                if let Err(error) = store.set_profile_json(&account.id, &profile.raw.to_string()) {
+                    tracing::warn!(account = %account.id, %error, "the profile could not be stored");
+                }
+            }
+            Err(error) => {
+                tracing::debug!(account = %account.id, %error, "the quota poll got no profile")
+            }
+        }
+    }
+
+    /// `poll_account` with the router, then `refresh_profile`, for every account `polled` accepts,
+    /// concurrently; an account counts the moment its snapshot was reported, and what has not reported by
+    /// `bound` counts as pending and finishes in the background.
+    pub async fn sample_all(
+        store: Arc<Store>,
+        usage: Arc<UsageService>,
+        ledger: Ledger,
+        router: RouterHandle,
+        bound: Duration,
+    ) -> Sampled {
+        let accounts: Vec<AccountRow> = store
+            .accounts()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| polled(a.kind, a.state))
+            .collect();
+        let total = accounts.len();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+        for account in accounts {
+            let (store, usage, ledger, router, tx) = (
+                store.clone(),
+                usage.clone(),
+                ledger.clone(),
+                router.clone(),
+                tx.clone(),
+            );
+            tokio::spawn(async move {
+                let answer =
+                    Self::poll_account(&store, &usage, &ledger, Some(&router), &account).await;
+                let _ = tx.send(answer.is_some());
+                Self::refresh_profile(&store, &usage, &account).await;
+            });
+        }
+        drop(tx);
+        let mut sampled = Sampled::default();
+        let _ = tokio::time::timeout(bound, async {
+            while sampled.reported + sampled.failed < total {
+                match rx.recv().await {
+                    Some(true) => sampled.reported += 1,
+                    Some(false) => sampled.failed += 1,
+                    None => break,
+                }
+            }
+        })
+        .await;
+        sampled.pending = total - sampled.reported - sampled.failed;
+        sampled
     }
 }
 

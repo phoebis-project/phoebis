@@ -60,6 +60,27 @@ fn a_key_file_readable_by_group_or_other_warns_naming_the_path_and_0600() {
 }
 
 #[test]
+fn the_summary_names_the_routing_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "defaults", "");
+    let out = phoebis()
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("catalog refresh 21600s, startup fetch 5s"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn an_unknown_upstream_key_fails_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path(), "unknown-key", "upstream:\n  resolver: 1\n");

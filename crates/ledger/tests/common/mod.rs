@@ -41,6 +41,7 @@ pub struct Harness {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
+    pub usage: Option<Arc<phoebis_oauth::UsageService>>,
 }
 
 pub struct Account {
@@ -271,7 +272,7 @@ pub async fn harness_on(
         db.clone(),
         pricing,
         store.clone(),
-        usage,
+        usage.clone(),
         &bus,
         router_handle.clone(),
         clock.clone(),
@@ -311,6 +312,7 @@ pub async fn harness_on(
         relay,
         router: router_handle,
         store,
+        usage,
     }
 }
 

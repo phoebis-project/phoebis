@@ -58,6 +58,10 @@ headers, which cost nothing to read and cover whichever accounts are in use at t
 endpoint, every `quota.poll_interval_seconds`, fills the gaps an idle account leaves and is the only source of
 extra-usage credit totals.
 
+The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
+accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the
+first request after a restart; the poll then keeps its interval.
+
 ## Pricing
 
 Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,

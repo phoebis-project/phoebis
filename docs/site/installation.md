@@ -235,11 +235,15 @@ quota:
 routing:
   # How long an upstream's model list is held before it is read again for the console and the models listing.
   catalog_cache_seconds: 60
+  # How often every enabled upstream's model listing is read again.
+  catalog_refresh_seconds: 21600
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3
   # How long an upstream that answered 404 for a model is skipped for that model.
   model_rejection_seconds: 3600
+  # How long the proxy listener waits at startup for the model listings and the usage snapshots.
+  startup_fetch_seconds: 5
 sessions:
   expire_after_seconds: 86400
   # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
@@ -372,16 +376,20 @@ Defaults whole.
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `catalog_cache_seconds` | `60` | 1 to 86400 |
+| `catalog_refresh_seconds` | `21600` | 60 to 604800 |
 | `cooldown_fallback_seconds` | `60` | any number of seconds |
 | `max_attempts` | `3` | 1 to 8 |
 | `model_rejection_seconds` | `3600` | 1 to 604800 |
+| `startup_fetch_seconds` | `5` | 1 to 60 |
 
 Refused with:
 
 - `catalog_cache_seconds`: `routing.catalog_cache_seconds must be between 1 and 86400, not {value}`
+- `catalog_refresh_seconds`: `routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`
 - `cooldown_fallback_seconds`: nothing
 - `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
 - `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
+- `startup_fetch_seconds`: `routing.startup_fetch_seconds must be between 1 and 60, not {value}`
 
 ### sessions
 
@@ -459,7 +467,8 @@ refused with `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
-`keepalive` bounds, `routing.catalog_cache_seconds`, the four `sessions` keys,
+`keepalive` bounds, `routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
+`routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.rollup_retention_days`,
 `quota.sample_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name
 the same file. The first failure is the one reported, so fix the file top to bottom to find the next one.
