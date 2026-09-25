@@ -3512,6 +3512,48 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
 }
 
 #[test]
+fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placement() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        select_below: Some(0.5),
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.2, 0.1, 1_000));
+    st.record_sample("b", sample(0.9, 0.1, 1_000));
+    let on_a = st.in_flight().dispatched("a", 1_000);
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("a free account takes the placement")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "the below-ceiling account is at its cap, so the free one above the ceiling takes it"
+    );
+    assert!(
+        sel.trace
+            .skipped
+            .iter()
+            .any(|s| s.account_id == "a" && s.obstacle == "at_cap"),
+        "{:?}",
+        sel.trace.skipped
+    );
+    let on_b = st.in_flight().dispatched("b", 1_000);
+    assert_eq!(
+        select(&mut st, &s, &req, &mut rng()).0,
+        SelectResult::Held {
+            account_id: "a".into()
+        },
+        "with both at their cap the request is held on the one the ceiling prefers"
+    );
+    drop((on_a, on_b));
+}
+
+#[test]
 fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 0), ("c", 1)],

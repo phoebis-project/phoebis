@@ -510,11 +510,11 @@ pub fn select(
         }
     }
 
-    // Step 6: a model with its own window needs allowance left in it, the ceiling prefers the accounts under
-    // it, the cap and the wind-down prefer accounts that can take a fresh session, and under Pace the floor
-    // keeps an almost-spent account as the last resort. Each partition falls through to the wider set it
-    // narrowed when it would otherwise empty the selection, and every candidate a partition drops joins the
-    // trace under that partition's name.
+    // Step 6: a model with its own window needs allowance left in it, the cap bounds a fresh placement, the
+    // ceiling prefers the accounts under it, the wind-down prefers accounts that can take a fresh session, and
+    // under Pace the floor keeps an almost-spent account as the last resort. Each preference falls through to
+    // the wider set it narrowed when it would otherwise empty the selection, and every candidate a partition
+    // drops joins the trace under that partition's name.
     let mut skipped: Vec<Skipped> = Vec::new();
     // A dated deadline for the accounts the Fable partition drops, kept apart from `skipped`: it answers
     // `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
@@ -547,12 +547,17 @@ pub fn select(
         }
         selection_set = left;
     }
-    // With every account that could serve at its cap the request waits for a slot rather than piling onto one.
-    // Judged before the preferences below narrow the set: a hold is for no slot anywhere, never for a
-    // preference that ran out of them. A pinned request never gets here: step 5 renewed it.
-    let held = selection_set
+    // An account at its cap takes no fresh placement: a bound rather than a preference, so it runs ahead of the
+    // preferences below and a free account the ceiling would pass over still takes the request. With every
+    // account that could serve at its cap the request is held for a slot; the set is left whole so the answer
+    // names the account the strategy would have chosen. A pinned request never gets here: step 5 renewed it.
+    let under_cap: Vec<&Candidate> = selection_set
         .iter()
-        .all(|c| state.in_flight().account(&c.account_id) >= pool.failover.in_flight_cap);
+        .copied()
+        .filter(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
+        .collect();
+    let held = under_cap.is_empty();
+    narrow(&mut selection_set, &mut skipped, under_cap, "at_cap");
     // The threshold is a preference, not a refusal: with every account above it the request goes to the least
     // bad one rather than answering exhausted while capacity remains.
     if let Some(threshold) = pool.select_below_utilization {
@@ -568,13 +573,6 @@ pub fn select(
             .collect();
         narrow(&mut selection_set, &mut skipped, below, "above_ceiling");
     }
-    // An account at its cap is no place to put a session.
-    let under_cap: Vec<&Candidate> = selection_set
-        .iter()
-        .copied()
-        .filter(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
-        .collect();
-    narrow(&mut selection_set, &mut skipped, under_cap, "at_cap");
     // A session should not start on an account about to end.
     let not_winding_down: Vec<&Candidate> = selection_set
         .iter()

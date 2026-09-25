@@ -210,12 +210,12 @@ A pin lasts `affinity_ttl_seconds` from its last use: while it is live and its a
 request returns to that account, and stickiness wins over priority even across a later priority change. A pool
 with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins at all.
 
-Narrowing then trims what is left, each a preference that falls back to the wider set rather than stranding the request:
-a model-specific window (a canonical id containing `fable`) at or above 1 drops the account outright;
-`select_below_utilization` drops every account at or above that threshold in 5-hour utilization; an account already at
-the pool's `in_flight_cap` is skipped for a fresh placement, and with every account at its cap the request is held for a
-slot instead (see **In-flight caps**, below); and an account winding down toward its subscription end (see
-**Subscription end**, below) is skipped for a fresh placement too.
+Narrowing then trims what is left. A model-specific window (a canonical id containing `fable`) at or above 1 drops the
+account outright, and an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every
+preference below; with every account at its cap the request is held for a slot instead (see **In-flight caps**, below).
+The rest are preferences that fall back to the wider set rather than stranding the request: `select_below_utilization`
+drops every account at or above that threshold in 5-hour utilization, and an account winding down toward its
+subscription end (see **Subscription end**, below) is skipped for a fresh placement too.
 
 What remains is ordered in three kind groups, plan quota, overage, then API key, whenever `prefer_subscription`
 is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier. `pace`
@@ -417,7 +417,8 @@ a throttle that names no `Retry-After`, and a request bound to its account all t
 **Per account.** Every wire submission counts against its account from its dispatch until its response ends: a buffered
 answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The count
 is kept by the relay itself; no report is involved. An account at the pool's `in_flight_cap` (default 16) is passed over
-while a sibling is under it. Only when every account that could serve is at its cap is the request held: it waits up to
+while a sibling is under it, even a sibling above `select_below_utilization`: the cap is a bound, the ceiling a
+preference. Only when every account that could serve is at its cap is the request held: it waits up to
 `retry_in_place_seconds` for a slot on the account it would have chosen and lands there when one frees; past the bound
 it is selected again with that account passed over. A hold costs one attempt of `routing.max_attempts`. A session
 already pinned to the account is never held: the cap steers new placements and never moves a pin.
