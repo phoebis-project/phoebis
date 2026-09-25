@@ -792,6 +792,7 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

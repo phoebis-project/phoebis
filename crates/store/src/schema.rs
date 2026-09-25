@@ -54,11 +54,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (22, V22),
     (23, V23),
     (24, V24),
+    (25, V25),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -318,4 +319,48 @@ ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
 ALTER TABLE accounts ADD COLUMN subscription_tier TEXT;
 ALTER TABLE accounts ADD COLUMN subscription_since INTEGER;
 ALTER TABLE accounts ADD COLUMN trial_ends_at INTEGER;
+"#;
+
+// The strategy set is three names: `pace` takes over both sample-driven strategies now that every account carries
+// a sample, `priority` the random pick within a priority. The kind order is a free toggle every pool starts with
+// on, so the sub-strategy that ordered the api_key tier under a strategy with no sample for it has nothing left to
+// order. The per-pin migration dwell gives way to the source account's dwell, so `migrated_at` leaves. A pin from
+// before the burn columns reads no burn and its last use as its last refresh; a key with no cap and an account
+// nobody cancelled read as such, and an end is stored only beside the flag. `plan_fits` is the live fit of a
+// window's size per account and window kind.
+const V25: &str = r#"
+UPDATE pools SET strategy = 'pace' WHERE strategy IN ('earliest_refresh', 'least_utilized');
+UPDATE pools SET strategy = 'priority' WHERE strategy = 'priority_random';
+UPDATE pools SET prefer_subscription = 1;
+ALTER TABLE pools DROP COLUMN api_key_sub_strategy;
+ALTER TABLE pools ADD COLUMN shed_share REAL NOT NULL DEFAULT 0.5;
+ALTER TABLE pools ADD COLUMN burn_window_seconds INTEGER NOT NULL DEFAULT 600;
+ALTER TABLE pools ADD COLUMN source_dwell_seconds INTEGER NOT NULL DEFAULT 900;
+ALTER TABLE pools ADD COLUMN migrate_when_spent INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE pools ADD COLUMN warm_sessions TEXT NOT NULL DEFAULT 'when_needed';
+ALTER TABLE pools ADD COLUMN retry_in_place_seconds INTEGER NOT NULL DEFAULT 10;
+ALTER TABLE pools ADD COLUMN in_flight_cap INTEGER NOT NULL DEFAULT 16;
+ALTER TABLE pools ADD COLUMN pace_floor REAL NOT NULL DEFAULT 0.05;
+ALTER TABLE pools ADD COLUMN overage_move_grace_minutes INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE pools ADD COLUMN wind_down_minutes INTEGER NOT NULL DEFAULT 60;
+ALTER TABLE pins DROP COLUMN migrated_at;
+ALTER TABLE pins ADD COLUMN burn REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_at INTEGER;
+ALTER TABLE pins ADD COLUMN last_input_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN last_refresh_at INTEGER NOT NULL DEFAULT 0;
+UPDATE pins SET last_refresh_at = last_used_at;
+ALTER TABLE pins ADD COLUMN cache_ttl_ms INTEGER NOT NULL DEFAULT 300000;
+ALTER TABLE pins ADD COLUMN shed_from TEXT;
+ALTER TABLE pins ADD COLUMN shed_at INTEGER;
+ALTER TABLE pins ADD COLUMN static_hash TEXT;
+ALTER TABLE pins ADD COLUMN tail_hash TEXT;
+ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER;
+ALTER TABLE accounts ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN subscription_ends_at INTEGER;
+CREATE TABLE plan_fits (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, window TEXT NOT NULL,
+  scale REAL NOT NULL, confidence REAL NOT NULL, intervals INTEGER NOT NULL,
+  corrections_json TEXT NOT NULL DEFAULT '{}', fitted_at INTEGER NOT NULL, incarnation INTEGER NOT NULL,
+  PRIMARY KEY (account_id, window)
+);
 "#;

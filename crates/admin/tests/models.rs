@@ -4,7 +4,8 @@ mod common;
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    ApiKeyRow, CooldownRow, ModelRule, OveragePolicy, PoolRow, RulesMode, Strategy, SubStrategy,
+    ApiKeyRow, CooldownRow, Failover, ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding,
+    Strategy,
 };
 use common::{get, json, login, NOW};
 use serde_json::json as j;
@@ -43,7 +44,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 id: "main".into(),
                 label: "Main".into(),
                 enabled: true,
-                strategy: Strategy::PriorityRandom,
+                strategy: Strategy::Priority,
                 affinity_ttl_seconds: 3_600,
                 overage_policy: OveragePolicy::Allow,
                 migrate_above_utilization: None,
@@ -61,7 +62,8 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
-                api_key_sub_strategy: SubStrategy::PriorityRandom,
+                shedding: Shedding::default(),
+                failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
                 created_at: NOW,
@@ -104,6 +106,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

@@ -212,7 +212,7 @@ test('the model state decodes the cooldowns grouped by model, and the rejections
 test('a pool decodes its policy, status, members, and traffic', () => {
   const [p] = fixture('pools').pools.map(d.decodePool);
   assert.equal(p.name, 'Main');
-  assert.equal(p.strategy, 'least_utilized');
+  assert.equal(p.strategy, 'pace');
   assert.equal(p.keepalive.costCapUsdPerDay, 4);
   assert.equal(p.keepalive.warmSubagents, true);
   assert.equal(p.cacheTtl.enabled, false);
@@ -237,16 +237,15 @@ test('a pool decodes its select-below threshold and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
 });
 
-test('a pool decodes round robin, both subscription flags, and the sub-strategy, and encodes the stored one back', () => {
-  const wire = { ...fixture('pools').pools[0], strategy: 'round_robin', prefer_subscription: true, prefer_subscription_effective: true, api_key_sub_strategy: 'round_robin' };
+test('a pool decodes the three strategies and the flag, and encodes the stored flag back', () => {
+  const row = fixture('pools').pools[0];
+  assert.equal(d.decodePool({ ...row, strategy: 'pace' }).strategy, 'pace');
+  assert.equal(d.decodePool({ ...row, strategy: 'priority' }).strategy, 'priority');
+  const wire = { ...row, strategy: 'round_robin', prefer_subscription: true };
   const p = d.decodePool(wire);
-  assert.deepEqual([p.strategy, p.preferSubscription, p.preferSubscriptionEffective, p.apiKeySubStrategy], ['round_robin', true, true, 'round_robin']);
+  assert.deepEqual([p.strategy, p.preferSubscription], ['round_robin', true]);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
-  assert.deepEqual([back.strategy, back.prefer_subscription, back.api_key_sub_strategy], ['round_robin', true, 'round_robin']);
-  assert.equal('prefer_subscription_effective' in back, false, 'the effective value is the route\'s answer, never an input');
-  const forced = d.decodePool({ ...fixture('pools').pools[0], strategy: 'least_utilized', prefer_subscription: false, prefer_subscription_effective: true });
-  assert.deepEqual([forced.preferSubscription, forced.preferSubscriptionEffective], [false, true], 'the stored answer and the forced order are read apart');
-  assert.equal(d.decodePool(fixture('pools').pools[0]).apiKeySubStrategy, 'priority_random', 'the recorded row carries the default');
+  assert.deepEqual([back.strategy, back.prefer_subscription], ['round_robin', true]);
 });
 
 test('a pool decodes its cache TTL policy, its diagnostics override, and warm_subagents, and encodes them back', () => {

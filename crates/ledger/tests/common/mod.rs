@@ -17,8 +17,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, NewBundle, OveragePolicy, PoolRow,
-    RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity, NewBundle, OveragePolicy,
+    PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
@@ -148,7 +148,7 @@ pub async fn harness_on(
                     id: "main".into(),
                     label: "main".into(),
                     enabled: true,
-                    strategy: Strategy::PriorityRandom,
+                    strategy: Strategy::Priority,
                     affinity_ttl_seconds: 3600,
                     overage_policy: OveragePolicy::PreferPlan,
                     migrate_above_utilization: None,
@@ -157,7 +157,8 @@ pub async fn harness_on(
                     keepalive_json: "{}".into(),
                     body_capture_hours: capture.0,
                     prefer_subscription: false,
-                    api_key_sub_strategy: SubStrategy::PriorityRandom,
+                    shedding: Shedding::default(),
+                    failover: Failover::default(),
                     cache_ttl_json: "{}".into(),
                     cache_diagnostics: None,
                     created_at: NOW,
@@ -197,6 +198,7 @@ pub async fn harness_on(
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
+                    in_flight_cap: None,
                 },
                 "test",
             )

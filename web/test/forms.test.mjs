@@ -9,7 +9,6 @@ const pool = d.decodePool(fixture('pools').pools[0]);
 const accounts = new Set(pool.members.map((m) => m.accountId));
 const input = {
   affinityTtlSeconds: pool.affinityTtlSeconds,
-  apiKeySubStrategy: pool.apiKeySubStrategy,
   bodyCaptureHours: pool.bodyCaptureHours,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: pool.cacheTtl,

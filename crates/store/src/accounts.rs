@@ -3,6 +3,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
+use crate::registry::SubscriptionTerm;
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,6 +486,52 @@ impl Store {
                     tier: row.get(1)?,
                     since: row.get(2)?,
                     trial_ends_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+    }
+
+    /// The operator's answer alone: the flag and the end together, the end dropped when the flag is off;
+    /// bumps `revision` so the next reload publishes it.
+    pub fn set_cancelled(
+        &self,
+        id: &str,
+        cancelled: bool,
+        ends_at: Option<i64>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        if conn.execute(
+            "UPDATE accounts SET cancelled = ?2, \
+             subscription_ends_at = CASE WHEN ?2 THEN ?3 ELSE NULL END, \
+             revision = revision + 1, updated_at = ?4 WHERE id = ?1",
+            params![
+                id,
+                cancelled,
+                ends_at,
+                jiff::Timestamp::now().as_millisecond(),
+            ],
+        )? == 0
+        {
+            return Err(StoreError::AccountNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn subscription_term(&self, id: &str) -> Result<Option<SubscriptionTerm>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at \
+             FROM accounts WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(SubscriptionTerm {
+                    account_id: row.get(0)?,
+                    since: row.get(1)?,
+                    trial_ends_at: row.get(2)?,
+                    cancelled: row.get(3)?,
+                    ends_at: row.get(4)?,
                 })
             },
         )

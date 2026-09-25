@@ -1182,7 +1182,7 @@ async fn the_request_log_reads_a_key_selector_by_lifetime() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",

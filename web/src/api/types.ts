@@ -191,9 +191,7 @@ export interface QuotaSnapshot {
   status: QuotaFetchStatus;
 }
 
-export type PoolStrategy = 'earliest_refresh' | 'least_utilized' | 'priority_random' | 'round_robin';
-/** The API-key group carries its own order, because the sample a strategy ranks by exists for subscriptions alone. */
-export type ApiKeySubStrategy = 'priority_random' | 'round_robin';
+export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
 export interface PoolKeepalive {
@@ -251,7 +249,6 @@ export interface Pool {
   activePins: number;
   /** Idle seconds before a session's pin to an account expires; 0 disables affinity. */
   affinityTtlSeconds: number;
-  apiKeySubStrategy: ApiKeySubStrategy;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
   /** Null inherits the bootstrap option `compatibility.cache_diagnostics`; true or false overrides it for this pool. */
@@ -267,10 +264,8 @@ export interface Pool {
   modelRules: ModelRule[];
   name: string;
   overagePolicy: OveragePolicy;
-  /** The operator's stored answer. A sample-driven strategy orders by kind regardless; read the effective flag for that. */
+  /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
-  /** What selection runs under: the stored flag, or the order a sample-driven strategy forces. */
-  preferSubscriptionEffective: boolean;
   requests24h: number;
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;

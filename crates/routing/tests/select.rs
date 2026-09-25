@@ -1,11 +1,11 @@
 use phoebis_routing::{
     release_reasons, resolve, select, EvidenceSource, Exhaustion, MigrateReason, OverageEvidence,
     PinRef, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, MIGRATE_DWELL_MS, MODEL_REJECTED_REASON,
+    UtilizationSample, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, OveragePolicy, PoolMember,
-    PoolRow, RegistryLoad, RoutingLoad, RulesMode, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, OveragePolicy,
+    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -23,7 +23,6 @@ struct Pool {
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
-    sub_strategy: SubStrategy,
     kinds: Vec<(&'static str, AccountKind)>,
 }
 
@@ -31,13 +30,12 @@ impl Default for Pool {
     fn default() -> Self {
         Pool {
             policy: OveragePolicy::PreferPlan,
-            strategy: Strategy::PriorityRandom,
+            strategy: Strategy::Priority,
             affinity: 3600,
             migrate: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
-            sub_strategy: SubStrategy::PriorityRandom,
             kinds: vec![],
         }
     }
@@ -95,6 +93,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,
+            in_flight_cap: None,
         }],
         members: pool
             .members
@@ -118,7 +117,8 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,
-            api_key_sub_strategy: pool.sub_strategy,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
             created_at: 0,
@@ -126,6 +126,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
         }],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
+        terms: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -145,6 +146,7 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
+        terms: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -169,6 +171,7 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
         pools: s.pools().cloned().collect(),
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
+        terms: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -362,117 +365,40 @@ fn a_fresh_pin_carries_the_generation_the_request_was_admitted_under_not_the_sna
 }
 
 #[test]
-fn least_utilized_picks_the_lowest_five_hour_sample_and_random_without_samples() {
+fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsampled_account_as_untouched(
+) {
     let s = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
+        strategy: Strategy::Pace,
         ..Pool::default()
     });
+    // `window_of` reads the shared plan for a non-fable model, so only `seven_day` and its reset matter here.
+    let reading = |seven_day: f64, reset_at: i64, observed_at: i64| UtilizationSample {
+        fable: None,
+        fable_reset: None,
+        five_hour: None,
+        five_hour_reset: None,
+        seven_day: Some(seven_day),
+        seven_day_reset: Some(reset_at),
+        observed_at,
+    };
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", sample(0.9, 0.1, 1));
-    st.record_sample("b", sample(0.2, 0.1, 1));
-    st.record_sample("c", sample(0.5, 0.1, 1));
-    assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
-                &mut rng()
-            )
-            .0
-        ),
-        "b"
-    );
-    let mut none = RoutingState::from_load(RoutingLoad::default());
-    let mut seen = std::collections::HashSet::new();
-    for i in 0..40 {
-        let (result, _) = select(
-            &mut none,
-            &s,
-            &request(&s, None, "claude-sonnet-5", true, &[], i),
-            &mut StdRng::seed_from_u64(i as u64),
-        );
-        seen.insert(picked(&result).to_string());
-    }
-    assert_eq!(
-        seen.len(),
-        3,
-        "without samples every account is a 0 and the tie is random"
-    );
-    let mixed = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
-        kinds: vec![("c", AccountKind::ApiKey)],
-        ..Pool::default()
-    });
-    let mut oauth_first = RoutingState::from_load(RoutingLoad::default());
-    oauth_first.record_sample("a", sample(0.9, 0.1, 1));
-    oauth_first.record_sample("b", sample(0.2, 0.1, 1));
-    assert_eq!(
-        picked(
-            &select(
-                &mut oauth_first,
-                &mixed,
-                &request(&mixed, None, "claude-sonnet-5", true, &[], 1_000),
-                &mut rng()
-            )
-            .0
-        ),
-        "b",
-        "the oauth group orders under least_utilized ahead of the api_key group"
-    );
-    oauth_first.record_cooldown(cooled(
-        "a",
-        "account",
-        1_000 + HOUR,
-        "five_hour",
-        "rate_limit",
-    ));
-    oauth_first.record_cooldown(cooled(
-        "b",
-        "account",
-        1_000 + HOUR,
-        "five_hour",
-        "rate_limit",
-    ));
-    assert_eq!(
-        picked(
-            &select(
-                &mut oauth_first,
-                &mixed,
-                &request(&mixed, None, "claude-sonnet-5", true, &[], 2_000),
-                &mut rng()
-            )
-            .0
-        ),
-        "c",
-        "the api_key sibling serves once no oauth account is eligible"
-    );
-}
-
-#[test]
-fn earliest_refresh_orders_by_the_seven_day_reset_and_sorts_an_account_without_one_last() {
-    let s = snapshot(Pool {
-        strategy: Strategy::EarliestRefresh,
-        ..Pool::default()
-    });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    // `a` clears its 5h window first and refreshes its plan last; only the second of those orders.
-    st.record_sample("a", refreshing(0.1, HOUR, 5 * HOUR, 1));
-    st.record_sample("b", refreshing(0.9, 9 * HOUR, 2 * HOUR, 1));
+    st.record_sample("a", reading(0.5, 1_000 + 24 * HOUR, 1));
+    st.record_sample("b", reading(0.2, 1_000 + 96 * HOUR, 1));
+    // `c` stays unsampled: untouched, remaining 1 over the full week.
     let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     for seed in 0..8u64 {
         assert_eq!(
             picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
-            "b",
-            "the 7d window that refunds soonest wins, whatever the 5h resets say"
+            "a",
+            "0.5 used resetting in 24h (0.0208) outranks 0.2 used resetting in 96h (0.0083) and an untouched account (1/168)"
         );
     }
-    st.record_sample("b", refreshing(0.9, 9 * HOUR, 6 * HOUR, 2));
+    st.record_sample("a", reading(0.9, 1_000 + 24 * HOUR, 2));
     for seed in 0..8u64 {
         assert_eq!(
             picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
-            "a",
-            "and `c`, never sampled, is behind both: an unknown reset is infinitely far"
+            "b",
+            "spent to 0.1 remaining (0.0042), a falls behind b's wider allowance"
         );
     }
     let mut none = RoutingState::from_load(RoutingLoad::default());
@@ -489,7 +415,25 @@ fn earliest_refresh_orders_by_the_seven_day_reset_and_sorts_an_account_without_o
     assert_eq!(
         seen.len(),
         3,
-        "with no reset anywhere every account is equally far off and the tie is random"
+        "with nobody sampled every account scores the same untouched reading and the tie is random"
+    );
+    let mut two_tied = RoutingState::from_load(RoutingLoad::default());
+    // Far below the untouched score, so `b` never wins the draw between the two accounts that tie for it.
+    two_tied.record_sample("b", reading(0.99, 1_000 + 168 * HOUR, 1));
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..40u64 {
+        let (result, _) = select(
+            &mut two_tied,
+            &s,
+            &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+            &mut StdRng::seed_from_u64(i),
+        );
+        seen.insert(picked(&result).to_string());
+    }
+    assert_eq!(
+        seen,
+        std::collections::HashSet::from(["a".to_string(), "c".to_string()]),
+        "a and c tie untouched, and both are seen over the seeded draw"
     );
 }
 
@@ -509,11 +453,7 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
         "c",
         with_fable(refreshing(0.6, HOUR, 8 * HOUR, 1), 0.2, Some(3 * HOUR)),
     );
-    for strategy in [
-        Strategy::EarliestRefresh,
-        Strategy::LeastUtilized,
-        Strategy::PriorityRandom,
-    ] {
+    for strategy in [Strategy::Pace, Strategy::Priority, Strategy::RoundRobin] {
         let s = snapshot(Pool {
             strategy,
             ..Pool::default()
@@ -528,7 +468,7 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
         }
     }
     let earliest = snapshot(Pool {
-        strategy: Strategy::EarliestRefresh,
+        strategy: Strategy::Pace,
         ..Pool::default()
     });
     let fable = request(&earliest, None, "claude-fable-5-1", true, &[], 1_000);
@@ -560,7 +500,7 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
 #[test]
 fn a_fable_request_with_every_window_spent_is_exhausted_at_the_earliest_fable_reset() {
     let s = snapshot(Pool {
-        strategy: Strategy::EarliestRefresh,
+        strategy: Strategy::Pace,
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -632,11 +572,7 @@ fn the_depletion_threshold_drops_a_depleted_account_and_falls_back_when_every_ac
     st.record_sample("a", refreshing(0.95, HOUR, HOUR, 1));
     st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
     st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
-    for strategy in [
-        Strategy::EarliestRefresh,
-        Strategy::LeastUtilized,
-        Strategy::PriorityRandom,
-    ] {
+    for strategy in [Strategy::Pace, Strategy::Priority, Strategy::RoundRobin] {
         let s = snapshot(Pool {
             strategy,
             select_below: Some(0.92),
@@ -657,9 +593,8 @@ fn the_depletion_threshold_drops_a_depleted_account_and_falls_back_when_every_ac
         });
         let req = request(&all, None, "claude-sonnet-5", true, &[], 1_000);
         let expected = match strategy {
-            Strategy::EarliestRefresh => Some("a"),
-            Strategy::LeastUtilized => Some("b"),
-            Strategy::PriorityRandom | Strategy::RoundRobin => None,
+            Strategy::Pace => Some("a"),
+            Strategy::Priority | Strategy::RoundRobin => None,
         };
         for seed in 0..8u64 {
             let result = select(&mut st, &all, &req, &mut StdRng::seed_from_u64(seed)).0;
@@ -681,14 +616,15 @@ fn the_depletion_threshold_drops_a_depleted_account_and_falls_back_when_every_ac
 #[test]
 fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
     let s = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
+        strategy: Strategy::Pace,
         select_below: Some(0.8),
         members: vec![("a", 0), ("b", 0)],
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", refreshing(0.1, HOUR, HOUR, 1));
-    st.record_sample("b", refreshing(0.5, HOUR, HOUR, 1));
+    // No reset on either reading, so Pace falls back to the full week for both and ranks on remaining alone.
+    st.record_sample("a", sample(0.1, 0.1, 1));
+    st.record_sample("b", sample(0.5, 0.5, 1));
     let (opening, _) = select(
         &mut st,
         &s,
@@ -992,13 +928,15 @@ fn a_spent_fable_window_that_dated_no_reset_stops_excluding_once_the_reading_age
 #[test]
 fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() {
     let s = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
+        strategy: Strategy::Pace,
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    st.record_sample("a", sample(0.1, 0.1, 1));
-    st.record_sample("b", sample(0.5, 0.1, 1));
-    st.record_sample("c", sample(0.6, 0.1, 1));
+    // The opening pick is a fable request, so it is the fable reading Pace ranks by; no reset on any of the
+    // three, so Pace falls back to the full week for all and ranks on remaining alone.
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 1), 0.1, None));
+    st.record_sample("b", with_fable(sample(0.5, 0.3, 1), 0.3, None));
+    st.record_sample("c", with_fable(sample(0.6, 0.4, 1), 0.4, None));
     assert_eq!(
         picked(
             &select(
@@ -1516,7 +1454,7 @@ fn an_attempted_account_still_dates_the_exhaustion_with_its_cooldown() {
 #[test]
 fn a_tier_of_nan_samples_still_selects() {
     let s = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
+        strategy: Strategy::Pace,
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -1665,7 +1603,7 @@ fn a_singleton_models_round_does_not_move_a_three_account_models_round() {
 #[test]
 fn prefer_subscription_orders_plan_oauth_then_overage_oauth_then_api_keys_across_priorities() {
     let s = snapshot(Pool {
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::Priority,
         prefer_subscription: true,
         members: vec![("a", 1), ("b", 0), ("c", 0)],
         kinds: vec![("c", AccountKind::ApiKey)],
@@ -1731,110 +1669,10 @@ fn prefer_subscription_orders_plan_oauth_then_overage_oauth_then_api_keys_across
 }
 
 #[test]
-fn the_sample_driven_strategies_force_the_kind_order_and_the_api_key_group_takes_the_sub_strategy()
-{
-    let s = snapshot(Pool {
-        strategy: Strategy::LeastUtilized,
-        sub_strategy: SubStrategy::RoundRobin,
-        members: vec![("a", 0), ("b", 0), ("c", 0)],
-        kinds: vec![("b", AccountKind::ApiKey), ("c", AccountKind::ApiKey)],
-        ..Pool::default()
-    });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let mut r = rng();
-    st.record_sample("a", sample(0.9, 0.1, 1));
-    assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
-                &mut r
-            )
-            .0
-        ),
-        "a",
-        "an oauth account at 0.9 still beats the unsampled api keys"
-    );
-    st.record_cooldown(cooled(
-        "a",
-        "account",
-        1_000 + HOUR,
-        "five_hour",
-        "rate_limit",
-    ));
-    let two = [
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, None, "claude-sonnet-5", true, &[], 2_000),
-                &mut r,
-            )
-            .0,
-        )
-        .to_string(),
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(&s, None, "claude-sonnet-5", true, &[], 3_000),
-                &mut r,
-            )
-            .0,
-        )
-        .to_string(),
-    ];
-    assert_eq!(
-        two,
-        ["b", "c"],
-        "group three rotates under the round_robin sub-strategy"
-    );
-}
-
-#[test]
-fn priority_random_orders_the_api_key_group_itself_whatever_the_sub_strategy_holds() {
-    let s = snapshot(Pool {
-        strategy: Strategy::PriorityRandom,
-        prefer_subscription: true,
-        sub_strategy: SubStrategy::RoundRobin,
-        kinds: vec![
-            ("a", AccountKind::ApiKey),
-            ("b", AccountKind::ApiKey),
-            ("c", AccountKind::ApiKey),
-        ],
-        ..Pool::default()
-    });
-    let mut seen = std::collections::HashSet::new();
-    for seed in 0..40u64 {
-        // A fresh state each round: the sub-strategy reaching this pool would answer `a` every time.
-        let mut st = RoutingState::from_load(RoutingLoad::default());
-        seen.insert(
-            picked(
-                &select(
-                    &mut st,
-                    &s,
-                    &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
-                    &mut StdRng::seed_from_u64(seed),
-                )
-                .0,
-            )
-            .to_string(),
-        );
-    }
-    assert_eq!(
-        seen.len(),
-        3,
-        "an explicitly chosen strategy orders group three, not api_key_sub_strategy"
-    );
-}
-
-#[test]
-fn round_robin_orders_the_api_key_group_itself_whatever_the_sub_strategy_holds() {
+fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
     let s = snapshot(Pool {
         strategy: Strategy::RoundRobin,
         prefer_subscription: true,
-        sub_strategy: SubStrategy::PriorityRandom,
         kinds: vec![
             ("a", AccountKind::ApiKey),
             ("b", AccountKind::ApiKey),
@@ -1866,7 +1704,7 @@ fn round_robin_orders_the_api_key_group_itself_whatever_the_sub_strategy_holds()
 }
 
 #[test]
-fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() {
+fn the_migrate_rule_moves_a_hot_pin_only_to_a_destination_under_the_band() {
     let s = snapshot(Pool {
         migrate: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
@@ -1902,7 +1740,7 @@ fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() 
         "0.77 is inside the band under 0.8, so b is no destination"
     );
     st.record_sample("b", sample(0.70, 0.3, 2_500));
-    let (result, writes) = select(
+    let (result, _) = select(
         &mut st,
         &s,
         &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
@@ -1915,53 +1753,7 @@ fn the_migrate_rule_needs_a_hot_pin_a_destination_under_the_band_and_no_dwell() 
         (sel.account.id.as_str(), sel.migrated),
         ("b", Some(MigrateReason::Utilization))
     );
-    assert!(writes.iter().any(
-        |w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at == Some(3_000))
-    ));
-    st.record_sample("b", sample(0.9, 0.3, 3_500));
-    st.record_sample("a", sample(0.1, 0.3, 3_500));
-    assert_eq!(
-        picked(
-            &select(
-                &mut st,
-                &s,
-                &request(
-                    &s,
-                    Some("s1"),
-                    "claude-sonnet-5",
-                    true,
-                    &[],
-                    3_000 + MIGRATE_DWELL_MS - 1
-                ),
-                &mut r
-            )
-            .0
-        ),
-        "b",
-        "inside the dwell the hot pin stays"
-    );
-    let (result, _) = select(
-        &mut st,
-        &s,
-        &request(
-            &s,
-            Some("s1"),
-            "claude-sonnet-5",
-            true,
-            &[],
-            3_000 + MIGRATE_DWELL_MS,
-        ),
-        &mut r,
-    );
-    let SelectResult::Selected(sel) = result else {
-        panic!()
-    };
-    assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("a", Some(MigrateReason::Utilization)),
-        "the dwell ends and the rule moves it back"
-    );
-    // A fresh, dwell-free pin isolates the two inequalities the band applies to each window: `a` sits at
+    // A fresh pin isolates the two inequalities the band applies to each window: `a` sits at
     // exactly the threshold throughout, so every call below also proves the pinned side of `>=` is inclusive.
     let mut edges = RoutingState::from_load(RoutingLoad::default());
     let mut r2 = rng();
@@ -2068,8 +1860,10 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         ("b", Some(MigrateReason::Spent))
     );
     assert!(
-        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
-        "a spent migration takes no dwell: {writes:?}"
+        writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b")),
+        "a spent migration writes a fresh pin onto the destination: {writes:?}"
     );
     // The reset branch: s1's pin already moved to b above, so a fresh session exercises the reset check on
     // the current account itself rather than on a sibling. Both picks share one `now` so the pin's own TTL
@@ -2243,7 +2037,7 @@ fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
     // b reads over the threshold, so the band refuses it as a utilization destination, and under 1.0, so it
-    // holds allowance; no dwell is running, the pin was never migrated.
+    // holds allowance.
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("b", refreshing(0.9, 9 * HOUR, 9 * HOUR, 1_500));
     let (result, writes) = pick(&mut st, 2_000);
@@ -2256,8 +2050,10 @@ fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
         "the band would keep the pin on a; the spent window moves it"
     );
     assert!(
-        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
-        "a spent migration takes no dwell: {writes:?}"
+        writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b")),
+        "a spent migration writes a fresh pin onto the destination: {writes:?}"
     );
 }
 
@@ -2542,8 +2338,10 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
         "the seven-day reading at 1.0 spends the shared plan as the five-hour one does"
     );
     assert!(
-        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b" && p.migrated_at.is_none())),
-        "a spent migration takes no dwell: {writes:?}"
+        writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::UpsertPin(p) if p.account_id == "b")),
+        "a spent migration writes a fresh pin onto the destination: {writes:?}"
     );
 }
 
@@ -2589,7 +2387,7 @@ fn purge_drops_a_round_robin_cursor_once_its_cohort_account_is_gone() {
 fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_group() {
     let s = snapshot(Pool {
         policy: OveragePolicy::Allow,
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::Priority,
         prefer_subscription: true,
         members: vec![("a", 0), ("b", 0)],
         ..Pool::default()

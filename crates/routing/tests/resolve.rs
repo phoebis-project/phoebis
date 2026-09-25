@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, OveragePolicy, PoolMember,
-    PoolRow, RegistryLoad, RulesMode, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, ModelRule, OveragePolicy,
+    PoolMember, PoolRow, RegistryLoad, RulesMode, Shedding, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -25,7 +25,7 @@ fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32)
         id: id.into(),
         label: id.into(),
         enabled,
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::Priority,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
@@ -34,7 +34,8 @@ fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32)
         keepalive_json: "{}".into(),
         body_capture_hours,
         prefer_subscription: false,
-        api_key_sub_strategy: SubStrategy::PriorityRandom,
+        shedding: Shedding::default(),
+        failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
         created_at: 0,
@@ -62,6 +63,7 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
+        in_flight_cap: None,
     }
 }
 
@@ -174,6 +176,7 @@ fn snapshot() -> RegistrySnapshot {
         ],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
+        terms: Vec::new(),
     };
     RegistrySnapshot::from_load(load, DIGEST_KEY, 1_000, 1)
 }

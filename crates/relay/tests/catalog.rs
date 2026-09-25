@@ -658,6 +658,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

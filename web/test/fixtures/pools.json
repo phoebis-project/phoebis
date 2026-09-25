@@ -6,10 +6,8 @@
         "id": "main",
         "label": "Main",
         "enabled": true,
-        "strategy": "least_utilized",
-        "api_key_sub_strategy": "priority_random",
-        "prefer_subscription": false,
-        "prefer_subscription_effective": true,
+        "strategy": "pace",
+        "prefer_subscription": true,
         "affinity_ttl_seconds": 600,
         "overage_policy": "prefer_plan",
         "migrate_above_utilization": null,
@@ -45,8 +43,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790301466915,
-        "updated_at": 1790301466915,
+        "created_at": 1790334384116,
+        "updated_at": 1790334384116,
         "members": [
           {
             "account_id": "business",
@@ -63,7 +61,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "WRsPTvyD",
+            "prefix": "5GkU9NZG",
             "enabled": true
           }
         ],

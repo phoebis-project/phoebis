@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import type { Account, ApiKey, ApiKeySubStrategy, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
+import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -14,7 +14,7 @@ import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, Er
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEEPALIVE_BOUNDS, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STRATEGY_LABEL, STRATEGY_RULE, SUB_STRATEGY_LABEL, kindOrdered, sampleDriven } from '@/lib/selection';
+import { STRATEGY_LABEL, STRATEGY_RULE, kindOrdered } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
@@ -459,7 +459,6 @@ type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends num
 
 interface PoolForm {
   affinity: number;
-  apiKeySubStrategy: ApiKeySubStrategy;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
@@ -487,7 +486,6 @@ const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === s
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
-  apiKeySubStrategy: 'priority_random',
   cacheDiagnostics: null,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
@@ -506,14 +504,13 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   status: 'active',
-  strategy: 'least_utilized',
+  strategy: 'pace',
   tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
   warmSubagents: true,
 });
 
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
-  apiKeySubStrategy: pool.apiKeySubStrategy,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
@@ -633,15 +630,12 @@ export function PoolDialog({
   );
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
   const rulesRefusal = modelRulesRefusal(form.modelRules);
-  // Read from the strategy the form holds, so switching the select moves the toggle with it.
-  const forced = sampleDriven(form.strategy);
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
   const input: PoolInput = {
     affinityTtlSeconds: form.affinity,
-    apiKeySubStrategy: form.apiKeySubStrategy,
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
@@ -655,8 +649,6 @@ export function PoolDialog({
     modelRules: form.modelRules,
     name: form.name.trim(),
     overagePolicy: form.overage,
-    // The stored answer, not the toggle's state: a sample-driven strategy draws it on, and sending that back
-    // would overwrite what the operator chose with what the strategy forced.
     preferSubscription: form.preferSubscription,
     selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
     status: form.status,
@@ -763,20 +755,8 @@ export function PoolDialog({
                 <span className="field__label">Prioritize subscription upstreams</span>
                 <p className="field__hint">Plan quota first, then upstreams in overage, then API keys; priority orders each of those groups.</p>
               </span>
-              <Toggle checked={form.preferSubscription || forced} disabled={forced} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
+              <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
             </div>
-            {forced && <p className="field__hint">Always on under {STRATEGY_LABEL[form.strategy]}: an API key has no usage sample to order by, so subscription upstreams go first.</p>}
-            {forced && (
-              <Field label="API key sub-strategy" hint="How the API-key group is ordered once every subscription upstream is out.">
-                <Select value={form.apiKeySubStrategy} onChange={(e) => set('apiKeySubStrategy', e.target.value as ApiKeySubStrategy)} aria-label="API key sub-strategy">
-                  {(Object.keys(SUB_STRATEGY_LABEL) as ApiKeySubStrategy[]).map((v) => (
-                    <option key={v} value={v}>
-                      {SUB_STRATEGY_LABEL[v]}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
           </div>
           <Field label="Session affinity" hint={form.customAffinity ? `${AFFINITY_HINT} ${AFFINITY_CUSTOM_HINT}` : AFFINITY_HINT}>
             <span className="chips" role="group" aria-label="Session affinity">

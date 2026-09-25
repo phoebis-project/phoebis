@@ -1,22 +1,18 @@
-import type { Account, ApiKeySubStrategy, MemberEligibility, Pool, PoolStrategy, Session } from '@/api/types';
+import type { Account, MemberEligibility, Pool, PoolStrategy, Session } from '@/api/types';
 import { windowOf } from '@/lib/quota';
 
 /** One sentence per strategy, shown in the dialog's hint and the card; a later strategy adds its entry here. */
 export const STRATEGY_RULE: Record<PoolStrategy, string> = {
-  earliest_refresh: 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one whose 7-day window resets soonest; ties are random.',
-  least_utilized: 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.',
-  priority_random: 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), any of them at random.',
-  round_robin: 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.',
+  pace: 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.',
+  priority: 'Within the first tier that has an eligible upstream, any of them at random.',
+  round_robin: 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.',
 };
-export const STRATEGY_LABEL: Record<PoolStrategy, string> = { earliest_refresh: 'Earliest refresh', least_utilized: 'Least utilized', priority_random: 'Priority, then random', round_robin: 'Round robin' };
-export const SUB_STRATEGY_LABEL: Record<ApiKeySubStrategy, string> = { priority_random: 'Priority, then random', round_robin: 'Round robin' };
+export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
 export const GROUP_LABEL = ['plan', 'overage', 'keys'] as const;
 
-/** The strategies that order by kind whatever the flag holds: an API key carries no usage sample to rank it by. */
-export const sampleDriven = (strategy: PoolStrategy) => strategy === 'earliest_refresh' || strategy === 'least_utilized';
-/** Whether selection walks the kind tiers for this pool, which is the flag the route resolved, not the stored one. */
-export const kindOrdered = (pool: Pool) => pool.preferSubscriptionEffective;
+/** Whether selection walks the kind tiers for this pool: the operator's answer alone. */
+export const kindOrdered = (pool: Pool) => pool.preferSubscription;
 export const RULE_NOTE = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
 
 /** Why the router skips a member: its own verdict, as the pool view reports it. */
@@ -38,13 +34,18 @@ export interface Tier {
   priority: number;
 }
 
-/** The sort key the strategy ranks an eligible account by; lower first. `priority_random` scores nothing. */
+/** Remaining weekly allowance over the hours until the window resets; an unsampled account counts as untouched,
+ * the full week's worth of it. */
+function paceScore(account: Account): number {
+  const w = windowOf(account, '7d');
+  const remaining = Math.max(1 - (w?.utilization ?? 0), 0);
+  const hours = w?.resetsAt ? Math.max((Date.parse(w.resetsAt) - Date.now()) / 3_600_000, 1 / 60) : 168;
+  return remaining / hours;
+}
+
+/** The sort key the strategy ranks an eligible account by; lower first. `priority` scores nothing. */
 function keyOf(account: Account, strategy: PoolStrategy): number {
-  if (strategy === 'least_utilized') return windowOf(account, '5h')?.utilization ?? 0;
-  if (strategy === 'earliest_refresh') {
-    const resetsAt = windowOf(account, '7d')?.resetsAt;
-    return resetsAt ? Date.parse(resetsAt) : Number.POSITIVE_INFINITY;
-  }
+  if (strategy === 'pace') return -paceScore(account);
   return 0;
 }
 
@@ -79,8 +80,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
           },
         ];
       });
-    // A sample-driven strategy has nothing to rank an API key by, so the key tier falls back to its own order.
-    const strategy: PoolStrategy = group === 2 && sampleDriven(pool.strategy) ? pool.apiKeySubStrategy : pool.strategy;
+    const strategy = pool.strategy;
     // The router's tier is (priority, deferred): plan-funded members rank ahead of deferred ones, then the
     // strategy orders inside each half; equal scores share a rank because the router draws among them at random.
     const eligible = placements
@@ -91,7 +91,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
     for (const p of eligible) {
       const score = keyOf(p.account, strategy);
       if (!previous || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
-      // Round robin and priority_random both score every member 0, so the rank only moves across the deferred
+      // Round robin and priority both score every member 0, so the rank only moves across the deferred
       // boundary: each member of a subtier is equally the next, and the router rotates the plan-funded subtier
       // on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
       p.rank = rank;

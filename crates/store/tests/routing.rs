@@ -1,10 +1,35 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, OverageRow, PinRow, RekeyWrite,
+    AccountKind, AccountRow, AccountState, CooldownRow, FitRow, OverageRow, PinRow, RekeyWrite,
     ResolutionRow, StorageKey, Store,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
 const DATED: &str = "claude-sonnet-4-5-20250929";
+
+/// A pin with the eight engine columns at unremarkable defaults, so a test that only cares about a handful of
+/// fields does not have to spell every one.
+fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow {
+    PinRow {
+        key_id: key_id.into(),
+        session_id: session_id.into(),
+        model: model.into(),
+        account_id: account_id.into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        key_generation: 1,
+        incarnation: 1,
+        burn: 0.0,
+        burn_at: None,
+        last_input_tokens: 0,
+        last_refresh_at: 1,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+    }
+}
 
 fn store_with(ids: &[&str]) -> Store {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
@@ -115,36 +140,59 @@ fn a_repeat_rejection_advances_the_set_time_under_the_standing_deadline() {
 #[test]
 fn pins_are_upserted_deleted_and_dropped_with_their_account() {
     let store = store_with(&["a", "b"]);
-    let pin = PinRow {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        model: "claude-sonnet-5".into(),
-        account_id: "a".into(),
-        epoch: 1,
-        created_at: 1,
-        last_used_at: 1,
-        migrated_at: None,
-        key_generation: 1,
-        incarnation: 1,
+    let seeded = PinRow {
+        burn: 12.5,
+        burn_at: Some(2),
+        last_input_tokens: 4_000,
+        last_refresh_at: 3,
+        cache_ttl_ms: 3_600_000,
+        shed_from: Some("c".into()),
+        shed_at: Some(4),
+        static_hash: Some("static-hash".into()),
+        tail_hash: Some("tail-hash".into()),
+        ..pin("k", "s", "claude-sonnet-5", "a")
     };
-    store.upsert_pin(&pin).unwrap();
+    store.upsert_pin(&seeded).unwrap();
     store
         .upsert_pin(&PinRow {
             account_id: "b".into(),
             epoch: 2,
             last_used_at: 9,
-            ..pin.clone()
+            ..seeded.clone()
         })
         .unwrap();
     let pins = store.load_routing().unwrap().pins;
+    assert_eq!(pins.len(), 1);
+    let row = &pins[0];
     assert_eq!(
         (
-            pins.len(),
-            pins[0].account_id.as_str(),
-            pins[0].epoch,
-            pins[0].last_used_at
+            row.account_id.as_str(),
+            row.epoch,
+            row.last_used_at,
+            row.burn,
+            row.burn_at,
+            row.last_input_tokens,
+            row.last_refresh_at,
+            row.cache_ttl_ms,
+            row.shed_from.as_deref(),
+            row.shed_at,
+            row.static_hash.as_deref(),
+            row.tail_hash.as_deref(),
         ),
-        (1, "b", 2, 9)
+        (
+            "b",
+            2,
+            9,
+            12.5,
+            Some(2),
+            4_000,
+            3,
+            3_600_000,
+            Some("c"),
+            Some(4),
+            Some("static-hash"),
+            Some("tail-hash"),
+        )
     );
     store.delete_account("b", "test").unwrap();
     assert!(
@@ -179,60 +227,14 @@ fn overage_evidence_only_moves_forward_in_time() {
 }
 
 #[test]
-fn a_pin_carries_when_it_last_migrated_for_utilization() {
-    let store = store_with(&["a", "b"]);
-    let pin = PinRow {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        model: "claude-sonnet-5".into(),
-        account_id: "a".into(),
-        epoch: 1,
-        created_at: 1,
-        last_used_at: 1,
-        migrated_at: None,
-        key_generation: 1,
-        incarnation: 1,
-    };
-    store.upsert_pin(&pin).unwrap();
-    store
-        .upsert_pin(&PinRow {
-            account_id: "b".into(),
-            epoch: 2,
-            migrated_at: Some(7),
-            ..pin.clone()
-        })
-        .unwrap();
-    assert_eq!(store.load_routing().unwrap().pins[0].migrated_at, Some(7));
-    store
-        .upsert_pin(&PinRow {
-            epoch: 3,
-            migrated_at: None,
-            ..pin
-        })
-        .unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins[0].migrated_at,
-        None,
-        "a fresh pin clears the dwell"
-    );
-}
-
-#[test]
 fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
     let store = store_with(&["a"]);
-    let pin = PinRow {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        model: "claude-sonnet-5".into(),
-        account_id: "a".into(),
-        epoch: 1,
-        created_at: 1,
-        last_used_at: 1,
-        migrated_at: None,
+    let seeded = PinRow {
         key_generation: 7,
         incarnation: 3,
+        ..pin("k", "s", "claude-sonnet-5", "a")
     };
-    store.upsert_pin(&pin).unwrap();
+    store.upsert_pin(&seeded).unwrap();
     store
         .upsert_cooldown(&CooldownRow {
             incarnation: 3,
@@ -262,7 +264,7 @@ fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
             epoch: 2,
             key_generation: 8,
             incarnation: 4,
-            ..pin
+            ..seeded
         })
         .unwrap();
     let load = store.load_routing().unwrap();
@@ -287,18 +289,7 @@ fn the_routing_rows_carry_the_holder_they_were_recorded_for() {
 }
 
 fn spelling_pin() -> PinRow {
-    PinRow {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        model: SPELLING.into(),
-        account_id: "a".into(),
-        epoch: 1,
-        created_at: 1,
-        last_used_at: 1,
-        migrated_at: None,
-        key_generation: 1,
-        incarnation: 1,
-    }
+    pin("k", "s", SPELLING, "a")
 }
 
 /// The rows one landing of the spelling's resolution moves: the pin and the model cooldown of account `a`, and
@@ -375,4 +366,36 @@ fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_
     assert_eq!(load.pins, rekey.upsert_pins);
     assert_eq!(load.cooldowns, rekey.upsert_cooldowns);
     assert_eq!(load.resolutions, vec![rekey.resolution]);
+}
+
+#[test]
+fn a_fit_row_round_trips_and_a_second_write_replaces_it() {
+    let store = store_with(&["a"]);
+    let fit = FitRow {
+        account_id: "a".into(),
+        window: "seven_day".into(),
+        scale: 1.0,
+        confidence: 0.5,
+        intervals: 3,
+        corrections_json: "{}".into(),
+        fitted_at: 1_000,
+        incarnation: 1,
+    };
+    store.upsert_fit(&fit).unwrap();
+    assert_eq!(store.fits().unwrap(), vec![fit.clone()]);
+    let refitted = FitRow {
+        scale: 2.0,
+        confidence: 0.9,
+        intervals: 5,
+        corrections_json: r#"{"claude-opus-5":1.1}"#.into(),
+        fitted_at: 2_000,
+        incarnation: 2,
+        ..fit
+    };
+    store.upsert_fit(&refitted).unwrap();
+    assert_eq!(
+        store.fits().unwrap(),
+        vec![refitted],
+        "a second write for the same account and window replaces it rather than adding a row"
+    );
 }

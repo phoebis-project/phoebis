@@ -19,8 +19,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, ModelRule, NewBundle,
-    OveragePolicy, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity, ModelRule, NewBundle,
+    OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -108,7 +108,7 @@ impl Default for PoolSpec {
             migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
-            strategy: Strategy::PriorityRandom,
+            strategy: Strategy::Priority,
         }
     }
 }
@@ -597,7 +597,8 @@ async fn build(
                     keepalive_json: "{}".into(),
                     body_capture_hours: 0,
                     prefer_subscription: false,
-                    api_key_sub_strategy: SubStrategy::PriorityRandom,
+                    shedding: Shedding::default(),
+                    failover: Failover::default(),
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
                     created_at: NOW,
@@ -637,6 +638,7 @@ async fn build(
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
+                    in_flight_cap: None,
                 },
                 "test",
             )

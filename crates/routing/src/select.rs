@@ -1,8 +1,6 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
-use phoebis_store::{
-    AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy, SubStrategy,
-};
+use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy};
 use rand::{Rng, RngExt};
 
 use crate::state::{PinRef, RoutingState, StateWrite, Tier};
@@ -34,8 +32,6 @@ pub enum MigrateReason {
 
 /// The hysteresis band under the migrate threshold: a destination counts only below `threshold - MIGRATE_BAND`.
 pub const MIGRATE_BAND: f64 = 0.05;
-/// How long the migrate rule leaves a pin alone after it moved for utilization.
-pub const MIGRATE_DWELL_MS: i64 = 300_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
@@ -106,7 +102,7 @@ fn window_of(canonical_model: &str) -> Window {
 }
 
 /// Whether an account can still serve a request for the model-scoped window. No sample, or a sample that never
-/// read that window, counts as allowance, the way `least_utilized` reads an unsampled account as a 0.
+/// read that window, counts as allowance, the way `Strategy::Pace` scores an unsampled account as untouched.
 ///
 /// A window read full excludes only while the reading stands for it: the reset the sample announced is the
 /// moment the window refunds, and a reading that announced none is worth no more than the interval the router
@@ -137,8 +133,8 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: Window, now: 
                 return true;
             };
             // The shared plan has two readings and either one at 1.0 means the upstream refuses the request
-            // until that window refunds; the `EarliestRefresh` arm reads the weekly reset for its own
-            // ordering, this reads both for the one question of whether the account can serve at all.
+            // until that window refunds; `Strategy::Pace` reads the weekly reset for its own ordering, this
+            // reads both for the one question of whether the account can serve at all.
             let standing = |reading: Option<f64>, reset: Option<i64>| {
                 reading.unwrap_or(0.0) >= 1.0
                     && match reset {
@@ -365,16 +361,9 @@ pub fn select(
             reason = Some(MigrateReason::Overage);
         }
         if let Some(threshold) = pool.migrate_above_utilization {
-            // A negative difference (a `migrated_at` ahead of the clock, from a backwards step) must not read
-            // as dwelling forever, so the range excludes it rather than only bounding the top.
-            let dwelling = current
-                .migrated_at
-                .is_some_and(|at| (0..MIGRATE_DWELL_MS).contains(&(request.now - at)));
-            let hot = !dwelling
-                && state.sample(&current.account_id).is_some_and(|s| {
-                    s.five_hour.unwrap_or(0.0) >= threshold
-                        || s.seven_day.unwrap_or(0.0) >= threshold
-                });
+            let hot = state.sample(&current.account_id).is_some_and(|s| {
+                s.five_hour.unwrap_or(0.0) >= threshold || s.seven_day.unwrap_or(0.0) >= threshold
+            });
             if hot {
                 let cool: Vec<&Candidate> = eligible
                     .iter()
@@ -497,7 +486,15 @@ pub fn select(
             selection_set = below;
         }
     }
-    let Some(chosen) = choose(state, snapshot, pool, window, &selection_set, rng) else {
+    let Some(chosen) = choose(
+        state,
+        snapshot,
+        pool,
+        window,
+        &selection_set,
+        request.now,
+        rng,
+    ) else {
         return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
     };
 
@@ -512,12 +509,20 @@ pub fn select(
             epoch,
             created_at: request.now,
             last_used_at: request.now,
-            migrated_at: (migrated == Some(MigrateReason::Utilization)).then_some(request.now),
             // The generation the relay admitted this request under, not the snapshot's: a key deleted and
             // created again under its id between admission and here must not stamp the new holder's
             // generation on a pin this request's old one is choosing.
             key_generation: request.key_generation,
             incarnation: chosen.incarnation,
+            burn: 0.0,
+            burn_at: None,
+            last_input_tokens: 0,
+            last_refresh_at: request.now,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
         };
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
@@ -630,12 +635,16 @@ fn selected_row(snapshot: &RegistrySnapshot, account_id: &str) -> AccountRow {
         .expect("a selected account is one the snapshot the selection ran against holds")
 }
 
+const WEEK_HOURS: f64 = 168.0;
+
+#[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     window: Window,
     set: &[&'a Candidate],
+    now: i64,
     rng: &mut impl Rng,
 ) -> Option<&'a Candidate> {
     let kind_ordered = pool.kind_ordered();
@@ -668,61 +677,36 @@ fn choose<'a>(
     };
     let first = set.iter().map(|c| key_of(c)).min()?;
     let tier: Vec<&Candidate> = set.iter().copied().filter(|c| key_of(c) == first).collect();
-    // The sub-strategy exists because a sample-driven strategy has no sample to order an api_key account by. An
-    // operator who chose round_robin or priority_random chose it for the whole pool, so group three takes that
-    // strategy and the stored sub-strategy waits for the day the pool goes sample-driven.
-    let sample_driven = matches!(
-        pool.strategy,
-        Strategy::EarliestRefresh | Strategy::LeastUtilized
-    );
-    let strategy = if kind_ordered && first.0 == 2 && sample_driven {
-        match pool.api_key_sub_strategy {
-            SubStrategy::PriorityRandom => Strategy::PriorityRandom,
-            SubStrategy::RoundRobin => Strategy::RoundRobin,
-        }
-    } else {
-        pool.strategy
-    };
-    match strategy {
-        Strategy::EarliestRefresh => {
-            let reset = |c: &Candidate| {
-                state.sample(&c.account_id).and_then(|s| match window {
-                    Window::Fable => s.fable_reset,
-                    Window::SevenDay => s.seven_day_reset,
-                })
+    match pool.strategy {
+        Strategy::Pace => {
+            // Remaining allowance over the hours until the window refunds it, so an account that resets sooner is
+            // spent first; a reading nobody sampled is a freshly reset account, remaining 1 over the full week.
+            let score = |c: &Candidate| -> f64 {
+                let sample = state.sample(&c.account_id);
+                let (reading, reset) = match window {
+                    Window::Fable => (
+                        sample.and_then(|s| s.fable),
+                        sample.and_then(|s| s.fable_reset),
+                    ),
+                    Window::SevenDay => (
+                        sample.and_then(|s| s.seven_day),
+                        sample.and_then(|s| s.seven_day_reset),
+                    ),
+                };
+                let remaining = (1.0 - reading.unwrap_or(0.0)).max(0.0);
+                let hours = reset
+                    .map(|r| ((r - now) as f64 / 3_600_000.0).max(1.0 / 60.0))
+                    .unwrap_or(WEEK_HOURS);
+                remaining / hours
             };
-            // A reset nobody has sampled is a reset infinitely far off, which puts the account holding it
-            // behind every account whose refund is dated.
-            let earliest = tier.iter().filter_map(|c| reset(c)).min();
-            let ties: Vec<&Candidate> = tier
+            let best = tier
                 .iter()
-                .copied()
-                .filter(|c| reset(c) == earliest)
-                .collect();
+                .map(|c| score(c))
+                .fold(f64::NEG_INFINITY, f64::max);
+            let ties: Vec<&Candidate> = tier.iter().copied().filter(|c| score(c) == best).collect();
             Some(ties[rng.random_range(0..ties.len())])
         }
-        Strategy::LeastUtilized => {
-            let utilization = |c: &Candidate| {
-                state
-                    .sample(&c.account_id)
-                    .and_then(|s| s.five_hour)
-                    .unwrap_or(0.0)
-            };
-            let lowest = tier
-                .iter()
-                .map(|c| utilization(c))
-                .fold(f64::INFINITY, f64::min);
-            let mut ties: Vec<&Candidate> = tier
-                .iter()
-                .copied()
-                .filter(|c| utilization(c) == lowest)
-                .collect();
-            if ties.is_empty() {
-                ties = tier;
-            }
-            Some(ties[rng.random_range(0..ties.len())])
-        }
-        Strategy::PriorityRandom => Some(tier[rng.random_range(0..tier.len())]),
+        Strategy::Priority => Some(tier[rng.random_range(0..tier.len())]),
         Strategy::RoundRobin => {
             // The cursor walks the tier's sorted ids, so an account's turn does not depend on the order
             // `resolve` happened to build the candidate list in.

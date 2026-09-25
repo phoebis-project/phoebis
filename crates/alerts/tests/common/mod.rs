@@ -21,8 +21,8 @@ use phoebis_ledger::{
 use phoebis_oauth::Clock;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, OveragePolicy, PoolRow,
-    RulesMode, Secret, StorageKey, Store, Strategy, SubStrategy,
+    AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, Failover, OveragePolicy,
+    PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 
 pub const NOW: i64 = 1_700_000_000_000;
@@ -180,7 +180,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 id: "main".into(),
                 label: "Main".into(),
                 enabled: true,
-                strategy: Strategy::PriorityRandom,
+                strategy: Strategy::Priority,
                 affinity_ttl_seconds: 3_600,
                 overage_policy: OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
@@ -189,7 +189,8 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 keepalive_json: r#"{"enabled":true,"probe_cost_cap_usd_per_day":1.0}"#.into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
-                api_key_sub_strategy: SubStrategy::PriorityRandom,
+                shedding: Shedding::default(),
+                failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
                 created_at: NOW,
@@ -226,6 +227,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

@@ -1,6 +1,6 @@
 use phoebis_store::{
-    ApiKeyRow, OveragePolicy, PoolRow, RetiredSecret, RulesMode, StorageKey, Store, Strategy,
-    SubStrategy, ROTATION_GRACE_MS,
+    ApiKeyRow, Failover, OveragePolicy, PoolRow, RetiredSecret, RulesMode, Shedding, StorageKey,
+    Store, Strategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -8,7 +8,7 @@ fn pool(id: &str) -> PoolRow {
         id: id.into(),
         label: id.into(),
         enabled: true,
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::Priority,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
@@ -17,7 +17,8 @@ fn pool(id: &str) -> PoolRow {
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
         prefer_subscription: false,
-        api_key_sub_strategy: SubStrategy::PriorityRandom,
+        shedding: Shedding::default(),
+        failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
         created_at: 1,
@@ -45,6 +46,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
+        in_flight_cap: None,
     }
 }
 

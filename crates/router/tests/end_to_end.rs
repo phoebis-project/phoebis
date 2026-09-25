@@ -320,7 +320,7 @@ usage:
     assert_eq!(
         client
             .post(admin("/pools"))
-            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "console", "priority": 0 }] }))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] }))
             .send()
             .await
             .unwrap()
@@ -612,7 +612,7 @@ usage:
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
 
-    // Distinct priorities give the first selection a deterministic winner: `least_utilized` only orders
+    // Distinct priorities give the first selection a deterministic winner: `pace` only orders
     // candidates within a tier, and each account here is alone in its own.
     for (id, secret) in [("a", "sk-ant-api03-AAAA"), ("b", "sk-ant-api03-BBBB")] {
         assert_eq!(
@@ -638,7 +638,7 @@ usage:
     assert_eq!(
         client
             .post(admin("/pools"))
-            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "least_utilized", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
             .send()
             .await
             .unwrap()
@@ -966,7 +966,7 @@ usage:
     assert_eq!(
         client
             .post(admin("/pools"))
-            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
             .send()
             .await
             .unwrap()
@@ -1393,7 +1393,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "body_capture_hours": 1, "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "body_capture_hours": 1, "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -1949,7 +1949,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     logged_in(&client, &admin("/session")).await;
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
     // A lead of 299 s on a five-minute entry puts the first probe one second after the request.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0 } })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0 } })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -2174,7 +2174,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority_random", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true } })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true } })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -2463,7 +2463,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
     // A lead of 299 s on a five-minute entry puts the first probe one second after the request, which is what
     // gives the pass a wasted probe to draw once the release below settles it.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "least_utilized", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0, "probe_cost_cap_usd_per_day": 4 }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0, "probe_cost_cap_usd_per_day": 4 }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -2814,7 +2814,7 @@ usage:
     );
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
     for (pool, account) in [("subs", "sub"), ("keys", "console")] {
-        assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": pool, "label": pool, "strategy": "priority_random", "members": [{ "account_id": account, "priority": 0 }] })).send().await.unwrap().status(), 201);
+        assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": pool, "label": pool, "strategy": "priority", "members": [{ "account_id": account, "priority": 0 }] })).send().await.unwrap().status(), 201);
     }
     // Cloned per call rather than captured by the async block directly: `client` is used again below, and a
     // closure invoked twice cannot move the same value out of its environment on each call.

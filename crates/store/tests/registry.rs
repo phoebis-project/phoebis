@@ -1,7 +1,7 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity, MemoryKey,
-    MemoryRecord, MemoryStore, ModelRule, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
-    Store, StoreError, Strategy, SubStrategy, SubscriptionRow,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover, Identity, MemoryKey,
+    MemoryRecord, MemoryStore, ModelRule, OveragePolicy, PoolRow, RulesMode, Secret, Shedding,
+    StorageKey, Store, StoreError, Strategy, SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -9,6 +9,37 @@ const UNDO_V24: &str = "ALTER TABLE accounts DROP COLUMN subscription_plan; \
      ALTER TABLE accounts DROP COLUMN subscription_tier; \
      ALTER TABLE accounts DROP COLUMN subscription_since; \
      ALTER TABLE accounts DROP COLUMN trial_ends_at;";
+// The exact reverse of `V25`, one statement per line so the marker on a line that restores an old name or
+// column ends at that line alone rather than commenting out the roll-back chain's next constant.
+const UNDO_V25: &str = r#"
+DROP TABLE plan_fits;
+ALTER TABLE accounts DROP COLUMN subscription_ends_at;
+ALTER TABLE accounts DROP COLUMN cancelled;
+ALTER TABLE api_keys DROP COLUMN in_flight_cap;
+ALTER TABLE pins DROP COLUMN tail_hash;
+ALTER TABLE pins DROP COLUMN static_hash;
+ALTER TABLE pins DROP COLUMN shed_at;
+ALTER TABLE pins DROP COLUMN shed_from;
+ALTER TABLE pins DROP COLUMN cache_ttl_ms;
+ALTER TABLE pins DROP COLUMN last_refresh_at;
+ALTER TABLE pins DROP COLUMN last_input_tokens;
+ALTER TABLE pins DROP COLUMN burn_at;
+ALTER TABLE pins DROP COLUMN burn;
+ALTER TABLE pins ADD COLUMN migrated_at INTEGER; -- rollback
+ALTER TABLE pools DROP COLUMN wind_down_minutes;
+ALTER TABLE pools DROP COLUMN overage_move_grace_minutes;
+ALTER TABLE pools DROP COLUMN pace_floor;
+ALTER TABLE pools DROP COLUMN in_flight_cap;
+ALTER TABLE pools DROP COLUMN retry_in_place_seconds;
+ALTER TABLE pools DROP COLUMN warm_sessions;
+ALTER TABLE pools DROP COLUMN migrate_when_spent;
+ALTER TABLE pools DROP COLUMN source_dwell_seconds;
+ALTER TABLE pools DROP COLUMN burn_window_seconds;
+ALTER TABLE pools DROP COLUMN shed_share;
+ALTER TABLE pools ADD COLUMN api_key_sub_strategy TEXT NOT NULL DEFAULT 'priority_random'; -- rollback
+UPDATE pools SET strategy = 'least_utilized' WHERE strategy = 'pace'; -- rollback
+UPDATE pools SET strategy = 'priority_random' WHERE strategy = 'priority'; -- rollback
+"#;
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
@@ -29,7 +60,7 @@ fn pool(id: &str) -> PoolRow {
         id: id.into(),
         label: id.into(),
         enabled: true,
-        strategy: Strategy::PriorityRandom,
+        strategy: Strategy::Priority,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
@@ -38,7 +69,8 @@ fn pool(id: &str) -> PoolRow {
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
         prefer_subscription: false,
-        api_key_sub_strategy: SubStrategy::PriorityRandom,
+        shedding: Shedding::default(),
+        failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
         created_at: 1,
@@ -66,6 +98,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
+        in_flight_cap: None,
     }
 }
 
@@ -100,19 +133,21 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     const UNDO_V17: &str = "ALTER TABLE api_keys DROP COLUMN retired_secret_last_used_at;";
     const UNDO_V13: &str = "ALTER TABLE pools DROP COLUMN cache_ttl_json; ALTER TABLE pools DROP COLUMN cache_diagnostics;";
     const UNDO_V12: &str = "";
-    const UNDO_V11: &str = "ALTER TABLE pools DROP COLUMN prefer_subscription; ALTER TABLE pools DROP COLUMN api_key_sub_strategy; ALTER TABLE pins DROP COLUMN migrated_at;";
+    // The trailing `\n` (a real newline, unlike the `\`-continued lines above) ends the marker's comment at
+    // this constant's own close, so the roll-back chain's next constant is not swallowed with it.
+    const UNDO_V11: &str = "ALTER TABLE pools DROP COLUMN prefer_subscription; ALTER TABLE pools DROP COLUMN api_key_sub_strategy; ALTER TABLE pins DROP COLUMN migrated_at; -- rollback\n";
     const UNDO_V9: &str = "ALTER TABLE cooldowns DROP COLUMN set_at;";
     const UNDO_V8: &str = "ALTER TABLE pools DROP COLUMN select_below_utilization;";
     const UNDO_V5: &str =
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 24);
+    assert_eq!(store.schema_version().unwrap(), 25);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        24,
+        25,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -126,7 +161,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -135,7 +170,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
+        25,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -164,14 +199,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
+        25,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -190,14 +225,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
+        25,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -209,14 +244,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
+        25,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -228,7 +263,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "DROP INDEX registry_changes_target; {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "DROP INDEX registry_changes_target; {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -236,7 +271,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
+        25,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -250,6 +285,72 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         .unwrap(),
         1,
         "and the index it was missing is there"
+    );
+}
+
+/// The pre-migration shape of two pools and a pin, seeded through the columns and strategy names `V25` maps
+/// away: a seed that restores the dropped shape plays the roll-back constant's role, so the sweep's marker
+/// covers it the same way.
+const SEED_PRE_V25: &str = r#"
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, prefer_subscription, created_at, updated_at) VALUES ('legacy', 'legacy', 1, 'least_utilized', 'prefer_plan', '{}', 0, 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, prefer_subscription, created_at, updated_at) VALUES ('random', 'random', 1, 'priority_random', 'prefer_plan', '{}', 0, 1, 1); -- rollback
+INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at) VALUES ('k', 's', 'm', 'legacy', 1, 1, 7, 5); -- rollback
+"#;
+
+#[test]
+fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_the_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    // The pin's account_id is a live foreign key, so the account exists before the rollback plants rows under it.
+    store
+        .insert_account(&account("legacy", AccountKind::Oauth))
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 25);
+    let pools = migrated.pools().unwrap();
+    let legacy = pools.iter().find(|p| p.id == "legacy").unwrap();
+    let random = pools.iter().find(|p| p.id == "random").unwrap();
+    assert_eq!(
+        legacy.strategy,
+        Strategy::Pace,
+        "the sample-driven strategy maps to the single one that replaces it"
+    );
+    assert_eq!(
+        random.strategy,
+        Strategy::Priority,
+        "the random pick keeps its rule under its new name"
+    );
+    assert!(
+        legacy.prefer_subscription && random.prefer_subscription,
+        "the migration turns the free toggle on for every existing pool"
+    );
+    assert_eq!(legacy.shedding, Shedding::default());
+    assert_eq!(legacy.failover, Failover::default());
+    let pin = migrated
+        .load_routing()
+        .unwrap()
+        .pins
+        .into_iter()
+        .find(|p| p.key_id == "k")
+        .unwrap();
+    assert_eq!(pin.burn, 0.0);
+    assert_eq!(pin.burn_at, None);
+    assert_eq!(
+        pin.last_refresh_at, 7,
+        "a pin from before the burn columns reads its last use as its last refresh"
+    );
+    assert_eq!(
+        (pin.shed_from, pin.shed_at, pin.static_hash, pin.tail_hash),
+        (None, None, None, None)
     );
 }
 
@@ -272,15 +373,15 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     // the version this migration reads from rather than rolled back through every later one.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
+        "{UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        24,
-        "the direct 23 to 24 open runs its migration"
+        25,
+        "the direct 23 to 25 open runs every migration between"
     );
     assert_eq!(
         migrated.subscription("a").unwrap().unwrap(),
@@ -296,6 +397,48 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     migrated.set_profile("a", "{}", &row).unwrap();
     assert_eq!(migrated.subscription("a").unwrap().unwrap(), row);
     assert_eq!(migrated.profile_json("a").unwrap().as_deref(), Some("{}"));
+}
+
+#[test]
+fn the_cancelled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_write() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    let revision = || store.account("a").unwrap().unwrap().revision;
+    let before = revision();
+    store.set_cancelled("a", true, Some(9_000)).unwrap();
+    assert!(revision() > before, "the write bumps the revision");
+    store
+        .set_profile(
+            "a",
+            "{}",
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1_000),
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    let term = store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (term.cancelled, term.ends_at, term.since),
+        (true, Some(9_000), Some(1_000)),
+        "the flag and its end are the operator's alone; the start is the profile's"
+    );
+    let after_profile = revision();
+    store.set_cancelled("a", false, Some(9_000)).unwrap();
+    assert!(
+        revision() > after_profile,
+        "clearing the flag bumps the revision too"
+    );
+    let term = store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (term.cancelled, term.ends_at),
+        (false, None),
+        "the end is dropped the moment the flag goes off, whatever end was passed"
+    );
 }
 
 #[test]
@@ -439,7 +582,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V24} \
+        "{UNDO_V25} {UNDO_V24} \
          DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -468,7 +611,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 24);
+    assert_eq!(migrated.schema_version().unwrap(), 25);
     migrated
         .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
         .unwrap();
@@ -616,7 +759,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         .update_pool(
             &PoolRow {
                 body_capture_hours: 24,
-                strategy: Strategy::EarliestRefresh,
+                strategy: Strategy::Pace,
                 select_below_utilization: Some(0.8),
                 model_rules: pool_rules.clone(),
                 ..pool("main")
@@ -651,7 +794,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         ),
         (
             24,
-            Strategy::EarliestRefresh,
+            Strategy::Pace,
             Some(0.8),
             pool_rules,
             Some(6),
@@ -668,7 +811,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             .iter()
             .find(|p| p.id == "main")
             .map(|p| (p.strategy, p.select_below_utilization)),
-        Some((Strategy::EarliestRefresh, Some(0.8))),
+        Some((Strategy::Pace, Some(0.8))),
         "and the load every reader starts from reads both back"
     );
     assert!(matches!(
@@ -914,44 +1057,26 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
 }
 
 #[test]
-fn a_pool_stores_round_robin_the_subscription_preference_and_the_sub_strategy() {
+fn a_pool_stores_round_robin_and_the_subscription_preference_is_the_operators_alone() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     let mut row = pool("rr");
     row.strategy = Strategy::RoundRobin;
     row.prefer_subscription = true;
-    row.api_key_sub_strategy = SubStrategy::RoundRobin;
     store.insert_pool(&row, "test").unwrap();
     let read = store.pool("rr").unwrap().unwrap();
     assert_eq!(
-        (
-            read.strategy,
-            read.prefer_subscription,
-            read.api_key_sub_strategy
-        ),
-        (Strategy::RoundRobin, true, SubStrategy::RoundRobin)
+        (read.strategy, read.prefer_subscription),
+        (Strategy::RoundRobin, true)
     );
     row.prefer_subscription = false;
-    row.api_key_sub_strategy = SubStrategy::PriorityRandom;
     store.update_pool(&row, "test").unwrap();
     let read = store.pool("rr").unwrap().unwrap();
-    assert_eq!(
-        (read.prefer_subscription, read.api_key_sub_strategy),
-        (false, SubStrategy::PriorityRandom)
+    assert!(
+        !read.prefer_subscription && !read.kind_ordered(),
+        "the flag is the operator's answer alone; no strategy overrides it"
     );
     let change = store.registry_changes_after(0, 10).unwrap().pop().unwrap();
-    assert!(
-        change.diff_json.contains(r#""prefer_subscription":false"#)
-            && change
-                .diff_json
-                .contains(r#""api_key_sub_strategy":"priority_random""#)
-    );
-    row.strategy = Strategy::LeastUtilized;
-    store.update_pool(&row, "test").unwrap();
-    let read = store.pool("rr").unwrap().unwrap();
-    assert!(
-        !read.prefer_subscription && read.kind_ordered(),
-        "the stored flag stays the operator's answer; the sample-driven strategy orders by kind regardless"
-    );
+    assert!(change.diff_json.contains(r#""prefer_subscription":false"#));
 }
 
 #[test]

@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
-use phoebis_store::{OveragePolicy, PoolMember, PoolRow, StoreError, Strategy, SubStrategy};
+use phoebis_store::{Failover, OveragePolicy, PoolMember, PoolRow, Shedding, StoreError, Strategy};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -28,6 +28,7 @@ struct MemberInput {
 }
 
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PoolInput {
     #[serde(default)]
     id: Option<String>,
@@ -59,8 +60,6 @@ struct PoolInput {
     members: Option<Vec<MemberInput>>,
     #[serde(default)]
     prefer_subscription: Option<bool>,
-    #[serde(default)]
-    api_key_sub_strategy: Option<String>,
 }
 
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
@@ -125,33 +124,19 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(strategy) = &input.strategy {
         row.strategy = match strategy.as_str() {
-            "earliest_refresh" => Strategy::EarliestRefresh,
-            "least_utilized" => Strategy::LeastUtilized,
-            "priority_random" => Strategy::PriorityRandom,
+            "pace" => Strategy::Pace,
+            "priority" => Strategy::Priority,
             "round_robin" => Strategy::RoundRobin,
             _ => {
                 return Err(failure(
                     StatusCode::BAD_REQUEST,
-                    "strategy must be earliest_refresh, least_utilized, priority_random, or round_robin",
+                    "strategy must be pace, priority, or round_robin",
                 ))
             }
         };
     }
-    if let Some(sub) = &input.api_key_sub_strategy {
-        row.api_key_sub_strategy = match sub.as_str() {
-            "priority_random" => SubStrategy::PriorityRandom,
-            "round_robin" => SubStrategy::RoundRobin,
-            _ => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "api_key_sub_strategy must be priority_random or round_robin",
-                ))
-            }
-        };
-    }
-    // The flag is the operator's answer and nothing else writes it: a sample-driven strategy orders by kind
-    // whatever it holds, and the pool answers both values so a strategy the operator tries out and takes back
-    // leaves the preference where they left it.
+    // The flag is the operator's answer and nothing else writes it: a pool orders by kind only while this is
+    // on, so a strategy the operator tries out and takes back leaves the preference where they left it.
     if let Some(prefer) = input.prefer_subscription {
         row.prefer_subscription = prefer;
     }
@@ -284,7 +269,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         id: id.clone(),
         label: String::new(),
         enabled: true,
-        strategy: Strategy::LeastUtilized,
+        strategy: Strategy::Pace,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
         migrate_above_utilization: None,
@@ -292,8 +277,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         model_rules: Vec::new(),
         keepalive_json: "{}".into(),
         body_capture_hours: 0,
-        prefer_subscription: false,
-        api_key_sub_strategy: SubStrategy::PriorityRandom,
+        prefer_subscription: true,
+        shedding: Shedding::default(),
+        failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
         created_at: now,
@@ -531,8 +517,8 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     };
     Ok(json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
-        "strategy": row.strategy.as_str(), "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
-        "prefer_subscription": row.prefer_subscription, "prefer_subscription_effective": row.kind_ordered(),
+        "strategy": row.strategy.as_str(),
+        "prefer_subscription": row.prefer_subscription,
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,

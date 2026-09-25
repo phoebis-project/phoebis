@@ -10,7 +10,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let created = post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
         Some(&cookie),
     )
     .await;
@@ -166,7 +166,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let with_policy = post(
         &app,
         "/admin/pools",
-        r#"{"id":"warm","label":"Warm","strategy":"priority_random","keepalive":{"enabled":true}}"#,
+        r#"{"id":"warm","label":"Warm","strategy":"priority","keepalive":{"enabled":true}}"#,
         Some(&cookie),
     )
     .await;
@@ -178,7 +178,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let refused = post(
         &app,
         "/admin/pools",
-        r#"{"id":"typo","label":"Typo","strategy":"priority_random","keepalive":{"warm_subagents":1}}"#,
+        r#"{"id":"typo","label":"Typo","strategy":"priority","keepalive":{"warm_subagents":1}}"#,
         Some(&cookie),
     )
     .await;
@@ -190,7 +190,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let quiet = post(
         &app,
         "/admin/pools",
-        r#"{"id":"quiet","label":"Quiet","strategy":"priority_random","keepalive":{"enabled":true,"warm_subagents":false}}"#,
+        r#"{"id":"quiet","label":"Quiet","strategy":"priority","keepalive":{"enabled":true,"warm_subagents":false}}"#,
         Some(&cookie),
     )
     .await;
@@ -199,7 +199,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let untouched = post(
         &app,
         "/admin/pools",
-        r#"{"id":"loud","label":"Loud","strategy":"priority_random","keepalive":{}}"#,
+        r#"{"id":"loud","label":"Loud","strategy":"priority","keepalive":{}}"#,
         Some(&cookie),
     )
     .await;
@@ -213,7 +213,7 @@ use phoebis_keepalive::Event;
 async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_discards_them() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -445,7 +445,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
 async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_only() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -608,7 +608,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
 async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_is_refused() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -722,7 +722,7 @@ fn every_engine_reason_maps_onto_the_view_vocabulary() {
 async fn an_ended_session_is_listed_without_a_companion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -790,7 +790,7 @@ async fn an_ended_session_is_listed_without_a_companion() {
 async fn a_probe_leaves_the_keys_last_used_at_alone() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     parts.router.reload().await.unwrap();
     let created = json(
         post(

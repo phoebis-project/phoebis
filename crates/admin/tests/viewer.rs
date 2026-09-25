@@ -38,7 +38,7 @@ const GETS: &[&str] = &[
 async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutation() {
     let parts = common::admin_parts_full().await;
     let admin = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&admin)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&admin)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -225,7 +225,7 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
         (
             "POST",
             "/admin/pools".into(),
-            r#"{"id":"p2","label":"p2","strategy":"priority_random"}"#,
+            r#"{"id":"p2","label":"p2","strategy":"priority"}"#,
         ),
         ("PATCH", "/admin/pools/main".into(), "{}"),
         ("DELETE", "/admin/pools/main".into(), ""),

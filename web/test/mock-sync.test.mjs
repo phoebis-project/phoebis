@@ -95,7 +95,6 @@ const CLOSED = {
   keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },
   pools: {
-    '[].apiKeySubStrategy': d.SUB_STRATEGY_VALUES,
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
     '[].overagePolicy': d.OVERAGE_POLICY_VALUES,
     '[].status': d.POOL_STATUS_VALUES,

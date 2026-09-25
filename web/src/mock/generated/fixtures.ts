@@ -393,11 +393,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "trigger": "hash"
           },
-          "id": "evt_2c025e3fd8156076",
+          "id": "evt_5eef76e51870a1db",
           "kind": "client_drift",
           "opened_at": 1000000,
           "resolved_at": null,
-          "rule_id": "rule_8b636e499f979871",
+          "rule_id": "rule_8dc2f056008d57c9",
           "state": "open",
           "subject": "client 2.1.274"
         }
@@ -422,7 +422,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "event": "session_started",
           "id": 4,
           "kind": "session_active",
-          "rule_id": "rule_eb7262981c1a0293",
+          "rule_id": "rule_2fd3089e15918cfa",
           "state": "event",
           "status": 200,
           "subject": "desktop, session e2e-ui"
@@ -438,7 +438,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": false,
           "has_secret": false,
-          "id": "rule_8b636e499f979871",
+          "id": "rule_8dc2f056008d57c9",
           "kind": "client_drift",
           "scope": {
             "id": null,
@@ -453,7 +453,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": true,
-          "id": "rule_742263db0ab83ded",
+          "id": "rule_e3f664b2b7212c6d",
           "kind": "utilization_above",
           "scope": {
             "id": "main",
@@ -2585,7 +2585,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -2686,7 +2686,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -2888,7 +2888,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -3091,7 +3091,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "key_id": "desktop",
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "next_probe_at": 1238204,
+          "next_probe_at": 1236283,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -3122,8 +3122,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "keepalive_opt_out": false,
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
-      "prefix": "WRsPTvyD",
-      "created_at": 1790301466917,
+      "prefix": "5GkU9NZG",
+      "created_at": 1790334384118,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -3186,8 +3186,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive_opt_out": false,
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
-          "prefix": "WRsPTvyD",
-          "created_at": 1790301466917,
+          "prefix": "5GkU9NZG",
+          "created_at": 1790334384118,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
@@ -3950,9 +3950,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "2tYaZdnGI8Hqv9jDZHNEDkYWtSDQXJ28qvy_8VNJX8U",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A58126%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=BHEi8onZD6HnQ13U5eOMauaHQ_SKHbkedCJgpv7Sd5M&code_challenge_method=S256&state=dqnVcdsXFwzuVFY2IFmUtMsmN6ds66c-hsrHcYN2xRw",
-      "redirect_uri": "http://localhost:58126/callback",
+      "id": "yT-h7NCgKEmvUDVS2j5OeHnLb4TdT92TNE0bU8aDlvI",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60991%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=ovSiZREzWXuyEh2ABSa6NUvBwoQPkdGN8iWD2g4CXug&code_challenge_method=S256&state=ynZP2raAlupqQx1Ake5oDS892NorP8lW_lrVU-3nz9I",
+      "redirect_uri": "http://localhost:60991/callback",
       "expires_at": 1600000
     }
   },
@@ -4150,10 +4150,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "id": "main",
           "label": "Main",
           "enabled": true,
-          "strategy": "least_utilized",
-          "api_key_sub_strategy": "priority_random",
-          "prefer_subscription": false,
-          "prefer_subscription_effective": true,
+          "strategy": "pace",
+          "prefer_subscription": true,
           "affinity_ttl_seconds": 600,
           "overage_policy": "prefer_plan",
           "migrate_above_utilization": null,
@@ -4189,8 +4187,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cache_diagnostics": null,
           "body_capture_hours": 24,
-          "created_at": 1790301466915,
-          "updated_at": 1790301466915,
+          "created_at": 1790334384116,
+          "updated_at": 1790334384116,
           "members": [
             {
               "account_id": "business",
@@ -4207,7 +4205,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "WRsPTvyD",
+              "prefix": "5GkU9NZG",
               "enabled": true
             }
           ],
@@ -4435,7 +4433,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "pricing_import": {
     "route": "POST /admin/pricing/import",
     "body": {
-      "token": "imp_08fc49de3ecfb340ceb2eee8a786b2ec",
+      "token": "imp_ec88c031318e6e49bd39afc70fc5c519",
       "format": "litellm",
       "in_file": 1,
       "served": 1,
@@ -4468,7 +4466,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790301466917,
+        "key_generation": 1790334384118,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -4699,7 +4697,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -4800,7 +4798,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -5002,7 +5000,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5145,7 +5143,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/session",
     "body": {
       "role": "admin",
-      "session_id": "X-Rl9YU6mt1stqR1DDqctVlJG2PuZwkr85nZxzYFW3Y"
+      "session_id": "PyfnwRKWIPaxeyAh1YvTuetd5gww69piD_yadv6FWlI"
     }
   },
   "sessions": {
@@ -5154,7 +5152,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "session_id": "s1",
           "model": "claude-sonnet-5",
           "account_id": "business",
@@ -5168,14 +5166,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
-            "next_probe_at": 1238204,
+            "next_probe_at": 1236283,
             "state": "busy"
           },
           "historical": false
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790301466917,
+          "key_generation": 1790334384118,
           "session_id": "s2",
           "model": "claude-sonnet-5",
           "account_id": "business",

@@ -8,8 +8,8 @@ use phoebis_routing::{
     RouterConfig, SelectRequest, SelectResult, UtilizationSample,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, ModelRule,
-    OveragePolicy, PoolRow, RulesMode, StorageKey, Store, Strategy, SubStrategy,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, ModelRule,
+    OveragePolicy, PoolRow, RulesMode, Shedding, StorageKey, Store, Strategy,
 };
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 
@@ -47,7 +47,7 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 id: "p".into(),
                 label: "p".into(),
                 enabled: true,
-                strategy: Strategy::PriorityRandom,
+                strategy: Strategy::Priority,
                 affinity_ttl_seconds: 3600,
                 overage_policy: OveragePolicy::PreferPlan,
                 migrate_above_utilization: None,
@@ -56,7 +56,8 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
-                api_key_sub_strategy: SubStrategy::PriorityRandom,
+                shedding: Shedding::default(),
+                failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
                 created_at: 0,
@@ -93,6 +94,7 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )
@@ -1183,6 +1185,7 @@ fn insert_key_k(store: &Store) {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

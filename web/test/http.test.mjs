@@ -202,7 +202,6 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   const calls = stub(() => answer(200, row));
   await new HttpApi().updatePool('main', {
     affinityTtlSeconds: 600,
-    apiKeySubStrategy: 'priority_random',
     bodyCaptureHours: 0,
     cacheDiagnostics: null,
     cacheTtl: { enabled: false, inOverage: null, main: '1h', models: [], subagent: '5m' },
@@ -215,7 +214,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     preferSubscription: false,
     selectBelowUtilization: 0.4,
     status: 'active',
-    strategy: 'least_utilized',
+    strategy: 'pace',
   });
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['PATCH', '/admin/pools/main']], 'a second write could fail after the first landed');
   const body = JSON.parse(calls[0].init.body);

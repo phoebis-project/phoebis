@@ -600,7 +600,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
             trial_ends_at: Some(1_790_899_200_000),
         },
     ).unwrap();
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":2}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":2}]}"#, Some(&cookie)).await;
     let bucket = phoebis_ledger::bucket_of(now - 60_000);
     parts
         .db

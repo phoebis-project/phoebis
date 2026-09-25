@@ -553,7 +553,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             .status(),
         404
     );
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
     for i in 0..5 {
         parts.ledger.record(record(
             &format!("t{i}"),
@@ -637,7 +637,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     // the pins are written through one harness and the store is handed to the one under test.
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
-    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
     post(
         &seed.app,
         "/admin/keys",
@@ -656,9 +656,17 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 epoch: 1,
                 created_at: now - 10,
                 last_used_at: now - 5,
-                migrated_at: None,
                 key_generation: common::generation(&seed.store, "desktop"),
                 incarnation: 1,
+                burn: 0.0,
+                burn_at: None,
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
             })
             .unwrap();
     }

@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 
 use crate::{Store, StoreError, LOCK_POISONED};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PinRow {
     pub key_id: String,
     pub session_id: String,
@@ -13,12 +13,25 @@ pub struct PinRow {
     pub epoch: u64,
     pub created_at: i64,
     pub last_used_at: i64,
-    /// When the migrate rule last moved this pin for utilization; the dwell reads it.
-    pub migrated_at: Option<i64>,
     /// The key's `created_at` and the account's incarnation when the pin was made: both ids are reusable, and
     /// a pin is only ever the holders' it was made for.
     pub key_generation: i64,
     pub incarnation: u64,
+    /// The moving average of priced burn over the pool's burn window (meter tokens on a subscription account,
+    /// dollars on an api_key account) and when it was last folded; 0 and `None` for a pin never renewed with
+    /// usage.
+    pub burn: f64,
+    pub burn_at: Option<i64>,
+    pub last_input_tokens: u64,
+    /// The last main, subagent or compaction turn; `last_used_at` moves on every request, this does not.
+    pub last_refresh_at: i64,
+    /// The cache TTL in force at the last refresh, as the relay resolved it (the policy's rewrite, else the
+    /// client's own marker), so warmth is judged here without the relay's policy type; 5 minutes until reported.
+    pub cache_ttl_ms: i64,
+    pub shed_from: Option<String>,
+    pub shed_at: Option<i64>,
+    pub static_hash: Option<String>,
+    pub tail_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,9 +68,23 @@ pub struct ResolutionRow {
     pub resolved_at: i64,
 }
 
+/// The live fit of one window's size for one account, in meter tokens per full window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FitRow {
+    pub account_id: String,
+    pub window: String,
+    pub scale: f64,
+    pub confidence: f64,
+    pub intervals: u32,
+    /// Per-model correction factors as a JSON object, `{}` while the mix never varied.
+    pub corrections_json: String,
+    pub fitted_at: i64,
+    pub incarnation: u64,
+}
+
 /// One landing of a resolution: the spelling row and every pin and model cooldown it moves from the spelling to
 /// the dated id.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RekeyWrite {
     pub resolution: ResolutionRow,
     /// `(key_id, session_id, model)` of each pin under the spelling.
@@ -71,6 +98,7 @@ pub struct RekeyWrite {
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
     pub cooldowns: Vec<CooldownRow>,
+    pub fits: Vec<FitRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
@@ -87,11 +115,25 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at, key_generation, incarnation FROM pins ORDER BY key_id, session_id, model")?
-                .query_map([], |r| Ok(PinRow { key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?, epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?, migrated_at: r.get(7)?, key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64 }))?
+            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash FROM pins ORDER BY key_id, session_id, model")?
+                .query_map([], |r| Ok(PinRow {
+                    key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?,
+                    epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?,
+                    key_generation: r.get(7)?, incarnation: r.get::<_, i64>(8)? as u64,
+                    burn: r.get(9)?, burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
+                    last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
+                    shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
+                }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
                 .query_map([], |r| Ok(ResolutionRow { spelling: r.get(0)?, dated_id: r.get(1)?, resolved_at: r.get(2)? }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            fits: tx.prepare("SELECT account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation FROM plan_fits ORDER BY account_id, window")?
+                .query_map([], |r| Ok(FitRow {
+                    account_id: r.get(0)?, window: r.get(1)?, scale: r.get(2)?, confidence: r.get(3)?,
+                    intervals: r.get::<_, i64>(4)? as u32, corrections_json: r.get(5)?,
+                    fitted_at: r.get(6)?, incarnation: r.get::<_, i64>(7)? as u64,
+                }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -188,12 +230,86 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    pub fn upsert_fit(&self, row: &FitRow) -> Result<(), StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.execute(
+            "INSERT INTO plan_fits (account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(account_id, window) DO UPDATE SET \
+               scale = excluded.scale, confidence = excluded.confidence, intervals = excluded.intervals, \
+               corrections_json = excluded.corrections_json, fitted_at = excluded.fitted_at, \
+               incarnation = excluded.incarnation",
+            params![
+                row.account_id,
+                row.window,
+                row.scale,
+                row.confidence,
+                row.intervals as i64,
+                row.corrections_json,
+                row.fitted_at,
+                row.incarnation as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn fits(&self) -> Result<Vec<FitRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let rows = conn
+            .prepare(
+                "SELECT account_id, window, scale, confidence, intervals, corrections_json, fitted_at, incarnation \
+                 FROM plan_fits ORDER BY account_id, window",
+            )?
+            .query_map([], |r| {
+                Ok(FitRow {
+                    account_id: r.get(0)?,
+                    window: r.get(1)?,
+                    scale: r.get(2)?,
+                    confidence: r.get(3)?,
+                    intervals: r.get::<_, i64>(4)? as u32,
+                    corrections_json: r.get(5)?,
+                    fitted_at: r.get(6)?,
+                    incarnation: r.get::<_, i64>(7)? as u64,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
 }
 
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
-    conn.execute("INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, migrated_at, key_generation, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
-         ON CONFLICT(key_id, session_id, model) DO UPDATE SET account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, last_used_at = excluded.last_used_at, migrated_at = excluded.migrated_at, key_generation = excluded.key_generation, incarnation = excluded.incarnation",
-        params![pin.key_id, pin.session_id, pin.model, pin.account_id, pin.epoch as i64, pin.created_at, pin.last_used_at, pin.migrated_at, pin.key_generation, pin.incarnation as i64])?;
+    conn.execute(
+        "INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
+         ON CONFLICT(key_id, session_id, model) DO UPDATE SET \
+           account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
+           last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
+           incarnation = excluded.incarnation, burn = excluded.burn, burn_at = excluded.burn_at, \
+           last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
+           cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
+           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash",
+        params![
+            pin.key_id,
+            pin.session_id,
+            pin.model,
+            pin.account_id,
+            pin.epoch as i64,
+            pin.created_at,
+            pin.last_used_at,
+            pin.key_generation,
+            pin.incarnation as i64,
+            pin.burn,
+            pin.burn_at,
+            pin.last_input_tokens as i64,
+            pin.last_refresh_at,
+            pin.cache_ttl_ms,
+            pin.shed_from,
+            pin.shed_at,
+            pin.static_hash,
+            pin.tail_hash
+        ],
+    )?;
     Ok(())
 }
 

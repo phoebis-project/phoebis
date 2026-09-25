@@ -5,7 +5,7 @@ use common::{delete, get, json, login, patch, post, put};
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    let created = post(&app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":1},{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    let created = post(&app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":1},{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
     assert_eq!(created.status(), 201);
     let body = json(created).await;
     assert_eq!(
@@ -24,7 +24,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"main","label":"x","strategy":"priority_random"}"#,
+            r#"{"id":"main","label":"x","strategy":"priority"}"#,
             Some(&cookie)
         )
         .await
@@ -46,7 +46,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"least_utilized","affinity_ttl_seconds":30}"#,
+            r#"{"id":"p2","label":"x","strategy":"pace","affinity_ttl_seconds":30}"#,
             Some(&cookie)
         )
         .await
@@ -54,23 +54,43 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         400,
         "affinity is 0 or at least 60"
     );
-    assert_eq!(post(&app, "/admin/pools", r#"{"id":"p2","label":"x","strategy":"least_utilized","migrate_above_utilization":1.5}"#, Some(&cookie)).await.status(), 400);
     assert_eq!(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"least_utilized","select_below_utilization":1.5}"#,
+            r#"{"id":"p2","label":"x","strategy":"pace","migrate_above_utilization":1.5}"#,
             Some(&cookie)
         )
         .await
         .status(),
         400
     );
-    assert_eq!(post(&app, "/admin/pools", r#"{"id":"p2","label":"x","strategy":"least_utilized","select_below_utilization":-0.1}"#, Some(&cookie)).await.status(), 400);
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"p2","label":"x","strategy":"pace","select_below_utilization":1.5}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"p2","label":"x","strategy":"pace","select_below_utilization":-0.1}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400
+    );
     let refreshing = post(
         &app,
         "/admin/pools",
-        r#"{"id":"p3","label":"x","strategy":"earliest_refresh","select_below_utilization":1}"#,
+        r#"{"id":"p3","label":"x","strategy":"pace","select_below_utilization":1}"#,
         Some(&cookie),
     )
     .await;
@@ -85,7 +105,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
             body["strategy"].as_str(),
             body["select_below_utilization"].as_f64()
         ),
-        (Some("earliest_refresh"), Some(1.0))
+        (Some("pace"), Some(1.0))
     );
     let lowered = patch(
         &app,
@@ -121,7 +141,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"least_utilized","body_capture_hours":100}"#,
+            r#"{"id":"p2","label":"x","strategy":"pace","body_capture_hours":100}"#,
             Some(&cookie)
         )
         .await
@@ -260,7 +280,7 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
     post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random","body_capture_hours":12}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority","body_capture_hours":12}"#,
         Some(&cookie),
     )
     .await;
@@ -431,7 +451,7 @@ async fn the_key_list_counts_live_sessions_still_on_the_secret_a_rotation_retire
     post(
         &parts.app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
         Some(&cookie),
     )
     .await;
@@ -558,7 +578,7 @@ async fn a_revoke_whose_reload_fails_answers_503_and_the_old_secret_is_refused_o
     post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
         Some(&cookie),
     )
     .await;
@@ -613,7 +633,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
     post(
         &first,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
         Some(&cookie),
     )
     .await;
@@ -638,9 +658,17 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
                 epoch,
                 created_at: common::NOW - 10_000,
                 last_used_at,
-                migrated_at: None,
                 key_generation: common::generation(&store, "k"),
                 incarnation: 1,
+                burn: 0.0,
+                burn_at: None,
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
             })
             .unwrap();
     }
@@ -673,7 +701,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 id: "main".into(),
                 label: "Main".into(),
                 enabled: true,
-                strategy: phoebis_store::Strategy::PriorityRandom,
+                strategy: phoebis_store::Strategy::Priority,
                 affinity_ttl_seconds: 3_600,
                 overage_policy: phoebis_store::OveragePolicy::Allow,
                 migrate_above_utilization: None,
@@ -682,7 +710,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
-                api_key_sub_strategy: phoebis_store::SubStrategy::PriorityRandom,
+                shedding: phoebis_store::Shedding::default(),
+                failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
                 created_at: common::NOW,
@@ -712,6 +741,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )
@@ -725,9 +755,17 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             epoch: 3,
             created_at: common::NOW - 10,
             last_used_at: common::NOW - 5,
-            migrated_at: None,
             key_generation: common::generation(&store, "k"),
             incarnation: 1,
+            burn: 0.0,
+            burn_at: None,
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
         })
         .unwrap();
     store
@@ -739,9 +777,17 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             epoch: 2,
             created_at: 0,
             last_used_at: common::NOW - 90_000_000,
-            migrated_at: None,
             key_generation: common::generation(&store, "k"),
             incarnation: 1,
+            burn: 0.0,
+            burn_at: None,
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
         })
         .unwrap();
     // A second app over the same store: its router task loads the pins the first one never saw.
@@ -784,7 +830,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
     post(
         &parts.app,
         "/admin/keys",
@@ -901,7 +947,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
 async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
     parts.router.report(phoebis_routing::Report::Overage {
         account_id: "direct".into(),
         evidence: phoebis_routing::OverageEvidence {
@@ -961,8 +1007,7 @@ async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
 }
 
 #[tokio::test]
-async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_through_a_strategy_change(
-) {
+async fn a_pool_defaults_to_pace_with_the_kind_order_on_and_the_flag_is_the_operators_alone() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let created = post(
@@ -974,58 +1019,13 @@ async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_throu
     .await;
     assert_eq!(created.status(), 201);
     let body = json(created).await;
-    let flags = |v: &serde_json::Value| {
-        (
-            v["prefer_subscription"].as_bool(),
-            v["prefer_subscription_effective"].as_bool(),
-        )
-    };
     assert_eq!(
         (
             body["strategy"].as_str(),
-            body["api_key_sub_strategy"].as_str(),
-            flags(&body)
+            body["prefer_subscription"].as_bool()
         ),
-        (
-            Some("least_utilized"),
-            Some("priority_random"),
-            (Some(false), Some(true))
-        ),
-        "nobody asked for the kind order; the sample-driven default runs under it anyway"
-    );
-    let on = json(
-        patch(
-            &app,
-            "/admin/pools/dflt",
-            r#"{"prefer_subscription":true}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(flags(&on), (Some(true), Some(true)));
-    let edited = json(
-        patch(
-            &app,
-            "/admin/pools/dflt",
-            r#"{"strategy":"round_robin","api_key_sub_strategy":"round_robin"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        (
-            edited["strategy"].as_str(),
-            edited["api_key_sub_strategy"].as_str(),
-            flags(&edited)
-        ),
-        (
-            Some("round_robin"),
-            Some("round_robin"),
-            (Some(true), Some(true))
-        ),
-        "the strategy patch leaves the operator's own answer standing, and the sub-strategy is stored whatever the strategy"
+        (Some("pace"), Some(true)),
+        "a fresh pool starts on pace with the kind order already on"
     );
     let off = json(
         patch(
@@ -1037,36 +1037,24 @@ async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_throu
         .await,
     )
     .await;
-    assert_eq!(
-        flags(&off),
-        (Some(false), Some(false)),
-        "under round_robin the flag is the operator's to clear"
-    );
-    let back = json(
+    assert_eq!(off["prefer_subscription"].as_bool(), Some(false));
+    let edited = json(
         patch(
             &app,
             "/admin/pools/dflt",
-            r#"{"strategy":"least_utilized"}"#,
+            r#"{"strategy":"round_robin"}"#,
             Some(&cookie),
         )
         .await,
     )
     .await;
     assert_eq!(
-        flags(&back),
-        (Some(false), Some(true)),
-        "and back: the stored false survives, the effective order is forced"
-    );
-    assert_eq!(
-        patch(
-            &app,
-            "/admin/pools/dflt",
-            r#"{"api_key_sub_strategy":"earliest_refresh"}"#,
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        400
+        (
+            edited["strategy"].as_str(),
+            edited["prefer_subscription"].as_bool()
+        ),
+        (Some("round_robin"), Some(false)),
+        "the strategy patch leaves the operator's flag standing"
     );
     assert_eq!(
         post(&app, "/admin/pools", r#"{"id":"nolabel"}"#, Some(&cookie))
@@ -1077,14 +1065,64 @@ async fn a_pool_defaults_to_least_utilized_and_keeps_the_stored_preference_throu
 }
 
 #[tokio::test]
-async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag_and_its_effect() {
+async fn a_pool_refuses_an_old_strategy_name_and_the_sub_strategy_field_is_unknown() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"legacy","label":"x","strategy":"least_utilized"}"#, // refused name
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("strategy must be pace, priority, or round_robin")
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main2","label":"Main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(
+        patch(
+            &app,
+            "/admin/pools/main2",
+            r#"{"api_key_sub_strategy":"round_robin"}"#, // refused name
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        400,
+        "the sub-strategy field no longer exists"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let pool = listed["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main2")
+        .unwrap();
+    let carries_sub_strategy = pool.get("api_key_sub_strategy").is_some(); // refused name
+    let carries_effective_flag = pool.get("prefer_subscription_effective").is_some(); // refused name
+    assert!(
+        !carries_sub_strategy && !carries_effective_flag,
+        "a GET carries neither removed field"
+    );
+}
+
+#[tokio::test]
+async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let flags = |v: &serde_json::Value| {
         (
             v["strategy"].as_str().map(str::to_owned),
             v["prefer_subscription"].as_bool(),
-            v["prefer_subscription_effective"].as_bool(),
         )
     };
     let preferred = post(&app, "/admin/pools", r#"{"id":"rotating","label":"Rotating","strategy":"round_robin","prefer_subscription":true,"members":[{"account_id":"direct","priority":0},{"account_id":"business","priority":1}]}"#, Some(&cookie)).await;
@@ -1092,19 +1130,20 @@ async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag_an
     let rr = Some("round_robin".to_owned());
     assert_eq!(
         flags(&json(preferred).await),
-        (rr.clone(), Some(true), Some(true)),
-        "a strategy that reads no sample orders by kind only because the operator asked for it"
+        (rr.clone(), Some(true)),
+        "the operator's flag is answered as stored"
     );
     let plain = post(
         &app,
         "/admin/pools",
-        r#"{"id":"plain","label":"Plain","strategy":"round_robin"}"#,
+        r#"{"id":"plain","label":"Plain","strategy":"round_robin","prefer_subscription":false}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(
         flags(&json(plain).await),
-        (rr.clone(), Some(false), Some(false))
+        (rr.clone(), Some(false)),
+        "the flag is explicit either way"
     );
     let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
     let stored = listed["pools"]
@@ -1116,35 +1155,8 @@ async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag_an
         .unwrap();
     assert_eq!(
         flags(&stored),
-        (rr, Some(true), Some(true)),
+        (rr, Some(true)),
         "the create stored the flag rather than answering it once"
-    );
-}
-
-#[tokio::test]
-async fn an_unknown_api_key_sub_strategy_on_create_is_refused() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let refused = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"odd","label":"Odd","api_key_sub_strategy":"least_utilized"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"],
-        "api_key_sub_strategy must be priority_random or round_robin"
-    );
-    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
-    assert!(
-        listed["pools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|p| p["id"] != "odd"),
-        "a refused create stores no pool"
     );
 }
 
@@ -1240,7 +1252,7 @@ async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
     post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random"}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
         Some(&cookie),
     )
     .await;
@@ -1301,7 +1313,7 @@ async fn a_pool_patch_carrying_members_applies_both_or_refuses_before_the_policy
     let created = post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"direct","priority":1}]}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":1}]}"#,
         Some(&cookie),
     )
     .await;

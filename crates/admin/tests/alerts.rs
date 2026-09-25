@@ -7,7 +7,7 @@ use common::{delete, get, json, login, patch, post};
 async fn rules_are_created_validated_edited_tested_and_deleted_without_leaking_the_secret() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority_random","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
     let created = post(&parts.app, "/admin/alerts/rules", r#"{"kind":"utilization_above","scope":{"type":"pool","id":"main"},"threshold":0.9,"window":"7d","webhook_url":"http://127.0.0.1:1/hook","secret":"s3cret"}"#, Some(&cookie)).await;
     assert_eq!(created.status(), 201);
     let rule = json(created).await;

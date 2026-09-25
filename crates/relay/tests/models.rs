@@ -125,6 +125,7 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

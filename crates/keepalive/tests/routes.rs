@@ -103,6 +103,7 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )
@@ -197,6 +198,7 @@ async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
+                in_flight_cap: None,
             },
             "test",
         )

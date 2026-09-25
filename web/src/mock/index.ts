@@ -14,7 +14,7 @@ import { breakdownOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
-import { KEYS, POOLS, effectiveSubscriptionPreference } from './pools';
+import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
@@ -422,8 +422,6 @@ export class MockApi implements Api {
       members: input.members.map((m) => ({ ...m, eligible: eligibilityOf(this.accounts.find((a) => a.id === m.accountId), input.overagePolicy) })),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
-      // The input carries the operator's flag alone, so the route resolves it against the strategy here.
-      preferSubscriptionEffective: effectiveSubscriptionPreference(input),
       requests24h: 0,
       traffic24h: [],
     };
@@ -827,8 +825,6 @@ export class MockApi implements Api {
       ...input,
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set.
       members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) ?? 'eligible' })),
-      // The input carries the operator's flag alone, so the route resolves it against the strategy here.
-      preferSubscriptionEffective: effectiveSubscriptionPreference(input),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(next, 250);

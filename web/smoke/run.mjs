@@ -672,7 +672,7 @@ await m.navigate('/upstreams/spare');
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least utilized', 'Round robin', 'subscription first', 'Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.', 'Within the first tier that has an eligible upstream (tiers split by kind when "Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -693,7 +693,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   results.push({ name: '/pools the next upstream is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
   const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
   results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Subscription upstreams with plan quota first, then those in overage, then API keys; within a tier, the one with the lowest 5-hour utilization; ties are random.']);
+  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.']);
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
@@ -735,19 +735,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Least
   await m.settle(120);
   results.push({ name: '/pools dialog nav click moves the highlight', ok: keepaliveNav?.classList.contains('is-active') === true, missing: [...(dlg?.querySelectorAll('.dialog-nav__link.is-active') ?? [])].map((b) => b.textContent) });
 
-  // A sample-driven strategy has no usage sample for an API key, so it forces the kind order and offers the key
-  // group its own sub-strategy; a strategy that needs no sample hands the flag back to the operator.
+  // The toggle is the operator's alone: no strategy forces it, so switching strategies never touches it.
   {
     const strategy = dlg?.querySelector('select[aria-label="Strategy"]');
     const toggle = dlg?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
-    results.push({ name: '/pools the subscription toggle is checked and disabled under least_utilized', ok: toggle?.getAttribute('aria-checked') === 'true' && toggle?.disabled === true, missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
-    expect('/pools the sub-strategy dropdown shows under a sample-driven strategy', dlg?.textContent ?? '', ['API key sub-strategy', 'Round robin', 'Priority, then random']);
+    const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
+    results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     strategy.value = 'round_robin';
     strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools under round_robin the toggle is off and enabled and the dropdown hides', ok: toggle?.getAttribute('aria-checked') === 'false' && toggle?.disabled === false && !(dlg?.textContent ?? '').includes('API key sub-strategy'), missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
+    results.push({ name: '/pools switching strategies leaves the toggle enabled', ok: toggle?.disabled === false, missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
     // Back to the stored strategy: this dialog stays open for the checks below, which read the pool as it is saved.
-    strategy.value = 'least_utilized';
+    strategy.value = 'pace';
     strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
     await m.settle(150);
   }

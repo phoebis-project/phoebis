@@ -1525,7 +1525,7 @@ pub fn sample_from_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoebis_store::{OveragePolicy, PoolRow, RoutingLoad, Strategy, SubStrategy};
+    use phoebis_store::{Failover, OveragePolicy, PoolRow, RoutingLoad, Shedding, Strategy};
 
     /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, and an
     /// overage policy that never keeps an account out.
@@ -1534,7 +1534,7 @@ mod tests {
             id: "p".into(),
             label: "p".into(),
             enabled: true,
-            strategy: Strategy::PriorityRandom,
+            strategy: Strategy::Priority,
             affinity_ttl_seconds: 3_600,
             overage_policy: OveragePolicy::Allow,
             migrate_above_utilization: None,
@@ -1543,7 +1543,8 @@ mod tests {
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: false,
-            api_key_sub_strategy: SubStrategy::PriorityRandom,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
             created_at: 0,
@@ -1596,7 +1597,7 @@ mod tests {
         assert!(!needs(&pool, &quiet), "nothing in this pool reads usage");
         assert!(
             needs(&pool, &cooled(2_000, "rate_limit")),
-            "a cooled candidate is re-checked under priority_random with no threshold set"
+            "a cooled candidate is re-checked under priority with no threshold set"
         );
         assert!(
             !needs(&pool, &cooled(500, "rate_limit")),

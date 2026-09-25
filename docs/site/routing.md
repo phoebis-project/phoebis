@@ -52,9 +52,8 @@ Every field, in the order the request body takes them:
 | `id` | required | a slug: `id must match [a-z0-9][a-z0-9-]{0,63}` |
 | `label` | required | none |
 | `enabled` | `true` | none |
-| `strategy` | `least_utilized` | `earliest_refresh`, `least_utilized`, `priority_random`, or `round_robin` |
-| `api_key_sub_strategy` | `priority_random` | `priority_random` or `round_robin` |
-| `prefer_subscription` | `false` | see below |
+| `strategy` | `pace` | `pace`, `priority`, or `round_robin` |
+| `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60` |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1` |
@@ -73,30 +72,20 @@ says; `null` inherits it.
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
 
-`prefer_subscription` sets `prefer_subscription_effective` in the answer, which is also true whenever the
-strategy is `earliest_refresh` or `least_utilized`, whatever the flag holds, because those two strategies order
-by kind regardless of it. A pool with keys cannot be deleted: `409 pool still has keys`.
+`prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
+API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
+with keys cannot be deleted: `409 pool still has keys`.
 
-The kind order (subscription accounts with plan quota, then those in overage, then API keys) is in force under
-`earliest_refresh` and `least_utilized` whatever `prefer_subscription` says, and under `priority_random` and
-`round_robin` only when `prefer_subscription` is on; where it is in force, it outranks the priorities.
-`api_key_sub_strategy` orders the API-key group only under `earliest_refresh` and `least_utilized`, once that
-group is the first with an eligible upstream, because an API key has no usage sample for those two to order by;
-under `priority_random` and `round_robin` the API-key group takes the pool's own strategy. Each strategy's rule, as
-the console states it on the pool card (the pool dialog's "Prioritize subscription upstreams" toggle sets
-`prefer_subscription`):
+Each strategy's rule, as the console states it on the pool card (the pool dialog's "Prioritize subscription
+upstreams" toggle sets `prefer_subscription`):
 
-**`earliest_refresh`**: Subscription upstreams with plan quota first, then those in overage, then API keys;
-within a tier, the one whose 7-day window resets soonest; ties are random.
+**`pace`**: Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance
+per hour until its window resets; an unsampled upstream counts as untouched; ties are random.
 
-**`least_utilized`**: Subscription upstreams with plan quota first, then those in overage, then API keys;
-within a tier, the one with the lowest 5-hour utilization; ties are random.
+**`priority`**: Within the first tier that has an eligible upstream, any of them at random.
 
-**`priority_random`**: Within the first tier that has an eligible upstream (tiers split by kind when
-"Prioritize subscription upstreams" is on), any of them at random.
-
-**`round_robin`**: Within the first tier that has an eligible upstream (tiers split by kind when
-"Prioritize subscription upstreams" is on), each in turn; a restart starts the round again.
+**`round_robin`**: Within the first tier that has an eligible upstream, each in turn; a restart starts the round
+again.
 
 ### Cache TTL
 
@@ -216,11 +205,11 @@ Narrowing then trims what is left: a model-specific window (a canonical id conta
 drops the account outright, and `select_below_utilization` drops every account at or above that threshold in
 5-hour utilization, unless doing so would empty the set.
 
-What remains is ordered in three kind groups, plan quota, overage, then API key, whenever
-`prefer_subscription_effective` holds; each group orders by priority ascending, and the strategy picks inside
-the first non-empty tier: `earliest_refresh` ranks by the applicable weekly reset, the model's own window when
-it has one, else the shared 7-day window; `least_utilized` ranks by 5-hour utilization within the tier;
-`priority_random` and `round_robin` read no sample at all.
+What remains is ordered in three kind groups, plan quota, overage, then API key, whenever `prefer_subscription`
+is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier: `pace`
+ranks by remaining allowance over the hours until the applicable window resets, the model's own window when it
+has one, else the shared 7-day window, higher first, an unsampled upstream scoring as untouched with the full
+window remaining, ties random; `priority` and `round_robin` read no sample at all.
 
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.
@@ -233,9 +222,8 @@ the normal selection instead, and the account-scoped reference it carries may th
 
 A pool with `migrate_above_utilization` moves a pinned session off an account whose latest 5-hour or 7-day
 sample has reached the threshold, onto a sibling whose 5-hour and 7-day readings are both below the threshold
-minus 0.05 (`MIGRATE_BAND`), then leaves that session alone for five minutes (`MIGRATE_DWELL_MS`) so two accounts
-hovering at the line do not trade it back and forth. Under `prefer_plan`, a pinned account in overage yields to
-any eligible sibling that is not.
+minus 0.05 (`MIGRATE_BAND`). Under `prefer_plan`, a pinned account in overage yields to any eligible sibling that
+is not.
 
 A pinned account whose window for the session's model is spent, the Fable window for a Fable session and the
 shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands

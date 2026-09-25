@@ -1,7 +1,7 @@
 use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::{
-    digest_with, ApiKeyRow, OveragePolicy, PoolRow, RegistryLoad, RetiredSecret, RulesMode,
-    Strategy, SubStrategy,
+    digest_with, ApiKeyRow, Failover, OveragePolicy, PoolRow, RegistryLoad, RetiredSecret,
+    RulesMode, Shedding, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [0; 32];
@@ -29,13 +29,14 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,
+            in_flight_cap: None,
         }],
         members: Vec::new(),
         pools: vec![PoolRow {
             id: "p".into(),
             label: "p".into(),
             enabled: true,
-            strategy: Strategy::PriorityRandom,
+            strategy: Strategy::Priority,
             affinity_ttl_seconds: 3600,
             overage_policy: OveragePolicy::PreferPlan,
             migrate_above_utilization: None,
@@ -44,7 +45,8 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
             prefer_subscription: false,
-            api_key_sub_strategy: SubStrategy::PriorityRandom,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
             created_at: 0,
@@ -58,6 +60,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             expires_at: 2_000,
         }],
         reused_key_ids: Vec::new(),
+        terms: Vec::new(),
     }
 }
 

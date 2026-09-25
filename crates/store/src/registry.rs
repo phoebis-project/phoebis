@@ -10,20 +10,19 @@ use std::sync::atomic::Ordering;
 use crate::credentials::store_api_key_secret;
 use crate::{AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Strategy {
-    EarliestRefresh,
-    LeastUtilized,
-    PriorityRandom,
+    #[default]
+    Pace,
+    Priority,
     RoundRobin,
 }
 
 impl Strategy {
     pub fn as_str(self) -> &'static str {
         match self {
-            Strategy::EarliestRefresh => "earliest_refresh",
-            Strategy::LeastUtilized => "least_utilized",
-            Strategy::PriorityRandom => "priority_random",
+            Strategy::Pace => "pace",
+            Strategy::Priority => "priority",
             Strategy::RoundRobin => "round_robin",
         }
     }
@@ -32,9 +31,8 @@ impl Strategy {
 impl FromSql for Strategy {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         match value.as_str()? {
-            "earliest_refresh" => Ok(Strategy::EarliestRefresh),
-            "least_utilized" => Ok(Strategy::LeastUtilized),
-            "priority_random" => Ok(Strategy::PriorityRandom),
+            "pace" => Ok(Strategy::Pace),
+            "priority" => Ok(Strategy::Priority),
             "round_robin" => Ok(Strategy::RoundRobin),
             _ => Err(FromSqlError::InvalidType),
         }
@@ -47,35 +45,87 @@ impl ToSql for Strategy {
     }
 }
 
-/// How the api_key group orders under a sample-driven strategy, which has no sample to order an API key by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubStrategy {
-    PriorityRandom,
-    RoundRobin,
+/// Which pins a shedding round may move once the cold ones are moved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WarmSessions {
+    Always,
+    Never,
+    #[default]
+    WhenNeeded,
 }
 
-impl SubStrategy {
+impl WarmSessions {
     pub fn as_str(self) -> &'static str {
         match self {
-            SubStrategy::PriorityRandom => "priority_random",
-            SubStrategy::RoundRobin => "round_robin",
+            WarmSessions::Always => "always",
+            WarmSessions::Never => "never",
+            WarmSessions::WhenNeeded => "when_needed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<WarmSessions> {
+        match value {
+            "always" => Some(WarmSessions::Always),
+            "never" => Some(WarmSessions::Never),
+            "when_needed" => Some(WarmSessions::WhenNeeded),
+            _ => None,
         }
     }
 }
 
-impl FromSql for SubStrategy {
+impl FromSql for WarmSessions {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "priority_random" => Ok(SubStrategy::PriorityRandom),
-            "round_robin" => Ok(SubStrategy::RoundRobin),
-            _ => Err(FromSqlError::InvalidType),
-        }
+        WarmSessions::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
     }
 }
 
-impl ToSql for SubStrategy {
+impl ToSql for WarmSessions {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(self.as_str().into())
+    }
+}
+
+/// The load-shedding knobs of a pool; `Default` is the balanced preset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shedding {
+    pub shed_share: f64,
+    pub burn_window_seconds: u64,
+    pub source_dwell_seconds: u64,
+    pub migrate_when_spent: bool,
+    pub warm_sessions: WarmSessions,
+}
+
+impl Default for Shedding {
+    fn default() -> Self {
+        Shedding {
+            shed_share: 0.5,
+            burn_window_seconds: 600,
+            source_dwell_seconds: 900,
+            migrate_when_spent: true,
+            warm_sessions: WarmSessions::WhenNeeded,
+        }
+    }
+}
+
+/// The failover, overage-grace and wind-down knobs of a pool; `Default` is the shipped preset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Failover {
+    pub retry_in_place_seconds: u64,
+    pub in_flight_cap: u32,
+    pub pace_floor: f64,
+    pub overage_move_grace_minutes: u32,
+    pub wind_down_minutes: u32,
+}
+
+impl Default for Failover {
+    fn default() -> Self {
+        Failover {
+            retry_in_place_seconds: 10,
+            in_flight_cap: 16,
+            pace_floor: 0.05,
+            overage_move_grace_minutes: 30,
+            wind_down_minutes: 60,
+        }
     }
 }
 
@@ -172,9 +222,10 @@ pub struct PoolRow {
     pub model_rules: Vec<ModelRule>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
-    /// Order the selection set by account kind before priority; forced on under the sample-driven strategies.
+    /// Order the selection set by account kind before priority; the operator's answer alone.
     pub prefer_subscription: bool,
-    pub api_key_sub_strategy: SubStrategy,
+    pub shedding: Shedding,
+    pub failover: Failover,
     pub cache_ttl_json: String,
     /// `None` inherits `compatibility.cache_diagnostics`; `Some` overrides it for this pool.
     pub cache_diagnostics: Option<bool>,
@@ -183,15 +234,10 @@ pub struct PoolRow {
 }
 
 impl PoolRow {
-    /// The operator's stored preference, or the strategies that force it: a sample-driven strategy has no
-    /// sample to order an api_key account by. One function, so the selector, the pool route, and the console
-    /// cannot answer differently about the same pool.
+    /// One function, so the selector, the pool route, and the console cannot answer differently about the
+    /// same pool.
     pub fn kind_ordered(&self) -> bool {
         self.prefer_subscription
-            || matches!(
-                self.strategy,
-                Strategy::EarliestRefresh | Strategy::LeastUtilized
-            )
     }
 }
 
@@ -224,6 +270,8 @@ pub struct ApiKeyRow {
     pub last_used_at: Option<i64>,
     /// When the secret a rotation retired last authenticated; cleared by the next rotation.
     pub retired_secret_last_used_at: Option<i64>,
+    /// Requests in flight this key may hold at once; `None` is no cap.
+    pub in_flight_cap: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +298,17 @@ pub struct RetiredSecret {
     pub expires_at: i64,
 }
 
+/// What the engine knows about an account's paid term: the profile's start and trial end, the operator's flag
+/// and the end the operator saved with it (set only while the flag is on).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubscriptionTerm {
+    pub account_id: String,
+    pub since: Option<i64>,
+    pub trial_ends_at: Option<i64>,
+    pub cancelled: bool,
+    pub ends_at: Option<i64>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RegistryLoad {
     pub accounts: Vec<crate::AccountRow>,
@@ -265,6 +324,7 @@ pub struct RegistryLoad {
     /// sit at generation 0 under the same id, so the startup stamp starts such a key's own rows at its
     /// creation rather than claiming every unstamped row of the id.
     pub reused_key_ids: Vec<String>,
+    pub terms: Vec<SubscriptionTerm>,
 }
 
 /// Everything a verified edit changes. Borrowed so the admin route can stage it, run discovery, and commit.
@@ -384,6 +444,21 @@ impl Store {
                 )?
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
+            terms: tx
+                .prepare(
+                    "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at \
+                     FROM accounts ORDER BY id",
+                )?
+                .query_map([], |r| {
+                    Ok(SubscriptionTerm {
+                        account_id: r.get(0)?,
+                        since: r.get(1)?,
+                        trial_ends_at: r.get(2)?,
+                        cancelled: r.get(3)?,
+                        ends_at: r.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
         Ok(load)
@@ -410,8 +485,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?25)",
             params![
                 row.id,
                 row.label,
@@ -425,7 +500,16 @@ impl Store {
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
-                row.api_key_sub_strategy,
+                row.shedding.shed_share,
+                row.shedding.burn_window_seconds as i64,
+                row.shedding.source_dwell_seconds as i64,
+                row.shedding.migrate_when_spent,
+                row.shedding.warm_sessions,
+                row.failover.retry_in_place_seconds as i64,
+                row.failover.in_flight_cap as i64,
+                row.failover.pace_floor,
+                row.failover.overage_move_grace_minutes as i64,
+                row.failover.wind_down_minutes as i64,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
                 now
@@ -441,7 +525,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, api_key_sub_strategy = ?13, cache_ttl_json = ?14, cache_diagnostics = ?15, updated_at = ?16 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, updated_at = ?25 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -455,7 +539,16 @@ impl Store {
                 row.keepalive_json,
                 row.body_capture_hours as i64,
                 row.prefer_subscription,
-                row.api_key_sub_strategy,
+                row.shedding.shed_share,
+                row.shedding.burn_window_seconds as i64,
+                row.shedding.source_dwell_seconds as i64,
+                row.shedding.migrate_when_spent,
+                row.shedding.warm_sessions,
+                row.failover.retry_in_place_seconds as i64,
+                row.failover.in_flight_cap as i64,
+                row.failover.pace_floor,
+                row.failover.overage_move_grace_minutes as i64,
+                row.failover.wind_down_minutes as i64,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
                 now
@@ -587,8 +680,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, in_flight_cap, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -604,6 +697,7 @@ impl Store {
                 row.body_capture_hours.map(|h| h as i64),
                 row.secret_digest,
                 row.prefix,
+                row.in_flight_cap.map(|c| c as i64),
                 now
             ],
         )?;
@@ -624,7 +718,7 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -636,7 +730,8 @@ impl Store {
                 row.model_rules_mode,
                 row.long_context_twins,
                 row.keepalive_opt_out,
-                row.body_capture_hours.map(|h| h as i64)
+                row.body_capture_hours.map(|h| h as i64),
+                row.in_flight_cap.map(|c| c as i64)
             ],
         )?;
         if updated == 0 {
@@ -881,8 +976,8 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, api_key_sub_strategy, cache_ttl_json, cache_diagnostics FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, in_flight_cap FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -917,9 +1012,22 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         created_at: r.get(11)?,
         updated_at: r.get(12)?,
         prefer_subscription: r.get(13)?,
-        api_key_sub_strategy: r.get(14)?,
-        cache_ttl_json: r.get(15)?,
-        cache_diagnostics: r.get::<_, Option<bool>>(16)?,
+        shedding: Shedding {
+            shed_share: r.get(14)?,
+            burn_window_seconds: r.get::<_, i64>(15)? as u64,
+            source_dwell_seconds: r.get::<_, i64>(16)? as u64,
+            migrate_when_spent: r.get(17)?,
+            warm_sessions: r.get(18)?,
+        },
+        failover: Failover {
+            retry_in_place_seconds: r.get::<_, i64>(19)? as u64,
+            in_flight_cap: r.get::<_, i64>(20)? as u32,
+            pace_floor: r.get(21)?,
+            overage_move_grace_minutes: r.get::<_, i64>(22)? as u32,
+            wind_down_minutes: r.get::<_, i64>(23)? as u32,
+        },
+        cache_ttl_json: r.get(24)?,
+        cache_diagnostics: r.get::<_, Option<bool>>(25)?,
     })
 }
 
@@ -946,6 +1054,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         rotated_at: r.get(12)?,
         last_used_at: r.get(13)?,
         retired_secret_last_used_at: r.get(14)?,
+        in_flight_cap: r.get::<_, Option<i64>>(18)?.map(|c| c as u32),
     })
 }
 
@@ -961,7 +1070,16 @@ fn pool_diff(row: &PoolRow) -> String {
         "model_rules": row.model_rules,
         "body_capture_hours": row.body_capture_hours,
         "prefer_subscription": row.prefer_subscription,
-        "api_key_sub_strategy": row.api_key_sub_strategy.as_str(),
+        "shed_share": row.shedding.shed_share,
+        "burn_window_seconds": row.shedding.burn_window_seconds,
+        "source_dwell_seconds": row.shedding.source_dwell_seconds,
+        "migrate_when_spent": row.shedding.migrate_when_spent,
+        "warm_sessions": row.shedding.warm_sessions.as_str(),
+        "retry_in_place_seconds": row.failover.retry_in_place_seconds,
+        "in_flight_cap": row.failover.in_flight_cap,
+        "pace_floor": row.failover.pace_floor,
+        "overage_move_grace_minutes": row.failover.overage_move_grace_minutes,
+        "wind_down_minutes": row.failover.wind_down_minutes,
         "cache_ttl": serde_json::from_str::<serde_json::Value>(&row.cache_ttl_json).unwrap_or(serde_json::Value::Null),
         "cache_diagnostics": row.cache_diagnostics,
     })
@@ -980,6 +1098,7 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out,
         "body_capture_hours": row.body_capture_hours,
+        "in_flight_cap": row.in_flight_cap,
         "prefix": row.prefix,
     })
     .to_string()
