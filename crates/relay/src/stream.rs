@@ -90,11 +90,12 @@ pub(crate) struct Publish {
     /// session reads the id before this body has finished, so the hand-off cannot wait for `finish`, and a
     /// flush must not overtake it.
     pub on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
-    /// The pin a committed answer renews, sent with the usage `finish` assembled.
+    /// The pin a committed answer renews, or a rejection releases, sent with the usage `finish` assembled.
     pub renewal: Option<Renewal>,
 }
 
-/// A committed answer's renewal of its pin, sent once the answer has ended and its usage is known.
+/// A pinned answer's report on its pin, sent once the answer has ended and its usage is known: a renewal, or
+/// the release of a pin its own request created and a client error ended.
 pub(crate) struct Renewal {
     pub router: RouterHandle,
     pub pin: PinRef,
@@ -102,10 +103,33 @@ pub(crate) struct Renewal {
     pub origin: &'static str,
     pub canonical_model: String,
     pub cache_ttl_ms: i64,
+    /// Whether this request created the pin rather than renewing one that already served.
+    pub fresh: bool,
+    /// The attempt's (incarnation, lifecycle, credential) generations, which fence a release.
+    pub generations: (u64, u64, u64),
 }
 
+/// The client errors that end a pin their own request created: the pin never served, so keeping it would hold
+/// the session to an account on no evidence. A 429 is the cooldown path's.
+const RELEASING_STATUSES: [u16; 4] = [400, 401, 403, 404];
+
 impl Renewal {
-    pub(crate) fn send(self, now: i64, usage: Option<&Usage>) {
+    /// Whether an answer of `status` releases the pin instead of renewing it.
+    pub(crate) fn releases(&self, status: u16) -> bool {
+        self.fresh && RELEASING_STATUSES.contains(&status)
+    }
+
+    pub(crate) fn send(self, now: i64, status: u16, usage: Option<&Usage>) {
+        if self.releases(status) {
+            let (incarnation, lifecycle_generation, credential_generation) = self.generations;
+            self.router.report(Report::PinReleased {
+                pin: self.pin,
+                incarnation,
+                lifecycle_generation,
+                credential_generation,
+            });
+            return;
+        }
         self.router.report(Report::PinRenewed {
             pin: self.pin,
             now,
@@ -287,7 +311,7 @@ impl Publish {
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
         if let Some(renewal) = self.renewal.take() {
-            renewal.send((self.clock)(), usage.as_ref());
+            renewal.send((self.clock)(), self.status, usage.as_ref());
         }
         self.trace
             .complete(

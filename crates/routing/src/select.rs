@@ -82,9 +82,8 @@ pub enum Warmth {
 /// says; the class decides when present; without it, a request whose boundaries contain the pin's tail
 /// continues the conversation, one that matches the static prefix without the tail restarted it, and one
 /// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
-/// fact, and so does a chained request on a pin that stores no hashes, which it cannot be foreign to. A
-/// keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than its own,
-/// so it is judged by none of this: its renewal report stamps the refresh instead.
+/// fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
+/// its own, so it is judged by none of this: its renewal report stamps the refresh instead.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
     if request.probe {
         return Warmth::Untouched;
@@ -100,11 +99,6 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
         };
     }
     if request.static_hash.is_none() && request.boundaries.is_empty() {
-        return Warmth::Refresh;
-    }
-    // A body without a chain left the pin no hashes; judging this request foreign would keep the pin from ever
-    // learning the conversation's, so it refreshes and `renew` stamps them.
-    if current.static_hash.is_none() && current.tail_hash.is_none() {
         return Warmth::Refresh;
     }
     if request
@@ -762,7 +756,7 @@ fn move_of<'a>(
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
     let destinations =
         |state: &RoutingState, keep: &dyn Fn(&Candidate) -> bool| -> Vec<&'a Candidate> {
-            eligible
+            let set: Vec<&'a Candidate> = eligible
                 .iter()
                 .copied()
                 .filter(|c| c.account_id != current.account_id && keep(c))
@@ -771,7 +765,29 @@ fn move_of<'a>(
                 .filter(|c| {
                     window != SEVEN_DAY_FABLE || holds_allowance(state, &c.account_id, window, now)
                 })
-                .collect()
+                .collect();
+            // A hot destination would shed the session again at its next round, so every move prefers a cool
+            // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
+            // hot sibling still answers, which staying put does not.
+            let Some(threshold) = pool.migrate_above_utilization else {
+                return set;
+            };
+            let cool: Vec<&'a Candidate> = set
+                .iter()
+                .copied()
+                .filter(|c| {
+                    reading_under(state, &c.account_id, FIVE_HOUR, threshold - MIGRATE_BAND)
+                        && reading_under(state, &c.account_id, SEVEN_DAY, threshold - MIGRATE_BAND)
+                        && state
+                            .last_shed(&c.account_id)
+                            .is_none_or(|at| now - at >= dwell_ms)
+                })
+                .collect();
+            if cool.is_empty() {
+                set
+            } else {
+                cool
+            }
         };
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
@@ -858,6 +874,15 @@ fn move_of<'a>(
     {
         let marks = shed_round(state, snapshot, pool, current, cold, now, fallback_ms);
         state.record_shed(&current.account_id, now, marks);
+    }
+    // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
+    // the release names the cooldown and the mark leaves with the pin, where a shed would name a move the
+    // cooldown forced. The round above still runs, since a cooldown can hold one model alone.
+    if state
+        .cooldown(&current.account_id, &request.canonical_model, now)
+        .is_some()
+    {
+        return None;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request.

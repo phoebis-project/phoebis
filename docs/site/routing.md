@@ -251,16 +251,21 @@ checked in this order: spent, overage, return to plan, drain, and shed. The firs
 moves the pin and names the move after itself. A pin on an account past its subscription end reaches none of
 them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
 
-**Spent** The pinned account's window for the session's model is spent: the Fable window for a Fable session and
-the shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading
-stands (until its reset, or until the sample ages out). With `migrate_when_spent` on (the default), the pin moves
-on this request to a sibling that holds allowance in that window, without waiting for the upstream's 429. The
-shedding budget, the band and the dwell do not apply: a sibling reading over the threshold but under 1.0 still
-receives the session. The router has to know the sibling's allowance: an API-key account has no plan window to
-spend, and any other sibling needs a sample younger than the sample interval, so the toggle has the pool sample
-its accounts. After a restart, until those samples land, a spent session stays and the upstream's answer decides.
-Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the
-session straight back. With the toggle off, or no sibling holding allowance, the session stays.
+With `migrate_above_utilization` set, every rule prefers a cool destination: a sibling that reads below the threshold
+minus 0.05 (`MIGRATE_BAND`) on both windows and has run no shedding round of its own within `source_dwell_seconds`, so a
+moved session does not land where the next round would shed it again. When none of a rule's destinations is cool, the
+rule still moves the pin to one of them; only the shed rule insists on a cool one.
+
+**Spent** The pinned account's window for the session's model is spent: the Fable window for a Fable session and the
+shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands (until
+its reset, or until the sample ages out). With `migrate_when_spent` on (the default), the pin moves on this request to a
+sibling that holds allowance in that window, without waiting for the upstream's 429. The shedding budget does not apply,
+and the band and the dwell only order the siblings: one reading over the threshold but under 1.0 still receives the
+session when no cool one can. The router has to know the sibling's allowance: an API-key account has no plan window to
+spend, and any other sibling needs a sample younger than the sample interval, so the toggle has the pool sample its
+accounts. After a restart, until those samples land, a spent session stays and the upstream's answer decides. Under
+`prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the session straight
+back. With the toggle off, or no sibling holding allowance, the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an API key. The sibling has to hold allowance too,
@@ -285,11 +290,13 @@ whose burn carries the total past the share stays marked, and the round stops th
 order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
 orders every pin by burn over rewrite cost, cold or warm.
 
-A marked session moves at its next request, onto a sibling that reads below the threshold minus 0.05
-(`MIGRATE_BAND`) on both windows, that did not shed this pin within `source_dwell_seconds`, and that has run no
-round of its own within that dwell. An unmarked pin never moves for utilization. The marks live in memory for the
-dwell: a marked session that stays idle never moves, no new round runs on the account until the dwell passes, and
-a restart forgets the marks, so the next request after it may start a fresh round.
+A marked session moves at its next request, onto a sibling that reads below the threshold minus 0.05 (`MIGRATE_BAND`) on
+both windows, that did not shed this pin within `source_dwell_seconds`, and that has run no round of its own within that
+dwell. A marked pin whose account is cooling for the session's model is released instead, with `cooldown` among its
+reasons, and its mark goes with it; the round on the account still runs, since a cooldown can hold one model alone. An
+unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked session that stays idle never
+moves, no new round runs on the account until the dwell passes, and a restart forgets the marks, so the next request
+after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it alone. Without the
@@ -297,10 +304,8 @@ class header, a request whose messages extend the session's conversation refresh
 session's static prefix (tools and system prompt) without extending its messages restarted the conversation and reads
 cold; one that matches neither changes nothing. A request that carries `x-claude-code-context-compacted` reads cold
 whatever else it says, so a compacted session goes first in the round's order on the request that carries the fact. A
-body the router cannot read refreshes the pin on every request. A session with no stored hashes, which such a body
-leaves, treats its next chained request as a continuation and records that request's hashes. A keepalive probe replays
-another request's headers and body, so the router judges none of them: a probe never colds a session, and its renewal
-counts as a refresh.
+body the router cannot read refreshes the pin on every request. A keepalive probe replays another request's headers and
+body, so the router judges none of them: a probe never colds a session, and its renewal counts as a refresh.
 
 **Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
 tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
@@ -308,14 +313,16 @@ subscription account runs on its plan, dollars on an API-key account or a subscr
 renewal folds both, so leaving overage switches the reading back without a reset. A keepalive probe's usage never
 counts.
 
-Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `mark`, `overage`, `return_to_plan`,
-`shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session, the others after
-the rule above that moved it. A pin released without a move records `pin_expired` with `reasons`,
-every fact the selection found against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`,
-`paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`,
-`funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against
-the account, as with a move whose destination emptied. Releasing a session by hand, from the Sessions
-view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `mark`, `overage`, `return_to_plan`, `shed`, or
+`spent`: `cooldown` and `mark` when a failover or a credential mark moved the session, the others after the rule above
+that moved it. A pin released without a move records `pin_expired` with `reasons`, every fact the selection found
+against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`, `paused`, `spent`, `subscription_ended`,
+`unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`,
+`unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
+emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on the account,
+records the single reason `client_error`: it never served, so the session's next request is placed afresh rather than
+moved. Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires
+its pin the same way.
 
 ## Cooldowns and failover
 
@@ -364,11 +371,12 @@ An API-key account whose monthly spend cap is reached answers a 429 naming `enfo
 account is cooled as a whole until the first of the next month, reason `spend_cap`, and an exhaustion it causes
 claims `overage`.
 
-A response head also lands a selection sample on the account it answered for, whichever header family it
-carries: an OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports
-one; an api_key head's `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}`
-headers, one bucket per canonical model. A later head for another model adds that model's buckets beside the
-ones already on file rather than replacing them.
+A response head also lands a selection sample on the account it answered for, whichever header family it carries: an
+OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports one; an api_key head's
+`anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}` headers, one bucket per canonical
+model. A later head for another model adds that model's buckets beside the ones already on file rather than replacing
+them. An OAuth head that reads both shared windows stands in for the router's own usage fetch: the account is fetched
+again only once its latest sample, from a head or a fetch, is older than the sample interval.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
 the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
@@ -381,15 +389,17 @@ says. Each attempt goes through these steps:
 
 1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified rate-limit
    headers the client's automatic continue reads; `untimed` answers `503` with error code `accounts_unavailable` and no
-   `Retry-After`, since only an operator can clear it. Both carry an Anthropic-shaped error body. `held` waits for a
-   slot and asks again ([in-flight caps](#in-flight-caps)).
+   `Retry-After`, since only an operator can clear it, unless the request reached it through holds alone with nothing
+   dialled: then every account is at its cap, and the answer is `429` with error code `accounts_at_cap`. Each carries
+   an Anthropic-shaped error body. `held` waits for a slot and asks again ([in-flight caps](#in-flight-caps)).
 2. Acquire the account's credential, apply its body edits, and send on its dispatch path.
 3. Classify the head. A short throttle on a portable request is waited out on the same account
    ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
    the matching pin, and returns to step 1; on a non-portable request it records the cooldown and commits the failed
    response instead. Any other row commits and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
-   request.
+   request. A pin this request created and whose answer is `400`, `401`, `403`, or `404` is released instead, since
+   it never served; a `429` keeps the cooldown path of step 3.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -422,29 +432,36 @@ involved. An account at the pool's `in_flight_cap` (default 16) is passed over w
 sibling above `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that
 could serve is at its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it
 would have chosen and lands there when one frees; past the bound it is selected again with that account passed over, and
-with every account passed over it is answered `503 accounts_unavailable`. A hold costs one attempt of
-`routing.max_attempts`, and a hold that would leave none for the dial is answered `503 accounts_unavailable` at once. A
-session already pinned to the account is never held, and a move whose every destination is at its cap is not made: the
-pin renews in place and the next request judges the move again.
+with every account passed over it is answered `429` with the error type `rate_limit_error`, the error code
+`accounts_at_cap`, the message `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's
+`retry_in_place_seconds` held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats
+a longer one as a block it does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would
+leave none for the dial is answered the same `429` at once. A request that dialled an account before its holds ran out,
+and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A session already pinned to the
+account is never held, and a move whose every destination is at its cap is not made: the pin renews in place and the
+next request judges the move again.
 
-**Per key.** A key's own `in_flight_cap`, unset by default, counts each request once, from its admission, before
-anything is selected, until its response ends. The count is held across every attempt, retry, and hold, so a request
-sleeping in a retry in place keeps its key's slot. A request past the cap is refused before it reaches an account: `429`
-with the error type `rate_limit_error`, the error code `key_in_flight_cap`, and a `Retry-After` of the pool's
-`retry_in_place_seconds`, one second when that is 0. The refused request is observed with its body and gets its own
-request row under that code.
+**Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
+before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and
+are never refused for want of one: the probe is the router's own traffic, and a token count is no conversation turn. The
+count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's slot. A
+request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the error
+code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0. The
+refused request is observed with its body and gets its own request row under that code.
 
 ### When nothing can serve
 
 With every account in the pool rate limited, `phoebis` answers `429` with `retry-after`,
 `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset`, and
-`anthropic-ratelimit-unified-representative-claim` naming the window; a cooldown that came from a bare
-`Retry-After` is rendered as `five_hour`, because the client treats an unknown claim as no claim. The error code
-is `accounts_exhausted` and the message is `every account in this pool is rate limited`. For anything only an
-operator can clear, such as a pool whose accounts are all paused, `phoebis` answers `503` with error code
-`accounts_unavailable`, message `no account in this pool can serve requests`, and no `retry-after`. A request
-admitted under a key that was deleted and created again before it was routed is answered the same way, since
-the registry it was admitted against no longer holds its key.
+`anthropic-ratelimit-unified-representative-claim` naming the window; a cooldown that came from a bare `Retry-After` is
+rendered as `five_hour`, because the client treats an unknown claim as no claim. The error code is `accounts_exhausted`
+and the message is `every account in this pool is rate limited`. With every account at its in-flight cap past the hold,
+`phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds
+([in-flight caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a
+pool whose accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message
+`no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted and
+created again before it was routed is answered the same way, since the registry it was admitted against no longer holds
+its key.
 
 A model every account in the pool has rejected within the rejection window answers `404` with error code
 `model_rejected` and the message `every account in this pool rejected the model`; the

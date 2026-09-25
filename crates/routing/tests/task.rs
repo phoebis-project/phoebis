@@ -2,7 +2,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
+use phoebis_oauth::{Clock, CredentialManager, ExtraUsage, UsageService, UsageSnapshot, UsageWindow};
+use phoebis_profile::{
+    claude_code_2_1_269_linux_x64,
+    fixtures::{control_response, ControlFixture},
+};
 use phoebis_routing::{
     resolve, sample_from_usage, spawn, BandWeight, BurnRates, Exhaustion, PinRef, PinUsage,
     Presented, RateTable, Rates, ReloadError, Report, ResolveError, RouterConfig, SelectRequest,
@@ -10,9 +14,15 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, FitRow,
-    ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding, StorageKey, Store, Strategy,
+    ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
+    Strategy,
 };
-use fake_upstream::{stays_for, wait_for, wait_for_async};
+use phoebis_transport::{
+    connector_builder,
+    control::{ControlClient, ResolveFuture, Resolver},
+    trust_extra_ca, Plane,
+};
+use fake_upstream::{stays_for, wait_for, wait_for_async, FakeUpstream, Respond, Rule};
 
 const HOUR: i64 = 3_600_000;
 
@@ -1447,6 +1457,108 @@ async fn a_fetch_started_under_a_previous_incarnation_changes_nothing() {
         store.load_routing().unwrap().overage.is_empty(),
         "and nothing reached the store"
     );
+}
+
+/// A usage service over account `a` of `store` whose fetches reach `up`, a fake control plane on a loopback
+/// port. The token is far from expiry, so no fetch refreshes first, and the cache holds nothing, so every fetch
+/// the router starts is one request the fake records.
+fn usage_against(up: &FakeUpstream, store: &Arc<Store>, clock: Clock) -> Arc<UsageService> {
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let profile = claude_code_2_1_269_linux_x64();
+    let mut builder = connector_builder(profile, Plane::Control).unwrap();
+    trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
+    let manager = Arc::new(CredentialManager::new(
+        store.clone(),
+        control.clone(),
+        profile,
+        clock.clone(),
+    ));
+    Arc::new(UsageService::new(
+        manager,
+        control,
+        profile,
+        Duration::ZERO,
+        4,
+        clock,
+    ))
+}
+
+#[tokio::test]
+async fn a_head_sample_within_the_ttl_defers_the_usage_poll_and_one_past_it_does_not() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Usage).to_vec(),
+        },
+    }])
+    .await;
+    let fetches = || {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.contains("/api/oauth/usage"))
+            .count()
+    };
+    // Under `prefer_plan` every selection needs a sample, so only the sampler's own clock holds a fetch back.
+    let store = seeded_oauth(&["a"]);
+    let start = 1_000_000;
+    let now = Arc::new(AtomicI64::new(start));
+    let config = RouterConfig::default();
+    let ttl = config.sample_ttl.as_millis() as i64;
+    let handle = spawn(
+        store.clone(),
+        Some(usage_against(&up, &store, clock(&now))),
+        clock(&now),
+        config,
+    )
+    .unwrap();
+    let head = sample_with(start, FIVE_HOUR, 0.2, None).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 0.1,
+            reset: None,
+            observed_at: start,
+        },
+    );
+    handle.report(observed("a", head));
+    let inside = start + ttl - 1_000;
+    now.store(inside, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), inside))
+        .await
+        .unwrap();
+    stays_for(Duration::from_millis(200), || fetches() == 0).await;
+
+    let past = start + ttl;
+    now.store(past, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), past))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || (fetches() == 1).then_some(())).await;
+    stays_for(Duration::from_millis(100), || fetches() == 1).await;
+    up.shutdown().await;
 }
 
 async fn next_event(

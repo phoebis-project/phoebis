@@ -6,6 +6,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use phoebis_bus::{Bus, Event};
+use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_store::Failover;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -307,10 +308,24 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
     assert_eq!(
         (
             resp.status().as_u16(),
-            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            resp.headers()["retry-after"].to_str().unwrap()
         ),
-        (503, "accounts_unavailable"),
-        "the exhaustion path's answer, not the budget's"
+        (429, "accounts_at_cap", "2"),
+        "the pool at its cap answers with the hold's bound, not the budget's refusal"
+    );
+    assert_eq!(
+        outcome(&resp).error_code.as_deref(),
+        Some("accounts_at_cap"),
+        "the row names the code"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
+    assert_eq!(
+        (&body["error"]["type"], &body["error"]["message"]),
+        (
+            &serde_json::json!("rate_limit_error"),
+            &serde_json::json!("every account in this pool is at its in-flight cap")
+        )
     );
     assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
     assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
@@ -353,8 +368,16 @@ async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
     statuses.sort();
     assert_eq!(
         statuses,
-        [200, 503],
-        "one takes the freed slot; the other, held again past the bound, is answered as exhausted"
+        [200, 429],
+        "one takes the freed slot; the other, held again past the bound, is answered at the cap"
+    );
+    let at_cap = if two.status() == 429 { &two } else { &three };
+    assert_eq!(
+        (
+            at_cap.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            at_cap.headers()["retry-after"].to_str().unwrap()
+        ),
+        ("accounts_at_cap", "1")
     );
     assert_eq!(
         (posts(&up), h.router.in_flight().account("a")),
@@ -513,6 +536,137 @@ async fn a_key_past_its_cap_is_refused_before_selection_with_a_retry_after_and_t
         (429, Some("key_in_flight_cap"))
     );
     drop(held);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", held_stream());
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            key_in_flight_cap: Some(1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let held = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(held.status().as_u16(), 200);
+    assert_eq!(
+        h.router.in_flight().key("desktop"),
+        1,
+        "the key is at its cap"
+    );
+
+    // The engine's own probe: no credential header, the key named by id.
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let mut probe = request_for(KEY, MODEL, "s2");
+    probe.headers_mut().remove("authorization");
+    probe.extensions_mut().remove::<phoebis_relay::OriginalHead>();
+    let probed = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                allow_oauth: true,
+            },
+            probe,
+        )
+        .await;
+    assert_eq!(probed.status().as_u16(), 200, "the probe is served");
+    drain(probed).await;
+
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let counted = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::CountOauthNonFirstParty),
+            body(BodyFixture::CountOauth),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(counted.status().as_u16(), 200, "the count is served");
+    drain(counted).await;
+    assert_eq!(
+        h.router.in_flight().key("desktop"),
+        1,
+        "neither took a slot of the key's cap"
+    );
+
+    let refused = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s3"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "key_in_flight_cap"),
+        "a message on the key is still refused"
+    );
+    drop(held);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pool_with_nothing_to_hold_for_still_answers_accounts_unavailable() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 2),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    // Paused, the account is no longer one a request could be held for, cap or not.
+    h.store.set_enabled("a", false).unwrap();
+    h.router.reload().await.unwrap();
+    let started = Instant::now();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < HELD_FOR,
+        "answered without a hold: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    assert!(resp.headers().get("retry-after").is_none());
+    assert_eq!(posts(&up), 1, "nothing was dialled for the second request");
+    drop(first);
     up.release();
     up.shutdown().await;
 }

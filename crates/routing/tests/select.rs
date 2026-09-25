@@ -3876,52 +3876,6 @@ fn a_body_without_a_chain_refreshes_on_every_request() {
 }
 
 #[test]
-fn a_chained_request_on_a_pin_without_hashes_refreshes_it_and_stamps_them() {
-    let s = snapshot(Pool {
-        members: vec![("a", 0)],
-        ..Pool::default()
-    });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let chained = |now: i64, boundaries: &[&str]| {
-        with_facts(
-            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
-            None,
-            false,
-            Some("s0"),
-            boundaries,
-        )
-    };
-    select(
-        &mut st,
-        &s,
-        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
-        &mut rng(),
-    );
-    let pin = pinned(&st, "s1");
-    assert_eq!(
-        (pin.static_hash.as_deref(), pin.tail_hash.as_deref()),
-        (None, None),
-        "a body without a chain leaves the pin no hashes"
-    );
-    select(&mut st, &s, &chained(T + 1_000, &["m1"]), &mut rng());
-    let pin = pinned(&st, "s1");
-    assert_eq!(
-        (
-            pin.last_refresh_at,
-            pin.static_hash.as_deref(),
-            pin.tail_hash.as_deref()
-        ),
-        (T + 1_000, Some("s0"), Some("m1")),
-        "the pin has nothing the chain could be foreign to, so the request refreshes it and stamps its hashes"
-    );
-    select(&mut st, &s, &chained(T + 2_000, &["x1"]), &mut rng());
-    assert!(
-        !warm(&pinned(&st, "s1"), T + 2_000),
-        "the next request compares against the stamped hashes: the same prefix without the tail is a restart"
-    );
-}
-
-#[test]
 fn a_probe_never_colds_a_pin() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
@@ -4393,6 +4347,198 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
     );
 }
 
+/// A pool whose moves read a threshold of 0.8, where `b` outranks `c`: without the cool preference every move
+/// below would land on `b`.
+fn cool_preference_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
+    Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        kinds,
+        ..Pool::default()
+    }
+}
+
+/// `b` reads above the threshold and still holds allowance, so every rule would take it; `c` reads cool.
+fn hot_b_cool_c(st: &mut RoutingState, at: i64) {
+    st.record_sample("b", sample(0.9, 0.3, at));
+    st.record_sample("c", sample(0.1, 0.1, at));
+}
+
+#[test]
+fn a_spent_move_prefers_a_cool_sibling() {
+    let s = snapshot(cool_preference_pool(vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    hot_b_cool_c(&mut st, T + 500);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "the cool sibling takes the spent pin over the hot one that outranks it"
+    );
+}
+
+#[test]
+fn an_overage_move_prefers_a_cool_sibling() {
+    let s = snapshot(cool_preference_pool(vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_overage("a", overage(true, T + 500, Some(T + 40 * MINUTE)));
+    hot_b_cool_c(&mut st, T + 500);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("c".into(), Some(MigrateReason::Overage)),
+        "the cool sibling takes the pin back to plan over the hot one that outranks it"
+    );
+}
+
+#[test]
+fn a_return_to_plan_move_prefers_a_cool_sibling() {
+    let s = snapshot(cool_preference_pool(vec![("a", AccountKind::ApiKey)]));
+    let mut st = loaded(vec![PinRow {
+        created_at: T - MINUTE,
+        ..burning("cold", "a", 0.0, false, T)
+    }]);
+    hot_b_cool_c(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+        ("c".into(), Some(MigrateReason::ReturnToPlan)),
+        "the cool sibling takes the cold pin off the key over the hot one that outranks it"
+    );
+}
+
+#[test]
+fn a_drain_move_prefers_a_cool_sibling() {
+    let s = snapshot_with_terms(
+        cool_preference_pool(vec![]),
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(T + 10 * MINUTE),
+        }],
+    );
+    let mut st = loaded(vec![burning("cold", "a", 0.0, false, T)]);
+    hot_b_cool_c(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng()).0),
+        ("c".into(), Some(MigrateReason::Drain)),
+        "the cool sibling takes the cold pin off the ending account over the hot one that outranks it"
+    );
+}
+
+#[test]
+fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    st.record_sample("b", sample(0.9, 0.3, T + 500));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "the preference falls through to the rule's own set rather than leaving the pin on a spent account"
+    );
+}
+
+#[test]
+fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    // Two cold pins, so the round has one to spare: it marks the hotter.
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+    let req = auxiliary(&s, "s1", T);
+    let reasons = release_reasons(&st, &s, &pinned(&st, "s1"), &req);
+    let (result, _) = select(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = result else {
+        panic!("expected a selection, got {result:?}")
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.migrated,
+            sel.trace.moved,
+            sel.trace.renewed
+        ),
+        ("b", None, None, false),
+        "the cooled account's pin is released and the session placed afresh, not shed"
+    );
+    assert!(
+        reasons.contains(&"cooldown"),
+        "the release names the cooldown: {reasons:?}"
+    );
+    assert!(
+        st.last_shed("a").is_some(),
+        "the round still ran, since the cooldown is the model's alone"
+    );
+    assert!(!marked(&st, "s1", T), "the mark left with the released pin");
+
+    let cleared = T + 10 * MINUTE + 1_000;
+    let (result, _) = select(&mut st, &s, &auxiliary(&s, "s1", cleared), &mut rng());
+    let SelectResult::Selected(sel) = result else {
+        panic!("expected a selection, got {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.renewed, sel.trace.moved),
+        ("b", true, None),
+        "with the cooldown cleared the session's next request renews in place"
+    );
+}
+
 /// A pool whose round runs on `a` at 0.8, with `b` a cool destination.
 fn shedding_pool(shedding: Shedding) -> Pool {
     Pool {
@@ -4520,9 +4666,11 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    // c stays cool throughout, so a mark that outlived the move would find a destination.
+    // c stays cool throughout, so a mark that outlived the move would find a destination. Its reading is older
+    // than the sample TTL, so no spent move takes it for a destination whose allowance it cannot know, and the
+    // spent move below has only a to go to.
     hot_a_cool_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.1, 0.1, T - 500));
+    st.record_sample("c", sample(0.1, 0.1, T - 2 * SAMPLE_TTL_MS));
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
@@ -4530,7 +4678,6 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
     );
     st.record_sample("a", sample(0.9, 0.3, T + 500));
     st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    st.record_sample("c", sample(0.1, 0.1, T + 500));
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
         ("a".into(), Some(MigrateReason::Spent)),

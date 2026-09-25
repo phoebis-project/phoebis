@@ -81,6 +81,25 @@ pub(crate) fn key_in_flight_cap(retry_after_seconds: u64) -> Failure {
     }
 }
 
+/// The error code of a pool whose every account was held at its in-flight cap until the hold ran out.
+pub const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
+
+/// The longest `Retry-After` the at-cap answer names. The client waits out a `Retry-After` under 20 seconds and
+/// treats a longer one as a block it does not retry, while a pool at its cap frees within seconds.
+const AT_CAP_RETRY_AFTER_MAX: u64 = 19;
+
+/// 429 `rate_limit_error`, code `accounts_at_cap`, message `every account in this pool is at its in-flight cap`,
+/// `Retry-After` the pool's `retry_in_place_seconds` clamped to 1 through 19.
+pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: ACCOUNTS_AT_CAP,
+        message: "every account in this pool is at its in-flight cap",
+        retry_after: Some(retry_after_seconds.clamp(1, AT_CAP_RETRY_AFTER_MAX)),
+    }
+}
+
 /// A rejected caller credential is always a `401`: telling the caller which of the four ways it failed would
 /// help an attacker enumerate, and the downstream client acts on the status alone.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {

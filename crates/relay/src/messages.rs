@@ -18,7 +18,7 @@ use phoebis_bus::{
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
     ResponseHead as BusHead, Usage,
 };
-use phoebis_oauth::{AccessToken, Clock, CredentialManager};
+use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     resolve, AccountTicket, EvidenceSource, Exhaustion, KeyPermit, KeyRefusal, OverageEvidence,
     PinRef, Presented, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
@@ -46,9 +46,9 @@ use crate::classify::{
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure, ACCOUNT_CANCELLED,
-    METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE,
-    UPSTREAM_UNREACHABLE,
+    accounts_at_cap, auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure,
+    ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND,
+    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -907,13 +907,19 @@ impl Relay {
         let failover = pool.map(|p| p.failover).unwrap_or_default();
         // One permit for the whole request, held across every attempt, retry in place and hold until the
         // response ends. Taken once the body is read, so a refusal is observed with it, and before anything is
-        // selected; the check and the increment are one call under the table's lock.
-        let mut key_permit = match self.router.in_flight().try_acquire_key(
-            &key.id,
-            key.in_flight_cap,
-            (self.clock)(),
-        ) {
-            Some(permit) => Some(permit),
+        // selected; the check and the increment are one call under the table's lock. The cap bounds a key's
+        // conversations: a keepalive probe is the router's own traffic and a token count is no turn, so
+        // neither takes a slot or is refused for want of one.
+        let admission = match trace.kind {
+            Kind::Inference => self
+                .router
+                .in_flight()
+                .try_acquire_key(&key.id, key.in_flight_cap, (self.clock)())
+                .map(Some),
+            Kind::CountTokens | Kind::Probe => Some(None),
+        };
+        let mut key_permit = match admission {
+            Some(permit) => permit,
             None => {
                 trace
                     .observed(
@@ -1140,6 +1146,10 @@ impl Relay {
         let mut attempted: Vec<String> = Vec::new();
         let mut attempt: u8 = 0;
         let mut spent: u8 = 0;
+        // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
+        // is a pool at its cap, which frees on its own, not one only an operator can clear.
+        let mut held_out = false;
+        let mut dialed = false;
         // Read once and reused on every attempt of this request: neither fact changes across a failover.
         let hints = ClientHints::read(&parts.headers);
 
@@ -1216,16 +1226,18 @@ impl Relay {
                         .await
                 }
                 SelectResult::Exhausted(exhaustion) => {
-                    return self.exhausted(&admitted, attempt, &exhaustion, now).await;
+                    return self
+                        .exhausted(&admitted, attempt, &exhaustion, now, held_out && !dialed)
+                        .await;
                 }
                 // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
                 // selection place there; past it the account is attempted and the next selection looks elsewhere.
                 SelectResult::Held { account_id } => {
                     // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
-                    // so the pool answers as the exhausted one it is, at once.
+                    // so the pool answers as the exhausted one it is, at once: at its cap, unless a leg dialled.
                     if spent + 1 >= self.limits.max_attempts {
                         return self
-                            .exhausted(&admitted, attempt, &Exhaustion::Untimed, now)
+                            .exhausted(&admitted, attempt, &Exhaustion::Untimed, now, !dialed)
                             .await;
                     }
                     spent += 1;
@@ -1236,6 +1248,7 @@ impl Relay {
                         .wait_for_slot(&account_id, failover.in_flight_cap, deadline)
                         .await
                     {
+                        held_out = true;
                         attempted.push(account_id);
                     }
                     continue;
@@ -1250,6 +1263,7 @@ impl Relay {
                     continue;
                 }
             }
+            dialed = true;
             match self
                 .dispatch_to(
                     &admitted,
@@ -1268,18 +1282,33 @@ impl Relay {
         }
     }
 
-    /// The answer for a pool with nothing to select, the outcome carrying the exhaustion's code.
+    /// The answer for a pool with nothing to select, the outcome carrying the exhaustion's code. `at_cap` answers
+    /// an untimed exhaustion as a pool whose accounts are all at their in-flight cap.
     async fn exhausted(
         &self,
         admitted: &Admitted<'_>,
         attempt: u8,
         exhaustion: &Exhaustion,
         now: i64,
+        at_cap: bool,
     ) -> Response {
-        let code = match exhaustion {
-            Exhaustion::ModelRejected => MODEL_REJECTED.code,
-            Exhaustion::Timed { .. } => "accounts_exhausted",
-            Exhaustion::Untimed => "accounts_unavailable",
+        let (code, response) = match exhaustion {
+            Exhaustion::Untimed if at_cap => {
+                let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
+                (failure.code, failure.response(admitted.request_id))
+            }
+            Exhaustion::ModelRejected => (
+                MODEL_REJECTED.code,
+                exhaustion_response(exhaustion, now, admitted.request_id),
+            ),
+            Exhaustion::Timed { .. } => (
+                "accounts_exhausted",
+                exhaustion_response(exhaustion, now, admitted.request_id),
+            ),
+            Exhaustion::Untimed => (
+                "accounts_unavailable",
+                exhaustion_response(exhaustion, now, admitted.request_id),
+            ),
         };
         let outcome = self.outcome(
             admitted.trace,
@@ -1298,7 +1327,7 @@ impl Relay {
         );
         self.answer(
             admitted.trace,
-            exhaustion_response(exhaustion, now, admitted.request_id),
+            response,
             outcome,
             None,
             ResponseFacts::default(),
@@ -1569,6 +1598,7 @@ impl Relay {
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 fallback_ms: admitted.fallback_ms,
+                fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
                 identity: admitted.identity,
                 injected: &injected,
                 key: admitted.key,
@@ -1824,6 +1854,7 @@ impl Relay {
                 }
                 Ok(Drained::TooLarge(prefix)) => {
                     tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
+                    let release = self.release_on(&ctx, head.status);
                     return Next::Respond(
                         self.stream(Forward {
                             caller: ctx.caller,
@@ -1837,7 +1868,7 @@ impl Relay {
                             outcome,
                             prefix,
                             reader,
-                            renewal: None,
+                            renewal: release,
                             trace: ctx.trace,
                         })
                         .await,
@@ -1971,12 +2002,16 @@ impl Relay {
                 {
                     Ok(token) => return Next::Replay(Credential::from(token)),
                     // Nothing was replaced, so nothing conclusive happened: the upstream's 401 goes back as
-                    // it came, and the account keeps its state and its pin. Failing over would spend another
-                    // account on a request whose own credential may work again in a minute, and invalidating
-                    // the pin would move a session that has no reason to move. The manager marks the account
-                    // itself when the refresh ended in invalid_grant.
+                    // it came, and the account keeps its state and a pin that already served. Failing over
+                    // would spend another account on a request whose own credential may work again in a
+                    // minute, and invalidating the pin would move a session that has no reason to move; a pin
+                    // this request created is released as any client error's is. The manager marks the account
+                    // itself when the refresh ended in invalid_grant, and that mark ends the pin instead.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
+                        let release = (!matches!(error, AcquireError::ReauthRequired))
+                            .then(|| self.release_on(&ctx, head.status))
+                            .flatten();
                         return Next::Respond(
                             self.forward_buffered(
                                 ctx.trace,
@@ -1984,7 +2019,7 @@ impl Relay {
                                 buffered.unwrap_or_default(),
                                 ctx.caller,
                                 outcome,
-                                None,
+                                release,
                             )
                             .await,
                         );
@@ -1992,8 +2027,9 @@ impl Relay {
                 }
             }
             // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
-            // is forwarded as it came and the account keeps its state and its pin.
+            // is forwarded as it came and the account keeps its state and a pin that already served.
             Verdict::Refresh => {
+                let release = self.release_on(&ctx, head.status);
                 return Next::Respond(
                     self.forward_buffered(
                         ctx.trace,
@@ -2001,10 +2037,10 @@ impl Relay {
                         buffered.unwrap_or_default(),
                         ctx.caller,
                         outcome,
-                        None,
+                        release,
                     )
                     .await,
-                )
+                );
             }
             // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
             // it the same 400 classifies as `Commit` and is forwarded as any other.
@@ -2056,19 +2092,7 @@ impl Relay {
                         as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
                 });
                 // Sent where the answer ends, the only place its usage is known.
-                let renewal = ctx.pin.map(|pin| Renewal {
-                    router: self.router.clone(),
-                    pin: pin.clone(),
-                    origin: match ctx.trace.kind {
-                        Kind::Probe => "keepalive",
-                        Kind::CountTokens | Kind::Inference => "client",
-                    },
-                    canonical_model: ctx.identity.canonical_model.clone(),
-                    cache_ttl_ms: ctx
-                        .cache_ttl_ms
-                        .or(ctx.markers_ttl_ms)
-                        .unwrap_or(DEFAULT_CACHE_TTL_MS),
-                });
+                let renewal = self.renewal(&ctx);
                 let (prefix, observer) = match held {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
@@ -2255,6 +2279,36 @@ impl Relay {
             self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None)
                 .await,
         )
+    }
+
+    /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
+    /// answered with a client error.
+    fn renewal(&self, ctx: &Responding<'_>) -> Option<Renewal> {
+        ctx.pin.map(|pin| Renewal {
+            router: self.router.clone(),
+            pin: pin.clone(),
+            origin: match ctx.trace.kind {
+                Kind::Probe => "keepalive",
+                Kind::CountTokens | Kind::Inference => "client",
+            },
+            canonical_model: ctx.identity.canonical_model.clone(),
+            cache_ttl_ms: ctx
+                .cache_ttl_ms
+                .or(ctx.markers_ttl_ms)
+                .unwrap_or(DEFAULT_CACHE_TTL_MS),
+            fresh: ctx.fresh_pin,
+            generations: (
+                ctx.account.incarnation,
+                ctx.account.lifecycle_generation,
+                ctx.credential_generation,
+            ),
+        })
+    }
+
+    /// For a rejection forwarded with no renewal: the release of the pin this request created, when the status
+    /// is a client error that ends it, and nothing otherwise, so the pin a renewal would have kept stays as it is.
+    fn release_on(&self, ctx: &Responding<'_>, status: u16) -> Option<Renewal> {
+        self.renewal(ctx).filter(|renewal| renewal.releases(status))
     }
 
     /// How long to wait before trying the same account again, for a fail-over this leg can wait out instead: a
@@ -2699,7 +2753,7 @@ impl Relay {
             None => (None, ResponseFacts::default()),
         };
         if let Some(renewal) = renewal {
-            renewal.send((self.clock)(), usage.as_ref());
+            renewal.send((self.clock)(), head.status, usage.as_ref());
         }
         let response = built(builder, Body::from(payload.clone()));
         // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but
@@ -2745,7 +2799,8 @@ struct Forward<'a, C> {
     outcome: RelayOutcome,
     prefix: Bytes,
     reader: BodyReader<C>,
-    /// Set for a committed answer on a pinned request; sent when the body ends.
+    /// A pinned request's report, sent when the body ends: a committed answer's renewal, or the release of a
+    /// pin its own rejection ends.
     renewal: Option<Renewal>,
     trace: &'a Trace,
 }
@@ -2775,6 +2830,8 @@ struct Responding<'a> {
     client_version: Option<String>,
     credential_generation: u64,
     fallback_ms: i64,
+    /// Whether this selection created `pin` rather than renewing one that already served.
+    fresh_pin: bool,
     identity: &'a RequestIdentity,
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],

@@ -69,7 +69,8 @@ pub enum RouterEvent {
         session_id: String,
         model: String,
         account_id: String,
-        /// What the selection found against the account, in its own order; see `release_reasons`.
+        /// What the selection found against the account, in its own order (see `release_reasons`), or
+        /// `client_error` alone for a pin the relay released after the request that created it failed.
         reasons: Vec<&'static str>,
         at: i64,
     },
@@ -206,6 +207,14 @@ pub enum Report {
     },
     PinInvalidated {
         account_id: String,
+        pin: PinRef,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        credential_generation: u64,
+    },
+    /// A pin the relay releases because the request that created it ended in a client error; the next request of
+    /// the session is a fresh placement, not a move.
+    PinReleased {
         pin: PinRef,
         incarnation: u64,
         lifecycle_generation: u64,
@@ -1133,6 +1142,49 @@ impl Task {
                     )]);
                 }
             }
+            Report::PinReleased {
+                mut pin,
+                incarnation,
+                lifecycle_generation,
+                credential_generation,
+            } => {
+                pin.model = self.state.canonical(&pin.model).to_string();
+                // The epoch names the one pin the request created, and with it the account the generations are
+                // checked against; a pin replaced since is another placement's to keep.
+                let Some(account_id) = self
+                    .state
+                    .pin(&pin.key_id, &pin.session_id, &pin.model)
+                    .filter(|current| current.epoch == pin.epoch)
+                    .map(|current| current.account_id.clone())
+                else {
+                    return;
+                };
+                if self.superseded(
+                    &account_id,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                ) {
+                    return;
+                }
+                // Nothing enters `invalidated`: the pin never served, so the session's next request is a fresh
+                // placement rather than a move away from it.
+                self.state
+                    .remove_pin(&pin.key_id, &pin.session_id, &pin.model);
+                self.emit(RouterEvent::PinExpired {
+                    key_id: pin.key_id.clone(),
+                    session_id: pin.session_id.clone(),
+                    model: pin.model.clone(),
+                    account_id,
+                    reasons: vec!["client_error"],
+                    at: (self.clock)(),
+                });
+                self.write(vec![StateWrite::DeletePin(
+                    pin.key_id,
+                    pin.session_id,
+                    pin.model,
+                )]);
+            }
             Report::PinRenewed {
                 mut pin,
                 now,
@@ -1192,6 +1244,12 @@ impl Task {
             } => {
                 if self.moved_past(&account_id, incarnation) {
                     return;
+                }
+                // A head that read both shared windows says what a usage fetch would, so it holds the poll off
+                // for a TTL as a fetch does; one that read fewer leaves the poll due.
+                if sample.windows.contains_key(FIVE_HOUR) && sample.windows.contains_key(SEVEN_DAY)
+                {
+                    self.sampling.stamp(&account_id, sample.observed_at);
                 }
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
@@ -1592,6 +1650,13 @@ impl Sampling {
         if let Some(at) = at {
             self.sampled_at.insert(account_id.to_string(), at);
         }
+    }
+
+    /// Dates a sample that arrived without a fetch, leaving a fetch that is out to finish on its own. An older
+    /// head landing late never moves the date back.
+    fn stamp(&mut self, account_id: &str, at: i64) {
+        let sampled_at = self.sampled_at.entry(account_id.to_string()).or_insert(at);
+        *sampled_at = (*sampled_at).max(at);
     }
 
     fn forget(&mut self, account_id: &str) {

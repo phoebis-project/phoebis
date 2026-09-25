@@ -635,7 +635,9 @@ name = "phoebis-routing"
 version = "0.1.0"
 dependencies = [
  "phoebis-oauth",
+ "phoebis-profile",
  "phoebis-store",
+ "phoebis-transport",
  "fake-upstream",
  "jiff",
  "rand 0.10.2",

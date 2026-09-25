@@ -955,7 +955,10 @@ async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() 
         h.store.account("a").unwrap().unwrap().state == AccountState::Ready
     })
     .await;
-    assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
+    assert!(
+        h.router.pins().await.unwrap().is_empty(),
+        "the pin this request created never served, so the forwarded 401 released it"
+    );
     up.shutdown().await;
 }
 
@@ -1105,7 +1108,10 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
         h.store.account("a").unwrap().unwrap().state == AccountState::Ready
     })
     .await;
-    assert_eq!(h.router.pins().await.unwrap().len(), 1, "the pin stays");
+    assert!(
+        h.router.pins().await.unwrap().is_empty(),
+        "the pin this request created never served, so the forwarded 401 released it"
+    );
     up.shutdown().await;
 }
 
@@ -1235,17 +1241,34 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
 
 #[tokio::test]
 async fn a_committed_answer_the_relay_drained_renews_its_pin_where_the_answer_ends() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
+    use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
             status: 400,
             headers: vec![("content-type".into(), "application/json".into())],
             body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"messages: text content blocks must be non-empty"}}"#
                 .to_vec(),
         },
-    }])
-    .await;
+    );
+    up.push_credential_rule(A, "/v1/messages", json_200());
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    // A first turn with five-minute markers is answered, so the pin has served and its renewal left it at five
+    // minutes: a client error on a pin its own request created releases it instead of renewing it.
+    let five_minutes = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replace(r#","ttl":"1h""#, "");
+    let mut first = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        five_minutes.as_bytes(),
+        KEY,
+    );
+    set_header(&mut first, "x-claude-code-session-id", "s1");
+    let first = h.app.clone().oneshot(first).await.unwrap();
+    assert_eq!(first.status(), 200);
+    first.into_body().collect().await.unwrap();
     let resp = h
         .app
         .clone()
@@ -1259,7 +1282,7 @@ async fn a_committed_answer_the_relay_drained_renews_its_pin_where_the_answer_en
     assert_eq!(
         (pins[0].account_id.as_str(), pins[0].cache_ttl_ms),
         ("a", 3_600_000),
-        "the drained answer's renewal named the body's one-hour markers over the fresh pin's five minutes"
+        "the drained answer's renewal named the body's one-hour markers over the first turn's five minutes"
     );
     up.shutdown().await;
 }
