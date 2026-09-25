@@ -475,14 +475,6 @@ pub fn select(
             state, snapshot, pool, request, current, &eligible, window, cold,
         ) {
             state.remove_pin(&current.key_id, &current.session_id, &current.model);
-            // The move spends the mark: a pin that comes back inside the dwell is not shed again on a round
-            // that marked it before it left.
-            state.unmark_shed(
-                &current.account_id,
-                &current.key_id,
-                &current.session_id,
-                &current.model,
-            );
             writes.push(StateWrite::DeletePin(
                 current.key_id.clone(),
                 current.session_id.clone(),

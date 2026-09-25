@@ -517,16 +517,21 @@ impl RoutingState {
         ))
     }
 
+    /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one
+    /// off its account, so it spends that pin's mark as a removal does; a renewal keeps the epoch and the mark.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
-        self.pins.insert(
-            (
-                pin.key_id.clone(),
-                pin.session_id.clone(),
-                pin.model.clone(),
-            ),
-            pin,
+        let key = (
+            pin.key_id.clone(),
+            pin.session_id.clone(),
+            pin.model.clone(),
         );
+        let epoch = pin.epoch;
+        if let Some(replaced) = self.pins.insert(key, pin) {
+            if replaced.epoch != epoch {
+                self.spend_mark(&replaced);
+            }
+        }
     }
 
     pub(crate) fn remove_pin(
@@ -536,8 +541,26 @@ impl RoutingState {
         model: &str,
     ) -> Option<PinRow> {
         let model = self.canonical(model).to_string();
-        self.pins
-            .remove(&(key_id.to_string(), session_id.to_string(), model))
+        self.take_pin(&(key_id.to_string(), session_id.to_string(), model))
+    }
+
+    /// The one way a pin leaves the map: a pin that left its account, by a move, a fail-over, an expiry, a
+    /// release or the purge, spends its mark there, so coming back inside the dwell does not shed it on a round
+    /// that marked it before it left.
+    fn take_pin(&mut self, key: &(String, String, String)) -> Option<PinRow> {
+        let pin = self.pins.remove(key)?;
+        self.spend_mark(&pin);
+        Some(pin)
+    }
+
+    fn spend_mark(&mut self, pin: &PinRow) {
+        if let Some((_, marks)) = self.shed_rounds.get_mut(&pin.account_id) {
+            marks.remove(&(
+                pin.key_id.clone(),
+                pin.session_id.clone(),
+                pin.model.clone(),
+            ));
+        }
     }
 
     /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
@@ -839,19 +862,6 @@ impl RoutingState {
         self.shed_rounds.get(account_id).map(|(at, _)| *at)
     }
 
-    pub(crate) fn unmark_shed(
-        &mut self,
-        account_id: &str,
-        key_id: &str,
-        session_id: &str,
-        model: &str,
-    ) {
-        let model = self.canonical(model).to_string();
-        if let Some((_, marks)) = self.shed_rounds.get_mut(account_id) {
-            marks.remove(&(key_id.to_string(), session_id.to_string(), model));
-        }
-    }
-
     pub(crate) fn record_shed(
         &mut self,
         account_id: &str,
@@ -874,7 +884,7 @@ impl RoutingState {
             .get(&key)
             .is_some_and(|p| p.epoch == pin.epoch && p.account_id == account_id);
         if matches {
-            self.pins.remove(&key);
+            self.take_pin(&key);
         }
         matches
     }
@@ -930,7 +940,7 @@ impl RoutingState {
             .cloned()
             .collect();
         for pin in moved_pins {
-            self.pins.remove(&(
+            self.take_pin(&(
                 pin.key_id.clone(),
                 pin.session_id.clone(),
                 pin.model.clone(),
@@ -954,7 +964,9 @@ impl RoutingState {
                     model: dated_id.to_string(),
                     ..pin
                 };
-                self.pins.insert(dated_key, moved.clone());
+                if let Some(replaced) = self.pins.insert(dated_key, moved.clone()) {
+                    self.spend_mark(&replaced);
+                }
                 rekey.upsert_pins.push(moved);
             }
         }
@@ -1002,7 +1014,7 @@ impl RoutingState {
             .cloned()
             .collect();
         for key in &gone {
-            self.pins.remove(key);
+            self.take_pin(key);
         }
         gone
     }
@@ -1067,7 +1079,7 @@ impl RoutingState {
             })
             .collect();
         for (key, _) in &pins {
-            self.pins.remove(key);
+            self.take_pin(key);
         }
         // None of these needs a deletion written: the overage row cascades with the account and the next
         // holder's first reading replaces one left under another incarnation, and samples, round-robin cursors

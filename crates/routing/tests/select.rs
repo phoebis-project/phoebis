@@ -4411,6 +4411,62 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
 }
 
 #[test]
+fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
+    let s = snapshot(Pool {
+        migrate: Some(0.8),
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    // No sibling is cool, so a's round marks s1 and it stays.
+    st.record_sample("a", sample(0.9, 0.3, T - 500));
+    st.record_sample("b", sample(0.9, 0.3, T - 500));
+    st.record_sample("c", sample(0.9, 0.3, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(marked(&st, "s1", T));
+    // What the task does with a cooldown report that names the pin: the row, then the invalidation.
+    let fail_over = |st: &mut RoutingState, account: &str, until: i64| {
+        let epoch = pinned(st, "s1").epoch;
+        st.record_cooldown(cooled(account, "account", until, "five_hour", "rate_limit"));
+        assert!(st.invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                model: "claude-sonnet-5".into(),
+                epoch,
+            },
+            account,
+        ));
+    };
+    fail_over(&mut st, "a", T + 5_000);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("b".into(), None),
+        "the session fails over off the cooled a"
+    );
+    fail_over(&mut st, "b", T + HOUR);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 6_000), &mut rng()).0),
+        ("a".into(), None),
+        "a's cooldown has ended, so the session pins to a again inside a's dwell"
+    );
+    // c turns cool, so a mark that outlived the fail-over would find a destination.
+    st.record_sample("c", sample(0.1, 0.1, T + 6_500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 7_000), &mut rng()).0),
+        ("a".into(), None),
+        "a is still hot and its round still stands, but leaving a spent s1's mark"
+    );
+    assert_eq!(st.last_shed("a"), Some(T), "no new round ran on a");
+}
+
+#[test]
 fn a_round_never_marks_the_last_pin_and_a_zero_target_marks_nothing() {
     let s = snapshot(shedding_pool(Shedding::default()));
     let mut st = loaded(vec![burning("only", "a", 100.0, false, T)]);
