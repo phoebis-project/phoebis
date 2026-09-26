@@ -612,8 +612,8 @@ test('a session view folds every page the cursor names', () => {
 });
 
 test('the dashboard reads the live pin count the route answers beside the rollups', () => {
-  assert.equal(fixture('dashboard').sessions.active_pins, 0);
-  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 0);
+  assert.equal(fixture('dashboard').sessions.active_pins, 1);
+  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 1);
   assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 

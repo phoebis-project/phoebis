@@ -1,4 +1,4 @@
-import type { AlertEvent, AlertRule, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
+import type { AlertEvent, AlertRule, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
 import { accountById } from './accounts';
 import { PRICES } from './catalog';
 import { keyById } from './pools';
@@ -70,6 +70,18 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   // A session the engine still keeps a recipe for is the one holding a pin on its account.
   const pinned = spec.state !== null;
+  const unit: BurnUnit | null = pinned
+    ? accountById.get(spec.accountId)?.kind === 'api_key'
+      ? 'usd'
+      : 'meter_tokens'
+    : null;
+  // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after
+  // this one read; a usd row's burn is not modeled here, since the backend prices it off a differently scaled
+  // stored average (`burn_usd`), never this meter-token-sized roll.
+  const burnRoll = rng.int(200, 4_000);
+  const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
+  const lastInputRoll = rng.int(500, 20_000);
+  const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
   return {
     ...SESSION_SAMPLE,
     sessionId,
@@ -84,12 +96,12 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastRequestAt: seen ? seen.last : null,
     pinned,
     requests: seen ? seen.requests : 0,
-    burn: pinned ? rng.int(200, 4_000) : null,
-    burnAt: pinned ? ago(rng.int(2, 40) * MINUTE) : null,
-    burnUnit: pinned ? (accountById.get(spec.accountId)?.kind === 'api_key' ? 'usd' : 'meter_tokens') : null,
+    burn: pinned && unit !== 'usd' ? burnRoll : null,
+    burnAt: pinned ? burnAtRoll : null,
+    burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
-    lastInputTokens: pinned ? rng.int(500, 20_000) : null,
-    lastRefreshAt: pinned ? ago(rng.int(2, 40) * MINUTE) : null,
+    lastInputTokens: pinned ? lastInputRoll : null,
+    lastRefreshAt: pinned ? lastRefreshRoll : null,
     shedFrom: null,
     agents: spec.agents,
     companion: spec.companion,

@@ -225,6 +225,42 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
+    // A real selection through the router, so `sessions.json` captures a pinned row and the trace below is the
+    // shape `select` actually serializes, not a hand-built stand-in.
+    let snapshot = parts.router.snapshot();
+    let key_row = snapshot
+        .key("desktop")
+        .expect("the desktop key is in the snapshot")
+        .clone();
+    let candidates =
+        phoebis_routing::resolve(&snapshot, &key_row, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool's model rules allow claude-sonnet-5");
+    let selected = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            key_id: "desktop".into(),
+            key_generation,
+            session_id: Some("s-fixture".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let selection = match &selected.result {
+        phoebis_routing::SelectResult::Selected(selection) => selection.clone(),
+        other => panic!("the pool's two eligible members answer a selection, not {other:?}"),
+    };
+    let trace_json = serde_json::to_string(&selection.trace).unwrap();
     let bucket = phoebis_ledger::bucket_of(now - 60_000);
     parts
         .db
@@ -297,14 +333,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cooldown_until: Some(now + 1_800_000),
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
             },
-            attempt(
-                "r-failover",
-                2,
-                "business",
-                200,
-                "succeeded",
-                hour_ago + 400,
-            ),
+            AttemptRecord {
+                selection: Some(trace_json.clone()),
+                ..attempt(
+                    "r-failover",
+                    2,
+                    "business",
+                    200,
+                    "succeeded",
+                    hour_ago + 400,
+                )
+            },
         ],
         bodies: None,
     });

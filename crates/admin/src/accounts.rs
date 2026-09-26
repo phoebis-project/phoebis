@@ -11,10 +11,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
 use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StoreError};
-use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::routes::{account, account_json, failure, reload_or_refuse, store_failure};
+use crate::routes::{
+    account, account_json, double_option, failure, reload_or_refuse, store_failure,
+};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
@@ -42,12 +43,6 @@ struct PatchInput {
     cancelled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     subscription_ends_at: Option<Option<i64>>,
-}
-
-fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Option<T>>, D::Error> {
-    Option::<T>::deserialize(d).map(Some)
 }
 
 fn valid_slug(id: &str) -> bool {

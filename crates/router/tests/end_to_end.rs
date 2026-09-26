@@ -1763,12 +1763,12 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
         row["burn_unit"], "meter_tokens",
         "an oauth account funded by its plan"
     );
-    let last_used_at = row["last_used_at"].as_i64().unwrap();
+    let burn_at = row["burn_at"].as_i64().unwrap();
     let meter_tokens = phoebis_ledger::PlanFactors::shipped()
         .meter_tokens("claude-opus-5", 1_000, 0, 0, 0, 100)
         .unwrap();
     let band_factor =
-        phoebis_ledger::PlanWindows::shipped().band_factor(phoebis_routing::FIVE_HOUR, last_used_at);
+        phoebis_ledger::PlanWindows::shipped().band_factor(phoebis_routing::FIVE_HOUR, burn_at);
     // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
     // priced usage spread over that window.
     let expected_burn = meter_tokens * band_factor / 600.0;

@@ -998,11 +998,7 @@ impl Task {
                 canonical_model,
                 reply,
             } => {
-                let table = &self.config.rates.dollars;
-                let rates = crate::listing::row_for(&canonical_model, |k| table.rows.get(k))
-                    .copied()
-                    .unwrap_or(table.fallback);
-                let _ = reply.send(rates);
+                let _ = reply.send(self.config.rates.dollars.rates_for(&canonical_model));
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());

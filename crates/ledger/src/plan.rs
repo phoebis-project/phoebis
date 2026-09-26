@@ -233,20 +233,23 @@ impl PlanWindows {
         }
     }
 
-    /// The weight the meter puts on a charge landing on `window` at `at`: among the rows naming the window, the
-    /// one in force at `at` (the latest `effective_from` at or before it, a row without one being the oldest,
-    /// the later in the file among equals), its factor when its hours cover `at`, else 1. The one lookup every
-    /// reader of the band goes through, so how the rows spell their edges stays this function's business. A row
-    /// `from_yaml` did not resolve is never in force.
-    pub fn band_factor(&self, window: &str, at: i64) -> f64 {
-        let in_force = self
-            .bands
+    /// The row in force at `at` among those naming `window`: the latest `effective_from` at or before it, a row
+    /// without one being the oldest, the later in the file among equals. The one lookup every reader of the band
+    /// goes through, so how the rows spell their edges stays this function's business. A row `from_yaml` did not
+    /// resolve is never in force.
+    fn in_force(&self, window: &str, at: i64) -> Option<(&Band, &Resolved)> {
+        self.bands
             .iter()
             .filter(|band| band.names(window))
             .filter_map(|band| Some((band, band.resolved.as_ref()?)))
             .filter(|(_, resolved)| resolved.from.is_none_or(|from| from <= at))
-            .max_by_key(|(_, resolved)| resolved.from);
-        in_force
+            .max_by_key(|(_, resolved)| resolved.from)
+    }
+
+    /// The weight the meter puts on a charge landing on `window` at `at`: the in-force row's factor when its
+    /// hours cover `at`, else 1.
+    pub fn band_factor(&self, window: &str, at: i64) -> f64 {
+        self.in_force(window, at)
             .filter(|(band, resolved)| band.covers(&resolved.zone, at))
             .map_or(1.0, |(band, _)| band.factor)
     }
@@ -254,12 +257,6 @@ impl PlanWindows {
     /// The factor `band_factor` would apply while in force, whether or not `now` falls inside its hours: the
     /// fit table's prediction for `window`, `None` when no band names it.
     pub fn band_factor_of(&self, window: &str, now: i64) -> Option<f64> {
-        self.bands
-            .iter()
-            .filter(|band| band.names(window))
-            .filter_map(|band| Some((band, band.resolved.as_ref()?)))
-            .filter(|(_, resolved)| resolved.from.is_none_or(|from| from <= now))
-            .max_by_key(|(_, resolved)| resolved.from)
-            .map(|(band, _)| band.factor)
+        self.in_force(window, now).map(|(band, _)| band.factor)
     }
 }

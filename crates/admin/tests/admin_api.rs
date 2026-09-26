@@ -403,21 +403,27 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     .await;
     assert_eq!(confirmed.status(), 200);
     let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    // Computed rather than a literal, so the assertion holds whichever anchor day `derived_end` settles on.
+    let derived = phoebis_routing::term::derived_end(
+        &phoebis_store::SubscriptionTerm {
+            account_id: "business".into(),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: Some(1_790_899_200_000),
+            cancelled: false,
+            ends_at: None,
+        },
+        common::NOW,
+    );
     assert_eq!(
-        (
-            acct["subscription"]["plan"].clone(),
-            acct["subscription"]["tier"].clone(),
-            acct["subscription"]["since"].clone(),
-            acct["subscription"]["trial_ends_at"].clone(),
-            acct["subscription"]["ends_at"].clone(),
-        ),
-        (
-            serde_json::json!("max"),
-            serde_json::json!("default_claude_max_5x"),
-            serde_json::json!(1_773_482_400_000_i64),
-            serde_json::json!(1_790_899_200_000_i64),
-            serde_json::Value::Null,
-        ),
+        acct["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+            "ends_at": null,
+            "derived_ends_at": derived,
+        }),
         "the confirm stored the plan and the start with no poll having run"
     );
 }
@@ -1021,5 +1027,36 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         ),
         (Some(0.5), Some("usd")),
         "overage evidence whose reset is ahead moves a subscription account's reading to dollars"
+    );
+    // A reset that has already passed no longer counts as overage: a raw `in_use` read would still answer
+    // `usd` here, since the flag itself never cleared. A later `observed_at` than the ahead-of-now report
+    // above, or the router's own newest-wins rule drops this one on the floor.
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "business".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(now - 3_600_000),
+            reset: Some(now - 1),
+            observed_at: now + 1,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    let recovered_sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "meter_tokens")
+    })
+    .await;
+    assert_eq!(
+        (
+            row(&recovered_sessions, "s1")["burn"].as_f64(),
+            row(&recovered_sessions, "s1")["burn_unit"].as_str()
+        ),
+        (Some(42.0), Some("meter_tokens")),
+        "a passed reset reads as not in overage, so the reading returns to the meter"
     );
 }

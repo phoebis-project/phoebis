@@ -27,6 +27,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
@@ -1238,6 +1239,13 @@ pub(crate) fn store_failure(error: StoreError) -> Response {
 
 pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
+pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay

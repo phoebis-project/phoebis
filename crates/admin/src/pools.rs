@@ -13,10 +13,9 @@ use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{
     Failover, OveragePolicy, PoolMember, PoolRow, Shedding, StoreError, Strategy, WarmSessions,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::routes::{failure, reload_or_refuse, store_failure};
+use crate::routes::{double_option, failure, reload_or_refuse, store_failure};
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -82,13 +81,6 @@ struct PoolInput {
     overage_move_grace_minutes: Option<u32>,
     #[serde(default)]
     wind_down_minutes: Option<u32>,
-}
-
-/// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
-fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Option<T>>, D::Error> {
-    Option::<T>::deserialize(d).map(Some)
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -568,28 +560,32 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let pool_id = row.id.clone();
-    let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
-    let (day, traffic, moves) = state
+    let (day, traffic) = state
         .ledger
         .db()
         .read(move |c| {
             Ok((
                 phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600)?,
                 phoebis_ledger::pool_traffic(c, &pool_id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
-                phoebis_ledger::moves_by_reason(
-                    c,
-                    &phoebis_ledger::SeriesFilter {
-                        from: now - 3_600_000,
-                        to: now,
-                        bucket_seconds: 3_600,
-                        accounts: account_ids,
-                        ..Default::default()
-                    },
-                )?,
             ))
         })
         .await
         .unwrap_or_default();
+    // A memberless pool has no account to attribute a move against, so this skips the read rather than
+    // reading `pin_migrations_by_reason`'s empty `accounts` as "every account".
+    let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
+    let moves = if account_ids.is_empty() {
+        std::collections::BTreeMap::new()
+    } else {
+        state
+            .ledger
+            .db()
+            .read(move |c| {
+                phoebis_ledger::pin_migrations_by_reason(c, now - 3_600_000, now, &account_ids)
+            })
+            .await
+            .unwrap_or_default()
+    };
     let cooldowns = state.router.cooldowns().await.unwrap_or_default();
     let overages = state.router.overages().await.unwrap_or_default();
     let pins = state.router.pins().await.unwrap_or_default();

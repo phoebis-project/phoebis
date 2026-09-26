@@ -7,7 +7,7 @@
     "storage_ok": true,
     "ledger": {
       "schema_version": 18,
-      "written": 13,
+      "written": 14,
       "dropped": 0,
       "write_failures": 0,
       "gaps": 0,

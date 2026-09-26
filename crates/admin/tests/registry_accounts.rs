@@ -734,26 +734,28 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
         (Some(1), Some(2))
     );
     assert_eq!(listed["profile"]["display_name"], "Biz");
-    assert_eq!(
-        (
-            listed["subscription"]["plan"].as_str(),
-            listed["subscription"]["tier"].as_str(),
-            listed["subscription"]["since"].as_i64(),
-            listed["subscription"]["trial_ends_at"].as_i64(),
-            listed["subscription"]["ends_at"].as_i64(),
-        ),
-        (
-            Some("max"),
-            Some("default_claude_max_5x"),
-            Some(1_773_482_400_000_i64),
-            Some(1_790_899_200_000_i64),
-            None,
-        ),
-        "never cancelled, so the stored end is null"
+    // Computed rather than a literal, so the assertion holds whichever anchor day `derived_end` settles on.
+    let derived = phoebis_routing::term::derived_end(
+        &phoebis_store::SubscriptionTerm {
+            account_id: "business".into(),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: Some(1_790_899_200_000),
+            cancelled: false,
+            ends_at: None,
+        },
+        now,
     );
-    assert!(
-        listed["subscription"]["derived_ends_at"].is_i64(),
-        "a subscription with a start prefills a derived end"
+    assert_eq!(
+        listed["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+            "ends_at": null,
+            "derived_ends_at": derived,
+        }),
+        "never cancelled, so the stored end is null"
     );
     assert_eq!(listed["cancelled"], false);
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
@@ -853,9 +855,61 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
     );
     // The saved end is not the anchor the console prefills the form with next time; the derivation is its own
     // question, read from `since` and the trial alone.
-    assert!(
-        cancelled["subscription"]["derived_ends_at"].is_i64(),
+    let derived = phoebis_routing::term::derived_end(
+        &phoebis_store::SubscriptionTerm {
+            account_id: "business".into(),
+            since: Some(1_000_000),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(end),
+        },
+        common::NOW,
+    );
+    assert_eq!(
+        cancelled["subscription"]["derived_ends_at"].as_i64(),
+        derived,
         "a start is on file, so the prefill derives an end of its own"
+    );
+    // An end alone is accepted on the resulting row: the account is already cancelled, so the flag needs no
+    // repeating.
+    let new_end = end + 1_000;
+    let end_only = json(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            &format!(r#"{{"subscription_ends_at":{new_end}}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            end_only["cancelled"].as_bool(),
+            end_only["subscription"]["ends_at"].as_i64(),
+        ),
+        (Some(true), Some(new_end)),
+        "an end alone is accepted while the resulting row is already cancelled"
+    );
+    // The flag alone, re-affirming a cancellation already on file, falls back to the stored end rather than
+    // needing it repeated.
+    let flag_only = json(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            r#"{"cancelled":true}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            flag_only["cancelled"].as_bool(),
+            flag_only["subscription"]["ends_at"].as_i64(),
+        ),
+        (Some(true), Some(new_end)),
+        "the flag alone keeps the stored end standing"
     );
     // A cancelled OAuth account with no profile at all still answers the flag and the stored end: the flag
     // must never read false for lack of a profile.

@@ -13,11 +13,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::pools::valid_slug;
-use crate::routes::{failure, reload_or_refuse, store_failure};
+use crate::routes::{double_option, failure, reload_or_refuse, store_failure};
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -49,12 +48,6 @@ struct KeyInput {
     body_capture_hours: Option<Option<u32>>,
     #[serde(default, deserialize_with = "double_option")]
     in_flight_cap: Option<Option<u32>>,
-}
-
-fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Option<T>>, D::Error> {
-    Option::<T>::deserialize(d).map(Some)
 }
 
 fn new_secret() -> String {

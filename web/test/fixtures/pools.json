@@ -57,8 +57,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790408154254,
-        "updated_at": 1790408154254,
+        "created_at": 1790412878204,
+        "updated_at": 1790412878204,
         "members": [
           {
             "account_id": "business",
@@ -75,14 +75,14 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "psh38vwb",
+            "prefix": "TAamlUMm",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 4,
         "cost_24h": 0.018,
-        "active_pins": 0,
+        "active_pins": 1,
         "traffic_24h": [
           {
             "at": -82800000,

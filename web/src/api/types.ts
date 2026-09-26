@@ -606,10 +606,12 @@ export type BurnUnit = 'meter_tokens' | 'usd';
 export interface Session {
   accountId: string | null;
   agents: number;
-  /** The moving average priced in `burnUnit`; null for a session with no pin, or a pin never renewed with usage. */
+  /** The moving average priced in `burnUnit`; 0 for a pin never renewed with usage, null with no pin at all or
+   *  with one whose account left the registry. */
   burn: number | null;
   /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with `burn`. */
   burnAt: string | null;
+  /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
   /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
   cacheTtlMs: number | null;

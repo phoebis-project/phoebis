@@ -1512,6 +1512,7 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
     );
     for (body, message) in [
         (r#"{"shed_share":1.5}"#, "shed_share is between 0 and 1"),
+        (r#"{"shed_share":-0.1}"#, "shed_share is between 0 and 1"),
         (
             r#"{"burn_window_seconds":59}"#,
             "burn_window_seconds is at least 60",
@@ -1530,6 +1531,7 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         ),
         (r#"{"in_flight_cap":0}"#, "in_flight_cap is at least 1"),
         (r#"{"pace_floor":-0.1}"#, "pace_floor is between 0 and 1"),
+        (r#"{"pace_floor":1.5}"#, "pace_floor is between 0 and 1"),
         (
             r#"{"overage_move_grace_minutes":301}"#,
             "overage_move_grace_minutes is 0 to 300",
@@ -1543,6 +1545,65 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         assert_eq!(refused.status(), 400, "{body}");
         assert_eq!(json(refused).await["error"].as_str(), Some(message));
     }
+    // Every field's lower inclusive edge, accepted in one patch.
+    let low = json(
+        patch(
+            &app,
+            "/admin/pools/eng",
+            r#"{"shed_share":0,"pace_floor":0,"burn_window_seconds":60,"source_dwell_seconds":60,
+                "retry_in_place_seconds":0,"in_flight_cap":1,"overage_move_grace_minutes":0,
+                "wind_down_minutes":0}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            low["shed_share"].as_f64(),
+            low["pace_floor"].as_f64(),
+            low["burn_window_seconds"].as_u64(),
+            low["source_dwell_seconds"].as_u64(),
+            low["retry_in_place_seconds"].as_u64(),
+            low["in_flight_cap"].as_u64(),
+            low["overage_move_grace_minutes"].as_u64(),
+            low["wind_down_minutes"].as_u64(),
+        ),
+        (
+            Some(0.0),
+            Some(0.0),
+            Some(60),
+            Some(60),
+            Some(0),
+            Some(1),
+            Some(0),
+            Some(0),
+        ),
+        "every field's lower inclusive edge is accepted"
+    );
+    // The three fields with an upper edge, accepted in a second patch.
+    let high = json(
+        patch(
+            &app,
+            "/admin/pools/eng",
+            r#"{"shed_share":1,"pace_floor":1,"retry_in_place_seconds":300,
+                "overage_move_grace_minutes":300,"wind_down_minutes":10080}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            high["shed_share"].as_f64(),
+            high["pace_floor"].as_f64(),
+            high["retry_in_place_seconds"].as_u64(),
+            high["overage_move_grace_minutes"].as_u64(),
+            high["wind_down_minutes"].as_u64(),
+        ),
+        (Some(1.0), Some(1.0), Some(300), Some(300), Some(10_080)),
+        "every field's upper inclusive edge is accepted"
+    );
 }
 
 #[tokio::test]

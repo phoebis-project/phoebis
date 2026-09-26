@@ -1088,6 +1088,100 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
         (point["plan_percent"].as_f64().unwrap() - expected).abs() < 1e-12,
         "the fitted 5-hour scale is absent, so the tier's predicted one divides the bucket: {point}"
     );
+    // A fitted scale, other than the tier's row, takes over the division.
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: phoebis_store::FitRow {
+            account_id: "business".into(),
+            window: phoebis_routing::FIVE_HOUR.into(),
+            scale: 5_945_000.0,
+            confidence: 0.8,
+            intervals: 12,
+            corrections_json: "{}".into(),
+            fitted_at: now,
+            incarnation: 1,
+            band_factor: None,
+            ..Default::default()
+        },
+        incarnation: 1,
+    });
+    let expected_fitted = meter_tokens / 5_945_000.0;
+    let burn_fitted = wait_json(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=account",
+        &cookie,
+        |v| {
+            v["points"].as_array().unwrap().iter().any(|p| {
+                p["group"] == "business"
+                    && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0
+                    && (p["plan_percent"].as_f64().unwrap_or(-1.0) - expected_fitted).abs() < 1e-9
+            })
+        },
+    )
+    .await;
+    let fitted_point = burn_fitted["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["group"] == "business" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
+        .unwrap();
+    assert!(
+        (fitted_point["plan_percent"].as_f64().unwrap() - expected_fitted).abs() < 1e-9,
+        "a fitted 5-hour scale divides the bucket instead of the tier's predicted one: {fitted_point}"
+    );
+    // An api_key account has no tier on file and no fit row, so its point reads plan_percent null.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "burn-2".into(),
+            received_at: now - HOUR,
+            finished_at: Some(now - HOUR + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s2".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "burn-2".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            started_at: now - HOUR,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            estimated_usd: Some(0.01),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    let with_direct = wait_json(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=account",
+        &cookie,
+        |v| {
+            v["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["group"] == "direct" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
+        },
+    )
+    .await;
+    assert!(
+        with_direct["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["group"] == "direct")
+            .all(|p| p["plan_percent"].is_null()),
+        "an api_key account has no plan to read a percent of"
+    );
     let by_key = json(
         get(
             &parts.app,
@@ -1115,6 +1209,142 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
         .status(),
         400,
         "pool is not one of the burn route's own group_by values"
+    );
+}
+
+#[tokio::test]
+async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let session_request = |id: &str,
+                           at: i64,
+                           session: &str,
+                           account: &str,
+                           input: u64,
+                           output: u64,
+                           estimated_usd: f64| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: if account == "business" {
+                "oauth"
+            } else {
+                "api_key"
+            }
+            .into(),
+            started_at: at,
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            output_tokens: Some(output),
+            estimated_usd: Some(estimated_usd),
+            ..Default::default()
+        }],
+        bodies: None,
+    };
+    // The most tokens, split an hour apart so the series carries it in two buckets.
+    parts.ledger.record(session_request(
+        "r-big-1",
+        now - HOUR - 100,
+        "s-big",
+        "business",
+        2_000,
+        200,
+        0.0,
+    ));
+    parts.ledger.record(session_request(
+        "r-big-2",
+        now - 100,
+        "s-big",
+        "business",
+        2_000,
+        200,
+        0.0,
+    ));
+    // Fewer tokens than "s-big", more than "s-small", on an api_key account.
+    parts.ledger.record(session_request(
+        "r-mid",
+        now - 100,
+        "s-mid",
+        "direct",
+        1_000,
+        100,
+        0.05,
+    ));
+    // The fewest tokens: last in the ranking.
+    parts.ledger.record(session_request(
+        "r-small",
+        now - 100,
+        "s-small",
+        "business",
+        10,
+        1,
+        0.0,
+    ));
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-mid").await.unwrap()
+    })
+    .await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=session",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let points = burn["points"].as_array().unwrap();
+    let first_index = |group: &str| {
+        points
+            .iter()
+            .position(|p| p["group"] == group)
+            .unwrap_or_else(|| panic!("{group} is not in the ranked sessions: {points:?}"))
+    };
+    assert!(
+        first_index("s-big") < first_index("s-mid")
+            && first_index("s-mid") < first_index("s-small"),
+        "ranked by tokens, most first: {points:?}"
+    );
+    let big_buckets: Vec<serde_json::Value> = points
+        .iter()
+        .filter(|p| p["group"] == "s-big" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
+        .cloned()
+        .collect();
+    assert_eq!(
+        big_buckets.len(),
+        2,
+        "the hour-apart attempts land in two different buckets: {points:?}"
+    );
+    assert!(
+        big_buckets.iter().all(|p| p["usd"].as_f64() == Some(0.0)),
+        "an oauth session prices in meter tokens alone: {big_buckets:?}"
+    );
+    let mid_point = points
+        .iter()
+        .find(|p| p["group"] == "s-mid" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
+        .unwrap_or_else(|| panic!("s-mid's bucket carries its dollar price: {points:?}"));
+    assert_eq!(
+        mid_point["meter_tokens"].as_f64(),
+        Some(0.0),
+        "an api_key session prices in dollars alone"
     );
 }
 
@@ -1321,10 +1551,17 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
         Some(&cookie),
     )
     .await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"empty","label":"Empty","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
     let now = common::NOW;
-    let event = |account: &str, reason: &str| {
+    let event_at = |account: &str, reason: &str, at: i64| {
         Record::Event(EventRecord {
-            at: now - 100,
+            at,
             kind: "pin_migrated".into(),
             account_id: Some(account.into()),
             key_id: Some("desktop".into()),
@@ -1334,11 +1571,16 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
             detail: Some(serde_json::json!({ "reason": reason }).to_string()),
         })
     };
+    let event = |account: &str, reason: &str| event_at(account, reason, now - 100);
     parts.ledger.record(event("business", "shed"));
     parts.ledger.record(event("direct", "shed"));
     parts.ledger.record(event("business", "spent"));
     // A shed of another pool's account, left out of "main"'s count.
     parts.ledger.record(event("outside", "shed"));
+    // 61 minutes ago: outside the last hour, so this one is not counted either.
+    parts
+        .ledger
+        .record(event_at("business", "shed", now - 61 * 60_000));
     let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
         v["pools"]
             .as_array()
@@ -1348,18 +1590,27 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
             .is_some_and(|p| p["moves_per_hour"]["shed"] == 2.0)
     })
     .await;
-    let main = pools["pools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["id"] == "main")
-        .unwrap();
+    let pool = |id: &str| {
+        pools["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
     assert_eq!(
         (
-            main["moves_per_hour"]["shed"].as_f64(),
-            main["moves_per_hour"]["spent"].as_f64()
+            pool("main")["moves_per_hour"]["shed"].as_f64(),
+            pool("main")["moves_per_hour"]["spent"].as_f64()
         ),
-        (Some(2.0), Some(1.0))
+        (Some(2.0), Some(1.0)),
+        "the hour-old move and another pool's account are both left out"
+    );
+    assert_eq!(
+        pool("empty")["moves_per_hour"],
+        serde_json::json!({}),
+        "a memberless pool answers an empty map without a query to attribute moves against"
     );
 }
 

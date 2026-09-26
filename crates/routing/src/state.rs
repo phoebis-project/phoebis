@@ -201,10 +201,14 @@ impl RateTable {
         }
     }
 
-    /// Each count times its rate, summed, from the row `listing::row_for` finds for `canonical_model`, else
-    /// from `fallback`.
+    /// The row `listing::row_for` finds for `canonical_model`, else `fallback`.
+    pub fn rates_for(&self, canonical_model: &str) -> Rates {
+        *row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback)
+    }
+
+    /// Each count times its rate, summed.
     pub fn price(&self, canonical_model: &str, usage: PinUsage) -> f64 {
-        let rates = row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback);
+        let rates = self.rates_for(canonical_model);
         usage.input as f64 * rates.input
             + usage.cache_read as f64 * rates.cache_read
             + usage.write_5m as f64 * rates.write_5m

@@ -7,6 +7,7 @@ use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
@@ -396,6 +397,42 @@ pub fn recent_events_of_kind(
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The `pin_migrated` events in `[from, to)` for the given accounts, counted by the move's `detail.reason`
+/// (`unknown` when the event named none). Reads the events table's `(kind, at)` index directly rather than an
+/// hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly; the caller decides
+/// whether an empty `accounts` list should skip the query entirely rather than treat it as "every account", the
+/// way `SeriesFilter`'s scopes do.
+pub fn pin_migrations_by_reason(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+    accounts: &[String],
+) -> Result<BTreeMap<String, u64>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT account_id, detail FROM events WHERE kind = 'pin_migrated' AND at >= ?1 AND at < ?2",
+    )?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            r.get::<_, Option<String>>(1)?,
+        ))
+    })?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (account_id, detail) = row?;
+        if !account_id.is_some_and(|id| accounts.contains(&id)) {
+            continue;
+        }
+        let parsed: Value = detail
+            .as_deref()
+            .and_then(|d| serde_json::from_str(d).ok())
+            .unwrap_or(Value::Null);
+        let reason = parsed["reason"].as_str().unwrap_or("unknown").to_string();
+        *out.entry(reason).or_insert(0u64) += 1;
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1195,11 +1232,54 @@ pub struct BurnPoint {
     pub uncached_tokens: u64,
 }
 
+/// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
+/// attempt carry the same five token counts and a dollar estimate under different names.
+struct UsageRow<'a> {
+    canonical_model: &'a str,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_5m_tokens: u64,
+    cache_write_1h_tokens: u64,
+    output_tokens: u64,
+    estimated_usd: f64,
+    /// Milliseconds: the row's own hour for a rollup row, `started_at` for an attempt, since a bucket spanning
+    /// more than one band edge needs the charge's own instant to say which side it landed on.
+    at: i64,
+}
+
+/// Meter tokens (banded at the row's own instant) for an oauth account, `estimated_usd` for an api_key one; a
+/// row whose account is not in `kinds` carries no price the caller could attribute, so it adds nothing at all.
+fn price_usage(
+    point: &mut BurnPoint,
+    kind: Option<AccountKind>,
+    factors: &PlanFactors,
+    windows: &PlanWindows,
+    row: &UsageRow,
+) {
+    match kind {
+        Some(AccountKind::Oauth) => {
+            if let Some(tokens) = factors.meter_tokens(
+                row.canonical_model,
+                row.input_tokens,
+                row.cache_read_tokens,
+                row.cache_write_5m_tokens,
+                row.cache_write_1h_tokens,
+                row.output_tokens,
+            ) {
+                point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, row.at);
+            }
+        }
+        Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
+        None => return,
+    }
+    point.cached_tokens += row.cache_read_tokens;
+    point.uncached_tokens += row.input_tokens;
+}
+
 /// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the
 /// fitted scale they are later divided by was built with; read per row rather than per bucket, since a
 /// six-hour or daily bucket spans more than one band edge and only the row's own hour says which side of an
-/// edge it fell on. An api_key row prices in `estimated_usd` instead; a row whose account is not in `kinds`
-/// carries no price the caller could attribute, so it is left out entirely.
+/// edge it fell on.
 pub fn burn_series(
     conn: &Connection,
     factors: &PlanFactors,
@@ -1227,25 +1307,22 @@ pub fn burn_series(
             .iter()
             .filter(|r| r.hour >= at && r.hour < at + filter.bucket_seconds && matches(r))
         {
-            match kinds.get(&row.account_id) {
-                Some(AccountKind::Oauth) => {
-                    if let Some(tokens) = factors.meter_tokens(
-                        &row.canonical_model,
-                        row.input_tokens,
-                        row.cache_read_tokens,
-                        row.cache_write_5m_tokens,
-                        row.cache_write_1h_tokens,
-                        row.output_tokens,
-                    ) {
-                        point.meter_tokens +=
-                            tokens * windows.band_factor(FIVE_HOUR, row.hour * 1_000);
-                    }
-                }
-                Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
-                None => continue,
-            }
-            point.cached_tokens += row.cache_read_tokens;
-            point.uncached_tokens += row.input_tokens;
+            price_usage(
+                &mut point,
+                kinds.get(&row.account_id).copied(),
+                factors,
+                windows,
+                &UsageRow {
+                    canonical_model: &row.canonical_model,
+                    input_tokens: row.input_tokens,
+                    cache_read_tokens: row.cache_read_tokens,
+                    cache_write_5m_tokens: row.cache_write_5m_tokens,
+                    cache_write_1h_tokens: row.cache_write_1h_tokens,
+                    output_tokens: row.output_tokens,
+                    estimated_usd: row.estimated_usd,
+                    at: row.hour * 1_000,
+                },
+            );
         }
         points.push(point);
         at += filter.bucket_seconds;
@@ -1296,8 +1373,34 @@ pub fn moves_by_reason(
     Ok(out)
 }
 
+/// The sessions with the most tokens over `[from, to)`, ranked in SQL rather than in memory, so a caller never
+/// reads an attempt row belonging to a session it will not answer.
+const SESSION_BURN_LIMIT: usize = 20;
+
+fn top_sessions_by_tokens(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<Vec<String>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT r.session_id FROM attempts a JOIN requests r ON r.id = a.request_id \
+         WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
+         GROUP BY r.session_id \
+         ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
+             + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
+             + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![from, to, limit as i64], |row| {
+        row.get::<_, String>(0)
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(LedgerError::from)
+}
+
 /// One attempt's tokens toward a session's burn series: the rollups carry no session dimension, so this reads
-/// the request and attempt rows directly.
+/// the request and attempt rows directly, for the given sessions alone.
 struct SessionAttempt {
     session_id: String,
     account_id: String,
@@ -1316,16 +1419,28 @@ fn read_session_attempts(
     conn: &Connection,
     from: i64,
     to: i64,
+    sessions: &[String],
 ) -> Result<Vec<SessionAttempt>, LedgerError> {
-    let mut stmt = conn.prepare(
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
         "SELECT r.session_id, a.account_id, a.started_at, r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
          a.output_tokens, a.estimated_usd \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
-         WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2",
-    )?;
+         WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ?"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut bind: Vec<rusqlite::types::Value> = sessions
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.clone()))
+        .collect();
+    bind.push(rusqlite::types::Value::Integer(from));
+    bind.push(rusqlite::types::Value::Integer(to));
     let tokens = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
-    let rows = stmt.query_map(params![from, to], |row| {
+    let rows = stmt.query_map(params_from_iter(bind), |row| {
         Ok(SessionAttempt {
             session_id: row.get(0)?,
             account_id: row.get(1)?,
@@ -1344,7 +1459,8 @@ fn read_session_attempts(
 }
 
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
-/// `burn_series` prices an account row.
+/// `burn_series` prices an account row. One pass over the range's attempts: each lands in its bucket by index,
+/// rather than every session re-scanning every attempt for every bucket.
 pub fn session_burn_series(
     conn: &Connection,
     factors: &PlanFactors,
@@ -1353,57 +1469,59 @@ pub fn session_burn_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let attempts = read_session_attempts(conn, filter.from, filter.to)?;
-    let mut totals: HashMap<String, u64> = HashMap::new();
-    for a in &attempts {
-        *totals.entry(a.session_id.clone()).or_default() += a.input_tokens
-            + a.cache_read_tokens
-            + a.cache_write_5m_tokens
-            + a.cache_write_1h_tokens
-            + a.output_tokens;
+    let sessions = top_sessions_by_tokens(conn, first * 1_000, last * 1_000, SESSION_BURN_LIMIT)?;
+    if sessions.is_empty() {
+        return Ok(Vec::new());
     }
-    let mut ranked: Vec<(String, u64)> = totals.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ranked.truncate(20);
-    let mut out = Vec::new();
-    for (session_id, _) in ranked {
-        let mut points = Vec::new();
-        let mut at = first;
-        while at < last {
-            let mut point = BurnPoint {
-                at: at * 1_000,
+    let bucket_count = ((last - first) / filter.bucket_seconds) as usize;
+    let empty_series = || {
+        (0..bucket_count)
+            .map(|i| BurnPoint {
+                at: (first + i as i64 * filter.bucket_seconds) * 1_000,
                 ..BurnPoint::default()
-            };
-            for a in attempts.iter().filter(|a| {
-                a.session_id == session_id
-                    && a.at / 1_000 >= at
-                    && a.at / 1_000 < at + filter.bucket_seconds
-            }) {
-                match kinds.get(&a.account_id) {
-                    Some(AccountKind::Oauth) => {
-                        if let Some(tokens) = factors.meter_tokens(
-                            &a.canonical_model,
-                            a.input_tokens,
-                            a.cache_read_tokens,
-                            a.cache_write_5m_tokens,
-                            a.cache_write_1h_tokens,
-                            a.output_tokens,
-                        ) {
-                            point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, a.at);
-                        }
-                    }
-                    Some(AccountKind::ApiKey) => point.usd += a.estimated_usd,
-                    None => continue,
-                }
-                point.cached_tokens += a.cache_read_tokens;
-                point.uncached_tokens += a.input_tokens;
-            }
-            points.push(point);
-            at += filter.bucket_seconds;
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut by_session: HashMap<String, Vec<BurnPoint>> = sessions
+        .iter()
+        .map(|id| (id.clone(), empty_series()))
+        .collect();
+    for a in read_session_attempts(conn, first * 1_000, last * 1_000, &sessions)? {
+        let Some(series) = by_session.get_mut(&a.session_id) else {
+            continue;
+        };
+        let bucket_at = a.at / 1_000;
+        if bucket_at < first || bucket_at >= last {
+            continue;
         }
-        out.push((session_id, points));
+        let index = ((bucket_at - first) / filter.bucket_seconds) as usize;
+        let Some(point) = series.get_mut(index) else {
+            continue;
+        };
+        price_usage(
+            point,
+            kinds.get(&a.account_id).copied(),
+            factors,
+            windows,
+            &UsageRow {
+                canonical_model: &a.canonical_model,
+                input_tokens: a.input_tokens,
+                cache_read_tokens: a.cache_read_tokens,
+                cache_write_5m_tokens: a.cache_write_5m_tokens,
+                cache_write_1h_tokens: a.cache_write_1h_tokens,
+                output_tokens: a.output_tokens,
+                estimated_usd: a.estimated_usd,
+                at: a.at,
+            },
+        );
     }
-    Ok(out)
+    Ok(sessions
+        .into_iter()
+        .map(|id| {
+            let series = by_session.remove(&id).unwrap_or_default();
+            (id, series)
+        })
+        .collect())
 }
 
 #[cfg(test)]

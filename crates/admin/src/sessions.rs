@@ -73,16 +73,20 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             continue;
         }
         // The unit a reader takes for `burn`, the account's kind and whether its overage evidence stands now:
-        // the same predicate every reader of it applies, so this row never disagrees with the selector.
-        let kind = accounts
+        // the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
+        // whose account left the registry has no kind to pick a unit from, so both read null rather than
+        // guessing one.
+        let unit = accounts
             .iter()
             .find(|a| a.id == p.account_id)
-            .map_or(phoebis_store::AccountKind::Oauth, |a| a.kind);
-        let in_overage = overages
-            .iter()
-            .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
-        let unit = BurnUnit::of(kind, in_overage);
-        let burn = unit.read(&p);
+            .map(|a| a.kind)
+            .map(|kind| {
+                let in_overage = overages
+                    .iter()
+                    .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
+                BurnUnit::of(kind, in_overage)
+            });
+        let burn = unit.map(|u| u.read(&p));
         rows.insert(
             key,
             json!({
