@@ -770,6 +770,79 @@ async function wastedProbeRows(theme) {
   }
 }
 
+/**
+ * The burn section and the rewrites card against the Failovers card they sit beside: the same title type, the same
+ * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers.
+ */
+async function burnCards(theme) {
+  try {
+    await page.waitForFunction(() => [...document.querySelectorAll('.card__title')].some((t) => t.textContent === 'Plan meter fit') && !document.querySelector('#burn .skeleton'), null, { timeout: 15_000 });
+  } catch {
+    failures.push(`${theme} /analytics: the burn section never finished loading`);
+    return;
+  }
+  const cards = await page.evaluate(() => {
+    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+    const box = (title) => {
+      const el = card(title);
+      if (!el) return null;
+      const head = getComputedStyle(el.querySelector('.card__title'));
+      const chart = el.querySelector('.recharts-responsive-container');
+      return { chart: chart ? Math.round(chart.getBoundingClientRect().height) : null, title, type: `${head.fontSize}/${head.fontWeight}`, width: Math.round(el.getBoundingClientRect().width) };
+    };
+    return { beside: card('Failovers')?.nextElementSibling === card('Migration rewrites'), boxes: ['Failovers', 'Migration rewrites', 'Tokens per minute', 'Spend per minute', 'Plan per hour'].map(box).filter(Boolean) };
+  });
+  measurements.push(`${theme} /analytics burn cards ${JSON.stringify(cards.boxes)}`);
+  if (!cards.beside) failures.push(`${theme} /analytics: the migration rewrites card does not follow Failovers`);
+  const [reference, ...rest] = cards.boxes;
+  if (!reference || reference.title !== 'Failovers') {
+    failures.push(`${theme} /analytics: no Failovers card to measure the burn cards against`);
+    return;
+  }
+  for (const b of rest) {
+    if (b.type !== reference.type) failures.push(`${theme} /analytics: "${b.title}" titles in ${b.type} against Failovers' ${reference.type}`);
+    if (b.width !== reference.width) failures.push(`${theme} /analytics: "${b.title}" is ${b.width}px wide against Failovers' ${reference.width}px`);
+    if (b.chart !== null && b.chart !== reference.chart) failures.push(`${theme} /analytics: "${b.title}" draws a ${b.chart}px chart against Failovers' ${reference.chart}px`);
+  }
+}
+
+/**
+ * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
+ * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
+ * list view's shot, so that shot stays the list alone.
+ */
+async function requestDrawer(theme) {
+  await page.locator('.requests__table tbody tr').first().click();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('.drawer .attempt', { timeout: 15_000 });
+  } catch {
+    failures.push(`${theme} /requests: the drawer drew no attempt`);
+    return;
+  }
+  const drawn = await page.evaluate(() => {
+    const box = (el) => {
+      const s = getComputedStyle(el);
+      return `${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+    };
+    const status = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Status')?.querySelector('.badge');
+    const client = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Client')?.querySelector('.badge');
+    const traces = [...document.querySelectorAll('.drawer .attempt')].map((a) => a.querySelector('.selection-trace'));
+    return {
+      attempts: traces.length,
+      badges: [...(client ? [client] : []), ...document.querySelectorAll('.drawer .selection-trace .badge')].map((b) => ({ box: box(b), text: b.textContent })),
+      overflow: traces.filter((t) => t && t.scrollWidth > t.clientWidth).length,
+      reference: status ? box(status) : null,
+      traces: traces.filter(Boolean).length,
+    };
+  });
+  measurements.push(`${theme} /requests drawer ${JSON.stringify(drawn)}`);
+  if (drawn.traces !== drawn.attempts) failures.push(`${theme} /requests: ${drawn.traces} of ${drawn.attempts} attempts draw a selection trace`);
+  if (drawn.overflow > 0) failures.push(`${theme} /requests: ${drawn.overflow} selection traces run past the drawer`);
+  if (drawn.reference === null) failures.push(`${theme} /requests: the drawer has no status badge to measure against`);
+  for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
+}
+
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
@@ -816,7 +889,10 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
       }
-      if (view.path === '/analytics') await wastedProbeRows(theme);
+      if (view.path === '/analytics') {
+        await wastedProbeRows(theme);
+        await burnCards(theme);
+      }
       if (view.path === '/settings') {
         await compatibilityCard(theme);
         await bootstrapCards(theme);
@@ -828,6 +904,7 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
+      if (view.path === '/requests') await requestDrawer(theme);
     }
   }
 } catch (error) {

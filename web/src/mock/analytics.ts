@@ -1,11 +1,14 @@
-import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestKind, WastedProbeReason } from '@/api/types';
+import type {
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, RequestKind, RewritePoint, WastedProbeReason, WindowFit,
+} from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
+import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
 import { USER_AGENTS } from './requests';
-import { DAY, HOUR } from './time';
+import { DAY, HOUR, MINUTE, ago, iso } from './time';
 
 /**
  * One hour of one lane of the fixture ledger. The admin routes answer buckets and groups rather than rows,
@@ -210,4 +213,104 @@ export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoin
     points.push({ at: new Date(at).toISOString(), groups: groupsOf(inBucket, q) });
   }
   return points;
+}
+
+type Range = Pick<AnalyticsQuery, 'from' | 'to'>;
+
+/** The bucket starts the analytics routes answer a range in, and each bucket's width. */
+function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
+  const fromMs = Date.parse(range.from);
+  const toMs = Date.parse(range.to);
+  const bucketMs = bucketMsFor(toMs - fromMs);
+  const starts: number[] = [];
+  for (let at = Math.floor(fromMs / bucketMs) * bucketMs; at < Math.ceil(toMs / HOUR) * HOUR; at += bucketMs) starts.push(at);
+  return { bucketMs, starts };
+}
+
+/**
+ * Two fits, one inside the table's prediction and one well past it with its band factor off the provisional row,
+ * so the fit table has a drift to colour and a band to mark.
+ */
+export const FITS: WindowFit[] = [
+  { accountId: 'business', bandDivergent: false, bandFactor: 1.41, bandFactorPredicted: 1.45, confidence: 0.82, corrections: {}, drift: 5_945_000 / 6_120_000, fittedAt: ago(12 * MINUTE), intervals: 14, predicted: 6_120_000, scale: 5_945_000, window: 'five_hour' },
+  { accountId: 'personal', bandDivergent: true, bandFactor: 1.18, bandFactorPredicted: 1.45, confidence: 0.55, corrections: { 'claude-sonnet-5': 1.08 }, drift: 3_420_000 / 2_400_000, fittedAt: ago(47 * MINUTE), intervals: 6, predicted: 2_400_000, scale: 3_420_000, window: 'five_hour' },
+];
+
+/** The shipped meter factors against Opus, by the model family a canonical id names. */
+const METER_FACTORS: [string, number][] = [['fable', 2], ['haiku', 0.36], ['opus', 1], ['sonnet', 0.54]];
+/** A subscription row's tokens in meter units: the model's factor over the token kinds, each at its own weight. */
+const meterTokensOf = (r: HourlyRollup) =>
+  (METER_FACTORS.find(([family]) => r.model.includes(family))?.[1] ?? 1) * (r.tokens.uncachedInput + r.tokens.cacheRead * 0.1 + r.tokens.cacheWrite5m * 1.25 + r.tokens.cacheWrite1h * 2 + r.tokens.output * 5);
+
+/**
+ * The fixture ledger files no request class, so each row's tokens split across the classes by fixed shares; a
+ * probe replays no class of its own and files under `-` with a keepalive credit, as the rollups do.
+ */
+const CLASS_SHARES: [string, number][] = [['auxiliary', 0.1], ['compaction', 0.03], ['main', 0.6], ['subagent', 0.22], ['workflow', 0.05]];
+
+/** How many sessions the session grouping keeps, the route's cut. */
+const BURN_SESSIONS = 20;
+
+export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): { bucketSeconds: number; points: BurnPoint[] } {
+  const { bucketMs, starts } = bucketsOf(range);
+  const kinds = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
+  const first = starts[0] ?? 0;
+  const end = (starts[starts.length - 1] ?? 0) + bucketMs;
+  // The route prices a row by its account's kind and skips a row whose account left the registry.
+  const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId));
+  const sharesOf = (r: HourlyRollup): [string, number][] => {
+    if (groupBy === 'account') return [[r.accountId, 1]];
+    if (groupBy === 'key') return [[r.keyId, 1]];
+    if (groupBy === 'session') return [[r.sessionId, 1]];
+    return r.kind === 'probe' ? [['-', 1]] : CLASS_SHARES;
+  };
+  const sums = new Map<string, Map<number, { cached: number; meter: number; uncached: number; usd: number }>>();
+  for (const r of kept) {
+    const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
+    const oauth = kinds.get(r.accountId) === 'oauth';
+    for (const [group, share] of sharesOf(r)) {
+      const byAt = sums.get(group) ?? new Map();
+      sums.set(group, byAt);
+      const s = byAt.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
+      byAt.set(at, s);
+      s.cached += r.tokens.cacheRead * share;
+      s.uncached += r.tokens.uncachedInput * share;
+      s.meter += oauth ? meterTokensOf(r) * share : 0;
+      s.usd += oauth ? 0 : r.costUsd * share;
+    }
+  }
+  const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
+  let groups = [...sums.keys()].sort();
+  if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
+  const scaleOf = (accountId: string) => FITS.find((f) => f.accountId === accountId && f.window === 'five_hour')?.scale ?? null;
+  const points = groups.flatMap((group) =>
+    starts.map((at): BurnPoint => {
+      const s = sums.get(group)?.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
+      const scale = groupBy === 'account' ? scaleOf(group) : null;
+      return { at: iso(at), cachedTokens: Math.round(s.cached), group, meterTokens: Math.round(s.meter * 100) / 100, planPercent: scale === null ? null : s.meter / scale, uncachedTokens: Math.round(s.uncached), usd: s.usd };
+    }),
+  );
+  return { bucketSeconds: bucketMs / 1_000, points };
+}
+
+/** The reason each hour's moves are filed under, in turn, weighted toward the failover and the shedding round. */
+const MOVE_TURNS: PinMigrationReason[] = ['cooldown', 'shed', 'cooldown', 'spent', 'shed', 'overage', 'cooldown', 'return_to_plan', 'drain', 'mark'];
+
+/** The account rollups' moves into each account, with the cache the first request after each one wrote again. */
+export function rewritesOf(rollups: AccountRollup[], range: Range): { moves: Record<string, number>; points: RewritePoint[] } {
+  const { bucketMs, starts } = bucketsOf(range);
+  const moves: Record<string, number> = {};
+  const points = starts.map((at): RewritePoint => {
+    let rewriteTokens = 0;
+    for (const r of rollups) {
+      const hour = Date.parse(r.hour);
+      if (hour < at || hour >= at + bucketMs || r.pins.migratedIn === 0) continue;
+      const turn = Math.floor(hour / HOUR);
+      rewriteTokens += r.pins.migratedIn * (18_000 + (turn % 5) * 9_000);
+      const reason = MOVE_TURNS[turn % MOVE_TURNS.length];
+      moves[reason] = (moves[reason] ?? 0) + r.pins.migratedIn;
+    }
+    return { at: iso(at), rewriteTokens };
+  });
+  return { moves, points };
 }

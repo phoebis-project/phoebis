@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, PinMigrationReason, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import type { Attempt, CapturedBodies, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
+import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
+import { moveLabel } from '@/lib/analytics';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
@@ -45,16 +47,9 @@ const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
   upstream_error: 'Upstream error',
 };
 
-const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
-  cooldown: 'rate limited',
-  mark: 'upstream marked',
-  overage: 'overage',
-  spent: 'window spent',
-  utilization: 'utilization',
-};
-
 const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   attempted: 'already tried by this request',
+  client_error: 'client error',
   cooldown: 'account cooled',
   deleted: 'upstream deleted',
   disconnected: 'upstream disconnected',
@@ -65,6 +60,7 @@ const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   reauth_required: 'needs re-auth',
   released: 'nothing else stood against the upstream',
   spent: 'window spent',
+  subscription_ended: 'subscription ended',
   unpaired: 'upstream unpaired',
   unserved: 'model no longer served here',
 };
@@ -417,7 +413,21 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               rows={[
                 { label: 'Session', value: r.sessionId ?? '-', mono: true },
                 { label: 'Agent', value: r.agentId ?? '-', mono: true },
-                { label: 'Client', value: r.client ?? '-', mono: true },
+                {
+                  label: 'Client',
+                  value: (
+                    <>
+                      {r.client ?? '-'}
+                      {r.requestClass !== null && (
+                        <>
+                          {' '}
+                          <Badge title="The request class the client sent">{r.requestClass}</Badge>
+                        </>
+                      )}
+                    </>
+                  ),
+                  mono: true,
+                },
                 { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
@@ -492,6 +502,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                       })}
                     <CacheRow attempt={a} usage={r.usage} />
                   </ul>
+                  {a.selection && <SelectionTrace trace={a.selection} usage={r.usage} />}
                   {(a.response.stopReason || a.response.servedModel || (a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0)) && (
                     <div className="attempt__response secondary">
                       {a.response.stopReason && <span>stopped: {a.response.stopReason}{a.response.refusalCategory ? ` (${a.response.refusalCategory}${a.response.refusalRecommendedModel ? `, try ${a.response.refusalRecommendedModel}` : ''})` : ''}</span>}
@@ -542,12 +553,12 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                   </p>
                 );
               }
-              const reason = String(e.detail?.reason ?? '') as PinMigrationReason;
+              const reason = String(e.detail?.reason ?? '');
               const from = String(e.detail?.from_account ?? '-');
               return (
                 <p className="attempt__migration" key={`${e.at}-${from}`} title={fmtAbsolute(e.at)}>
                   Session moved from <Link to={`/upstreams/${from}`}>{from}</Link> to{' '}
-                  {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {PIN_MIGRATION_LABEL[reason] ?? reason}
+                  {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {moveLabel(reason)}
                 </p>
               );
             })}

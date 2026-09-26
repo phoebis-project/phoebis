@@ -111,6 +111,24 @@ test('the analytics reads encode the range, the dimension, and every id list', a
   assert.deepEqual([...breakdown.searchParams.keys()], ['group_by', 'range'], 'an empty list and an unset flag are left off the query');
 });
 
+test('the burn, rewrite and fit reads send the range and the grouping and answer what the routes decode to', async () => {
+  const body = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
+  const bodies = { '/admin/analytics/burn': body('analytics_burn'), '/admin/analytics/fits': body('analytics_fits'), '/admin/analytics/rewrites': body('analytics_rewrites') };
+  const calls = stub((url) => answer(200, bodies[new URL(url, 'http://x').pathname]));
+  const api = new HttpApi();
+  const range = { from: '1970-01-01T00:00:00.000Z', to: '1970-01-02T00:00:00.000Z' };
+  const burn = await api.getAnalyticsBurn(range, 'request_class');
+  const rewrites = await api.getAnalyticsRewrites(range);
+  const fits = await api.getAnalyticsFits();
+  const [burnUrl, rewritesUrl, fitsUrl] = calls.map((c) => new URL(c.url, 'http://x'));
+  assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
+  assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
+  assert.deepEqual([fitsUrl.pathname, fitsUrl.search], ['/admin/analytics/fits', ''], 'the fits route reads no query');
+  assert.deepEqual([burn.bucketSeconds, burn.points.length, burn.points.at(-1).meterTokens], [3_600, bodies['/admin/analytics/burn'].points.length, 1_864.08]);
+  assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
+  assert.deepEqual(fits.map((f) => [f.accountId, f.window, f.drift]), [['business', 'five_hour', 0.5]]);
+});
+
 test('getSession answers null on 401 without running the hook', async () => {
   let unauthorized = 0;
   setHooks({ onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });

@@ -427,6 +427,73 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.ok(rollups.every((r) => isIso(r.hour) && typeof r.peak['5h'] === 'number'));
 });
 
+test('the burn series decodes each point with its instant, both token sides, and a plan share only where the route has one', () => {
+  const body = fixture('analytics_burn');
+  const burn = d.decodeBurn(body);
+  assert.equal(burn.bucketSeconds, 3_600);
+  assert.equal(burn.points.length, body.points.length);
+  const last = burn.points[burn.points.length - 1];
+  const wire = body.points[body.points.length - 1];
+  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: 1_000, group: 'business', meterTokens: 1_864.08, planPercent: wire.plan_percent, uncachedTokens: 2_000, usd: 0 });
+  assert.ok(burn.points.every((p) => isIso(p.at)));
+  // Every grouping but the upstream one answers the share as null, which is no fit rather than an idle window.
+  const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, group: 'desktop', plan_percent: null }] }).points;
+  assert.equal(keyed.planPercent, null);
+  assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
+});
+
+test('the rewrite series decodes with the moves by reason over the range', () => {
+  const body = fixture('analytics_rewrites');
+  const rewrites = d.decodeRewrites(body);
+  assert.equal(rewrites.points.length, body.points.length);
+  assert.deepEqual(rewrites.points[0], { at: new Date(body.points[0].at).toISOString(), rewriteTokens: 0 });
+  assert.deepEqual(rewrites.moves, { spent: 1 });
+  // The reasons are the route's own names, so one the console does not label yet stays a key of its own.
+  assert.deepEqual(d.decodeRewrites({ moves: { later_reason: 2, shed: 3 }, points: [] }).moves, { later_reason: 2, shed: 3 });
+});
+
+test('a window fit decodes the scale against the prediction and the band pair', () => {
+  const [fit] = fixture('analytics_fits').fits.map(d.decodeWindowFit);
+  assert.deepEqual(fit, {
+    accountId: 'business',
+    bandDivergent: false,
+    bandFactor: 1.4,
+    bandFactorPredicted: 1.45,
+    confidence: 0.8,
+    corrections: {},
+    drift: 0.5,
+    fittedAt: new Date(1_000_000).toISOString(),
+    intervals: 12,
+    predicted: 11_890_000,
+    scale: 5_945_000,
+    window: 'five_hour',
+  });
+  // A tier with no row for the window predicts nothing, so it has no drift, and a fit that has not folded both
+  // sides of the band carries no band factor.
+  const bare = d.decodeWindowFit({ ...fixture('analytics_fits').fits[0], band_factor: null, band_factor_predicted: null, corrections: { 'claude-sonnet-5': 1.08 }, drift: null, predicted: null });
+  assert.deepEqual([bare.predicted, bare.drift, bare.bandFactor, bare.bandFactorPredicted, bare.corrections], [null, null, null, null, { 'claude-sonnet-5': 1.08 }]);
+});
+
+test('an attempt carries the selection trace with its skipped members as named objects', () => {
+  const detail = d.decodeRequest(fixture('request').request);
+  assert.equal(detail.attempts[0].selection, null, 'an attempt stored without a trace reads as none');
+  // The fixture's trace has not had its cache read folded in, so the member reads as absent.
+  assert.deepEqual(detail.attempts[1].selection, { cacheRead: null, moved: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'ranked' }], strategy: 'pace', tier: [0, 0, 0] });
+  assert.equal(detail.requestClass, null, 'the fixture request sent no class header');
+  // No captured request carries a folded cache read, a move, a renewal or a class yet, so this row is built from
+  // the backend's serde names: `SelectionTrace` and `Skipped` in the routing crate, `cache_read` from the ledger.
+  const row = d.decodeRequest({
+    ...fixture('request').request,
+    attempts: [{ index: 1, account_id: 'business', selection: { cache_read: 4_200, moved: 'shed', renewed: false, skipped: [{ account_id: 'direct', obstacle: 'above_ceiling' }, { account_id: 'mail', obstacle: 'subscription_ended' }], strategy: 'round_robin', tier: [1, 2, 1] } }, { index: 2, account_id: 'business', selection: { renewed: true, skipped: [], strategy: 'pace', tier: null } }],
+    request_class: 'subagent',
+  });
+  assert.equal(row.requestClass, 'subagent');
+  assert.deepEqual(row.attempts[0].selection, { cacheRead: 4_200, moved: 'shed', renewed: false, skipped: [{ accountId: 'direct', obstacle: 'above_ceiling' }, { accountId: 'mail', obstacle: 'subscription_ended' }], strategy: 'round_robin', tier: [1, 2, 1] });
+  assert.deepEqual(row.attempts[1].selection, { cacheRead: null, moved: null, renewed: true, skipped: [], strategy: 'pace', tier: null }, 'a renewed pin answers no tier');
+  const [odd] = d.decodeRequest({ attempts: [{ index: 1, selection: { renewed: false, skipped: [], strategy: 'pace', tier: [0, 1] } }] }).attempts;
+  assert.equal(odd.selection.tier, null, 'a tier that is not three numbers reads as none rather than as a partial one');
+});
+
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');

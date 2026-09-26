@@ -1697,6 +1697,20 @@
   margin: 6px 0 0;
 }
 
+.selection-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.selection-trace__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+
 .usage-table td {
   padding: 6px 4px;
 }

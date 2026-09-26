@@ -218,6 +218,8 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       index: i,
       outcome,
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
+      // Drawn once the events exist, since a trace names the move an event records.
+      selection: null,
       startedAt: iso(cursor),
       upstreamStatus,
       windows: rateLimitHit ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
@@ -351,6 +353,7 @@ function buildRequests(): RequestLog[] {
       index: 0,
       outcome: 'upstream_error',
       response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
+      selection: null,
       startedAt: story.at,
       upstreamStatus: 404,
       windows: [],
@@ -370,11 +373,13 @@ const REJECTION_MS = 180;
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
-/** A migration reason the fixture draws for a single-attempt row, weighted toward the two the pool's samples drive. */
+/** A move reason the fixture draws for a single-attempt row, weighted toward the shedding round and a spent window. */
 const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
+  { value: 'drain', weight: 1 },
   { value: 'overage', weight: 2 },
+  { value: 'return_to_plan', weight: 1 },
+  { value: 'shed', weight: 3 },
   { value: 'spent', weight: 3 },
-  { value: 'utilization', weight: 3 },
 ];
 
 function buildRequestEvents(): Map<string, RequestEvent[]> {
@@ -431,6 +436,80 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
 
 /** The events the mock's request detail answers, by request id; a failover writes one, a few rows carry a spent or a hot window. */
 export const REQUEST_EVENTS: Map<string, RequestEvent[]> = buildRequestEvents();
+
+/** The obstacles a fresh placement's passed-over members are drawn from; being ranked behind another is the usual one. */
+const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
+  { value: 'above_ceiling', weight: 2 },
+  { value: 'at_cap', weight: 1 },
+  { value: 'cooldown', weight: 2 },
+  { value: 'floor', weight: 1 },
+  { value: 'operator', weight: 1 },
+  { value: 'overage', weight: 1 },
+  { value: 'ranked', weight: 10 },
+  { value: 'spent', weight: 1 },
+  { value: 'subscription_ended', weight: 1 },
+  { value: 'winding_down', weight: 1 },
+];
+
+const pinOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.canonicalModel}`;
+
+/**
+ * The drawer's shed move and the two newer release reasons, each on a pin no other event touches, so the checks
+ * that look for an unmoved request beside a moved one still find one.
+ */
+function addStoryEvents() {
+  const busy = new Set([...REQUEST_EVENTS.keys()].flatMap((id) => { const r = requestById.get(id); return r ? [pinOf(r)] : []; }));
+  const owed: ((r: RequestLog, from: string) => RequestEvent)[] = [];
+  const pinned = (r: RequestLog) => ({ keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId });
+  const shedMoved = [...REQUEST_EVENTS.values()].some((events) => events.some((e) => e.detail?.reason === 'shed'));
+  if (!shedMoved) owed.push((r, from) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
+  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { reasons: ['client_error'] }, kind: 'pin_expired' }));
+  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
+  for (const r of REQUESTS) {
+    const lane = LANES.find((l) => l.keyId === r.keyId);
+    const next = owed[0];
+    if (!next) break;
+    const from = lane?.accountIds.find((id) => id !== r.accountId);
+    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r))) continue;
+    REQUEST_EVENTS.set(r.id, [next(r, from)]);
+    busy.add(pinOf(r));
+    owed.shift();
+  }
+}
+
+/**
+ * Every request its class and every attempt its trace, on a stream of their own so each row and event above keeps
+ * its draws. A move the events record is the trace's `moved`; a first attempt no event moved either renewed its pin
+ * or placed the session afresh, and a fresh placement names every member it passed over.
+ */
+function traceRequests() {
+  const h = createRng(2_909);
+  const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
+  for (const r of REQUESTS) {
+    const pool = poolById.get(r.poolId ?? '');
+    const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
+    const events = REQUEST_EVENTS.get(r.id) ?? [];
+    r.requestClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
+    r.attempts = r.attempts.map((a, i, all): Attempt => {
+      const moved = events.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
+      // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
+      const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
+      const strategy = pool?.strategy ?? 'pace';
+      if (i === 0 && moved === undefined && h.chance(0.55)) return { ...a, selection: { cacheRead, moved: null, renewed: true, skipped: [], strategy, tier: null } };
+      const account = accountOf.get(a.accountId);
+      const overage = account?.overage?.inUse === true ? 1 : 0;
+      // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
+      const group = pool?.preferSubscription ? (account?.kind === 'api_key' ? 2 : overage) : 0;
+      const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
+      const tried = new Set(all.slice(0, i).map((x) => x.accountId));
+      const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
+      return { ...a, selection: { cacheRead, moved: typeof moved === 'string' ? moved : null, renewed: false, skipped, strategy, tier: [group, priority, overage] } };
+    });
+  }
+}
+
+addStoryEvents();
+traceRequests();
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;

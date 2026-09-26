@@ -3,14 +3,15 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, Lin
 import { useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, CacheMissReason, CostSplit, LatencyHistograms, RequestLog } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, RequestLog, RewritePoint, WindowFit } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
-import { Button, Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, type BurnLine, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId } from '@/lib/format';
@@ -29,6 +30,9 @@ type Dim = QueryDim | 'sessionId';
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'User agent' };
+const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Upstream', key: 'Key', request_class: 'Request class', session: 'Session' };
+// Upstream first: the route's default, and the one grouping that draws the plan share.
+const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the upstream.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
@@ -119,6 +123,7 @@ export function AnalyticsPage() {
   const [clientGroups, setClientGroups] = useState('');
   const [groupsCut, setGroupsCut] = useState(false);
   const [includeProbes, setIncludeProbes] = useState(false);
+  const [burnGroup, setBurnGroup] = useState<BurnGroup>('account');
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
   // Three bars stack at the top now, and the filter bar wraps at narrow widths,
@@ -192,6 +197,9 @@ export function AnalyticsPage() {
     [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
+  const burn = useAsync(() => api.getAnalyticsBurn({ from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
+  const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
+  const fits = useAsync(() => api.getAnalyticsFits(), []);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model);
@@ -209,7 +217,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, byModel, byPool, keyKeys, log, modelKeys, poolKeys, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, burn, byModel, byPool, fits, keyKeys, log, modelKeys, poolKeys, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -234,6 +242,8 @@ export function AnalyticsPage() {
   const split = knownSplit(totals.cost);
   const { keptWarm, savings } = totals;
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
+  // The burn, rewrite and fit routes read the range alone, so every filter of the bar passes them by.
+  const unfiltered = otherFilters || filters.accountId.length > 0;
 
   const groupSlot = useMemo(() => {
     // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
@@ -376,6 +386,11 @@ export function AnalyticsPage() {
             </BarChart>
           </ChartCard>
 
+          <Card title="Errors by code" subtitle="Non-200 responses in range">
+            {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
+          </Card>
+
+          {/* Failovers and the rewrites share a row, so what a move cost the cache sits beside the failovers. */}
           <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
             <LineChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -386,9 +401,7 @@ export function AnalyticsPage() {
             </LineChart>
           </ChartCard>
 
-          <Card title="Errors by code" subtitle="Non-200 responses in range">
-            {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
-          </Card>
+          <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} tick={tick} unfiltered={unfiltered} />
         </div>
         <BreakdownTable
           title={`Traffic by ${groupLabel.toLowerCase()}`}
@@ -402,6 +415,16 @@ export function AnalyticsPage() {
             cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
           }))}
         />
+      </Section>
+
+      {/* Burn */}
+      <Section id="burn" offset={headOffset} title="Burn" meta={`Tokens, spend and plan share over the range${unfiltered ? UNFILTERED_NOTE : ''}`}>
+        <div className="row">
+          <span className="muted">Group by</span>
+          <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
+        </div>
+        <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error} groupBy={burnGroup} loading={burn.data === null || burn.stale} />
+        <FitTable error={fits.error} fits={fits.stale ? null : fits.data} />
       </Section>
 
       {/* Latency */}
@@ -673,6 +696,7 @@ function useStickyHeight(ref: RefObject<HTMLElement | null>): number {
 }
 const SECTIONS = [
   { id: 'traffic', label: 'Traffic' },
+  { id: 'burn', label: 'Burn' },
   { id: 'latency', label: 'Latency' },
   { id: 'cache', label: 'Cache' },
   { id: 'cost', label: 'Cost' },
@@ -718,17 +742,44 @@ function Section({ id, title, meta, offset, shown = true, children }: { children
   );
 }
 
-function ChartCard({ title, subtitle, loading, children, legend, height = 220 }: { children: ReactNode; height?: number; legend?: { color: string; dashed?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[]; loading: boolean; subtitle?: string; title: string }) {
+function ChartCard({
+  title,
+  subtitle,
+  loading,
+  children,
+  empty,
+  error = null,
+  footer,
+  legend,
+  height = 220,
+}: {
+  children: ReactNode;
+  /** Drawn in place of the chart, legend and all, when the answer holds nothing the chart could draw. */
+  empty?: ReactNode;
+  /** A card reading a route of its own draws that route's failure in place of the chart. */
+  error?: string | null;
+  footer?: ReactNode;
+  height?: number;
+  legend?: { color: string; dashed?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
+  loading: boolean;
+  subtitle?: string;
+  title: string;
+}) {
   return (
     <Card title={title} subtitle={subtitle}>
-      {loading ? (
+      {error !== null ? (
+        <ErrorState title={`Could not load ${title.toLowerCase()}`} body={error} />
+      ) : loading ? (
         <Skeleton height={height} />
+      ) : empty ? (
+        <p className="muted">{empty}</p>
       ) : (
         <>
           <ResponsiveContainer width="100%" height={height}>
             {children as never}
           </ResponsiveContainer>
           {legend && <Legend items={legend} />}
+          {footer}
         </>
       )}
     </Card>
@@ -1089,6 +1140,233 @@ function CostByGroup({ points, groupBy, groupSlot, loading, tick }: { groupBy: G
         ))}
       </AreaChart>
     </ChartCard>
+  );
+}
+
+const UNFILTERED_NOTE = '; the filters above do not apply here';
+const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const tickFor = (bucketMs: number) => (v: number) => (bucketMs >= 6 * HOUR ? fmtDayShort(v) : fmtHourTick(v));
+
+function RewritesCard({ answer, error, loading, tick, unfiltered }: { answer: { moves: Record<string, number>; points: RewritePoint[] } | null; error: string | null; loading: boolean; tick: (v: number) => string; unfiltered: boolean }) {
+  const ink = useChartInk();
+  const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
+  const total = data.reduce((n, p) => n + p.rewriteTokens, 0);
+  const moves = Object.entries(answer?.moves ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  return (
+    <ChartCard
+      title="Migration rewrites"
+      subtitle={`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`}
+      error={error}
+      loading={loading}
+      legend={[{ color: ink.series[1], label: 'Rewrite tokens', value: fmtCompact(total) }]}
+      footer={
+        <ul className="legend" aria-label="Moves by reason">
+          <li className="muted">Moves</li>
+          {moves.length === 0 ? (
+            <li className="muted">none in range</li>
+          ) : (
+            moves.map(([reason, n]) => (
+              <li key={reason}>
+                {upperFirst(moveLabel(reason))}
+                <span className="legend__value num">{fmtInt(n)}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      }
+    >
+      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+        <CartesianGrid vertical={false} stroke={ink.grid} />
+        <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+        <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<{ at: number; rewriteTokens: number }>((p) => [{ color: ink.series[1], label: 'rewrite tokens', value: fmtCompact(p.rewriteTokens) }])} />
+        <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+      </BarChart>
+    </ChartCard>
+  );
+}
+
+const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
+const OVERHEAD_HINT = 'every other class, and requests that named none';
+const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
+
+/**
+ * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
+ * its rank, so a range that reorders the groups does not repaint them; the upstream grouping keeps each upstream's
+ * page-wide colour.
+ */
+function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSeconds: number; points: BurnPoint[] } | null; error: string | null; groupBy: BurnGroup; loading: boolean }) {
+  const ink = useChartInk();
+  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds)), [answer, groupBy]);
+  const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
+  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
+  // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
+  const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
+  const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
+  const tick = tickFor((answer?.bucketSeconds ?? 3_600) * 1_000);
+  const label = BURN_GROUP_LABEL[groupBy].toLowerCase();
+  // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
+  const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
+  const byUpstream = groupBy === 'account';
+  const meterAxis = byUpstream && lines.some((l) => l.unit === 'meter_tokens');
+  const usdAxis = !meterAxis || lines.some((l) => l.unit === 'usd');
+  // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
+  const usdMax = Math.max(0, ...rows.flatMap((r) => r.usd));
+  const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
+  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'meter_tokens');
+  const spendOf = (l: BurnLine, r: BurnRow, i: number) => (byUpstream ? (l.unit === 'meter_tokens' ? `${fmtCompact(r.meter[i])} meter tokens` : fmtUsd(r.usd[i])) : `${fmtUsd(r.usd[i])}, ${fmtCompact(r.meter[i])} meter tokens`);
+  return (
+    <div className="grid-2">
+      <ChartCard
+        title="Tokens per minute"
+        subtitle={`Input tokens per minute, stacked by ${label}; the lighter part of each is cached${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`}
+        error={error}
+        loading={loading}
+        empty={empty}
+        legend={lines.map((l) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: fmtCompact(l.tokensPerMinute) }))}
+      >
+        <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+          <CartesianGrid vertical={false} stroke={ink.grid} />
+          <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+          <Tooltip
+            cursor={{ fill: ink.grid, opacity: 0.6 }}
+            content={timeTip<BurnRow>((r) => [
+              ...lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: `${fmtCompact(r.uncached[i])} uncached, ${fmtCompact(r.cached[i])} cached` })),
+              { label: 'total', value: fmtCompact(r.uncached.reduce((n, v) => n + v, 0) + r.cached.reduce((n, v) => n + v, 0)) },
+            ])}
+          />
+          {lines.flatMap((l, i) => [
+            <Bar key={`${i}-uncached`} dataKey={(r: BurnRow) => r.uncached[i]} stackId="a" fill={colorOf(l)} stroke={ink.surface} strokeWidth={1} maxBarSize={22} isAnimationActive={false} />,
+            <Bar key={`${i}-cached`} dataKey={(r: BurnRow) => r.cached[i]} stackId="a" fill={colorOf(l)} fillOpacity={0.45} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === lines.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />,
+          ])}
+        </BarChart>
+      </ChartCard>
+
+      <ChartCard
+        title="Spend per minute"
+        subtitle={byUpstream ? 'Dollars per minute on the left; a subscription upstream burns plan-meter tokens, dashed, on the right' : 'Dollars per minute; the tooltip adds the plan-meter tokens'}
+        error={error}
+        loading={loading}
+        empty={empty}
+        legend={lines.map((l) => ({ color: colorOf(l), dashed: byUpstream && l.unit === 'meter_tokens', label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: byUpstream && l.unit === 'meter_tokens' ? `${fmtCompact(l.meterPerMinute)} tokens` : fmtUsd(l.usdPerMinute) }))}
+      >
+        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid vertical={false} stroke={ink.grid} />
+          <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+          {usdAxis && <YAxis yAxisId="usd" tickFormatter={(v: number) => `$${v.toFixed(usdDigits)}`} tickLine={false} axisLine={false} width={56} />}
+          {meterAxis && <YAxis yAxisId="meter" orientation="right" tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />}
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: spendOf(l, r, i) })))} />
+          {lines.map((l, i) => {
+            const meter = byUpstream && l.unit === 'meter_tokens';
+            return <Line key={i} yAxisId={meter ? 'meter' : 'usd'} type="monotone" dataKey={(r: BurnRow) => (meter ? r.meter[i] : r.usd[i])} stroke={colorOf(l)} strokeWidth={2} strokeDasharray={meter ? '5 3' : undefined} dot={false} isAnimationActive={false} />;
+          })}
+        </LineChart>
+      </ChartCard>
+
+      {byUpstream && (
+        <ChartCard
+          title="Plan per hour"
+          subtitle="Share of each subscription upstream's 5-hour window its traffic used per hour, weighted by the peak band"
+          error={error}
+          loading={loading}
+          empty={
+            empty ??
+            (planned.length === 0 ? 'No subscription upstream burned in this range.' : planned.every(({ l }) => l.planPeak === null) ? 'No fit yet: no subscription upstream in range has a fitted or predicted window size.' : undefined)
+          }
+          legend={planned.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, value: l.planPeak === null ? 'no fit yet' : `peak ${fmtPct(l.planPeak, 1)}` }))}
+        >
+          <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <YAxis tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => planned.map(({ i, l }) => ({ color: colorOf(l), label: nameOf(l), value: r.plan[i] === null ? 'no fit yet' : fmtPct(r.plan[i] as number, 1) })))} />
+            {planned.map(({ i, l }) => (
+              <Line key={i} type="monotone" dataKey={(r: BurnRow) => (r.plan[i] === null ? null : (r.plan[i] as number) * 100)} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ChartCard>
+      )}
+    </div>
+  );
+}
+
+const FIT_HINT = `Each subscription upstream's fitted window size against the size its tier predicts; a drift more than ${fmtPct(DRIFT_TOLERANCE)} either way is marked.`;
+const BAND_HINT = `The fitted peak-band factor beside the table's. The table's band row is provisional, and a fit more than ${fmtPct(BAND_TOLERANCE)} off it is marked.`;
+const factorOf = (v: number | null) => (v === null ? '-' : v.toFixed(2));
+
+function FitTable({ error, fits }: { error: string | null; fits: WindowFit[] | null }) {
+  const rows = useMemo(() => [...(fits ?? [])].sort((a, b) => a.accountId.localeCompare(b.accountId) || a.window.localeCompare(b.window)), [fits]);
+  return (
+    <Card title="Plan meter fit" subtitle={FIT_HINT} padded={false} className="card--table">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Upstream</th>
+              <th>Window</th>
+              <th className="right">Fitted</th>
+              <th className="right">Predicted</th>
+              <th className="right">Drift</th>
+              <th className="right">Confidence</th>
+              <th className="right">Intervals</th>
+              <th>Corrections</th>
+              <th className="right">
+                <span className="pct-label" title={BAND_HINT}>
+                  Band
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((f) => {
+              const band = `${factorOf(f.bandFactor)} / ${factorOf(f.bandFactorPredicted)}`;
+              const corrections = Object.entries(f.corrections).sort(([a], [b]) => a.localeCompare(b));
+              return (
+                <tr key={`${f.accountId}-${f.window}`}>
+                  <td className="mono">{f.accountId}</td>
+                  <td>{FIT_WINDOW_LABEL[f.window] ?? f.window}</td>
+                  <td className="right num" title={`fitted ${fmtAbsolute(f.fittedAt)}`}>
+                    {fmtCompact(f.scale)}
+                  </td>
+                  <td className="right num">{f.predicted === null ? <span className="muted">-</span> : fmtCompact(f.predicted)}</td>
+                  <td className="right num">
+                    {f.drift === null ? (
+                      <span className="muted">-</span>
+                    ) : driftWide(f.drift) ? (
+                      <Badge tone="warning" title={`More than ${fmtPct(DRIFT_TOLERANCE)} off the prediction`}>
+                        {driftLabel(f.drift)}
+                      </Badge>
+                    ) : (
+                      driftLabel(f.drift)
+                    )}
+                  </td>
+                  <td className="right num">{fmtPct(f.confidence)}</td>
+                  <td className="right num">{fmtInt(f.intervals)}</td>
+                  <td className="mono">{corrections.length === 0 ? <span className="muted">none</span> : corrections.map(([model, factor]) => `${model} ×${factor.toFixed(2)}`).join(', ')}</td>
+                  <td className="right num">
+                    {f.bandDivergent ? (
+                      <Badge tone="warning" title={`More than ${fmtPct(BAND_TOLERANCE)} off the provisional band row`}>
+                        {band}
+                      </Badge>
+                    ) : (
+                      band
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={9} className={error ? '' : 'muted'}>
+                  {error ? <ErrorState title="Could not load the fits" body={error} /> : fits === null ? <Skeleton height={22} /> : 'No fits yet.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 

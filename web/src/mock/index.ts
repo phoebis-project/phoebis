@@ -2,7 +2,7 @@ import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
@@ -10,7 +10,7 @@ import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
-import { breakdownOf, seriesOf } from './analytics';
+import { FITS, breakdownOf, burnOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -495,6 +495,18 @@ export class MockApi implements Api {
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
     return latency(breakdownOf(ALL_ROLLUPS, query));
+  }
+
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) {
+    return latency(burnOf(ALL_ROLLUPS, range, groupBy));
+  }
+
+  getAnalyticsFits() {
+    return latency(FITS.map((f) => ({ ...f, corrections: { ...f.corrections } })));
+  }
+
+  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
+    return latency(rewritesOf(ACCOUNT_ROLLUPS, range));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {

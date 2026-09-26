@@ -1739,7 +1739,8 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
       hinted !== undefined &&
       ['Client hints', 'Turn origin', 'Tool time before this turn', 'User agent', 'Agent type', 'Compaction', 'Context compacted'].every((t) => (drawer?.textContent ?? '').includes(t)) &&
       row('Turn origin')?.textContent?.trim() === hinted.turnOrigin &&
-      row('Client')?.textContent?.trim() === hinted.client &&
+      // The class badge rides beside the client in the same row, so the client is the row's first text alone.
+      row('Client')?.firstChild?.textContent?.trim() === hinted.client &&
       agent?.getAttribute('title') === hinted.userAgent &&
       (agent?.textContent ?? '').length > 0 &&
       hinted.userAgent.startsWith((agent?.textContent ?? '').replace(/…$/, '')) &&
@@ -1921,6 +1922,62 @@ if (failoverRow) {
     await m.navigate(`/requests/${releasedId}`);
     expect('/requests/:released drawer names the release and every reason', m.text(), ['Session released from', 'account cooled, window spent']);
   }
+  for (const [reason, label] of [['client_error', 'client error'], ['subscription_ended', 'subscription ended']]) {
+    const id = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired' && e.detail?.reasons?.includes(reason)))?.[0];
+    results.push({ name: `fixture: a request whose pin was released for ${reason}`, ok: id !== undefined, missing: [] });
+    if (id) {
+      await m.navigate(`/requests/${id}`);
+      await m.settle(300);
+      expect(`/requests/:released drawer words ${reason}`, m.text(), ['Session released from', label]);
+    }
+  }
+}
+{
+  // Every attempt carries its trace; the drawer draws one block per attempt, with the placement, the members passed
+  // over as badges, and the cache read against the request's input.
+  const traceOf = (el) => ({ head: el.querySelector('.selection-trace__row')?.textContent ?? '', skipped: [...el.querySelectorAll('.selection-trace__row .badge')].map((b) => b.textContent?.trim()) });
+  const shed = requests.find((r) => r.attempts.some((a) => a.selection?.moved === 'shed'));
+  results.push({ name: 'fixture: a request whose session was shed onto its upstream', ok: shed !== undefined, missing: [] });
+  if (shed) {
+    await m.navigate(`/requests/${shed.id}`);
+    await m.settle(300);
+    const attempt = shed.attempts.find((a) => a.selection?.moved === 'shed');
+    const blocks = [...m.container.querySelectorAll('.drawer .attempt')].map((li) => li.querySelector('.selection-trace'));
+    const drawn = blocks[attempt.index] ? traceOf(blocks[attempt.index]) : { head: '', skipped: [] };
+    const tier = attempt.selection.tier;
+    results.push({
+      name: '/requests drawer draws a moved attempt\'s trace: the strategy, the tier, the move and each member passed over',
+      ok:
+        blocks.length === shed.attempts.length &&
+        blocks.every((b) => b !== null) &&
+        drawn.head.startsWith('Selection') &&
+        drawn.head.includes(`group ${tier[0]}, priority ${tier[1]}`) &&
+        drawn.head.includes('moved: shed') &&
+        JSON.stringify(drawn.skipped) === JSON.stringify(attempt.selection.skipped.map((s) => `${s.accountId}: ${s.obstacle}`)),
+      missing: [shed.id, drawn.head, ...drawn.skipped],
+    });
+    const read = attempt.selection.cacheRead;
+    results.push({ name: '/requests drawer reads the answering attempt\'s cache read as a hit or a miss against its input', ok: read !== null && drawn.head.includes(`${read > 0 ? 'hit' : 'miss'}, `) && drawn.head.includes('input tokens read from cache'), missing: [String(read), drawn.head] });
+    const client = [...m.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Client')?.querySelector('dd');
+    results.push({ name: '/requests drawer shows the request class as a badge beside the client', ok: shed.requestClass !== null && client?.querySelector('.badge')?.textContent === shed.requestClass && client?.firstChild?.textContent === shed.client, missing: [client?.textContent ?? 'no client row', String(shed.requestClass)] });
+  }
+  const renewed = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.renewed);
+  results.push({ name: 'fixture: a request that renewed its pin', ok: renewed !== undefined, missing: [] });
+  if (renewed) {
+    await m.navigate(`/requests/${renewed.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    results.push({ name: '/requests drawer reads a renewed pin as continued, with no tier and nothing passed over', ok: drawn.head.includes('continued, pin renewed') && !drawn.head.includes('group ') && drawn.skipped.length === 0, missing: [drawn.head, ...drawn.skipped] });
+    expect('/requests drawer needles for the trace', m.text(), ['Selection', 'renewed']);
+  }
+  const fresh = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection && !r.attempts[0].selection.renewed && r.attempts[0].selection.moved === null && r.attempts[0].selection.skipped.length > 0);
+  results.push({ name: 'fixture: a request placed afresh past other members', ok: fresh !== undefined, missing: [] });
+  if (fresh) {
+    await m.navigate(`/requests/${fresh.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    results.push({ name: '/requests drawer reads a fresh placement', ok: drawn.head.includes('fresh placement') && drawn.skipped.length === fresh.attempts[0].selection.skipped.length, missing: [drawn.head, ...drawn.skipped] });
+  }
 }
 {
   const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));
@@ -2080,6 +2137,44 @@ m.unmount();
 
 m = await mount('/analytics');
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Upstreams', 'Peak 5-hour utilization', 'Upstreams in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
+{
+  const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+  const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
+  const burnGroup = async (label) => {
+    [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
+    await m.settle(700);
+  };
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Plan meter fit', 'no fit yet', 'Moves']);
+  const failovers = card('Failovers');
+  results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
+  const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
+  const moveLegend = legendOf('Migration rewrites').slice(2);
+  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
+
+  const planned = legendOf('Plan per hour');
+  results.push({ name: '/analytics plan per hour draws each subscription upstream and says which has no fit yet', ok: planned.includes('business') && planned.includes('personal') && planned.includes('mail') && !planned.includes('console') && card('Plan per hour')?.textContent?.includes('no fit yet') === true, missing: planned });
+  const spend = legendOf('Spend per minute');
+  const dashed = [...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])].filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent);
+  results.push({ name: '/analytics spend per minute charts a subscription upstream in meter tokens and an API-key one in dollars', ok: spend.includes('console') && dashed.some((t) => t?.startsWith('business')) && !dashed.some((t) => t?.startsWith('console')), missing: [...spend, ...dashed] });
+
+  const fitRows = [...(card('Plan meter fit')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge') !== null, text: td.textContent?.trim() })));
+  const fit = (id) => fitRows.find((r) => r[0]?.text === id) ?? [];
+  results.push({
+    name: '/analytics the fit table colours a drift past 20% and marks a band off the provisional row',
+    ok: fit('personal')[4]?.text === '+42.5%' && fit('personal')[4]?.badge === true && fit('personal')[8]?.badge === true && fit('business')[4]?.text === '-2.9%' && fit('business')[4]?.badge === false && fit('business')[8]?.badge === false && fit('personal')[7]?.text === 'claude-sonnet-5 ×1.08',
+    missing: fitRows.map((r) => r.map((c) => `${c.text}${c.badge ? '*' : ''}`).join(' | ')),
+  });
+  results.push({ name: '/analytics the band column names its tolerance and that the row is provisional', ok: (card('Plan meter fit')?.querySelector('th .pct-label')?.getAttribute('title') ?? '').includes('provisional') && (card('Plan meter fit')?.querySelector('th .pct-label')?.getAttribute('title') ?? '').includes('15%'), missing: [] });
+
+  await burnGroup('Request class');
+  const classes = legendOf('Tokens per minute');
+  results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
+  expect('/analytics burn by request class', m.text(), ['conversation', 'overhead', 'compaction, main, subagent']);
+  await burnGroup('Key');
+  const keys = legendOf('Spend per minute');
+  results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
+  await burnGroup('Upstream');
+}
 {
   const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const missCard = cardByTitle('Misses by reason');
@@ -2349,7 +2444,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const hist = m.container.querySelectorAll('.hist__bars').length;
   results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
   const bar = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Upstreams']), missing: bar });
+  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Upstreams']), missing: bar });
   // The Upstreams entry anchors on the section id `accounts`, which the rename deliberately left alone.
   const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => (b.textContent?.trim() === 'Upstreams' ? 'accounts' : b.textContent?.trim().toLowerCase().replace(/ /g, '-')));
   results.push({ name: '/analytics each bar entry has a section to scroll to', ok: targets.every((id) => m.container.querySelector(`.analytics-section#${id}`) !== null), missing: targets });

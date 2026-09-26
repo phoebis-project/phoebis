@@ -376,6 +376,25 @@ export interface AttemptResponse {
   stopSequence: string | null;
 }
 
+/** A candidate the selection passed over, with the obstacle in its way as the router named it. */
+export interface SkippedCandidate {
+  accountId: string;
+  obstacle: string;
+}
+
+/** Why a selection landed where it did, as the router stored it on the attempt. */
+export interface SelectionTrace {
+  /** The cache-read tokens the response reported, folded in at completion; null until then or without a response. */
+  cacheRead: number | null;
+  /** The move reason when a fail-over or a move placed the attempt, null otherwise. */
+  moved: string | null;
+  renewed: boolean;
+  skipped: SkippedCandidate[];
+  strategy: string;
+  /** Group, priority, and the overage bit the choice was made in; null for a renewed pin. */
+  tier: [number, number, number] | null;
+}
+
 export interface Attempt {
   accountId: string;
   /** Null when the attempt drew no response body to read diagnostics from. */
@@ -385,6 +404,8 @@ export interface Attempt {
   index: number;
   outcome: AttemptOutcome;
   response: AttemptResponse;
+  /** Null for an attempt the router stored no trace for. */
+  selection: SelectionTrace | null;
   startedAt: string;
   upstreamStatus: number | null;
   windows: AttemptWindow[];
@@ -449,6 +470,8 @@ export interface RequestLog {
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;
+  /** `x-claude-code-request-class` as the client sent it; `null` when it sent none. */
+  requestClass: string | null;
   requestTruncated: boolean;
   responseTruncated: boolean;
   sessionId: string | null;
@@ -479,11 +502,26 @@ export interface CapturedBodies {
 }
 
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
-export type PinMigrationReason = 'cooldown' | 'mark' | 'overage' | 'spent' | 'utilization';
+export type PinMigrationReason = 'cooldown' | 'drain' | 'mark' | 'overage' | 'return_to_plan' | 'shed' | 'spent';
 
 /** Why the router released a session's pin without a move: the `reasons` of a `pin_expired` event, in the
  * order the selection found them. */
-export type PinReleaseReason = 'attempted' | 'cooldown' | 'deleted' | 'disconnected' | 'expired' | 'funding_required' | 'overage' | 'paused' | 'reauth_required' | 'released' | 'spent' | 'unpaired' | 'unserved';
+export type PinReleaseReason =
+  | 'attempted'
+  | 'client_error'
+  | 'cooldown'
+  | 'deleted'
+  | 'disconnected'
+  | 'expired'
+  | 'funding_required'
+  | 'overage'
+  | 'paused'
+  | 'reauth_required'
+  | 'released'
+  | 'spent'
+  | 'subscription_ended'
+  | 'unpaired'
+  | 'unserved';
 
 /** One event of a request's window, as `GET /admin/requests/{id}` lists them beside the summary. */
 export interface RequestEvent {
@@ -617,6 +655,56 @@ export interface AccountRollup {
   /** Null for a window the hour holds no utilization sample of. */
   peak: { '5h': number | null; '7d': number | null; '7d_fable': number | null };
   pins: { created: number; migratedIn: number; migratedOut: number };
+}
+
+/** The dimensions the burn route groups on; `session` reads the twenty sessions with the most tokens. */
+export type BurnGroup = 'account' | 'key' | 'request_class' | 'session';
+
+/** One group's burn over one bucket, as `GET /admin/analytics/burn` answers it. */
+export interface BurnPoint {
+  at: string;
+  /** Cache-read tokens. */
+  cachedTokens: number;
+  group: string;
+  /** A subscription upstream's tokens in plan-meter units, weighted by the peak band of the hour they landed in. */
+  meterTokens: number;
+  /** The bucket's meter tokens as a fraction of the upstream's 5-hour window, not a percentage; null under every
+   *  other grouping, and for an upstream with neither a fit nor a predicted window size. */
+  planPercent: number | null;
+  /** Uncached input tokens. */
+  uncachedTokens: number;
+  /** An API-key upstream's estimated cost. */
+  usd: number;
+}
+
+/** The cache-write tokens the first request after a move wrote, per bucket. */
+export interface RewritePoint {
+  at: string;
+  rewriteTokens: number;
+}
+
+/** One upstream's fitted window size against the size its tier predicts, as `GET /admin/analytics/fits` answers it. */
+export interface WindowFit {
+  accountId: string;
+  /** `bandFactor` more than 15% off `bandFactorPredicted`, a provisional tolerance; nothing alerts on it. */
+  bandDivergent: boolean;
+  /** The live fit's peak-band weight; null until both sides of the band have folded. */
+  bandFactor: number | null;
+  /** The shipped band row's factor for the window; null where no band names it. */
+  bandFactorPredicted: number | null;
+  confidence: number;
+  /** A factor per model the fit corrected its meter by. */
+  corrections: Record<string, number>;
+  /** `scale` over `predicted`; null without a prediction. */
+  drift: number | null;
+  fittedAt: string;
+  intervals: number;
+  /** The tier's window size; null where the tier has no row for the window. */
+  predicted: number | null;
+  /** The fitted window size in meter tokens. */
+  scale: number;
+  /** `five_hour`, `seven_day`, or `seven_day_fable`, as the route names it. */
+  window: string;
 }
 
 export type KeepaliveState = 'busy' | 'idle' | 'parked';

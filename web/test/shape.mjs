@@ -17,9 +17,11 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * the range; its keys are data, not schema. `cacheMissReasons` is one too past its eight known keys, since the
  * route answers any name the beta sent, unlike a closed enum-keyed record such as `wastedProbeReasons`, which
  * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
- * move reason seen in the last hour. Matched by path only where the fixture's own shape there is an object, so a
- * same-named scalar (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP = (path, want) => (path.endsWith('.errors') || path.endsWith('.cacheMissReasons') || path.endsWith('.movesPerHour')) && typeof want === 'object' && want !== null && !Array.isArray(want);
+ * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's
+ * `corrections`, one factor per model the fit corrected. Matched by path only where the fixture's own shape there
+ * is an object, so a same-named scalar (`Overview.hourly[].errors`, a plain count) still takes the ordinary type
+ * check below. */
+const MAP = (path, want) => (path.endsWith('.errors') || path.endsWith('.cacheMissReasons') || path.endsWith('.movesPerHour') || path.endsWith('.moves') || path.endsWith('.corrections')) && typeof want === 'object' && want !== null && !Array.isArray(want);
 
 const kindOf = (v) => (v === null || v === undefined ? 'null' : Array.isArray(v) ? 'list' : typeof v);
 

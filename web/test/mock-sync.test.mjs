@@ -39,6 +39,9 @@ const SYNC = {
   alert_rules: { decode: (b) => b.rules.map(d.decodeAlertRule), mock: (api) => api.listAlertRules() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
+  analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
+  analytics_fits: { decode: (b) => b.fits.map(d.decodeWindowFit), mock: (api) => api.getAnalyticsFits() },
+  analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query) },
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
@@ -61,7 +64,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['analytics_burn', 'analytics_fits', 'analytics_rewrites', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
@@ -102,8 +105,11 @@ const CLOSED = {
   },
   requests: {
     '.requests[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES,
+    '.requests[].attempts[].selection.moved': [...d.PIN_MIGRATION_REASON_VALUES, null],
+    '.requests[].attempts[].selection.skipped[].obstacle': d.SKIP_OBSTACLE_VALUES,
     '.requests[].kind': d.REQUEST_KIND_VALUES,
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
+    '.requests[].requestClass': d.REQUEST_CLASS_VALUES,
   },
   sessions: { '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
 };

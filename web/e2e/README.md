@@ -8,8 +8,9 @@ records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (pool chips, the caching controls, the select-below threshold, the routing cards, the
 compatibility card, the bootstrap cards, the Delete upstream button, the upstream lines, the alert rule dialog, the
-remaining cards, the error state, the cost-cap rows, the live feed, the wasted-probe rows). The script exits non-zero
-with the list of failures when any of that does not hold.
+remaining cards, the error state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the request
+drawer, which opens once the request list's shot is taken). The script exits non-zero with the list of failures when
+any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

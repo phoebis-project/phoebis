@@ -12,6 +12,8 @@ import type {
   AnalyticsPoint,
   AnalyticsQuery,
   ApiKey,
+  BurnGroup,
+  BurnPoint,
   CapturedBodies,
   CatalogModel,
   CreatedApiKey,
@@ -39,9 +41,11 @@ import type {
   RequestDetail,
   RequestPage,
   RequestQuery,
+  RewritePoint,
   Session,
   SessionInfo,
   Settings,
+  WindowFit,
 } from './types';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
 
@@ -139,6 +143,11 @@ export interface Api {
   /** `refresh` reads the upstream again before answering rather than the cache. */
   getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog>;
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
+  /** The route reads the range and the grouping alone; no other filter of the query narrows it. */
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
+  /** The live fits, which hold no range. */
+  getAnalyticsFits(): Promise<WindowFit[]>;
+  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
