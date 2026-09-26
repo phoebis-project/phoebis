@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
 use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StoreError};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::routes::{account, account_json, failure, reload_or_refuse, store_failure};
@@ -37,6 +38,16 @@ struct PatchInput {
     enabled: Option<bool>,
     #[serde(default)]
     secret: Option<String>,
+    #[serde(default)]
+    cancelled: Option<bool>,
+    #[serde(default, deserialize_with = "double_option")]
+    subscription_ends_at: Option<Option<i64>>,
+}
+
+fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 fn valid_slug(id: &str) -> bool {
@@ -163,6 +174,39 @@ pub(crate) async fn patch(
             "only an api_key account has a secret",
         );
     }
+    // Validated against the resulting row, not just the edited field: an end saved earlier and a bare
+    // `cancelled: false` today must not leave the end standing without the flag that gates it.
+    let cancellation = if input.cancelled.is_some() || input.subscription_ends_at.is_some() {
+        let term = match state.store.subscription_term(&id) {
+            Ok(term) => term.unwrap_or_default(),
+            Err(error) => return store_failure(error),
+        };
+        let cancelled = input.cancelled.unwrap_or(term.cancelled);
+        let ends_at = input.subscription_ends_at.unwrap_or(term.ends_at);
+        if cancelled && row.kind == AccountKind::ApiKey {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "only an oauth account is cancelled",
+            );
+        }
+        // The stored end alone never trips this: `set_cancelled` drops it the moment the flag goes off, so
+        // only an end this patch itself asked for can conflict with an uncancel it also asked for.
+        if !cancelled && input.subscription_ends_at.flatten().is_some() {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "subscription_ends_at needs cancelled",
+            );
+        }
+        if cancelled && ends_at.is_none() {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "cancelled needs subscription_ends_at",
+            );
+        }
+        Some((cancelled, ends_at))
+    } else {
+        None
+    };
     let label = input.label.as_deref().unwrap_or(&row.label);
     let verifying = row.kind == AccountKind::ApiKey && input.secret.is_some();
     if verifying {
@@ -221,6 +265,12 @@ pub(crate) async fn patch(
         if let Err(error) = state.store.set_enabled(&id, enabled) {
             // A verified edit may already be in the store, so it is published before the storage failure is
             // answered rather than left waiting for an unrelated write.
+            let _ = reload_or_refuse(&state).await;
+            return store_failure(error);
+        }
+    }
+    if let Some((cancelled, ends_at)) = cancellation {
+        if let Err(error) = state.store.set_cancelled(&id, cancelled, ends_at) {
             let _ = reload_or_refuse(&state).await;
             return store_failure(error);
         }

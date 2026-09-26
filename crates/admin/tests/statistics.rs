@@ -723,7 +723,7 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     assert_eq!(bad_group.status(), 400);
     assert_eq!(
         json(bad_group).await["error"],
-        "group_by is account, all, client, effort, key, kind, model, pool, or user_agent"
+        "group_by is account, all, client, effort, key, kind, model, pool, request_class, or user_agent"
     );
     let too_many_clients = get(
         &parts.app,

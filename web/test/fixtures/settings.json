@@ -30,6 +30,62 @@
       "metrics": "127.0.0.1:9464",
       "proxy": "test"
     },
+    "plan_factors": {
+      "measured": "2026-09-24",
+      "reference": "claude-opus-5",
+      "models": {
+        "claude-fable-5": {
+          "factor": 2.0,
+          "input": 1.0,
+          "cache_read": 0.026,
+          "cache_write_5m": 1.23,
+          "cache_write_1h": 1.23,
+          "output": 4.67,
+          "measured": null,
+          "unmeasured": true
+        },
+        "claude-fable-5-1": {
+          "factor": 3.61,
+          "input": 1.0,
+          "cache_read": 0.026,
+          "cache_write_5m": 1.23,
+          "cache_write_1h": 1.23,
+          "output": 4.67,
+          "measured": "2026-09-19",
+          "unmeasured": false
+        },
+        "claude-haiku-4-5": {
+          "factor": 0.36,
+          "input": 1.0,
+          "cache_read": 0.026,
+          "cache_write_5m": 1.23,
+          "cache_write_1h": 1.23,
+          "output": 4.67,
+          "measured": "2026-09-24",
+          "unmeasured": false
+        },
+        "claude-opus-5": {
+          "factor": 1.0,
+          "input": 1.0,
+          "cache_read": 0.026,
+          "cache_write_5m": 1.23,
+          "cache_write_1h": 1.23,
+          "output": 4.67,
+          "measured": "2026-09-19",
+          "unmeasured": false
+        },
+        "claude-sonnet-5": {
+          "factor": 0.54,
+          "input": 1.0,
+          "cache_read": 0.026,
+          "cache_write_5m": 1.23,
+          "cache_write_1h": 1.23,
+          "output": 4.67,
+          "measured": "2026-09-24",
+          "unmeasured": false
+        }
+      }
+    },
     "pricing": {
       "version": "2026-09-08",
       "effective": "2026-09-08",

@@ -16,8 +16,8 @@ use crate::select::{
 };
 use crate::state::{
     burn_folded, AccountTicket, EvidenceSource, InFlight, OverageEvidence, PinRef, PinUsage,
-    RateTable, RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    RateTable, Rates, RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, Presented, RegistrySnapshot};
 
@@ -276,6 +276,17 @@ enum Command {
     Pins {
         reply: oneshot::Sender<Vec<PinRow>>,
     },
+    /// The dollar rates a confirmed pricing import reaches the burn with, without a restart.
+    ReplaceRates {
+        dollars: RateTable,
+        reply: oneshot::Sender<()>,
+    },
+    /// The dollar rates in force for one model, so a caller can check a `ReplaceRates` landed without serving a
+    /// request through it.
+    Rates {
+        canonical_model: String,
+        reply: oneshot::Sender<Rates>,
+    },
     ReleaseSession {
         key_id: String,
         session_id: String,
@@ -416,6 +427,21 @@ impl RouterHandle {
     }
     pub async fn pins(&self) -> Result<Vec<PinRow>, RouterGone> {
         self.ask(|reply| Command::Pins { reply }).await
+    }
+    /// Swaps the dollar side of the burn's rates, so a confirmed pricing import reaches it without a restart.
+    pub async fn replace_dollar_rates(&self, dollars: RateTable) -> Result<(), RouterGone> {
+        self.ask(|reply| Command::ReplaceRates { dollars, reply })
+            .await
+    }
+    /// The dollar rates in force for `canonical_model`, for a caller that has to check a `replace_dollar_rates`
+    /// landed without serving a request through it.
+    pub async fn rates(&self, canonical_model: &str) -> Result<Rates, RouterGone> {
+        let canonical_model = canonical_model.to_string();
+        self.ask(|reply| Command::Rates {
+            canonical_model,
+            reply,
+        })
+        .await
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
@@ -963,6 +989,20 @@ impl Task {
             }
             Command::Pins { reply } => {
                 let _ = reply.send(self.state.pins());
+            }
+            Command::ReplaceRates { dollars, reply } => {
+                self.config.rates.dollars = dollars;
+                let _ = reply.send(());
+            }
+            Command::Rates {
+                canonical_model,
+                reply,
+            } => {
+                let table = &self.config.rates.dollars;
+                let rates = crate::listing::row_for(&canonical_model, |k| table.rows.get(k))
+                    .copied()
+                    .unwrap_or(table.fallback);
+                let _ = reply.send(rates);
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());

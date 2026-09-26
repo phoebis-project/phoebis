@@ -38,7 +38,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_20x', since: ago(200 * DAY), trialEndsAt: null },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which the Models view and this account's own status fold in like any other cooldown.
@@ -60,6 +60,9 @@ export const ACCOUNTS: Account[] = ([
     email: 'mail@example.com',
     status: 'cooldown',
     routingEnabled: true,
+    // Cancelled, with both ends set: the stored one the operator saved, the derived one the form would
+    // otherwise have prefilled.
+    cancelled: true,
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 1, 1 * HOUR + 12 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
@@ -71,7 +74,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'pro_5x', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'pro_5x', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
     requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
     cooldowns: [
       {
@@ -111,7 +114,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: ago(400 * DAY), trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(20 * DAY) },
     requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
     cooldowns: [],
   },
@@ -168,7 +171,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'claude_team', since: null, trialEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'claude_team', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
     requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
     cooldowns: [],
   },

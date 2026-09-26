@@ -27,6 +27,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         "id": r.id, "at": r.received_at, "finished_at": r.finished_at, "key_id": r.key_id, "key_generation": r.key_generation, "pool_id": r.pool_id,
         "account_id": last.map(|a| a.account_id.clone()), "session_id": r.session_id, "agent_id": r.agent_id, "parent_agent_id": r.parent_agent_id,
         "model": r.model, "canonical_model": r.canonical_model, "kind": r.kind, "origin": r.origin, "transport": if r.stream { "sse" } else { "json" },
+        "request_class": r.request_class,
         "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "client_drift": r.client_drift, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
         "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
         "request_truncated": r.request_truncated, "response_truncated": r.response_truncated,
@@ -91,6 +92,7 @@ fn attempt_json(a: &AttemptRecord) -> Value {
         "cooldown_set": a.cooldown_scope.as_ref().map(|scope| json!({ "reason": scope, "until": a.cooldown_until })),
         "windows": windows,
         "overage_in_use": a.overage_in_use, "estimated_usd": a.estimated_usd, "pricing_version": a.pricing_version,
+        "selection": a.selection.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "response": {
             "cleared_input_tokens": a.cleared_input_tokens, "inference_geo": a.inference_geo,
             "refusal_category": a.refusal_category, "refusal_recommended_model": a.refusal_recommended_model,

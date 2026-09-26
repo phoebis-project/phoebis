@@ -8,13 +8,18 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    apply_filter, bucket_seconds, hour_ceil, hour_of, parse_range, read_account_rollups,
-    read_rollups, AccountRollupRow, LiveKeys, RollupFilter, RollupRow, GROUP_BYS,
+    apply_filter, bucket_seconds, burn_series, hour_ceil, hour_of, moves_by_reason, parse_range,
+    read_account_rollups, read_rollups, rewrite_series, session_burn_series, AccountRollupRow,
+    LiveKeys, PlanFactors, PlanWindows, RollupFilter, RollupRow, SeriesFilter, GROUP_BYS,
 };
-use serde_json::json;
+use phoebis_routing::FIVE_HOUR;
+use phoebis_store::AccountKind;
+use serde_json::{json, Value};
 
-use crate::routes::failure;
+use crate::routes::{failure, store_failure};
 use crate::AdminState;
+
+const BURN_GROUP_BYS: &[&str] = &["account", "key", "request_class", "session"];
 
 fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
@@ -81,7 +86,7 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, client, effort, key, kind, model, pool, or user_agent",
+            "group_by is account, all, client, effort, key, kind, model, pool, request_class, or user_agent",
         ));
     }
     let filter = filter_of(q);
@@ -200,4 +205,218 @@ pub(crate) async fn accounts(
         "hours": hours.iter().map(|h| json!({ "hour": h.hour * 1_000, "utilization_5h_max": h.utilization_5h_max, "utilization_7d_max": h.utilization_7d_max, "utilization_7d_oi_max": h.utilization_7d_oi_max, "overage_seconds": h.overage_seconds, "cooldown_seconds": h.cooldown_seconds, "pins_created": h.pins_created, "pins_migrated_in": h.pins_migrated_in, "pins_migrated_out": h.pins_migrated_out })).collect::<Vec<_>>(),
     })).collect();
     Json(json!({ "from": from, "to": to, "accounts": accounts })).into_response()
+}
+
+/// The account's fitted 5-hour scale, else its predicted one, else `None`: the denominator `burn`'s
+/// per-account `plan_percent` divides a bucket's meter tokens by.
+fn plan_scale(
+    state: &AdminState,
+    fits: &[phoebis_store::FitRow],
+    windows: &PlanWindows,
+    account_id: &str,
+) -> Option<f64> {
+    if let Some(fitted) = fits
+        .iter()
+        .find(|f| f.account_id == account_id && f.window == FIVE_HOUR)
+    {
+        return Some(fitted.scale);
+    }
+    let tier = state.store.subscription(account_id).ok().flatten()?.tier?;
+    windows.predicted(&tier, FIVE_HOUR)
+}
+
+pub(crate) async fn burn(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let now = (state.clock)();
+    let (from, to) = match parse_range(q.get("range").map(String::as_str), now) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let group_by = q
+        .get("group_by")
+        .cloned()
+        .unwrap_or_else(|| "account".into());
+    if !BURN_GROUP_BYS.contains(&group_by.as_str()) {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "group_by is account, key, request_class, or session",
+        );
+    }
+    let accounts = match state.store.accounts() {
+        Ok(a) => a,
+        Err(e) => return store_failure(e),
+    };
+    let kinds: HashMap<String, AccountKind> =
+        accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
+    let fits = state.router.fits().await.unwrap_or_default();
+    let bucket = bucket_seconds(from, to);
+    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
+    let group_by_read = group_by.clone();
+    let read = state
+        .ledger
+        .db()
+        .read(move |c| {
+            let factors = PlanFactors::shipped();
+            let windows = PlanWindows::shipped();
+            if group_by_read == "session" {
+                let filter = SeriesFilter {
+                    from,
+                    to,
+                    bucket_seconds: bucket,
+                    ..Default::default()
+                };
+                return session_burn_series(c, &factors, &windows, &kinds, &filter);
+            }
+            let rows = read_rollups(c, from_hour, to_hour)?;
+            let mut groups: Vec<String> = rows
+                .iter()
+                .map(|r| match group_by_read.as_str() {
+                    "key" => r.key_id.clone(),
+                    "request_class" => r.request_class.clone(),
+                    _ => r.account_id.clone(),
+                })
+                .collect();
+            groups.sort();
+            groups.dedup();
+            let mut out = Vec::new();
+            for group in groups {
+                let one = vec![group.clone()];
+                let filter = SeriesFilter {
+                    from,
+                    to,
+                    bucket_seconds: bucket,
+                    accounts: if group_by_read == "account" {
+                        one.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    keys: if group_by_read == "key" {
+                        one.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    request_classes: if group_by_read == "request_class" {
+                        one
+                    } else {
+                        Vec::new()
+                    },
+                    pools: Vec::new(),
+                };
+                let points = burn_series(c, &factors, &windows, &kinds, &filter)?;
+                out.push((group, points));
+            }
+            Ok(out)
+        })
+        .await;
+    let series = match read {
+        Ok(s) => s,
+        Err(e) => return ledger_failure(e),
+    };
+    let windows = PlanWindows::shipped();
+    let points: Vec<Value> = series
+        .into_iter()
+        .flat_map(|(group, points)| {
+            // The scale is one per group, read once rather than once per point.
+            let scale = (group_by == "account")
+                .then(|| plan_scale(&state, &fits, &windows, &group))
+                .flatten();
+            let group_for_points = group.clone();
+            points.into_iter().map(move |p| {
+                json!({
+                    "at": p.at, "group": group_for_points, "meter_tokens": p.meter_tokens, "usd": p.usd,
+                    "cached_tokens": p.cached_tokens, "uncached_tokens": p.uncached_tokens,
+                    "plan_percent": scale.filter(|s| *s > 0.0).map(|s| p.meter_tokens / s),
+                })
+            })
+        })
+        .collect();
+    Json(json!({ "from": from, "to": to, "bucket_seconds": bucket, "group_by": group_by, "points": points })).into_response()
+}
+
+pub(crate) async fn rewrites(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let (from, to) = match parse_range(q.get("range").map(String::as_str), (state.clock)()) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let bucket = bucket_seconds(from, to);
+    let filter = SeriesFilter {
+        from,
+        to,
+        bucket_seconds: bucket,
+        ..Default::default()
+    };
+    let read = state
+        .ledger
+        .db()
+        .read(move |c| Ok((rewrite_series(c, &filter)?, moves_by_reason(c, &filter)?)))
+        .await;
+    let (series, moves): (Vec<(i64, u64)>, std::collections::BTreeMap<String, u64>) = match read {
+        Ok(x) => x,
+        Err(e) => return ledger_failure(e),
+    };
+    Json(json!({
+        "from": from, "to": to, "bucket_seconds": bucket,
+        "points": series.into_iter().map(|(at, rewrite_tokens)| json!({ "at": at, "rewrite_tokens": rewrite_tokens })).collect::<Vec<_>>(),
+        "moves": moves,
+    }))
+    .into_response()
+}
+
+pub(crate) async fn fits(State(state): State<Arc<AdminState>>) -> Response {
+    let now = (state.clock)();
+    let Ok(fits) = state.router.fits().await else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the router is not available",
+        );
+    };
+    let accounts = match state.store.accounts() {
+        Ok(a) => a,
+        Err(e) => return store_failure(e),
+    };
+    let windows = PlanWindows::shipped();
+    let tier_by_account: HashMap<String, Option<String>> = accounts
+        .iter()
+        .filter(|a| a.kind == AccountKind::Oauth)
+        .map(|a| {
+            (
+                a.id.clone(),
+                state
+                    .store
+                    .subscription(&a.id)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.tier),
+            )
+        })
+        .collect();
+    let rows: Vec<Value> = fits
+        .iter()
+        .map(|f| {
+            let tier = tier_by_account.get(&f.account_id).cloned().flatten();
+            let predicted = tier.as_deref().and_then(|t| windows.predicted(t, &f.window));
+            let drift = predicted.filter(|p| *p != 0.0).map(|p| f.scale / p);
+            let band_factor_predicted = windows.band_factor_of(&f.window, now);
+            // A provisional tolerance until the owner's next measurements tighten the row; no alert fires on
+            // it, the table only shows it.
+            let band_divergent = matches!(
+                (f.band_factor, band_factor_predicted),
+                (Some(fitted), Some(predicted)) if (fitted - predicted).abs() > predicted.abs() * 0.15
+            );
+            json!({
+                "account_id": f.account_id, "window": f.window, "scale": f.scale, "confidence": f.confidence,
+                "intervals": f.intervals,
+                "corrections": serde_json::from_str::<Value>(&f.corrections_json).unwrap_or_else(|_| json!({})),
+                "fitted_at": f.fitted_at, "predicted": predicted, "drift": drift,
+                "band_factor": f.band_factor, "band_factor_predicted": band_factor_predicted,
+                "band_divergent": band_divergent,
+            })
+        })
+        .collect();
+    Json(json!({ "fits": rows })).into_response()
 }

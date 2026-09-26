@@ -117,6 +117,8 @@ export const KEYS: ApiKey[] = [
     name: 'laptop',
     prefix: 'phoebis-c41d',
     poolId: 'all',
+    // A cap on a shared laptop key, so a runaway loop cannot hold every in-flight slot the pool has.
+    inFlightCap: 8,
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
       { not: false, pattern: 'claude-sonnet-5' },

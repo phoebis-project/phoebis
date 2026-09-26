@@ -250,4 +250,16 @@ impl PlanWindows {
             .filter(|(band, resolved)| band.covers(&resolved.zone, at))
             .map_or(1.0, |(band, _)| band.factor)
     }
+
+    /// The factor `band_factor` would apply while in force, whether or not `now` falls inside its hours: the
+    /// fit table's prediction for `window`, `None` when no band names it.
+    pub fn band_factor_of(&self, window: &str, now: i64) -> Option<f64> {
+        self.bands
+            .iter()
+            .filter(|band| band.names(window))
+            .filter_map(|band| Some((band, band.resolved.as_ref()?)))
+            .filter(|(_, resolved)| resolved.from.is_none_or(|from| from <= now))
+            .max_by_key(|(_, resolved)| resolved.from)
+            .map(|(band, _)| band.factor)
+    }
 }

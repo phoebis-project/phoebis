@@ -61,7 +61,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['analytics_burn', 'analytics_fits', 'analytics_rewrites', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_routing::BurnUnit;
 use serde_json::json;
 
 use crate::routes::failure;
@@ -39,6 +40,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         .map(|k| (k.id.clone(), k.created_at))
         .collect();
     let now = (state.clock)();
+    let accounts = match state.store.accounts() {
+        Ok(accounts) => accounts,
+        Err(e) => return Err(crate::routes::store_failure(e)),
+    };
+    let overages = state.router.overages().await.unwrap_or_default();
+    let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state
         .ledger
@@ -65,11 +72,24 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         {
             continue;
         }
+        // The unit a reader takes for `burn`, the account's kind and whether its overage evidence stands now:
+        // the same predicate every reader of it applies, so this row never disagrees with the selector.
+        let kind = accounts
+            .iter()
+            .find(|a| a.id == p.account_id)
+            .map_or(phoebis_store::AccountKind::Oauth, |a| a.kind);
+        let in_overage = overages
+            .iter()
+            .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
+        let unit = BurnUnit::of(kind, in_overage);
+        let burn = unit.read(&p);
         rows.insert(
             key,
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
+                "burn": burn, "burn_unit": unit, "burn_at": p.burn_at, "cache_ttl_ms": p.cache_ttl_ms,
+                "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from,
             }),
         );
     }
@@ -80,6 +100,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+                    "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                    "last_refresh_at": null, "shed_from": null,
                 })
             });
         entry["last_request_at"] = json!(a.last_request_at);
@@ -106,6 +128,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "model": null, "account_id": null, "epoch": null,
                 "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
+                "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                "last_refresh_at": null, "shed_from": null,
             })
         });
         entry["companion"] = json!(view.companion);

@@ -10,7 +10,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
-use phoebis_store::{Failover, OveragePolicy, PoolMember, PoolRow, Shedding, StoreError, Strategy};
+use phoebis_store::{
+    Failover, OveragePolicy, PoolMember, PoolRow, Shedding, StoreError, Strategy, WarmSessions,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -60,6 +62,26 @@ struct PoolInput {
     members: Option<Vec<MemberInput>>,
     #[serde(default)]
     prefer_subscription: Option<bool>,
+    #[serde(default)]
+    shed_share: Option<f64>,
+    #[serde(default)]
+    burn_window_seconds: Option<u64>,
+    #[serde(default)]
+    source_dwell_seconds: Option<u64>,
+    #[serde(default)]
+    migrate_when_spent: Option<bool>,
+    #[serde(default)]
+    warm_sessions: Option<String>,
+    #[serde(default)]
+    retry_in_place_seconds: Option<u64>,
+    #[serde(default)]
+    in_flight_cap: Option<u32>,
+    #[serde(default)]
+    pace_floor: Option<f64>,
+    #[serde(default)]
+    overage_move_grace_minutes: Option<u32>,
+    #[serde(default)]
+    wind_down_minutes: Option<u32>,
 }
 
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
@@ -221,6 +243,92 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             ));
         }
         row.body_capture_hours = hours;
+    }
+    if let Some(share) = input.shed_share {
+        if !(0.0..=1.0).contains(&share) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "shed_share is between 0 and 1",
+            ));
+        }
+        row.shedding.shed_share = share;
+    }
+    if let Some(seconds) = input.burn_window_seconds {
+        if seconds < 60 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "burn_window_seconds is at least 60",
+            ));
+        }
+        row.shedding.burn_window_seconds = seconds;
+    }
+    if let Some(seconds) = input.source_dwell_seconds {
+        if seconds < 60 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "source_dwell_seconds is at least 60",
+            ));
+        }
+        row.shedding.source_dwell_seconds = seconds;
+    }
+    if let Some(spent) = input.migrate_when_spent {
+        row.shedding.migrate_when_spent = spent;
+    }
+    if let Some(mode) = &input.warm_sessions {
+        row.shedding.warm_sessions = match WarmSessions::parse(mode) {
+            Some(mode) => mode,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "warm_sessions must be always, never, or when_needed",
+                ))
+            }
+        };
+    }
+    if let Some(seconds) = input.retry_in_place_seconds {
+        if seconds > 300 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "retry_in_place_seconds is 0 to 300",
+            ));
+        }
+        row.failover.retry_in_place_seconds = seconds;
+    }
+    if let Some(cap) = input.in_flight_cap {
+        if cap < 1 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "in_flight_cap is at least 1",
+            ));
+        }
+        row.failover.in_flight_cap = cap;
+    }
+    if let Some(floor) = input.pace_floor {
+        if !(0.0..=1.0).contains(&floor) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "pace_floor is between 0 and 1",
+            ));
+        }
+        row.failover.pace_floor = floor;
+    }
+    if let Some(minutes) = input.overage_move_grace_minutes {
+        if minutes > 300 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "overage_move_grace_minutes is 0 to 300",
+            ));
+        }
+        row.failover.overage_move_grace_minutes = minutes;
+    }
+    if let Some(minutes) = input.wind_down_minutes {
+        if minutes > 10_080 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "wind_down_minutes is at most 10080 (one week)",
+            ));
+        }
+        row.failover.wind_down_minutes = minutes;
     }
     // Checked over the whole row rather than over the edited field alone, so lowering affinity under an
     // enabled policy is refused exactly as enabling under a short affinity is.
@@ -460,13 +568,24 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
     let pool_id = row.id.clone();
-    let (day, traffic) = state
+    let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
+    let (day, traffic, moves) = state
         .ledger
         .db()
         .read(move |c| {
             Ok((
                 phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600)?,
                 phoebis_ledger::pool_traffic(c, &pool_id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
+                phoebis_ledger::moves_by_reason(
+                    c,
+                    &phoebis_ledger::SeriesFilter {
+                        from: now - 3_600_000,
+                        to: now,
+                        bucket_seconds: 3_600,
+                        accounts: account_ids,
+                        ..Default::default()
+                    },
+                )?,
             ))
         })
         .await
@@ -480,6 +599,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = state.store.accounts()?;
+    let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
     // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready,
     // an account-wide cooldown, or overage the pool's policy admits no substitute for. `None` is eligible.
     let ineligible = |m: &PoolMember| -> Option<&'static str> {
@@ -499,7 +619,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         if row.overage_policy == OveragePolicy::Never
             && overages
                 .iter()
-                .any(|(id, e)| *id == m.account_id && e.in_use)
+                .any(|(id, e)| *id == m.account_id && e.stands(now, fallback_ms))
         {
             return Some("overage");
         }
@@ -522,6 +642,13 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
+        "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,
+        "source_dwell_seconds": row.shedding.source_dwell_seconds, "migrate_when_spent": row.shedding.migrate_when_spent,
+        "warm_sessions": row.shedding.warm_sessions.as_str(),
+        "retry_in_place_seconds": row.failover.retry_in_place_seconds, "in_flight_cap": row.failover.in_flight_cap,
+        "pace_floor": row.failover.pace_floor, "overage_move_grace_minutes": row.failover.overage_move_grace_minutes,
+        "wind_down_minutes": row.failover.wind_down_minutes,
+        "moves_per_hour": moves.iter().map(|(reason, count)| (reason.clone(), *count as f64)).collect::<std::collections::BTreeMap<_, _>>(),
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,

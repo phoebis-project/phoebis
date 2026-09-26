@@ -88,6 +88,9 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/alerts/rules/{id}/test", post(alerts::test_rule))
         .route("/admin/analytics/accounts", get(analytics::accounts))
         .route("/admin/analytics/breakdown", get(analytics::breakdown))
+        .route("/admin/analytics/burn", get(analytics::burn))
+        .route("/admin/analytics/fits", get(analytics::fits))
+        .route("/admin/analytics/rewrites", get(analytics::rewrites))
         .route("/admin/analytics/series", get(analytics::series))
         .route("/admin/dashboard", get(dashboard::show))
         .route("/admin/keepalive/overview", get(keepalive::overview))
@@ -1047,9 +1050,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 "rate_limit_tier": p["organization"]["rate_limit_tier"],
             })
         });
-    // Null until the account has paired and a profile document exists: an OAuth row with no profile yet has
-    // no subscription to report, the same as an `api_key` upstream.
-    let subscription = (row.kind == AccountKind::Oauth && profile.is_some())
+    // The stored flag and end read through this alone, with no profile join, so a cancelled account answers
+    // them even before it ever pairs.
+    let term = state
+        .store
+        .subscription_term(&row.id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
+    // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
+    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
         .then(|| {
             state
                 .store
@@ -1064,6 +1075,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 "tier": s.tier,
                 "since": s.since,
                 "trial_ends_at": s.trial_ends_at,
+                "ends_at": term.ends_at,
+                "derived_ends_at": phoebis_routing::term::derived_end(&term, (state.clock)()),
             })
         });
     json!({
@@ -1071,6 +1084,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
         "label": row.label,
         "enabled": row.enabled,
+        "cancelled": term.cancelled,
         "state": state_name(row.state),
         "identity": row.identity.as_ref().map(|identity| json!({
             "email": identity.email,

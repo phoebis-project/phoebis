@@ -68,6 +68,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const idleRoll = spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
   const lastUsedAgo = spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
+  // A session the engine still keeps a recipe for is the one holding a pin on its account.
+  const pinned = spec.state !== null;
   return {
     ...SESSION_SAMPLE,
     sessionId,
@@ -80,9 +82,15 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     createdAt: ago(createdAgo),
     lastUsedAt: ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
-    // A session the engine still keeps a recipe for is the one holding a pin on its account.
-    pinned: spec.state !== null,
+    pinned,
     requests: seen ? seen.requests : 0,
+    burn: pinned ? rng.int(200, 4_000) : null,
+    burnAt: pinned ? ago(rng.int(2, 40) * MINUTE) : null,
+    burnUnit: pinned ? (accountById.get(spec.accountId)?.kind === 'api_key' ? 'usd' : 'meter_tokens') : null,
+    cacheTtlMs: pinned ? 5 * MINUTE : null,
+    lastInputTokens: pinned ? rng.int(500, 20_000) : null,
+    lastRefreshAt: pinned ? ago(rng.int(2, 40) * MINUTE) : null,
+    shedFrom: null,
     agents: spec.agents,
     companion: spec.companion,
     companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,

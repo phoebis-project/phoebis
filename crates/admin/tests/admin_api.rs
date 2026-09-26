@@ -404,13 +404,20 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     assert_eq!(confirmed.status(), 200);
     let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(
-        acct["subscription"],
-        serde_json::json!({
-            "plan": "max",
-            "tier": "default_claude_max_5x",
-            "since": 1_773_482_400_000_i64,
-            "trial_ends_at": 1_790_899_200_000_i64,
-        }),
+        (
+            acct["subscription"]["plan"].clone(),
+            acct["subscription"]["tier"].clone(),
+            acct["subscription"]["since"].clone(),
+            acct["subscription"]["trial_ends_at"].clone(),
+            acct["subscription"]["ends_at"].clone(),
+        ),
+        (
+            serde_json::json!("max"),
+            serde_json::json!("default_claude_max_5x"),
+            serde_json::json!(1_773_482_400_000_i64),
+            serde_json::json!(1_790_899_200_000_i64),
+            serde_json::Value::Null,
+        ),
         "the confirm stored the plan and the start with no poll having run"
     );
 }
@@ -910,5 +917,109 @@ async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_c
     assert_eq!(
         get(&app, "/admin/session", Some(&vcookie)).await.status(),
         401
+    );
+}
+
+#[tokio::test]
+async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects() {
+    use common::{generation, get, json, login, post, wait_json};
+    // The router task loads its pins at spawn, so the pool, the key, and the pins are written through one
+    // harness and the store handed to the one under test.
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let key_generation = generation(&seed.store, "desktop");
+    let now = common::NOW;
+    let pin = |session: &str, account: &str| phoebis_store::PinRow {
+        key_id: "desktop".into(),
+        session_id: session.into(),
+        model: "claude-sonnet-5".into(),
+        account_id: account.into(),
+        epoch: 1,
+        created_at: now - 10,
+        last_used_at: now - 5,
+        key_generation,
+        incarnation: 1,
+        burn: 42.0,
+        burn_at: Some(now - 5),
+        burn_usd: 0.5,
+        last_input_tokens: 1_000,
+        last_refresh_at: now - 5,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+    };
+    seed.store.upsert_pin(&pin("s1", "business")).unwrap();
+    seed.store.upsert_pin(&pin("s2", "direct")).unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = |sessions: &serde_json::Value, session: &str| {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == session)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (
+            row(&sessions, "s1")["burn"].as_f64(),
+            row(&sessions, "s1")["burn_unit"].as_str()
+        ),
+        (Some(42.0), Some("meter_tokens")),
+        "a subscription account funded by its plan reads the meter average"
+    );
+    assert_eq!(
+        (
+            row(&sessions, "s2")["burn"].as_f64(),
+            row(&sessions, "s2")["burn_unit"].as_str()
+        ),
+        (Some(0.5), Some("usd")),
+        "an api_key pin always reads the dollar average"
+    );
+    assert_eq!(
+        row(&sessions, "s1")["burn_at"].as_i64(),
+        Some(now - 5),
+        "the fold's own timestamp, not the cache clock"
+    );
+    // Pushed into overage with a reset ahead of now: the same pin reads the dollar average instead.
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "business".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(now - 3_600_000),
+            reset: Some(now + 3_600_000),
+            observed_at: now,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    let overage_sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "usd")
+    })
+    .await;
+    assert_eq!(
+        (
+            row(&overage_sessions, "s1")["burn"].as_f64(),
+            row(&overage_sessions, "s1")["burn_unit"].as_str()
+        ),
+        (Some(0.5), Some("usd")),
+        "overage evidence whose reset is ahead moves a subscription account's reading to dollars"
     );
 }

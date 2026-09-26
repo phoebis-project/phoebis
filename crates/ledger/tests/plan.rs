@@ -246,6 +246,21 @@ fn the_band_weighs_a_weekday_afternoon_dispatch_on_the_five_hour_window_and_noth
 }
 
 #[test]
+fn the_shipped_bands_predicted_factor_answers_the_row_that_lists_the_window() {
+    let windows = PlanWindows::shipped();
+    assert_eq!(
+        windows.band_factor_of(FIVE_HOUR, SEPTEMBER_BEFORE_NOON),
+        Some(1.45),
+        "the row's factor stands whether or not now falls inside its hours"
+    );
+    assert_eq!(
+        windows.band_factor_of(SEVEN_DAY, SEPTEMBER_AFTERNOON),
+        None,
+        "no band lists the seven-day window"
+    );
+}
+
+#[test]
 fn meter_tokens_of_a_mixed_usage_are_the_weighted_sum_and_a_missing_model_is_none() {
     let factors = PlanFactors::shipped();
     // 100 input, 1,000 cache reads, 10 five-minute and 20 one-hour writes, 50 output.

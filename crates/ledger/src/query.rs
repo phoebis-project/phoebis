@@ -1296,6 +1296,116 @@ pub fn moves_by_reason(
     Ok(out)
 }
 
+/// One attempt's tokens toward a session's burn series: the rollups carry no session dimension, so this reads
+/// the request and attempt rows directly.
+struct SessionAttempt {
+    session_id: String,
+    account_id: String,
+    /// Milliseconds, `attempts.started_at`.
+    at: i64,
+    canonical_model: String,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_5m_tokens: u64,
+    cache_write_1h_tokens: u64,
+    output_tokens: u64,
+    estimated_usd: f64,
+}
+
+fn read_session_attempts(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+) -> Result<Vec<SessionAttempt>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT r.session_id, a.account_id, a.started_at, r.canonical_model, \
+         a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
+         a.output_tokens, a.estimated_usd \
+         FROM attempts a JOIN requests r ON r.id = a.request_id \
+         WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2",
+    )?;
+    let tokens = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
+    let rows = stmt.query_map(params![from, to], |row| {
+        Ok(SessionAttempt {
+            session_id: row.get(0)?,
+            account_id: row.get(1)?,
+            at: row.get(2)?,
+            canonical_model: row.get(3)?,
+            input_tokens: tokens(row.get(4)?),
+            cache_read_tokens: tokens(row.get(5)?),
+            cache_write_5m_tokens: tokens(row.get(6)?),
+            cache_write_1h_tokens: tokens(row.get(7)?),
+            output_tokens: tokens(row.get(8)?),
+            estimated_usd: row.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(LedgerError::from)
+}
+
+/// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
+/// `burn_series` prices an account row.
+pub fn session_burn_series(
+    conn: &Connection,
+    factors: &PlanFactors,
+    windows: &PlanWindows,
+    kinds: &HashMap<String, AccountKind>,
+    filter: &SeriesFilter,
+) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let attempts = read_session_attempts(conn, filter.from, filter.to)?;
+    let mut totals: HashMap<String, u64> = HashMap::new();
+    for a in &attempts {
+        *totals.entry(a.session_id.clone()).or_default() += a.input_tokens
+            + a.cache_read_tokens
+            + a.cache_write_5m_tokens
+            + a.cache_write_1h_tokens
+            + a.output_tokens;
+    }
+    let mut ranked: Vec<(String, u64)> = totals.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked.truncate(20);
+    let mut out = Vec::new();
+    for (session_id, _) in ranked {
+        let mut points = Vec::new();
+        let mut at = first;
+        while at < last {
+            let mut point = BurnPoint {
+                at: at * 1_000,
+                ..BurnPoint::default()
+            };
+            for a in attempts.iter().filter(|a| {
+                a.session_id == session_id
+                    && a.at / 1_000 >= at
+                    && a.at / 1_000 < at + filter.bucket_seconds
+            }) {
+                match kinds.get(&a.account_id) {
+                    Some(AccountKind::Oauth) => {
+                        if let Some(tokens) = factors.meter_tokens(
+                            &a.canonical_model,
+                            a.input_tokens,
+                            a.cache_read_tokens,
+                            a.cache_write_5m_tokens,
+                            a.cache_write_1h_tokens,
+                            a.output_tokens,
+                        ) {
+                            point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, a.at);
+                        }
+                    }
+                    Some(AccountKind::ApiKey) => point.usd += a.estimated_usd,
+                    None => continue,
+                }
+                point.cached_tokens += a.cache_read_tokens;
+                point.uncached_tokens += a.input_tokens;
+            }
+            points.push(point);
+            at += filter.bucket_seconds;
+        }
+        out.push((session_id, points));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

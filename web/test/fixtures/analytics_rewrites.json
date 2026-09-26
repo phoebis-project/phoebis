@@ -1,0 +1,113 @@
+{
+  "route": "GET /admin/analytics/rewrites?range=24h",
+  "body": {
+    "from": -85400000,
+    "to": 1000000,
+    "bucket_seconds": 3600,
+    "points": [
+      {
+        "at": -86400000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -82800000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -79200000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -75600000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -72000000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -68400000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -64800000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -61200000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -57600000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -54000000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -50400000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -46800000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -43200000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -39600000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -36000000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -32400000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -28800000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -25200000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -21600000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -18000000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -14400000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -10800000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -7200000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": -3600000,
+        "rewrite_tokens": 0
+      },
+      {
+        "at": 0,
+        "rewrite_tokens": 0
+      }
+    ],
+    "moves": {
+      "spent": 1
+    }
+  }
+}

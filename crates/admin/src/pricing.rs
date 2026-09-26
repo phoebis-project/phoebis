@@ -244,6 +244,9 @@ pub(crate) async fn confirm(State(state): State<Arc<AdminState>>, body: Bytes) -
         Err(e) => return failure(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     state.pricing.replace(table.clone());
+    // Reaches the router's burn without a restart; a router that has already stopped answers the price
+    // table's own routes fine, so a failed swap here is not itself a reason to refuse the confirmation.
+    let _ = state.router.replace_dollar_rates(table.rate_table()).await;
     match state.store.pricing_versions() {
         Ok(versions) => (StatusCode::CREATED, Json(table_json(&table, &versions))).into_response(),
         Err(e) => store_failure(e),

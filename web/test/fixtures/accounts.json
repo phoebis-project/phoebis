@@ -7,6 +7,7 @@
         "kind": "oauth",
         "label": "Business",
         "enabled": true,
+        "cancelled": false,
         "state": "ready",
         "identity": {
           "email": "test@example.invalid",
@@ -44,7 +45,9 @@
           "plan": "max",
           "tier": "default_claude_max_5x",
           "since": 1773482400000,
-          "trial_ends_at": null
+          "trial_ends_at": null,
+          "ends_at": null,
+          "derived_ends_at": 1159200000
         },
         "windows": [
           {
@@ -93,6 +96,7 @@
         "kind": "api_key",
         "label": "Direct",
         "enabled": true,
+        "cancelled": false,
         "state": "ready",
         "identity": null,
         "credential": null,

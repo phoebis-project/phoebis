@@ -13,12 +13,15 @@ use crate::AdminState;
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let s = &state.settings;
     let table = state.pricing.current();
+    let factors = phoebis_ledger::PlanFactors::shipped();
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
         "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },
         "compatibility": { "cache_diagnostics": s.cache_diagnostics, "outbound_gzip": false, "profile": s.profile, "usage_entrypoint": s.usage_entrypoint },
         "keepalive": s.keepalive,
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
+        "plan_factors": { "measured": factors.measured, "reference": factors.reference,
+            "models": factors.models.iter().map(|(m, f)| (m, json!({ "factor": f.factor, "input": f.input, "cache_read": f.cache_read, "cache_write_5m": f.cache_write_5m, "cache_write_1h": f.cache_write_1h, "output": f.output, "measured": f.measured, "unmeasured": f.unmeasured }))).collect::<std::collections::BTreeMap<_, _>>() },
         "pricing": { "version": table.version, "effective": table.effective, "source": table.source, "models": table.models.iter().map(|(m, p)| json!({ "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output })).collect::<Vec<_>>() },
         "quota": { "poll_interval_seconds": s.quota_poll_interval_seconds, "sample_retention_days": s.quota_sample_retention_days },
         "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "quota_samples_days": s.quota_sample_retention_days, "rollup_days": s.rollup_retention_days },

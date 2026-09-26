@@ -735,14 +735,27 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
     );
     assert_eq!(listed["profile"]["display_name"], "Biz");
     assert_eq!(
-        listed["subscription"],
-        serde_json::json!({
-            "plan": "max",
-            "tier": "default_claude_max_5x",
-            "since": 1_773_482_400_000_i64,
-            "trial_ends_at": 1_790_899_200_000_i64,
-        })
+        (
+            listed["subscription"]["plan"].as_str(),
+            listed["subscription"]["tier"].as_str(),
+            listed["subscription"]["since"].as_i64(),
+            listed["subscription"]["trial_ends_at"].as_i64(),
+            listed["subscription"]["ends_at"].as_i64(),
+        ),
+        (
+            Some("max"),
+            Some("default_claude_max_5x"),
+            Some(1_773_482_400_000_i64),
+            Some(1_790_899_200_000_i64),
+            None,
+        ),
+        "never cancelled, so the stored end is null"
     );
+    assert!(
+        listed["subscription"]["derived_ends_at"].is_i64(),
+        "a subscription with a start prefills a derived end"
+    );
+    assert_eq!(listed["cancelled"], false);
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert!(
         direct["profile"].is_null()
@@ -774,8 +787,9 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
     let second = json(get(&parts.app, "/admin/accounts/second", Some(&cookie)).await).await;
     assert_eq!(
         second["subscription"],
-        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null})
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null, "derived_ends_at": null})
     );
+    assert_eq!(second["cancelled"], false);
     // An OAuth account that has never paired (no profile document at all) answers `subscription: null`
     // outright, distinct from a paired account whose profile carries none of the five fields.
     assert_eq!(
@@ -797,6 +811,150 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
             .to_string()
             .contains("PLACEHOLDER"),
         "no credential in the list"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_derived_one_to_prefill(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            &phoebis_store::SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1_000_000),
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    let end = 1_790_000_000_000_i64;
+    let cancelled = json(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            cancelled["cancelled"].as_bool(),
+            cancelled["subscription"]["ends_at"].as_i64(),
+        ),
+        (Some(true), Some(end)),
+        "the route answers exactly the end it was saved with"
+    );
+    // The saved end is not the anchor the console prefills the form with next time; the derivation is its own
+    // question, read from `since` and the trial alone.
+    assert!(
+        cancelled["subscription"]["derived_ends_at"].is_i64(),
+        "a start is on file, so the prefill derives an end of its own"
+    );
+    // A cancelled OAuth account with no profile at all still answers the flag and the stored end: the flag
+    // must never read false for lack of a profile.
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts",
+            r#"{"id":"unpaired","kind":"oauth","label":"Unpaired"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let unpaired_cancelled = json(
+        patch(
+            &parts.app,
+            "/admin/accounts/unpaired",
+            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            unpaired_cancelled["cancelled"].as_bool(),
+            unpaired_cancelled["subscription"]["ends_at"].as_i64(),
+            unpaired_cancelled["subscription"]["derived_ends_at"].as_i64(),
+        ),
+        (Some(true), Some(end), None),
+        "no since to derive from, but the flag and the stored end round-trip regardless"
+    );
+    // Cancelling off drops the stored end, per `set_cancelled`'s own rule.
+    let restored = json(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            r#"{"cancelled":false}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            restored["cancelled"].as_bool(),
+            restored["subscription"]["ends_at"].as_i64(),
+        ),
+        (Some(false), None),
+        "the end leaves with the flag"
+    );
+}
+
+#[tokio::test]
+async fn an_end_without_the_flag_a_flag_without_an_end_and_a_flag_on_an_api_key_account_are_refused(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let bare_end = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        r#"{"subscription_ends_at":1790000000000}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bare_end.status(), 400);
+    assert_eq!(
+        json(bare_end).await["error"].as_str(),
+        Some("subscription_ends_at needs cancelled")
+    );
+    let bare_flag = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        r#"{"cancelled":true}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bare_flag.status(), 400);
+    assert_eq!(
+        json(bare_flag).await["error"].as_str(),
+        Some("cancelled needs subscription_ends_at")
+    );
+    let on_api_key = patch(
+        &parts.app,
+        "/admin/accounts/direct",
+        r#"{"cancelled":true,"subscription_ends_at":1790000000000}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(on_api_key.status(), 400);
+    assert_eq!(
+        json(on_api_key).await["error"].as_str(),
+        Some("only an oauth account is cancelled")
+    );
+    let unchanged = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        unchanged["cancelled"], false,
+        "every refusal above changed nothing"
     );
 }
 

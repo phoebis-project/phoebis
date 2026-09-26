@@ -349,6 +349,21 @@ async fn every_route_is_captured_and_holds_its_shape() {
         credential_generation: 1,
         incarnation: 1,
     });
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: phoebis_store::FitRow {
+            account_id: "business".into(),
+            window: "five_hour".into(),
+            scale: 5_945_000.0,
+            confidence: 0.8,
+            intervals: 12,
+            corrections_json: "{}".into(),
+            fitted_at: now,
+            incarnation: 1,
+            band_factor: Some(1.4),
+            ..Default::default()
+        },
+        incarnation: 1,
+    });
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 300,
         kind: "model_rejected".into(),
@@ -563,6 +578,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "analytics_breakdown",
             "/admin/analytics/breakdown?range=24h&group_by=key",
         ),
+        (
+            "analytics_burn",
+            "/admin/analytics/burn?range=24h&group_by=account",
+        ),
+        ("analytics_fits", "/admin/analytics/fits"),
+        ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (
             "analytics_series",
             "/admin/analytics/series?range=24h&group_by=key",

@@ -1,5 +1,5 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RuleCooldown, Session,
   SessionLifecycleDetail, Settings, Subscription, WindowId,
@@ -104,6 +104,8 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
   if (profile === null && sub === null) return null;
   return {
     billingType: str(profile?.billing_type),
+    derivedEndsAt: isoOrNull(sub?.derived_ends_at),
+    endsAt: isoOrNull(sub?.ends_at),
     organizationType: str(profile?.organization_type),
     plan: sub?.plan === 'max' || sub?.plan === 'pro' ? sub.plan : null,
     rateLimitTier: str(sub?.tier ?? profile?.rate_limit_tier),
@@ -124,6 +126,7 @@ export function decodeAccount(v: unknown): Account {
   const credential = rec(a.credential);
   const subscription = decodeSubscription(profile, sub);
   return {
+    cancelled: bool(a.cancelled),
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
@@ -207,6 +210,7 @@ export function decodeKey(v: unknown): ApiKey {
     enabled,
     expiresAt: expires,
     id: str(k.id),
+    inFlightCap: numOrNull(k.in_flight_cap),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
     lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
@@ -365,10 +369,13 @@ const agentState = (v: unknown): Session['keepalive']['state'] => AGENT_STATE_VA
 export const GUARD_VERDICT_VALUES = ['auxiliary', 'foreign', 'rearm', 'restart'] as const;
 const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
 
+export const BURN_UNIT_VALUES = ['meter_tokens', 'usd'] as const satisfies readonly BurnUnit[];
+const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u === str(v)) ?? null;
+
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agents: num(s.agents), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netMeterTokens: numOrNull(k.net_meter_tokens), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id) };
+  return { accountId: strOrNull(s.account_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netMeterTokens: numOrNull(k.net_meter_tokens), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;

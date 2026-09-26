@@ -1639,6 +1639,173 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     }
 }
 
+/// The fixture head, with an Opus-5 body instead of the captured fixture's own model: `PlanFactors::shipped()`
+/// and the shipped price table both name `claude-opus-5`, and neither names the fixture's `claude-sonnet-4-5`.
+fn opus_request(
+    client: &reqwest::Client,
+    proxy_port: u16,
+    secret: &str,
+    session: &str,
+) -> reqwest::RequestBuilder {
+    let head = inference_head(FixtureKind::ApiKey);
+    let (_, headers) = phoebis_transport::request::parse_head(head).unwrap();
+    let mut body: serde_json::Value = serde_json::from_slice(body(BodyFixture::ApiKey)).unwrap();
+    body["model"] = serde_json::json!("claude-opus-5");
+    let mut req = client
+        .post(format!(
+            "http://127.0.0.1:{proxy_port}/v1/messages?beta=true"
+        ))
+        .json(&body);
+    for (n, v) in headers {
+        match n.to_ascii_lowercase().as_str() {
+            "x-api-key" => {
+                req = req.header("x-api-key", secret);
+            }
+            "host" | "content-length" | "content-type" | "x-claude-code-session-id" => {}
+            _ => {
+                req = req.header(n, v);
+            }
+        }
+    }
+    req.header("x-claude-code-session-id", session)
+}
+
+#[tokio::test]
+async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"id":"msg_1","type":"message","model":"claude-opus-5","usage":{"input_tokens":1000,"output_tokens":100}}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-opus-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    // No `pricing_path`: the confirmed table is the shipped one, matched against directly below.
+    seed_oauth_account(&db_path, &key_path);
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_BURN_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "a", "priority": 0 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let resp = opus_request(&client, proxy_port, &secret, "burn-e2e")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    let sessions = wait_json(&client, &admin("/sessions"), |v| {
+        v["sessions"][0]["burn"].as_f64().is_some_and(|b| b > 0.0)
+    })
+    .await;
+    let row = &sessions["sessions"][0];
+    assert_eq!(
+        row["burn_unit"], "meter_tokens",
+        "an oauth account funded by its plan"
+    );
+    let last_used_at = row["last_used_at"].as_i64().unwrap();
+    let meter_tokens = phoebis_ledger::PlanFactors::shipped()
+        .meter_tokens("claude-opus-5", 1_000, 0, 0, 0, 100)
+        .unwrap();
+    let band_factor =
+        phoebis_ledger::PlanWindows::shipped().band_factor(phoebis_routing::FIVE_HOUR, last_used_at);
+    // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
+    // priced usage spread over that window.
+    let expected_burn = meter_tokens * band_factor / 600.0;
+    assert!(
+        (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-6,
+        "{row}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    let store = phoebis_store::Store::open(
+        &db_path,
+        &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+    )
+    .unwrap();
+    let pin = store
+        .load_routing()
+        .unwrap()
+        .pins
+        .into_iter()
+        .find(|p| p.key_id == "desktop" && p.session_id == "burn-e2e")
+        .expect("the pin the request created is on disk once the binary has stopped");
+    let dollars = phoebis_ledger::PriceTable::shipped().rate_table().price(
+        "claude-opus-5",
+        phoebis_routing::PinUsage {
+            input: 1_000,
+            output: 100,
+            ..Default::default()
+        },
+    );
+    assert!(
+        (pin.burn_usd - dollars / 600.0).abs() < 1e-12,
+        "the unit price table gives the dollar average, unweighted by the band: {}",
+        pin.burn_usd
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
     let dir = tempfile::tempdir().unwrap();

@@ -47,6 +47,8 @@ struct KeyInput {
     keepalive_opt_out: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     body_capture_hours: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "double_option")]
+    in_flight_cap: Option<Option<u32>>,
 }
 
 fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
@@ -110,6 +112,15 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
             ));
         }
         row.body_capture_hours = hours;
+    }
+    if let Some(cap) = input.in_flight_cap {
+        if cap == Some(0) {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "in_flight_cap is at least 1",
+            ));
+        }
+        row.in_flight_cap = cap;
     }
     Ok(())
 }
@@ -411,6 +422,7 @@ fn key_json(
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
+        "in_flight_cap": row.in_flight_cap,
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },

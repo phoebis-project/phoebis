@@ -1,0 +1,21 @@
+{
+  "route": "GET /admin/analytics/fits",
+  "body": {
+    "fits": [
+      {
+        "account_id": "business",
+        "window": "five_hour",
+        "scale": 5945000.0,
+        "confidence": 0.8,
+        "intervals": 12,
+        "corrections": {},
+        "fitted_at": 1000000,
+        "predicted": 11890000.0,
+        "drift": 0.5,
+        "band_factor": 1.4,
+        "band_factor_predicted": 1.45,
+        "band_divergent": false
+      }
+    ]
+  }
+}

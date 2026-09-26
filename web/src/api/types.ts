@@ -46,6 +46,11 @@ export interface Credential {
 
 export interface Subscription {
   billingType: string;
+  /** The account form's prefill: the anchor derived from `since` and the trial, carried forward to the next
+   *  occurrence after now; null with no `since` to derive from. */
+  derivedEndsAt: string | null;
+  /** The operator's saved end, standing only while `Account.cancelled` is set; null otherwise. */
+  endsAt: string | null;
   organizationType: string;
   /** `max` or `pro` from the profile's account flags; null when the document reports neither. */
   plan: 'max' | 'pro' | null;
@@ -62,6 +67,8 @@ export interface PoolMembership {
 }
 
 export interface Account {
+  /** Set only on an OAuth account; an api_key account always reads false. */
+  cancelled: boolean;
   cooldowns: Cooldown[];
   credential: Credential;
   email: string | null;
@@ -288,6 +295,8 @@ export interface ApiKey {
   enabled: boolean;
   expiresAt: string | null;
   id: string;
+  /** Requests in flight the key may hold; null is no cap. */
+  inFlightCap: number | null;
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
@@ -591,9 +600,19 @@ export type KeepaliveState = 'busy' | 'idle' | 'parked';
 /** Whether a cache-keepalive companion is registered for the session and still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
+/** Which of a pin's two burn averages a reader takes: meter tokens under plan funding, dollars off it. */
+export type BurnUnit = 'meter_tokens' | 'usd';
+
 export interface Session {
   accountId: string | null;
   agents: number;
+  /** The moving average priced in `burnUnit`; null for a session with no pin, or a pin never renewed with usage. */
+  burn: number | null;
+  /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with `burn`. */
+  burnAt: string | null;
+  burnUnit: BurnUnit | null;
+  /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
+  cacheTtlMs: number | null;
   companion: CompanionState;
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
@@ -612,6 +631,11 @@ export interface Session {
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
+  /** The input, cache-read and cache-write tokens of the pin's last renewal; null for a session with no pin. */
+  lastInputTokens: number | null;
+  /** The pin's last main, subagent or compaction turn, or a keepalive probe's renewal; null for a session with
+   *  no pin. */
+  lastRefreshAt: string | null;
   /** Last ledgered client request; null for a session that has not been seen in the ledger. */
   lastRequestAt: string | null;
   lastUsedAt: string | null;
@@ -621,6 +645,9 @@ export interface Session {
   /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
   requests: number;
   sessionId: string;
+  /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
+   *  pin never marked, or with no pin. */
+  shedFrom: string | null;
 }
 
 export type RecipeState = 'armed' | 'held' | 'probing';

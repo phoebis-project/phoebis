@@ -17,7 +17,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
   assert.deepEqual(
     Object.keys(a.subscription).sort(),
-    ['billingType', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
+    ['billingType', 'derivedEndsAt', 'endsAt', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
     'the route answers the profile and subscription fields and nothing more, so the card draws nothing beside them',
   );
   assert.equal(a.subscription.plan, 'max');
@@ -36,9 +36,22 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
+});
+
+test('an account decodes its cancelled flag and both ends, and a key its cap', () => {
+  const body = fixture('account');
+  const cancelled = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: 5_000, derived_ends_at: 9_000 } });
+  assert.deepEqual(
+    [cancelled.cancelled, cancelled.subscription.endsAt, cancelled.subscription.derivedEndsAt],
+    [true, d.iso(5_000), d.iso(9_000)],
+  );
+  assert.equal(d.decodeAccount(body).cancelled, false, 'a row the wire answers no flag for reads uncancelled');
+  const key = fixture('keys').keys[0];
+  assert.equal(d.decodeKey({ ...key, in_flight_cap: 4 }).inFlightCap, 4);
+  assert.equal(d.decodeKey(key).inFlightCap, null, 'no cap on the wire is no cap in the type');
 });
 
 test('an account decodes its quarantine flag and the router\'s overage evidence', () => {

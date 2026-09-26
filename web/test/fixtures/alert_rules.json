@@ -6,7 +6,7 @@
         "created_at": 1000000,
         "enabled": false,
         "has_secret": false,
-        "id": "rule_efc123aa90e068a7",
+        "id": "rule_94d82157573ae2dc",
         "kind": "client_drift",
         "scope": {
           "id": null,
@@ -21,7 +21,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": true,
-        "id": "rule_406e9a5c6fafcbed",
+        "id": "rule_c61d45a8758ae5ae",
         "kind": "utilization_above",
         "scope": {
           "id": "main",

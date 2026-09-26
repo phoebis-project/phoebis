@@ -987,6 +987,93 @@ async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage()
 }
 
 #[tokio::test]
+async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "direct".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(common::NOW - 3_600_000),
+            reset: Some(common::NOW - 1),
+            observed_at: common::NOW - 3_600_000,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    // Synchronized on the account view, which reads the raw flag, before reading the pool, which converts it.
+    common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
+        v["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "direct" && a["overage"]["in_use"] == true)
+    })
+    .await;
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            pools["pools"][0]["status"].as_str(),
+            pools["pools"][0]["members"][0]["eligible"].as_str()
+        ),
+        (Some("active"), Some("eligible")),
+        "a reset that has passed no longer counts as overage evidence for eligibility"
+    );
+}
+
+#[tokio::test]
+async fn a_key_carries_an_in_flight_cap_that_null_clears_and_zero_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let created = json(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main","in_flight_cap":4}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created["in_flight_cap"].as_u64(), Some(4));
+    let refused = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"in_flight_cap":0}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("in_flight_cap is at least 1")
+    );
+    let cleared = json(
+        patch(
+            &app,
+            "/admin/keys/desktop",
+            r#"{"in_flight_cap":null}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        cleared["in_flight_cap"].is_null(),
+        "an explicit null clears the stored cap"
+    );
+}
+
+#[tokio::test]
 async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1372,5 +1459,143 @@ async fn a_pool_patch_carrying_members_applies_both_or_refuses_before_the_policy
     assert_eq!(
         (&reread["affinity_ttl_seconds"], &reread["members"]),
         (&body["affinity_ttl_seconds"], &body["members"])
+    );
+}
+
+#[tokio::test]
+async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of_range_value() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"eng","label":"Engine","shed_share":0.3,"burn_window_seconds":120,
+                "source_dwell_seconds":90,"migrate_when_spent":false,"warm_sessions":"always",
+                "retry_in_place_seconds":5,"in_flight_cap":4,"pace_floor":0.1,
+                "overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            created["shed_share"].as_f64(),
+            created["burn_window_seconds"].as_u64(),
+            created["source_dwell_seconds"].as_u64(),
+            created["migrate_when_spent"].as_bool(),
+            created["warm_sessions"].as_str(),
+            created["retry_in_place_seconds"].as_u64(),
+            created["in_flight_cap"].as_u64(),
+            created["pace_floor"].as_f64(),
+            created["overage_move_grace_minutes"].as_u64(),
+            created["wind_down_minutes"].as_u64(),
+        ),
+        (
+            Some(0.3),
+            Some(120),
+            Some(90),
+            Some(false),
+            Some("always"),
+            Some(5),
+            Some(4),
+            Some(0.1),
+            Some(10),
+            Some(15),
+        ),
+        "every shedding and failover field is answered as stored"
+    );
+    assert!(
+        created["moves_per_hour"].is_object(),
+        "the pool card's figure is always an object, empty when nothing moved"
+    );
+    for (body, message) in [
+        (r#"{"shed_share":1.5}"#, "shed_share is between 0 and 1"),
+        (
+            r#"{"burn_window_seconds":59}"#,
+            "burn_window_seconds is at least 60",
+        ),
+        (
+            r#"{"source_dwell_seconds":59}"#,
+            "source_dwell_seconds is at least 60",
+        ),
+        (
+            r#"{"warm_sessions":"sometimes"}"#,
+            "warm_sessions must be always, never, or when_needed",
+        ),
+        (
+            r#"{"retry_in_place_seconds":301}"#,
+            "retry_in_place_seconds is 0 to 300",
+        ),
+        (r#"{"in_flight_cap":0}"#, "in_flight_cap is at least 1"),
+        (r#"{"pace_floor":-0.1}"#, "pace_floor is between 0 and 1"),
+        (
+            r#"{"overage_move_grace_minutes":301}"#,
+            "overage_move_grace_minutes is 0 to 300",
+        ),
+        (
+            r#"{"wind_down_minutes":10081}"#,
+            "wind_down_minutes is at most 10080 (one week)",
+        ),
+    ] {
+        let refused = patch(&app, "/admin/pools/eng", body, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{body}");
+        assert_eq!(json(refused).await["error"].as_str(), Some(message));
+    }
+}
+
+#[tokio::test]
+async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"eng","label":"Engine","shed_share":0.3,"burn_window_seconds":120,
+            "source_dwell_seconds":90,"migrate_when_spent":false,"warm_sessions":"always",
+            "retry_in_place_seconds":5,"in_flight_cap":4,"pace_floor":0.1,
+            "overage_move_grace_minutes":10,"wind_down_minutes":15}"#,
+        Some(&cookie),
+    )
+    .await;
+    let edited = json(
+        patch(
+            &app,
+            "/admin/pools/eng",
+            r#"{"label":"Renamed"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            edited["label"].as_str(),
+            edited["shed_share"].as_f64(),
+            edited["burn_window_seconds"].as_u64(),
+            edited["source_dwell_seconds"].as_u64(),
+            edited["migrate_when_spent"].as_bool(),
+            edited["warm_sessions"].as_str(),
+            edited["retry_in_place_seconds"].as_u64(),
+            edited["in_flight_cap"].as_u64(),
+            edited["pace_floor"].as_f64(),
+            edited["overage_move_grace_minutes"].as_u64(),
+            edited["wind_down_minutes"].as_u64(),
+        ),
+        (
+            Some("Renamed"),
+            Some(0.3),
+            Some(120),
+            Some(90),
+            Some(false),
+            Some("always"),
+            Some(5),
+            Some(4),
+            Some(0.1),
+            Some(10),
+            Some(15),
+        ),
+        "an unrelated patch leaves every engine field at what it was stored with"
     );
 }

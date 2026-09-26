@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1790386992696,
+      "key_generation": 1790408154256,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -17,6 +17,7 @@
       "kind": "inference",
       "origin": "client",
       "transport": "sse",
+      "request_class": null,
       "status": 200,
       "outcome": "succeeded",
       "error_code": null,
@@ -92,6 +93,7 @@
           "overage_in_use": null,
           "estimated_usd": 0.0036,
           "pricing_version": "2026-09-08",
+          "selection": null,
           "response": {
             "cleared_input_tokens": null,
             "inference_geo": "us",
@@ -128,6 +130,7 @@
           "overage_in_use": null,
           "estimated_usd": 0.0036,
           "pricing_version": "2026-09-08",
+          "selection": null,
           "response": {
             "cleared_input_tokens": null,
             "inference_geo": "us",

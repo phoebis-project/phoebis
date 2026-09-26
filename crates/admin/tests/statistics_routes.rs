@@ -3,8 +3,8 @@ mod common;
 use std::time::Duration;
 
 use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
-use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
-use common::{delete, get, json, login, post};
+use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
+use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 
@@ -237,6 +237,50 @@ async fn pricing_is_listed_imported_with_a_diff_and_confirmed_into_a_new_version
     prices.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_confirmed_import_reaches_the_routers_burn_without_a_restart() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Named as the harness's catalog serves it (`claude-sonnet-4-5`), or the diff would leave it out as an
+    // unserved model and the confirmed table would carry the shipped row's rates instead.
+    let before = parts.router.rates("claude-sonnet-4-5").await.unwrap();
+    assert_eq!(
+        before.input, 1.0,
+        "the harness's router starts on the unit table, the burn's effect otherwise only visible through a served request"
+    );
+    let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-4-5":{"input_cost_per_token":9e-06,"output_cost_per_token":4.5e-05}}"#.to_vec() } }]).await;
+    let url = format!("http://127.0.0.1:{}/prices.json", prices.addr().port());
+    let preview = json(
+        post(
+            &parts.app,
+            "/admin/pricing/import",
+            &format!(r#"{{"url":"{url}"}}"#),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let token = preview["token"].as_str().unwrap().to_string();
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/pricing/import/confirm",
+            &format!(r#"{{"token":"{token}"}}"#),
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let after = parts.router.rates("claude-sonnet-4-5").await.unwrap();
+    assert_eq!(
+        (after.input, after.output),
+        (9e-06, 4.5e-05),
+        "the confirmed table's rates reach the router at once"
+    );
+    prices.shutdown().await;
+}
+
 /// A gzip-compressed body, the shape `flate2::write::GzEncoder` gives a stream the wire never decodes for us.
 fn gzip(payload: &[u8]) -> Vec<u8> {
     use std::io::Write;
@@ -427,6 +471,11 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(3_600), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-09-08");
+    assert_eq!(settings["plan_factors"]["reference"], "claude-opus-5");
+    assert_eq!(
+        settings["plan_factors"]["models"]["claude-opus-5"]["factor"].as_f64(),
+        Some(1.0)
+    );
     let text = settings.to_string();
     assert!(
         !text.contains("admin-secret")
@@ -989,5 +1038,381 @@ async fn a_non_numeric_limit_on_the_request_log_is_refused() {
             .await
             .status(),
         200
+    );
+}
+
+#[tokio::test]
+async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            &phoebis_store::SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1_000_000),
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    let now = common::NOW;
+    parts
+        .ledger
+        .record(record("burn-1", now - HOUR, "claude-sonnet-5", "s1"));
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("burn-1").await.unwrap()
+    })
+    .await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(burn["group_by"], "account");
+    let point = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["group"] == "business" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
+        .unwrap_or_else(|| panic!("a bucket carries the recorded attempt: {burn}"));
+    let meter_tokens = point["meter_tokens"].as_f64().unwrap();
+    let expected = meter_tokens / 11_890_000.0;
+    assert!(
+        (point["plan_percent"].as_f64().unwrap() - expected).abs() < 1e-12,
+        "the fitted 5-hour scale is absent, so the tier's predicted one divides the bucket: {point}"
+    );
+    let by_key = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        by_key["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["plan_percent"].is_null()),
+        "plan_percent is an account-grouped figure alone"
+    );
+    assert_eq!(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?group_by=pool",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        400,
+        "pool is not one of the burn route's own group_by values"
+    );
+}
+
+#[tokio::test]
+async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let hour_ago = now - HOUR;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-rewrite".into(),
+            received_at: hour_ago,
+            finished_at: Some(hour_ago + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-rewrite".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: hour_ago,
+            outcome: "succeeded".into(),
+            cache_write_5m_tokens: Some(500),
+            selection: Some(
+                r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#
+                    .into(),
+            ),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 100,
+        kind: "pin_migrated".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-sonnet-5".into()),
+        actor: None,
+        detail: Some(
+            serde_json::json!({ "from_account": "direct", "epoch": 2, "reason": "shed" })
+                .to_string(),
+        ),
+    }));
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-rewrite").await.unwrap()
+    })
+    .await;
+    let rewrites = json(
+        get(
+            &parts.app,
+            "/admin/analytics/rewrites?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let total: u64 = rewrites["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["rewrite_tokens"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 500, "the moved attempt's cache write is the rewrite");
+    assert_eq!(rewrites["moves"]["shed"].as_u64(), Some(1));
+}
+
+#[tokio::test]
+async fn the_fits_route_answers_the_drift_against_the_tiers_row() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            &phoebis_store::SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1_000_000),
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: phoebis_store::FitRow {
+            account_id: "business".into(),
+            window: phoebis_routing::FIVE_HOUR.into(),
+            scale: 5_945_000.0,
+            confidence: 0.8,
+            intervals: 12,
+            corrections_json: "{}".into(),
+            fitted_at: common::NOW,
+            incarnation: 1,
+            band_factor: None,
+            ..Default::default()
+        },
+        incarnation: 1,
+    });
+    let fits = wait_json(&parts.app, "/admin/analytics/fits", &cookie, |v| {
+        v["fits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["account_id"] == "business")
+    })
+    .await;
+    let row = fits["fits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["account_id"] == "business")
+        .unwrap();
+    assert_eq!(row["predicted"].as_f64(), Some(11_890_000.0));
+    assert!(
+        (row["drift"].as_f64().unwrap() - 0.5).abs() < 1e-9,
+        "scale over predicted: {row}"
+    );
+    assert_eq!(row["band_factor_predicted"].as_f64(), Some(1.45));
+}
+
+#[tokio::test]
+async fn the_fits_route_marks_a_band_factor_more_than_fifteen_percent_off_the_row() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let fit = |account: &str, window: &str, band_factor: Option<f64>| phoebis_store::FitRow {
+        account_id: account.into(),
+        window: window.into(),
+        scale: 1.0,
+        confidence: 0.5,
+        intervals: 1,
+        corrections_json: "{}".into(),
+        fitted_at: common::NOW,
+        incarnation: 1,
+        band_factor,
+        ..Default::default()
+    };
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: fit("business", phoebis_routing::FIVE_HOUR, Some(1.0)),
+        incarnation: 1,
+    });
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: fit("direct", phoebis_routing::FIVE_HOUR, Some(1.4)),
+        incarnation: 1,
+    });
+    parts.router.report(phoebis_routing::Report::Fit {
+        row: fit("business", phoebis_routing::SEVEN_DAY, None),
+        incarnation: 1,
+    });
+    let fits = wait_json(&parts.app, "/admin/analytics/fits", &cookie, |v| {
+        v["fits"].as_array().unwrap().len() >= 3
+    })
+    .await;
+    let row = |account: &str, window: &str| {
+        fits["fits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["account_id"] == account && f["window"] == window)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row("business", "five_hour")["band_divergent"], true);
+    assert_eq!(row("direct", "five_hour")["band_divergent"], false);
+    let seven = row("business", "seven_day");
+    assert_eq!(
+        (
+            seven["band_factor"].as_f64(),
+            seven["band_factor_predicted"].as_f64(),
+            seven["band_divergent"].as_bool()
+        ),
+        (None, None, Some(false)),
+        "no band lists the seven-day window"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_row_answers_moves_per_hour_by_reason() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/accounts",
+        r#"{"id":"outside","kind":"oauth","label":"Outside"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"other","label":"Other","strategy":"priority","members":[{"account_id":"outside","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    let now = common::NOW;
+    let event = |account: &str, reason: &str| {
+        Record::Event(EventRecord {
+            at: now - 100,
+            kind: "pin_migrated".into(),
+            account_id: Some(account.into()),
+            key_id: Some("desktop".into()),
+            session_id: Some("s1".into()),
+            model: Some("claude-sonnet-5".into()),
+            actor: None,
+            detail: Some(serde_json::json!({ "reason": reason }).to_string()),
+        })
+    };
+    parts.ledger.record(event("business", "shed"));
+    parts.ledger.record(event("direct", "shed"));
+    parts.ledger.record(event("business", "spent"));
+    // A shed of another pool's account, left out of "main"'s count.
+    parts.ledger.record(event("outside", "shed"));
+    let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        v["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "main")
+            .is_some_and(|p| p["moves_per_hour"]["shed"] == 2.0)
+    })
+    .await;
+    let main = pools["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .unwrap();
+    assert_eq!(
+        (
+            main["moves_per_hour"]["shed"].as_f64(),
+            main["moves_per_hour"]["spent"].as_f64()
+        ),
+        (Some(2.0), Some(1.0))
+    );
+}
+
+#[tokio::test]
+async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_named_objects_on_the_wire(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-trace".into(),
+            received_at: common::NOW,
+            finished_at: Some(common::NOW + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            request_class: Some("main".into()),
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-trace".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: common::NOW,
+            outcome: "succeeded".into(),
+            selection: Some(
+                r#"{"strategy":"pace","tier":null,"renewed":false,"moved":null,"skipped":[{"account_id":"direct","obstacle":"cooldown"}]}"#
+                    .into(),
+            ),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-trace").await.unwrap()
+    })
+    .await;
+    let raw = get(&parts.app, "/admin/requests/r-trace", Some(&cookie)).await;
+    let body = json(raw).await;
+    assert_eq!(body["request"]["request_class"], "main");
+    let skipped = &body["request"]["attempts"][0]["selection"]["skipped"];
+    assert!(skipped.is_array());
+    assert_eq!(
+        skipped[0],
+        serde_json::json!({ "account_id": "direct", "obstacle": "cooldown" }),
+        "a named object on the wire, never a tuple: {body}"
     );
 }

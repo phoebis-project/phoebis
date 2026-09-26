@@ -18,6 +18,19 @@
             "not": true
           }
         ],
+        "shed_share": 0.5,
+        "burn_window_seconds": 600,
+        "source_dwell_seconds": 900,
+        "migrate_when_spent": true,
+        "warm_sessions": "when_needed",
+        "retry_in_place_seconds": 10,
+        "in_flight_cap": 16,
+        "pace_floor": 0.05,
+        "overage_move_grace_minutes": 30,
+        "wind_down_minutes": 30,
+        "moves_per_hour": {
+          "spent": 1.0
+        },
         "keepalive": {
           "cold_probe_limit": 2,
           "enabled": true,
@@ -44,8 +57,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790386992693,
-        "updated_at": 1790386992693,
+        "created_at": 1790408154254,
+        "updated_at": 1790408154254,
         "members": [
           {
             "account_id": "business",
@@ -62,7 +75,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "MlX4kqne",
+            "prefix": "psh38vwb",
             "enabled": true
           }
         ],
