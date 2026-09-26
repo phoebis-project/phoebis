@@ -45,9 +45,9 @@ the image's `HEALTHCHECK` runs `phoebis health` ([how](docs/site/installation.md
 | [Installation](docs/site/installation.md) | Build, container, service, commands, and every bootstrap setting. |
 | [Downstream client](docs/site/client.md) | The client's environment block, each variable, and the key's usage page. |
 | [Pairing an account](docs/site/pairing.md) | Pairing an OAuth account through the console or with `curl`. |
-| [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, the plan meter, cooldowns, failover, overage. |
+| [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
-| [Statistics and alerts](docs/site/statistics.md) | The ledger, the views, metrics, the live feed, webhook alerts. |
+| [Statistics and alerts](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, webhook alerts. |
 | [Operations](docs/site/operations.md) | Backup, storage key, upgrades, client re-pinning, publishing, releasing. |
 | [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
 

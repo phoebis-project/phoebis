@@ -219,16 +219,17 @@ The rest are preferences that fall back to the wider set rather than stranding t
 drops every account at or above that threshold in 5-hour utilization, and an account winding down toward its
 subscription end (see **Subscription end**, below) is skipped for a fresh placement too.
 
-What remains is ordered in three kind groups, plan quota, overage, then API key, whenever `prefer_subscription`
-is on; each group orders by priority ascending, and the strategy picks inside the first non-empty tier. `pace`
-reads each account's sample as a window map: a subscription account scores by remaining allowance in its own
-window (the model's own window when it has one, else the shared 7-day window) over the hours to the earlier of
-that window's reset and the account's derived end; an api_key account scores by one minus its worst live
-rate-limit bucket's utilization alone, with no division by hours, since a bucket refills within a minute and its
-own reset never enters the score. Either way a window nobody has sampled, or one whose reset has already passed,
-reads as untouched: remaining 1 over the full week. Ties are random. An account whose score falls at or below the
-pool's `pace_floor` is kept as the last resort, ranked by the same score among the others below it, once no
-account above the floor remains; `priority` and `round_robin` read no sample and no floor at all.
+What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
+plan quota, overage, then API key; within a group, or across the whole set with the flag off, tiers order by priority
+ascending, then, under `prefer_plan`, an account not in overage before one in overage. The strategy picks inside the
+first non-empty tier. `pace` reads each account's sample as a window map: a subscription account scores by remaining
+allowance in its own window (the model's own window when it has one, else the shared 7-day window) over the hours to the
+earlier of that window's reset and the account's derived end; an api_key account scores by one minus its worst live
+rate-limit bucket's utilization alone, with no division by hours, since a bucket refills within a minute and its own
+reset never enters the score. Either way a window nobody has sampled, or one whose reset has already passed, reads as
+untouched: remaining 1 over the full week. Ties are random. An account whose remaining allowance is at or below the
+pool's `pace_floor` is kept as the last resort, ranked by the same score among the others below it, once no account
+above the floor remains; `priority` and `round_robin` read no sample and no floor at all.
 
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.
@@ -486,11 +487,11 @@ A pool's `overage_policy` chooses what happens once an upstream starts billing e
 
 - **Prefer plan quota** (`prefer_plan`): a pinned session on this upstream moves to a plan-funded subscription
   sibling with allowance, warm or cold, once the reset the overage evidence names is further away than
-  `overage_move_grace_minutes` (default 30); an API-key sibling is never its destination, since a subscription
-  account in overage still costs less than one. A hard reason on the account instead, such as a spent window or a
-  cooldown, takes the move it already has, which may land on an API-key sibling. An API-key member returns to plan
-  quota the same way, independent of this policy, once its pin is cold or has sat on the key for
-  `source_dwell_seconds` (see [Moves](#moves)).
+  `overage_move_grace_minutes` (default 30); an API-key sibling is never its destination, since a move onto an API
+  key is kept for a hard reason. A hard reason on the account instead, such as a spent window or a cooldown, takes
+  the move it already has, which may land on an API-key sibling. An API-key member returns to plan quota the same
+  way, independent of this policy, once its pin is cold or has sat on the key for `source_dwell_seconds` (see
+  [Moves](#moves)).
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an upstream in extra usage as unavailable until its window resets.
 

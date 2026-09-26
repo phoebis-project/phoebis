@@ -38,22 +38,21 @@ the client sent: the `cch` billing hash, `x-client-request-id`, `cc_prev_req`, a
 absent. A request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the
 router never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
 attribution block, the router fills them like any other line, and they carry the `auxiliary` request class in
-`x-claude-code-request-class`. The router reads the header on every request: a main, subagent or compaction class keeps
-the session's pin warm and re-arms its keepalive recipe, and any other class does neither. Which client setting sends
-the header on an ordinary turn is not this page's to say; see
-[CLAUDE_CODE_GATEWAY_HINT_HEADERS](#claude_code_gateway_hint_headers) for the hints the reduced shape names outright.
-The previous request id and the prompt id come from the router's session memory, which survives a restart: they are kept
-on disk for `sessions.memory_retention_days` ([installation](installation.md#sessions)). Three things are not restored,
-because the router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search;
-`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and `cc_turn_origin`, who
-started the turn, which the router records when the line carries it and never writes. The restoration applies to a
-request whose `User-Agent` is `claude-cli/` followed by a version the client itself would spell (digits and dots,
-optionally `-` and a prerelease suffix of letters, digits, dots, and hyphens) and to the client's own inference
-requests; a keepalive probe replays a request as the client sent it.
-Two self-checks guard the restoration against a client build the router was not pinned to: a stamped `cch` hash the
-router cannot reproduce, and a `cc_version` suffix that does not reproduce from the prompt and the client's version.
-Either refuses the request as client drift before anything is sent, and the request log names which (`hash` or
-`version_suffix`). The variable is an internal one that a later client build may drop.
+`x-claude-code-request-class`. The router reads the class header whenever the client sends it; the other hints are under
+[CLAUDE_CODE_GATEWAY_HINT_HEADERS](#claude_code_gateway_hint_headers). A main, subagent or compaction class keeps the
+session's pin warm and re-arms its keepalive recipe, and any other class does neither. The previous request id and the
+prompt id come from the router's session memory, which survives a restart: they are kept on disk for
+`sessions.memory_retention_days` ([installation](installation.md#sessions)). Three things are not restored, because the
+router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true`
+selects it), the global cache scope on the static system block, and `cc_turn_origin`, who started the turn, which the
+router records when the line carries it and never writes. The restoration applies to a request whose `User-Agent` is
+`claude-cli/` followed by a version the client itself would spell (digits and dots, optionally `-` and a prerelease
+suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
+a keepalive probe replays a request as the client sent it. Two self-checks guard the
+restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
+`cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
+client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). The variable is an
+internal one that a later client build may drop.
 
 The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
 tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed
@@ -68,9 +67,11 @@ arrive by default. Set to `1`, it makes the client send its gateway hint headers
 `x-claude-code-agent-type` (the subagent's type on its own turns), `x-claude-code-compaction` (on the summarization
 request), `x-claude-code-context-compacted` (once, on the first request after a compaction), and
 `x-claude-code-prev-tool-durations` (the tool calls of the turn before and their milliseconds). The router reads them
-for the request log and the analytics and nothing else: the row carries each value as sent, the tool durations as
-their sum, and the drawer shows them ([statistics](statistics.md#requests)). Every header is optional; a request
-without one is relayed the same way. `0` stops them on every connection.
+for the request log and the analytics: the row carries each value as sent, the tool durations as their sum, and the
+drawer shows them ([statistics](statistics.md#requests)). `x-claude-code-context-compacted` also reaches routing: the
+session's pin reads cold on the request that carries it, so a move that waits for a cold cache may take the session and
+a shedding round orders it first ([Moves](routing.md#moves)); the other three change nothing about where a request
+lands. Every header is optional; a request without one is relayed the same way. `0` stops them on every connection.
 
 ### DISABLE_TELEMETRY
 

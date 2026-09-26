@@ -207,6 +207,10 @@ probe that made its net negative, not a contradiction.
 | `storage_limit` | storage limit | The engine is at its retained-request or session limit. |
 | `unsupported_shape` | unsupported shape | The last request had no cacheable prefix the probe could replay. |
 
+A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is `retrying` rather than paused
+under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` in place of the backoff, since a slot
+frees within seconds.
+
 A wasted probe settles with one of four reasons of its own, counted when the recipe stops with one already sent
 and unanswered:
 

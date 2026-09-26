@@ -267,11 +267,13 @@ beside it: the cache-write tokens the first request after a move paid to warm it
 counted, by reason. Burn reports the plan's burn in meter tokens for a subscription account and in dollars for an
 api-key account, side by side and each split into cached and uncached tokens, grouped by upstream, key, session, or
 request class, beside a Plan meter fit table (see [Plan meter](#plan-meter)); a subscription account's meter tokens
-carry the peak band's weight for the hour they landed in, the same weight the live fit divides by. Latency reports
-percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
-the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
-spend for the range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak
-utilization, ineligible time, and pin churn per upstream.
+carry the peak band's weight for the hour they landed in, the same weight the live fit divides by. Grouped by upstream,
+it adds a Plan per hour chart, the plan-percent view: the share of each subscription upstream's 5-hour window, at its
+fitted size or else its tier's, that its traffic used per hour, weighted by the peak band. Latency reports percentiles
+read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of
+input served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the
+range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization,
+ineligible time, and pin churn per upstream.
 
 Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives back only the
 hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later
