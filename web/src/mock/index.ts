@@ -1,5 +1,5 @@
 import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
@@ -70,7 +70,22 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   return rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
 };
 
-/** The affinity floor, the rule list, and the keepalive policy's refusals, first one first, as the pool routes answer them. */
+/** The shedding and failover refusals, in the order and words of the pool routes. */
+const engineRefusal = (input: PoolInput): string | null => {
+  const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
+  if (!(input.shedShare >= 0 && input.shedShare <= 1)) return 'shed_share is between 0 and 1';
+  if (!whole(input.burnWindowSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'burn_window_seconds is at least 60';
+  if (!whole(input.sourceDwellSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'source_dwell_seconds is at least 60';
+  if (!WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions)) return 'warm_sessions must be always, never, or when_needed';
+  if (!whole(input.retryInPlaceSeconds, 0, 300)) return 'retry_in_place_seconds is 0 to 300';
+  if (!whole(input.inFlightCap, 1, 4_294_967_295)) return 'in_flight_cap is at least 1';
+  if (!(input.paceFloor >= 0 && input.paceFloor <= 1)) return 'pace_floor is between 0 and 1';
+  if (!whole(input.overageMoveGraceMinutes, 0, 300)) return 'overage_move_grace_minutes is 0 to 300';
+  if (!whole(input.windDownMinutes, 0, 10_080)) return 'wind_down_minutes is at most 10080 (one week)';
+  return null;
+};
+
+/** The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool routes answer them. */
 const poolRefusal = (input: PoolInput): string | null => {
   const affinity = input.affinityTtlSeconds;
   if (affinity !== 0 && affinity < 60) return 'affinity_ttl_seconds is 0 or at least 60';
@@ -84,6 +99,8 @@ const poolRefusal = (input: PoolInput): string | null => {
   }
   if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
   if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
+  const engine = engineRefusal(input);
+  if (engine) return engine;
   if (k.enabled && affinity < 300) {
     return 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed';
   }
@@ -423,6 +440,7 @@ export class MockApi implements Api {
       members: input.members.map((m) => ({ ...m, eligible: eligibilityOf(this.accounts.find((a) => a.id === m.accountId), input.overagePolicy) })),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
+      movesPerHour: {},
       requests24h: 0,
       traffic24h: [],
     };

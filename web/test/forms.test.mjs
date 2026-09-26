@@ -7,21 +7,32 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.js
 
 const pool = d.decodePool(fixture('pools').pools[0]);
 const accounts = new Set(pool.members.map((m) => m.accountId));
+// The captured pool holds the store's defaults, the balanced presets, for every engine field.
 const input = {
   affinityTtlSeconds: pool.affinityTtlSeconds,
   bodyCaptureHours: pool.bodyCaptureHours,
+  burnWindowSeconds: pool.burnWindowSeconds,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: pool.cacheTtl,
+  inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
   members: pool.members.map((m) => ({ accountId: m.accountId, priority: m.priority })),
   migrateAboveUtilization: pool.migrateAboveUtilization,
+  migrateWhenSpent: pool.migrateWhenSpent,
   modelRules: pool.modelRules,
   name: pool.name,
+  overageMoveGraceMinutes: pool.overageMoveGraceMinutes,
   overagePolicy: pool.overagePolicy,
+  paceFloor: pool.paceFloor,
   preferSubscription: pool.preferSubscription,
+  retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
+  shedShare: pool.shedShare,
+  sourceDwellSeconds: pool.sourceDwellSeconds,
   status: 'active',
   strategy: pool.strategy,
+  warmSessions: pool.warmSessions,
+  windDownMinutes: pool.windDownMinutes,
 };
 const tuned = (patch) => ({ ...input, keepalive: { ...input.keepalive, ...patch } });
 
@@ -85,6 +96,42 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts), false, 'the form migrates from 50 %');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
+});
+
+test('a pool input with select-below inside the band is refused and every engine bound holds', () => {
+  const both = (migrate, select) => d.validatePoolInput({ ...input, migrateAboveUtilization: migrate, selectBelowUtilization: select }, accounts);
+  assert.equal(both(0.9, 0.85), true, 'the band\'s lower edge is still under it');
+  assert.equal(both(0.7, 0.65), true, 'the edge holds where the subtraction rounds under it');
+  assert.equal(both(0.9, 0.86), false, 'one point inside the band');
+  assert.equal(both(0.9, 0.9), false);
+  assert.equal(both(null, 0.95), true, 'with migration off there is no band');
+  assert.equal(both(0.5, null), true);
+  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 }), 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.');
+  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.85 }), null);
+  const whole = {
+    burnWindowSeconds: [60, null],
+    inFlightCap: [1, 4_294_967_295],
+    overageMoveGraceMinutes: [0, 300],
+    retryInPlaceSeconds: [0, 300],
+    sourceDwellSeconds: [60, null],
+    windDownMinutes: [0, 10_080],
+  };
+  for (const [field, [min, max]] of Object.entries(whole)) {
+    assert.equal(d.validatePoolInput({ ...input, [field]: min }, accounts), true, `${field} ${min} is inside`);
+    assert.equal(d.validatePoolInput({ ...input, [field]: min - 1 }, accounts), false, `${field} ${min - 1} is below the floor`);
+    assert.equal(d.validatePoolInput({ ...input, [field]: min + 0.5 }, accounts), false, `${field} is whole`);
+    if (max !== null) {
+      assert.equal(d.validatePoolInput({ ...input, [field]: max }, accounts), true, `${field} ${max} is inside`);
+      assert.equal(d.validatePoolInput({ ...input, [field]: max + 1 }, accounts), false, `${field} ${max + 1} is past the ceiling`);
+    }
+  }
+  for (const field of ['paceFloor', 'shedShare']) {
+    for (const v of [0, 0.3, 1]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), true, `${field} ${v} is a share`);
+    for (const v of [-0.01, 1.01, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, [field]: v }, accounts), false, `${field} ${v} is not`);
+  }
+  for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
 });
 
 const key = d.decodeKey(fixture('keys').keys[0]);

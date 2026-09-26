@@ -1352,6 +1352,89 @@
   border-radius: var(--radius-sm);
 }
 
+/* The pool form's utilization bar. The side padding keeps a handle at 0 or 100 % inside the field. */
+.ubar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 8px 0;
+}
+
+.ubar__track {
+  position: relative;
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+}
+
+.ubar__band {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  background: var(--serious-soft);
+  border-radius: 2px;
+}
+
+.ubar__tick {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 18px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+
+.ubar__tick--5h {
+  background: var(--series-1);
+}
+
+.ubar__tick--7d {
+  background: var(--series-4);
+}
+
+.ubar__handle {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  cursor: grab;
+  background: var(--surface);
+  border: 2px solid var(--ink-2);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  /* A drag on a touch screen moves the handle rather than the dialog's scroller. */
+  touch-action: none;
+}
+
+.ubar__handle--migrate {
+  border-color: var(--serious);
+}
+
+.ubar__handle--select {
+  border-color: var(--accent);
+}
+
+.ubar__handle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.ubar__scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.shed-preview {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+
 /* Requests */
 .requests {
   display: grid;

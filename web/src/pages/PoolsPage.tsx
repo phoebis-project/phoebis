@@ -2,18 +2,22 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session } from '@/api/types';
+import { POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
+import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session, WarmSessions } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
+import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
-import { KEEPALIVE_BOUNDS, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
+import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
+import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, type FailoverPreset, type SheddingPreset, type ShedPreview } from '@/lib/presets';
+import { windowOf } from '@/lib/quota';
 import { STRATEGY_LABEL, STRATEGY_RULE, kindOrdered } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
@@ -83,6 +87,51 @@ const KEEPALIVE_SUMMARY_HINT =
 const CAPTURE_HELP = 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.';
 const AFFINITY_HINT = "Idle time before a session's pin expires. Off means every request picks an upstream afresh.";
 const AFFINITY_CUSTOM_HINT = 'A custom value is at least 60 seconds; 0 turns affinity off.';
+const MIGRATE_HINT = 'A member at or above this line on either window runs a shedding round, which moves part of its burn to siblings reading under the band.';
+// The order the pills read in: the default, the two directions away from it, then a hand-set mix.
+const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
+const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', conservative: 'Conservative', custom: 'Custom', fast: 'Fast' };
+const SHEDDING_HINT: Record<SheddingPreset, string> = {
+  balanced: 'The default.',
+  conservative: 'Moves less and waits longer between rounds: fewer cache rewrites, slower relief.',
+  custom: 'Set the share, the burn window, and the dwell by hand.',
+  fast: 'Reads a shorter burn window and sheds again sooner: faster relief, more cache rewrites.',
+};
+const FAILOVER_HINT: Record<FailoverPreset, string> = {
+  balanced: 'The default.',
+  conservative: 'Waits out a longer throttle before moving on.',
+  custom: 'Set the cap, the retry bound, and the floor by hand.',
+  fast: 'Moves on sooner and spreads placements wider.',
+};
+// A scale from the fewest warm sessions moved to the most.
+const WARM_CHOICES: { body: string; title: string; value: WarmSessions }[] = [
+  { value: 'never', title: 'Never', body: 'a round moves cold sessions only, whatever the share still asks' },
+  { value: 'when_needed', title: 'When needed', body: 'cold sessions first, then warm ones by burn over the prompt they would rewrite' },
+  { value: 'always', title: 'Always', body: 'every session by burn over the prompt it would rewrite, warm or cold alike' },
+];
+const percentOf = (share: number) => Math.round(share * 10_000) / 100;
+
+/** The shedding card's dry run in one sentence, naming the unit its share was taken in. */
+function previewLine(preview: ShedPreview, migrateOn: boolean): string {
+  if (!migrateOn) return 'No round runs while migrate above utilization is off.';
+  if (preview.members === 0) return 'No member is above the threshold.';
+  const unit = preview.unit === 'meter_tokens' ? ' in meter tokens' : preview.unit === 'usd' ? ' in dollars' : '';
+  const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
+  return `Would move ${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} of the burn${unit}${across}.`;
+}
+
+/** The two groups name their presets alike, so one row of pills serves both. */
+function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPreset | FailoverPreset, string>; label: string; onPick: (name: SheddingPreset | FailoverPreset) => void; value: SheddingPreset | FailoverPreset }) {
+  return (
+    <span className="chips" role="group" aria-label={label}>
+      {PRESET_PILLS.map((name) => (
+        <button key={name} type="button" className={`pill ${value === name ? 'is-active' : ''}`} aria-pressed={value === name} title={hints[name]} onClick={() => onPick(name)}>
+          {PRESET_LABEL[name]}
+        </button>
+      ))}
+    </span>
+  );
+}
 const KEEPALIVE_GATE = "Requires session affinity of at least 5 minutes. A probe follows the session's pin; a shorter pin cannot keep the session on the upstream it warmed.";
 const KEEPALIVE_WARNING = 'Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.';
 
@@ -180,6 +229,7 @@ export function PoolsPage() {
         accounts={accounts.data ?? []}
         keys={keys.data ?? []}
         pools={pools.data ?? []}
+        sessions={sessions.data ?? []}
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
           setDialog(null);
@@ -242,6 +292,9 @@ function PoolCard({
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
+  const moves = Object.entries(pool.movesPerHour)
+    .filter(([, rate]) => rate > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
   return (
     <Card padded={false} className="pool">
       <header className="pool__head">
@@ -281,11 +334,22 @@ function PoolCard({
           </div>
           <div>
             <dt>Migration</dt>
-            <dd className="num">{pool.migrateAboveUtilization === null ? <span className="muted">Migrate off</span> : `Migrate above ${fmtPct(pool.migrateAboveUtilization)} utilization`}</dd>
+            <dd className="num" title={`Share ${fmtPct(pool.shedShare)}, burn window ${pool.burnWindowSeconds} s, source dwell ${pool.sourceDwellSeconds} s`}>
+              {pool.migrateAboveUtilization === null ? <span className="muted">Migrate off</span> : `Shed above ${fmtPct(pool.migrateAboveUtilization)}, ${sheddingPresetOf(pool)}`}
+            </dd>
           </div>
           <div>
             <dt>Selection</dt>
             <dd className="num">{pool.selectBelowUtilization === null ? <span className="muted">Select-below off</span> : `Select below ${fmtPct(pool.selectBelowUtilization)} utilization`}</dd>
+          </div>
+          <div>
+            <dt>Failover</dt>
+            <dd title={`In flight ${pool.inFlightCap}, retry in place ${pool.retryInPlaceSeconds} s, Pace floor ${fmtPct(pool.paceFloor)}`}>{failoverPresetOf(pool)}</dd>
+          </div>
+          {/* A list of rates, one per reason, so it takes a row of its own rather than wrapping in a column. */}
+          <div className="pool__policy-wide">
+            <dt>Moves</dt>
+            <dd className="num">{moves.length === 0 ? <span className="muted">none in the last hour</span> : moves.map(([reason, rate]) => `${rate.toFixed(1)}/h ${reason.replace(/_/g, ' ')}`).join(', ')}</dd>
           </div>
           <div className="pool__policy-wide">
             <dt>Keep prompt caches warm</dt>
@@ -466,6 +530,9 @@ interface PoolForm {
   captureHours: number;
   capUsd: number;
   customAffinity: boolean;
+  engine: PoolEngineFields;
+  /** The Custom pill is held apart from the values, so its inputs stay open while an edit passes through a preset. */
+  failoverCustom: boolean;
   keepalive: boolean;
   members: Record<string, number>;
   migrate: number;
@@ -476,6 +543,7 @@ interface PoolForm {
   preferSubscription: boolean;
   selectBelow: number;
   selectBelowOn: boolean;
+  sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   tuning: ProbeTuning;
@@ -493,6 +561,8 @@ const blankForm = (): PoolForm => ({
   captureHours: 24,
   capUsd: 5,
   customAffinity: false,
+  engine: { ...POOL_ENGINE_DEFAULTS },
+  failoverCustom: false,
   keepalive: true,
   members: {},
   migrate: 90,
@@ -503,6 +573,7 @@ const blankForm = (): PoolForm => ({
   preferSubscription: false,
   selectBelow: 80,
   selectBelowOn: false,
+  sheddingCustom: false,
   status: 'active',
   strategy: 'pace',
   tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
@@ -518,6 +589,19 @@ const formFrom = (pool: Pool): PoolForm => ({
   captureHours: pool.bodyCaptureHours || 24,
   capUsd: pool.keepalive.costCapUsdPerDay ?? 5,
   customAffinity: !isPreset(pool.affinityTtlSeconds),
+  engine: {
+    burnWindowSeconds: pool.burnWindowSeconds,
+    inFlightCap: pool.inFlightCap,
+    migrateWhenSpent: pool.migrateWhenSpent,
+    overageMoveGraceMinutes: pool.overageMoveGraceMinutes,
+    paceFloor: pool.paceFloor,
+    retryInPlaceSeconds: pool.retryInPlaceSeconds,
+    shedShare: pool.shedShare,
+    sourceDwellSeconds: pool.sourceDwellSeconds,
+    warmSessions: pool.warmSessions,
+    windDownMinutes: pool.windDownMinutes,
+  },
+  failoverCustom: failoverPresetOf(pool) === 'custom',
   keepalive: pool.keepalive.enabled,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
   migrate: pool.migrateAboveUtilization === null ? 90 : Math.round(pool.migrateAboveUtilization * 100),
@@ -530,6 +614,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
+  sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
@@ -561,6 +646,7 @@ export function PoolDialog({
   keys,
   pools,
   models,
+  sessions,
 }: {
   accounts: Account[];
   keys: ApiKey[];
@@ -572,7 +658,10 @@ export function PoolDialog({
   open: boolean;
   pool: Pool | null;
   pools: Pool[];
+  /** Every session the router holds: a shedding round weighs all of a member's pins, whichever pool's key made them. */
+  sessions: Session[];
 }) {
+  const now = useNow();
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -636,6 +725,7 @@ export function PoolDialog({
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
   const input: PoolInput = {
+    ...form.engine,
     affinityTtlSeconds: form.affinity,
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
@@ -661,6 +751,17 @@ export function PoolDialog({
   const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
 
   const setTuning = <K extends NumericTuningKey>(key: K, value: number) => setForm((f) => ({ ...f, tuning: { ...f.tuning, [key]: value } }));
+  const setEngine = <K extends keyof PoolEngineFields>(key: K, value: PoolEngineFields[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
+  const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(form.engine);
+  const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(form.engine);
+  const pickShedding = (name: SheddingPreset) =>
+    setForm((f) => (name === 'custom' ? { ...f, sheddingCustom: true } : { ...f, engine: { ...f.engine, ...SHEDDING_PRESETS[name] }, sheddingCustom: false }));
+  const pickFailover = (name: FailoverPreset) =>
+    setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
+  const band = bandRefusal(input);
+  const memberAccounts = accounts.filter((a) => a.id in form.members);
+  const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
+  const preview = shedPreview(input, accounts, sessions, now);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
   const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
@@ -782,7 +883,7 @@ export function PoolDialog({
               {!form.migrateOn && <span className="muted">Off</span>}
             </label>
             {form.migrateOn && (
-              <Field label="Utilization (%)" hint="A pinned session moves to another member once its upstream crosses this line on any window.">
+              <Field label="Utilization (%)" hint={MIGRATE_HINT}>
                 <Input type="number" min={50} max={100} value={form.migrate} onChange={(e) => set('migrate', Number(e.target.value))} style={{ width: 120 }} />
               </Field>
             )}
@@ -798,6 +899,101 @@ export function PoolDialog({
                 <Input type="number" min={0} max={100} value={form.selectBelow} onChange={(e) => set('selectBelow', Number(e.target.value))} style={{ width: 120 }} aria-label="Select below utilization (%)" />
               </Field>
             )}
+          </div>
+          <div className="field">
+            <span className="field__label">Member utilization</span>
+            <UtilizationBar
+              readings={readings}
+              migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
+              migrateMin={50}
+              selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
+            />
+            <p className="field__hint">Each tick is a member&apos;s current reading. Drag a threshold&apos;s handle, or focus it and use the arrow keys.</p>
+          </div>
+          {band && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{band}</div>
+            </div>
+          )}
+          <h3 className="section-title" style={{ marginTop: 12 }}>
+            Load shedding
+          </h3>
+          <div className="capture" role="group" aria-label="Load shedding">
+            <p className="field__hint">A member at or above the migrate threshold moves part of its burn to siblings reading under the band, one round per source dwell.</p>
+            <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
+            {sheddingPill === 'custom' ? (
+              <div className="form-row form-row--3">
+                <Field label="Share (%)" hint="Of the member's burn one round moves.">
+                  <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} />
+                </Field>
+                <Field label="Burn window (s)" hint="How far back a session's burn reaches.">
+                  <Input type="number" min={ENGINE_BOUNDS.burnWindowSeconds.min} step={60} value={form.engine.burnWindowSeconds} onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))} />
+                </Field>
+                <Field label="Source dwell (s)" hint="Between two rounds on one member, and how long a shed session stays off it.">
+                  <Input type="number" min={ENGINE_BOUNDS.sourceDwellSeconds.min} step={60} value={form.engine.sourceDwellSeconds} onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))} />
+                </Field>
+              </div>
+            ) : (
+              <p className="field__hint">
+                {SHEDDING_HINT[sheddingPill]} Share {fmtPct(form.engine.shedShare)}, burn window {form.engine.burnWindowSeconds} s, source dwell {form.engine.sourceDwellSeconds} s.
+              </p>
+            )}
+            <div className="field--inline field">
+              <span className="field__text">
+                <span className="field__label">Migrate when spent</span>
+                <p className="field__hint">Move a session off a member whose window for its model is spent while a sibling has allowance left, outside the share.</p>
+              </span>
+              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
+            </div>
+            <div className="field">
+              <span className="field__label">Warm sessions</span>
+              <div className="radio-list" role="radiogroup" aria-label="Warm sessions">
+                {WARM_CHOICES.map((c) => (
+                  <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
+                    <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
+                    <span>
+                      <b>{c.title}:</b> {c.body}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <p className="shed-preview num" role="status">
+              {previewLine(preview, form.migrateOn)}
+            </p>
+          </div>
+          <h3 className="section-title" style={{ marginTop: 12 }}>
+            Failover
+          </h3>
+          <div className="capture" role="group" aria-label="Failover">
+            <p className="field__hint">How long a request waits out a throttle on its member, how many requests one member holds, and how far Pace spends a member before it is the last resort.</p>
+            <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
+            {failoverPill === 'custom' ? (
+              <div className="form-row form-row--3">
+                <Field label="In flight" hint="Requests one member holds before a fresh session skips it.">
+                  <Input type="number" min={ENGINE_BOUNDS.inFlightCap.min} value={form.engine.inFlightCap} onChange={(e) => setEngine('inFlightCap', Number(e.target.value))} />
+                </Field>
+                <Field label="Retry in place (s)" hint="The longest throttle a request waits out on its member; 0 fails over at once.">
+                  <Input type="number" min={ENGINE_BOUNDS.retryInPlaceSeconds.min} max={ENGINE_BOUNDS.retryInPlaceSeconds.max} value={form.engine.retryInPlaceSeconds} onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))} />
+                </Field>
+                <Field label="Pace floor (%)" hint="Under Pace, a member with this share of its window left or less is the last resort.">
+                  <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} />
+                </Field>
+              </div>
+            ) : (
+              <p className="field__hint">
+                {FAILOVER_HINT[failoverPill]} In flight {form.engine.inFlightCap}, retry in place {form.engine.retryInPlaceSeconds} s, Pace floor {fmtPct(form.engine.paceFloor)}.
+              </p>
+            )}
+            <div className="form-row">
+              <Field label="Overage grace (min)" hint="Keep a session on an upstream in overage while its window resets within this many minutes.">
+                <Input type="number" min={ENGINE_BOUNDS.overageMoveGraceMinutes.min} max={ENGINE_BOUNDS.overageMoveGraceMinutes.max} value={form.engine.overageMoveGraceMinutes} onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))} />
+              </Field>
+              <Field label="Wind down (min)" hint="Before a cancelled upstream ends, take new sessions only as the last resort and move cold sessions off.">
+                <Input type="number" min={ENGINE_BOUNDS.windDownMinutes.min} max={ENGINE_BOUNDS.windDownMinutes.max} value={form.engine.windDownMinutes} onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))} />
+              </Field>
+            </div>
           </div>
           {/* Field's frame without its label element: a label forwards a click on its text to the first control
               inside, which here would press Add rule or flip the first row. */}

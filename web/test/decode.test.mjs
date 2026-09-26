@@ -283,6 +283,40 @@ test('a pool decodes its cache TTL policy, its diagnostics override, and warm_su
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
 });
 
+test('a pool decodes the engine fields and encodes them back', () => {
+  const row = fixture('pools').pools[0];
+  const p = d.decodePool(row);
+  assert.deepEqual(
+    [p.shedShare, p.burnWindowSeconds, p.sourceDwellSeconds, p.migrateWhenSpent, p.warmSessions],
+    [0.5, 600, 900, true, 'when_needed'],
+    'the captured pool holds the balanced shedding preset',
+  );
+  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [10, 16, 0.05, 30, 30], 'and the balanced failover preset');
+  assert.deepEqual(p.movesPerHour, { spent: 1 });
+  const wire = {
+    ...row,
+    shed_share: 0.3,
+    burn_window_seconds: 900,
+    source_dwell_seconds: 1800,
+    migrate_when_spent: false,
+    warm_sessions: 'never',
+    retry_in_place_seconds: 20,
+    in_flight_cap: 8,
+    pace_floor: 0.1,
+    overage_move_grace_minutes: 45,
+    wind_down_minutes: 120,
+    moves_per_hour: { shed: 2, spent: 0.5 },
+  };
+  const q = d.decodePool(wire);
+  assert.deepEqual(q.movesPerHour, { shed: 2, spent: 0.5 });
+  const back = d.encodePool({ ...q, name: q.name, status: 'active' });
+  const fields = ['shed_share', 'burn_window_seconds', 'source_dwell_seconds', 'migrate_when_spent', 'warm_sessions', 'retry_in_place_seconds', 'in_flight_cap', 'pace_floor', 'overage_move_grace_minutes', 'wind_down_minutes'];
+  assert.deepEqual(Object.fromEntries(fields.map((f) => [f, back[f]])), Object.fromEntries(fields.map((f) => [f, wire[f]])), 'every engine field goes back under the name the route reads');
+  assert.equal('moves_per_hour' in back, false, 'the moves are the route\'s count, never a setting');
+  assert.equal(d.decodePool({ ...row, warm_sessions: 'sometimes' }).warmSessions, 'when_needed', 'an unknown mode reads as the default');
+  assert.deepEqual(d.decodePool({ ...row, moves_per_hour: { shed: 'x', spent: 2 } }).movesPerHour, { spent: 2 }, 'a count that is not a number is left out');
+});
+
 test('a pool the route answers without a cache TTL policy decodes to the defaults', () => {
   const wire = { ...fixture('pools').pools[0] };
   delete wire.cache_ttl;

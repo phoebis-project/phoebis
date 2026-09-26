@@ -303,6 +303,105 @@ async function poolSelectBelow(theme) {
 }
 
 /**
+ * The routing tab's load-shedding and failover cards against the controls beside them: a preset pill against a
+ * session-affinity pill, each card's box against the migrate threshold's, a failover field against the migrate
+ * percent field, and a warm-sessions choice against an overage choice. Then the utilization bar's migrate handle
+ * and the shedding preview line, and on the pool card the Failover and Moves rows against the Strategy row.
+ */
+async function poolRoutingCards(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const rows = await page.evaluate(() => {
+    const policy = [...(document.querySelector('.pool .pool__policy')?.children ?? [])];
+    const read = (label) => {
+      const dd = policy.find((row) => row.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
+      if (!dd) return null;
+      // Heights are left out: a row wraps as its column narrows, however it is drawn.
+      const style = getComputedStyle(dd);
+      return `${style.fontSize} ${style.fontWeight} ${style.color} ${style.lineHeight}`;
+    };
+    return { failover: read('Failover'), moves: read('Moves'), strategy: read('Strategy') };
+  });
+  measurements.push(`${theme} /pools card rows ${JSON.stringify(rows)}`);
+  for (const label of ['failover', 'moves']) {
+    if (rows[label] === null) say(`the pool card has no ${label} row`);
+    else if (rows[label] !== rows.strategy) say(`the card's ${label} row reads ${rows[label]} against the strategy row's ${rows.strategy}`);
+  }
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.getByRole('button', { name: 'Routing', exact: true }).click();
+  } catch (error) {
+    say(`the pool dialog never reached its routing tab (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const migrate = dialog.locator('label.row', { hasText: 'Migrate above utilization' }).locator('input[type="checkbox"]');
+  if ((await migrate.count()) !== 1) say('no Migrate above utilization checkbox');
+  else if (!(await migrate.isChecked())) await migrate.check();
+  await settle();
+  const read = await dialog.evaluate((el) => {
+    const routing = [...el.querySelectorAll('.dialog-section')].find((s) => s.getAttribute('aria-label') === 'Routing');
+    const box = (node) => {
+      if (!node) return null;
+      const style = getComputedStyle(node);
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}`,
+        font: `${style.fontSize} ${style.fontWeight} ${style.color}`,
+        height: node.getBoundingClientRect().height,
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+        radius: style.borderTopLeftRadius,
+      };
+    };
+    // A pressed pill and a chosen radio are drawn in their own ink, so each side is read in its resting state.
+    const idlePill = (group) => [...(routing?.querySelectorAll(`[aria-label="${group}"] .pill`) ?? [])].find((p) => p.getAttribute('aria-pressed') === 'false');
+    const idleChoice = (group) => el.querySelector(`[aria-label="${group}"] .radio-list__item:not(.is-active)`);
+    const field = (text) => [...(routing?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('input');
+    const migrateBox = [...(routing?.querySelectorAll('label.row') ?? [])].find((r) => r.textContent?.includes('Migrate above utilization'))?.parentElement;
+    const handle = routing?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
+    const track = routing?.querySelector('.ubar__track')?.getBoundingClientRect();
+    const knob = handle?.getBoundingClientRect();
+    return {
+      affinityPill: box(idlePill('Session affinity')),
+      failoverBox: box(routing?.querySelector('[role="group"][aria-label="Failover"]')),
+      failoverField: box(field('Overage grace (min)')),
+      failoverPill: box(idlePill('Failover preset')),
+      handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
+      migrateBox: box(migrateBox),
+      migrateField: box(migrateBox?.querySelector('input[type="number"]')),
+      overageChoice: box(idleChoice('Overage policy')),
+      preview: routing?.querySelector('.shed-preview')?.textContent?.trim() ?? null,
+      sheddingBox: box(routing?.querySelector('[role="group"][aria-label="Load shedding"]')),
+      sheddingPill: box(idlePill('Load shedding preset')),
+      warmChoice: box(idleChoice('Warm sessions')),
+    };
+  });
+  measurements.push(`${theme} /pools routing cards ${JSON.stringify(read)}`);
+  // A box or a choice grows with what it holds, so those two are compared without their height.
+  const pairs = [
+    ['sheddingPill', 'affinityPill', ['border', 'font', 'height', 'padding', 'radius']],
+    ['failoverPill', 'affinityPill', ['border', 'font', 'height', 'padding', 'radius']],
+    ['sheddingBox', 'migrateBox', ['background', 'border', 'padding', 'radius']],
+    ['failoverBox', 'migrateBox', ['background', 'border', 'padding', 'radius']],
+    ['failoverField', 'migrateField', ['background', 'border', 'font', 'height', 'padding', 'radius']],
+    ['warmChoice', 'overageChoice', ['background', 'border', 'font', 'padding', 'radius']],
+  ];
+  for (const [mine, neighbour, keys] of pairs) {
+    if (!read[mine] || !read[neighbour]) {
+      say(`${mine} or ${neighbour} is not drawn to compare`);
+      continue;
+    }
+    const differs = keys.filter((key) => String(read[mine][key]) !== String(read[neighbour][key]));
+    if (differs.length) say(`the ${mine}'s ${differs.join(', ')} differs from the ${neighbour}'s`);
+  }
+  if (!read.handle) say('the utilization bar draws no migrate handle with migration on');
+  else if (!read.handle.inside || read.handle.value === null) say(`the migrate handle sits off its track (${JSON.stringify(read.handle)})`);
+  if (!read.preview || !/^(Would move|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
+/**
  * The compatibility card on Settings, and its geometry against the About card it sits above. The two carry the
  * same kind of read-only rows from the same bootstrap file, so a card that reads smaller than its neighbour is
  * the defect this page would show first.
@@ -715,6 +814,7 @@ try {
         await poolChips(theme);
         await poolCachingControls(theme);
         await poolSelectBelow(theme);
+        await poolRoutingCards(theme);
       }
       if (view.path === '/analytics') await wastedProbeRows(theme);
       if (view.path === '/settings') {

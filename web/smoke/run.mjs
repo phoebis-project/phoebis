@@ -686,6 +686,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   });
 }
 {
+  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
+  const row = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd')?.textContent?.trim();
+  const rows = [row('all', 'Migration'), row('all', 'Failover'), row('all', 'Moves'), row('codex', 'Migration'), row('codex', 'Failover'), row('codex', 'Moves')];
+  results.push({
+    name: '/pools the card names the shedding and failover presets and lists the moves per hour by reason',
+    ok: JSON.stringify(rows) === JSON.stringify(['Migrate off', 'balanced', '2.0/h shed, 0.5/h spent', 'Shed above 85%, custom', 'custom', 'none in the last hour']),
+    missing: rows.map(String),
+  });
+}
+{
   const order = m.container.querySelector('.pool .selection-order');
   const tiers = [...(order?.querySelectorAll('.selection-order__tier') ?? [])].map((t) => t.children[0]?.textContent?.trim());
   results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'overage P0', 'keys P1']), missing: tiers });
@@ -783,9 +793,129 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   // Migration is off by default and reveals a percent input when switched on.
   const migrateBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Migrate above utilization'));
   results.push({ name: '/pools migrate starts off', ok: migrateBox?.checked === false && t.includes('Off'), missing: [] });
-  migrateBox?.click();
-  await m.settle(120);
-  expect('/pools migrate on reveals a percent field', dlg?.textContent ?? '', ['Utilization (%)', 'A pinned session moves to another member once its upstream crosses this line on any window.']);
+  {
+    const routing = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Routing');
+    const card = (label) => routing?.querySelector(`[role="group"][aria-label="${label}"]`);
+    const pills = (group) => [...(routing?.querySelectorAll(`[aria-label="${group}"] .pill`) ?? [])];
+    const pressed = (group) => pills(group).filter((p) => p.getAttribute('aria-pressed') === 'true').map((p) => p.textContent?.trim());
+    const pick = async (group, label) => {
+      pills(group).find((p) => p.textContent?.trim() === label)?.click();
+      await m.settle(120);
+    };
+    const field = (group, label) => [...(card(group)?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    expect('/pools the routing section draws the bar and the shedding and failover cards', routing?.textContent ?? '', [
+      'Member utilization',
+      'Load shedding',
+      'Balanced',
+      'Fast',
+      'Conservative',
+      'Custom',
+      'Migrate when spent',
+      'Warm sessions',
+      'Never:',
+      'When needed:',
+      'Always:',
+      'No round runs while migrate above utilization is off.',
+      'Failover',
+      'Overage grace',
+      'Wind down',
+    ]);
+    const names = (group) => JSON.stringify(pills(group).map((p) => p.textContent?.trim()));
+    results.push({
+      name: '/pools both cards offer Balanced, Fast, Conservative and Custom with the stored preset pressed and its inputs closed',
+      ok:
+        names('Load shedding preset') === '["Balanced","Fast","Conservative","Custom"]' &&
+        names('Failover preset') === '["Balanced","Fast","Conservative","Custom"]' &&
+        JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]) === '[["Balanced"],["Balanced"]]' &&
+        field('Load shedding', 'Burn window (s)') === undefined &&
+        field('Failover', 'In flight') === undefined,
+      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')])],
+    });
+    await pick('Load shedding preset', 'Fast');
+    const fastLine = card('Load shedding')?.textContent ?? '';
+    await pick('Load shedding preset', 'Custom');
+    const fromFast = ['Share (%)', 'Burn window (s)', 'Source dwell (s)'].map((label) => field('Load shedding', label)?.value);
+    const burnWindow = field('Load shedding', 'Burn window (s)');
+    setter.call(burnWindow, '900');
+    burnWindow?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const edited = pressed('Load shedding preset');
+    await pick('Load shedding preset', 'Balanced');
+    results.push({
+      name: '/pools a shedding pill sets its values, Custom opens them, and an edit stays custom until a preset is picked',
+      ok:
+        fastLine.includes('Share 50%, burn window 300 s, source dwell 600 s.') &&
+        JSON.stringify(fromFast) === '["50","300","600"]' &&
+        JSON.stringify(edited) === '["Custom"]' &&
+        JSON.stringify(pressed('Load shedding preset')) === '["Balanced"]' &&
+        (card('Load shedding')?.textContent ?? '').includes('Share 50%, burn window 600 s, source dwell 900 s.'),
+      missing: [fastLine.slice(0, 160), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(pressed('Load shedding preset'))],
+    });
+    await pick('Failover preset', 'Conservative');
+    const conservativeLine = card('Failover')?.textContent ?? '';
+    await pick('Failover preset', 'Custom');
+    expect('/pools the failover Custom pill opens the cap, the retry bound, and the floor', card('Failover')?.textContent ?? '', [
+      'In flight',
+      'Retry in place',
+      'Pace floor',
+      'Overage grace',
+      'Wind down',
+      'Keep a session on an upstream in overage while its window resets within this many minutes.',
+      'Before a cancelled upstream ends, take new sessions only as the last resort and move cold sessions off.',
+    ]);
+    const fromConservative = ['In flight', 'Retry in place (s)', 'Pace floor (%)'].map((label) => field('Failover', label)?.value);
+    await pick('Failover preset', 'Balanced');
+    results.push({
+      name: '/pools a failover pill says what it trades and Custom starts from the values it held',
+      ok: conservativeLine.includes('Waits out a longer throttle before moving on.') && conservativeLine.includes('retry in place 20 s') && JSON.stringify(fromConservative) === '["16","20","5"]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
+      missing: [conservativeLine.slice(0, 200), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
+    });
+
+    migrateBox?.click();
+    await m.settle(120);
+    expect('/pools migrate on reveals a percent field', dlg?.textContent ?? '', ['Utilization (%)', 'A member at or above this line on either window runs a shedding round, which moves part of its burn to siblings reading under the band.']);
+    const handle = () => routing?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
+    const percent = migrateBox?.closest('.capture')?.querySelector('input[type="number"]');
+    const before = [handle()?.getAttribute('aria-valuenow'), percent?.value];
+    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    await m.settle(120);
+    const after = [handle()?.getAttribute('aria-valuenow'), percent?.value];
+    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await m.settle(120);
+    const ticks = [...(routing?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    results.push({
+      name: '/pools the bar draws each member reading and the migrate handle, which the arrow keys step and the percent field follows',
+      ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && routing?.querySelector('.ubar__band') !== null,
+      missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
+    });
+    expect("/pools the shedding preview replays a round over the hot members' pins", routing?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', 'of the burn in meter tokens', 'across 2 upstreams']);
+
+    // Select-below inside the band under the migrate threshold holds the save and says why.
+    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+    const selectBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Select below utilization'));
+    selectBox?.click();
+    await m.settle(120);
+    const selectPercent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+    setter.call(selectPercent, '88');
+    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const inBand = [routing?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled, routing?.querySelector('[role="slider"][aria-label="Select-below threshold"]')?.getAttribute('aria-valuenow')];
+    setter.call(selectPercent, '85');
+    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const atEdge = [routing?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled];
+    results.push({
+      name: '/pools select-below inside the band holds the save and names the band',
+      ok: inBand[0] === 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.' && inBand[1] === true && inBand[2] === '88' && atEdge[0] === '' && atEdge[1] === false,
+      missing: [...inBand.map(String), ...atEdge.map(String)],
+    });
+    setter.call(selectPercent, '80');
+    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    selectBox?.click();
+    await m.settle(120);
+  }
   migrateBox?.click();
   await m.settle(120);
 
@@ -901,7 +1031,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     await m.settle(150);
   }
 
-  const overageChosen = [...(dlg?.querySelectorAll('.radio-list input[type="radio"]') ?? [])].map((r) => r.checked);
+  // The routing section carries a radio group of its own, the warm-sessions choice, so this one is read by its name.
+  const overageChosen = [...(dlg?.querySelectorAll('[aria-label="Overage policy"] input[type="radio"]') ?? [])].map((r) => r.checked);
   results.push({ name: '/pools overage is a radio group with prefer_plan chosen', ok: JSON.stringify(overageChosen) === JSON.stringify([true, false, false]), missing: overageChosen.map(String) });
   const createKey = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key');
   createKey?.click();

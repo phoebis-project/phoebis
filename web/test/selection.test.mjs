@@ -62,6 +62,18 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     status: 'active',
     strategy,
     traffic24h: [],
+    // The store's defaults, the balanced presets.
+    burnWindowSeconds: 600,
+    inFlightCap: 16,
+    migrateWhenSpent: true,
+    movesPerHour: {},
+    overageMoveGraceMinutes: 30,
+    paceFloor: 0.05,
+    retryInPlaceSeconds: 10,
+    shedShare: 0.5,
+    sourceDwellSeconds: 900,
+    warmSessions: 'when_needed',
+    windDownMinutes: 30,
     ...over,
   };
   return merged;
@@ -191,4 +203,62 @@ test('round robin with the subscription preference walks the kind tiers first an
   assert.deepEqual(tiers[0].placements.map((p) => p.rank), [1, 1], 'the cursor, not a score, picks among them');
   const flat = selectionOrder(pool('round_robin', 'allow', members), trio, []);
   assert.deepEqual(flat.map((t) => [t.group, t.priority, t.next]), [[0, 0, ['key']], [0, 1, []]], 'without the preference priority alone orders the tiers');
+});
+
+test('pace places the floor group and a winding-down member last', () => {
+  const MINUTE = 60_000;
+  const subscription = (over) => ({ billingType: 'monthly', derivedEndsAt: null, endsAt: null, organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null, ...over });
+  const trio = [
+    account('fresh', { windows: window7d(hoursFromNow(24), 0.5) }),
+    // Its window resets in half an hour, so its rate would lead the tier if the floor did not hold it back.
+    account('spent', { windows: window7d(hoursFromNow(0.5), 0.96) }),
+    // Cancelled and ten minutes from its end, inside the default half-hour wind-down, with the best rate of all.
+    account('ending', { cancelled: true, subscription: subscription({ endsAt: new Date(Date.now() + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
+    account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
+  ];
+  const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]);
+  const pace = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0), member('spent', 0)]), trio, []);
+  assert.deepEqual(
+    ranked(pace[0]),
+    [
+      ['fresh', null, 1],
+      ['spent', 'floor', 2],
+      ['ending', 'winding_down', 3],
+    ],
+    'the floor group trails the ranked members, and the member winding down trails the floor group',
+  );
+  assert.deepEqual(pace[0].next, ['fresh']);
+  const lower = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('other', 1), member('spent', 0)]), trio, []);
+  assert.deepEqual(
+    lower.map((t) => [t.priority, t.next]),
+    [
+      [0, []],
+      [1, ['other']],
+    ],
+    'a member above the floor one tier down is taken before the last resort of the tier above',
+  );
+  const lastResort = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('spent', 0)]), trio, []);
+  assert.deepEqual(lastResort[0].next, ['spent'], 'with nothing else left, the floor group places before a member winding down');
+  const priority = selectionOrder(pool('priority', 'allow', [member('ending', 0), member('spent', 0)]), trio, []);
+  assert.deepEqual(
+    ranked(priority[0]),
+    [
+      ['spent', null, 1],
+      ['ending', 'winding_down', 2],
+    ],
+    'priority reads no floor, but the wind-down holds under every strategy',
+  );
+  const unwound = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)], { windDownMinutes: 5 }), trio, []);
+  assert.deepEqual(unwound[0].next, ['ending'], "outside the pool's wind-down the end only shortens the hours its rate divides by");
+  const trial = [account('trial', { subscription: subscription({ trialEndsAt: hoursFromNow(2) }), windows: window7d(hoursFromNow(100), 0.5) }), trio[0]];
+  assert.deepEqual(selectionOrder(pool('pace', 'allow', [member('fresh', 0), member('trial', 0)]), trial, [])[0].next, ['trial'], 'a trial end ahead of the reset is the hours the allowance must last');
+  const keyed = [account('key', { kind: 'api_key', windows: [{ id: '5h', label: '5-hour', observedAt: '2026-09-18T00:00:00.000Z', periodHours: 5, resetsAt: hoursFromNow(1), utilization: 0.97 }] }), trio[0]];
+  assert.deepEqual(
+    ranked(selectionOrder(pool('pace', 'allow', [member('fresh', 0), member('key', 0)]), keyed, [])[0]),
+    [
+      ['fresh', null, 1],
+      ['key', 'floor', 2],
+    ],
+    'an API-key member reads its worst reported window against the floor',
+  );
 });

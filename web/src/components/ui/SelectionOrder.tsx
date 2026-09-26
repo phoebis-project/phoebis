@@ -1,5 +1,5 @@
 import type { Account, Pool, Session } from '@/api/types';
-import { GROUP_LABEL, INELIGIBLE_LABEL, RULE_NOTE, STRATEGY_RULE, kindOrdered, selectionOrder } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_RULE, kindOrdered, selectionOrder } from '@/lib/selection';
 import { Badge } from './primitives';
 
 /** The tiers the router walks for a fresh session, with the upstream the next one lands on marked. */
@@ -21,14 +21,16 @@ export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account
                 ? `${p.account.label}: ${INELIGIBLE_LABEL[p.ineligible]}, skipped by selection`
                 : isNext
                   ? `${p.account.label}: where the next fresh session lands`
-                  : p.deferred
-                    ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
-                    : `${p.account.label}: rank ${p.rank} in this tier`;
+                  : p.lastResort
+                    ? `${p.account.label}: ${LAST_RESORT_LABEL[p.lastResort]}, taken only once no other upstream can take a fresh session`
+                    : p.deferred
+                      ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
+                      : `${p.account.label}: rank ${p.rank} in this tier`;
               return (
-                <Badge key={p.account.id} tone={isNext ? 'accent' : p.ineligible ? 'neutral' : 'good'} title={title}>
+                <Badge key={p.account.id} tone={isNext ? 'accent' : p.ineligible ? 'neutral' : p.lastResort ? 'warning' : 'good'} title={title}>
                   {isNext ? 'next ' : ''}
                   {p.account.label}
-                  {p.ineligible ? ` (${INELIGIBLE_LABEL[p.ineligible]})` : p.deferred ? ' overage' : ''}
+                  {p.ineligible ? ` (${INELIGIBLE_LABEL[p.ineligible]})` : p.lastResort ? ` (${LAST_RESORT_LABEL[p.lastResort]})` : p.deferred ? ' overage' : ''}
                   {suffix}
                 </Badge>
               );

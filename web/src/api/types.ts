@@ -255,34 +255,58 @@ export interface TrafficBucket {
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
 export type MemberEligibility = 'cooldown' | 'eligible' | 'overage' | 'unavailable';
 
+/** Whether a shedding round may mark a warm session: never, only once the cold ones fall short, or by burn alone. */
+export type WarmSessions = 'always' | 'never' | 'when_needed';
+
 export interface Pool {
   activePins: number;
   /** Idle seconds before a session's pin to an account expires; 0 disables affinity. */
   affinityTtlSeconds: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
+  /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
+  burnWindowSeconds: number;
   /** Null inherits the bootstrap option `compatibility.cache_diagnostics`; true or false overrides it for this pool. */
   cacheDiagnostics: boolean | null;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
   id: string;
+  /** Requests in flight one member may hold before a fresh session skips it. */
+  inFlightCap: number;
   keepalive: PoolKeepalive;
   members: { accountId: string; eligible: MemberEligibility; priority: number }[];
-  /** Null disables utilization-driven migration. */
+  /** Null disables the shedding round. */
   migrateAboveUtilization: number | null;
+  /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
+  migrateWhenSpent: boolean;
   modelRules: ModelRule[];
+  /** Moves that landed on the pool's members in the last hour, by reason. */
+  movesPerHour: Record<string, number>;
   name: string;
+  /** Minutes a session stays on an upstream in overage while its window resets within them. */
+  overageMoveGraceMinutes: number;
   overagePolicy: OveragePolicy;
+  /** Under Pace, a member with no more than this share of its window left takes a fresh session only as the last resort. */
+  paceFloor: number;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
   requests24h: number;
+  /** The longest throttle a request waits out on its own member before it fails over. */
+  retryInPlaceSeconds: number;
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
+  /** The share of a hot member's burn one shedding round moves. */
+  shedShare: number;
+  /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
+  sourceDwellSeconds: number;
   /** `active` and `disabled` are set by hand; the rest are observed. */
   status: 'active' | 'degraded' | 'disabled' | 'exhausted';
   strategy: PoolStrategy;
   traffic24h: TrafficBucket[];
+  warmSessions: WarmSessions;
+  /** Minutes before an upstream's subscription end from which it takes a fresh session only as the last resort. */
+  windDownMinutes: number;
 }
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';

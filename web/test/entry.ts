@@ -8,6 +8,7 @@ export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';
+export * from '@/lib/presets';
 export * from '@/lib/projection';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';

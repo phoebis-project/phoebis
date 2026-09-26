@@ -43,6 +43,7 @@ import type {
   SessionInfo,
   Settings,
 } from './types';
+import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
 
 export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
 
@@ -84,7 +85,22 @@ export const KEEPALIVE_TUNING_DEFAULTS: Omit<PoolKeepalive, 'costCapUsdPerDay' |
 /** Cache TTL policy a new pool starts with: off, so a pool's breakpoints pass through untouched until set. */
 export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, inOverage: '5m', main: '1h', models: [], subagent: '1h' };
 
-export interface PoolInput {
+export type PoolEngineFields = Pick<
+  Pool,
+  'burnWindowSeconds' | 'inFlightCap' | 'migrateWhenSpent' | 'overageMoveGraceMinutes' | 'paceFloor' | 'retryInPlaceSeconds' | 'shedShare' | 'sourceDwellSeconds' | 'warmSessions' | 'windDownMinutes'
+>;
+
+/** The store's shedding and failover defaults, which a new pool starts with. */
+export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
+  ...SHEDDING_PRESETS.balanced,
+  ...FAILOVER_PRESETS.balanced,
+  migrateWhenSpent: true,
+  overageMoveGraceMinutes: 30,
+  warmSessions: 'when_needed',
+  windDownMinutes: 30,
+};
+
+export interface PoolInput extends PoolEngineFields {
   affinityTtlSeconds: number;
   bodyCaptureHours: number;
   cacheDiagnostics: boolean | null;

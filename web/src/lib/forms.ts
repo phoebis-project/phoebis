@@ -1,6 +1,8 @@
-import type { KeyInput, PoolInput } from '@/api/client';
+import type { KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
+import { WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { checkPattern } from './patterns';
+import { MIGRATE_BAND } from './presets';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number ? K : never }[keyof PoolKeepalive];
 
@@ -37,8 +39,32 @@ export function modelRulesRefusal(rules: ModelRule[]): string | null {
   return null;
 }
 
+type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
+
+/** The pool routes' inclusive bound on each whole-number engine field; the two shares are ratios from 0 to 1. */
+export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'paceFloor' | 'shedShare'>, { max: number; min: number }> = {
+  burnWindowSeconds: { max: Number.MAX_SAFE_INTEGER, min: 60 },
+  inFlightCap: { max: 4_294_967_295, min: 1 },
+  overageMoveGraceMinutes: { max: 300, min: 0 },
+  retryInPlaceSeconds: { max: 300, min: 0 },
+  sourceDwellSeconds: { max: Number.MAX_SAFE_INTEGER, min: 60 },
+  windDownMinutes: { max: 10_080, min: 0 },
+};
+
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const ratio = (v: number | null, min: number) => v === null || (v >= min && v <= 1);
+
+/**
+ * Why the two thresholds cannot stand together, or null. A shed session lands only on a member under migrate
+ * above minus the band, so a select-below inside the band would prefer members a shed could never reach. The
+ * route checks each threshold alone; the band is the form's to hold.
+ */
+export function bandRefusal(input: Pick<PoolInput, 'migrateAboveUtilization' | 'selectBelowUtilization'>): string | null {
+  const { migrateAboveUtilization: migrate, selectBelowUtilization: select } = input;
+  // The tolerance keeps a percent the form divided by 100 on the edge of the band rather than a rounding under it.
+  if (migrate === null || select === null || select <= migrate - MIGRATE_BAND + 1e-9) return null;
+  return `Select below must sit at or under migrate above minus ${Math.round(MIGRATE_BAND * 100)}%, the band a shed session lands under.`;
+}
 
 /** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`. */
 export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string>): boolean {
@@ -54,6 +80,11 @@ export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<stri
     // Migration keeps the form's floor of 50 %, above the route's 0.
     ratio(input.migrateAboveUtilization, 0.5) &&
     ratio(input.selectBelowUtilization, 0) &&
+    bandRefusal(input) === null &&
+    ratio(input.shedShare, 0) &&
+    ratio(input.paceFloor, 0) &&
+    (Object.keys(ENGINE_BOUNDS) as (keyof typeof ENGINE_BOUNDS)[]).every((key) => whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max)) &&
+    WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) &&
     tuned &&
     k.retryMaxSeconds >= k.retrySeconds &&
     (k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0)) &&
