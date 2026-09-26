@@ -401,9 +401,9 @@ pub fn recent_events_of_kind(
 
 /// The `pin_migrated` events in `[from, to)` for the given accounts, counted by the move's `detail.reason`
 /// (`unknown` when the event named none). Reads the events table's `(kind, at)` index directly rather than an
-/// hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly; the caller decides
-/// whether an empty `accounts` list should skip the query entirely rather than treat it as "every account", the
-/// way `SeriesFilter`'s scopes do.
+/// hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly. An empty `accounts` list
+/// answers an empty map, unlike `SeriesFilter`'s scopes; a memberless pool skips the read outright rather than
+/// spend one on this.
 pub fn pin_migrations_by_reason(
     conn: &Connection,
     from: i64,
@@ -1373,10 +1373,12 @@ pub fn moves_by_reason(
     Ok(out)
 }
 
-/// The sessions with the most tokens over `[from, to)`, ranked in SQL rather than in memory, so a caller never
-/// reads an attempt row belonging to a session it will not answer.
+/// How many sessions `session_burn_series` answers: the burn chart's own row cap, so a busy range's read stays
+/// bounded by a caller-independent constant rather than the range's size.
 const SESSION_BURN_LIMIT: usize = 20;
 
+/// The `limit` sessions with the most tokens over `[from, to)`, ranked in SQL rather than in memory, so a
+/// caller never reads an attempt row belonging to a session it will not answer.
 fn top_sessions_by_tokens(
     conn: &Connection,
     from: i64,
@@ -1473,7 +1475,10 @@ pub fn session_burn_series(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let bucket_count = ((last - first) / filter.bucket_seconds) as usize;
+    // Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`), so a 6-hour or daily bucket can
+    // leave a trailing partial one, the same partial bucket `burn_series`'s `while at < last` loop still walks.
+    let bucket_count =
+        ((last - first + filter.bucket_seconds - 1) / filter.bucket_seconds) as usize;
     let empty_series = || {
         (0..bucket_count)
             .map(|i| BurnPoint {

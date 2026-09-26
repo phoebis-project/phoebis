@@ -1259,7 +1259,9 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         }],
         bodies: None,
     };
-    // The most tokens, split an hour apart so the series carries it in two buckets.
+    // The most tokens, split an hour apart so the series carries it in two buckets. Each attempt carries a
+    // nonzero `estimated_usd` too, so the assertion below proves the oauth branch ignores it rather than
+    // merely never having seen a value to add.
     parts.ledger.record(session_request(
         "r-big-1",
         now - HOUR - 100,
@@ -1267,7 +1269,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "business",
         2_000,
         200,
-        0.0,
+        5.0,
     ));
     parts.ledger.record(session_request(
         "r-big-2",
@@ -1276,7 +1278,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "business",
         2_000,
         200,
-        0.0,
+        5.0,
     ));
     // Fewer tokens than "s-big", more than "s-small", on an api_key account.
     parts.ledger.record(session_request(
@@ -1345,6 +1347,162 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         mid_point["meter_tokens"].as_f64(),
         Some(0.0),
         "an api_key session prices in dollars alone"
+    );
+}
+
+#[tokio::test]
+async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let session_request = |id: &str, session: &str, input: u64| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: now - 100,
+            finished_at: Some(now - 50),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: now - 100,
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            output_tokens: Some(10),
+            ..Default::default()
+        }],
+        bodies: None,
+    };
+    // Twenty-one sessions with distinct token counts, written so all twenty-one land in the writer's one
+    // batch; the smallest carries the fewest tokens and is the one the twenty-wide cut must drop.
+    for i in 0..21u64 {
+        let id = format!("r-cut-{i:02}");
+        let session = format!("s-cut-{i:02}");
+        parts.ledger.record(session_request(&id, &session, 100 + i));
+    }
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-cut-20").await.unwrap()
+    })
+    .await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=session",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let points = burn["points"].as_array().unwrap();
+    let groups: std::collections::BTreeSet<&str> = points
+        .iter()
+        .filter_map(|p| p["group"].as_str())
+        .filter(|g| g.starts_with("s-cut-"))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        20,
+        "the twenty busiest sessions survive the cut: {groups:?}"
+    );
+    assert!(
+        !groups.contains("s-cut-00"),
+        "the session with the fewest tokens is the one the cut drops: {groups:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ranges() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    // A 7-day range buckets in 6 hours; `now` always falls in the trailing partial bucket the ceiling of the
+    // hour leaves, since the newest bucket ends at `now`'s own hour rather than a 6-hour edge.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-trailing".into(),
+            received_at: now,
+            finished_at: Some(now + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s-trailing".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-trailing".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: now,
+            outcome: "succeeded".into(),
+            input_tokens: Some(500),
+            output_tokens: Some(50),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-trailing").await.unwrap()
+    })
+    .await;
+    let by_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=7d&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let by_session = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=7d&group_by=session",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let account_bucket_count = by_account["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["group"] == "business")
+        .count();
+    let session_points = by_session["points"].as_array().unwrap();
+    let session_bucket_count = session_points
+        .iter()
+        .filter(|p| p["group"] == "s-trailing")
+        .count();
+    assert_eq!(
+        session_bucket_count, account_bucket_count,
+        "the session series answers as many points over the range as the account series does"
+    );
+    let trailing = session_points
+        .iter()
+        .rfind(|p| p["group"] == "s-trailing")
+        .unwrap();
+    assert!(
+        trailing["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0,
+        "the trailing partial bucket still carries the attempt inside it: {trailing}"
     );
 }
 

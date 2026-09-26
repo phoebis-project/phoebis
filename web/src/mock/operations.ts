@@ -75,10 +75,11 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       ? 'usd'
       : 'meter_tokens'
     : null;
-  // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after
-  // this one read; a usd row's burn is not modeled here, since the backend prices it off a differently scaled
-  // stored average (`burn_usd`), never this meter-token-sized roll.
+  // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after this
+  // one read. A usd row's burn is the dollar average the wire actually answers for that unit, on its own
+  // dollar-sized roll rather than the meter-token one.
   const burnRoll = rng.int(200, 4_000);
+  const burnUsdRoll = rng.float(0.01, 0.5);
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
   const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
@@ -96,7 +97,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastRequestAt: seen ? seen.last : null,
     pinned,
     requests: seen ? seen.requests : 0,
-    burn: pinned && unit !== 'usd' ? burnRoll : null,
+    burn: pinned ? (unit === 'usd' ? burnUsdRoll : burnRoll) : null,
     burnAt: pinned ? burnAtRoll : null,
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,

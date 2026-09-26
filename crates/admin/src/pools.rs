@@ -571,8 +571,8 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         })
         .await
         .unwrap_or_default();
-    // A memberless pool has no account to attribute a move against, so this skips the read rather than
-    // reading `pin_migrations_by_reason`'s empty `accounts` as "every account".
+    // A memberless pool has no account to attribute a move against, so this skips the read outright rather
+    // than spend one on a query `pin_migrations_by_reason` would answer empty anyway.
     let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
     let moves = if account_ids.is_empty() {
         std::collections::BTreeMap::new()
