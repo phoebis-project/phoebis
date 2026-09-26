@@ -289,7 +289,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         store: store.clone(),
         windows: Arc::new(phoebis_ledger::PlanWindows::shipped()),
     });
-    // The day's spend comes from the rollups so a restart does not reset a pool's cap.
+    // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
     let alerts = phoebis_alerts::Alerts::new(phoebis_alerts::AlertParts {
         clock: clock.clone(),

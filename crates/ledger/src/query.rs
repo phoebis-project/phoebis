@@ -1296,10 +1296,11 @@ pub fn burn_series(
 }
 
 /// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket. A
-/// subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the fitted
-/// scale they are later divided by was built with; read per row rather than per bucket, since a six-hour or daily
-/// bucket can straddle a band edge and only the row's own hour says which side of it the row fell on. One pass:
-/// each row lands in its bucket by index.
+/// subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the band of the hour
+/// the rollup folded the request under (the live fit weighs a request at its completion, so a request straddling a
+/// band edge weighs differently here); read per row rather than per bucket, since a six-hour or daily bucket can
+/// straddle a band edge and only the row's own hour says which side of it the row fell on. One pass: each row lands
+/// in its bucket by index.
 pub fn burn_series_over(
     rows: &[RollupRow],
     factors: &PlanFactors,

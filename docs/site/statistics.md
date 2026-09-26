@@ -102,7 +102,7 @@ so no fold rests on a single rounding step. A reading folds nothing while any of
 one whose response head carried it is in flight on the account, since its rise may carry that request's charge before
 its tokens are booked; the run carries on to the next reading with no other request in flight. The carrying request's
 own charge is not in its head's reading, since the meter charges a request on the reading that follows it, so an account
-whose requests run one after another folds at each head, and one that keeps two or more requests in flight folds only at
+whose requests run one after another can fold at each head, and one that keeps two or more in flight folds only at
 a reading with at most its own in flight; a run that outgrows its window that way is dropped. The fit drops a run when a
 reset falls inside it (the reset time moved or the utilization fell by a hundredth or more; a smaller fall is rounding
 and reads as flat), when it outgrows its window, when the utilization rose while the router had nothing booked or in
