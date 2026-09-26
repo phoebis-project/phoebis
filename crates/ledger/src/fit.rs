@@ -316,10 +316,12 @@ impl WindowFit {
 /// Tokens are booked when an attempt completes, since the meter charges a request on the reading that follows
 /// it, weighted by the band in force at that instant; an attempt still open tells the fitter that a rise
 /// meanwhile is its own. A reading at least `MIN_INTERVAL_MS` past the previous one adds its rise to the run, and
-/// the run folds once its delta reaches three quanta with tokens booked. A run is dropped when a reset falls
-/// inside it (the reset moved, or the utilization fell by a quantum or more; a smaller fall reads as flat), when it
-/// outgrows the window, when it rose with nothing booked and nothing open (spend the router did not send), or when
-/// a stream that straddles a reset lands in it.
+/// the run folds once its delta reaches three quanta with tokens booked and no attempt open on the account: a
+/// rise read while one is open may carry that attempt's charge, whose tokens are not booked yet, so the run
+/// carries both until a reading with nothing open. A run is dropped when a reset falls inside it (the reset moved,
+/// or the utilization fell by a quantum or more; a smaller fall reads as flat), when it outgrows the window, when
+/// it rose with nothing booked and nothing open (spend the router did not send), or when a stream that straddles a
+/// reset lands in it.
 /// A window that has folded answers its row, carry included, at every reading judged, so a restart continues
 /// the run rather than starting it over.
 pub struct Fitter {
@@ -519,7 +521,7 @@ impl Fitter {
                     fit.run.since = Some(at);
                 }
             }
-        } else if booked.is_finite() && fit.run.delta + SLACK >= FOLD_DELTA {
+        } else if !open && booked.is_finite() && fit.run.delta + SLACK >= FOLD_DELTA {
             fit.fold(reading);
         }
         fit.report(account_id, window)

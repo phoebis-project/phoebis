@@ -787,14 +787,17 @@ impl Inner {
     /// The cap is a budget per UTC day, so the day the sum was taken for is carried with it and the first
     /// writer past midnight starts it over. Every writer of `spent_today` rolls under the same lock it
     /// charges: a probe that completes after midnight would otherwise land on yesterday's sum and have its
-    /// charge cleared by the next tick.
-    pub(crate) fn roll_day(&mut self, now: i64) {
+    /// charge cleared by the next tick. True when it rolled, so the caller deletes the stored days before it
+    /// once the lock is released.
+    pub(crate) fn roll_day(&mut self, now: i64) -> bool {
         let day = now.div_euclid(86_400_000);
         if self.spent_day < day {
             self.spent_today.clear();
             self.meter_spent_today.clear();
             self.spent_day = day;
+            return true;
         }
+        false
     }
 
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
@@ -1550,16 +1553,22 @@ impl Engine {
         // The four asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let retained_models = {
+        let (retained_models, rolled) = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
             }
             inner.expire(now, expiry);
             inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
-            inner.roll_day(now);
-            inner.anything_retained().then(|| inner.retained_models())
+            let rolled = inner.roll_day(now);
+            (
+                inner.anything_retained().then(|| inner.retained_models()),
+                rolled,
+            )
         };
+        if rolled {
+            self.purge_budgets_before(now);
+        }
         let Some(retained_models) = retained_models else {
             return;
         };

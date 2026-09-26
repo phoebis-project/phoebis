@@ -8,9 +8,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    apply_filter, bucket_seconds, burn_series, hour_ceil, hour_of, moves_by_reason, parse_range,
-    read_account_rollups, read_rollups, rewrite_series, session_burn_series, AccountRollupRow,
-    LiveKeys, PlanFactors, PlanWindows, RollupFilter, RollupRow, SeriesFilter, GROUP_BYS,
+    apply_filter, bucket_seconds, burn_rows, burn_series_over, hour_ceil, hour_of, moves_by_reason,
+    parse_range, read_account_rollups, read_rollups, rewrite_series, session_burn_series,
+    AccountRollupRow, LiveKeys, PlanFactors, PlanWindows, RollupFilter, RollupRow, SeriesFilter,
+    GROUP_BYS,
 };
 use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
@@ -269,9 +270,19 @@ pub(crate) async fn burn(
                 };
                 return session_burn_series(c, &factors, &windows, &kinds, &filter);
             }
-            let rows = read_rollups(c, from_hour, to_hour)?;
+            let base = SeriesFilter {
+                from,
+                to,
+                bucket_seconds: bucket,
+                ..Default::default()
+            };
+            // One read for every group: each folds its own scope from these rows rather than reading the range
+            // again under the reader lock. The groups are the ones the range itself holds; the read reaches back
+            // to the first bucket's edge, which may start before it.
+            let rows = burn_rows(c, &base)?;
             let mut groups: Vec<String> = rows
                 .iter()
+                .filter(|r| r.hour >= from_hour && r.hour < to_hour)
                 .map(|r| match group_by_read.as_str() {
                     "key" => r.key_id.clone(),
                     "request_class" => r.request_class.clone(),
@@ -284,9 +295,6 @@ pub(crate) async fn burn(
             for group in groups {
                 let one = vec![group.clone()];
                 let filter = SeriesFilter {
-                    from,
-                    to,
-                    bucket_seconds: bucket,
                     accounts: if group_by_read == "account" {
                         one.clone()
                     } else {
@@ -302,9 +310,9 @@ pub(crate) async fn burn(
                     } else {
                         Vec::new()
                     },
-                    pools: Vec::new(),
+                    ..base.clone()
                 };
-                let points = burn_series(c, &factors, &windows, &kinds, &filter)?;
+                let points = burn_series_over(&rows, &factors, &windows, &kinds, &filter)?;
                 out.push((group, points));
             }
             Ok(out)

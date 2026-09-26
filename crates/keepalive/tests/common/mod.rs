@@ -67,6 +67,8 @@ pub struct Rig {
     pub engine: Arc<Engine>,
     pub h: relay_common::Harness,
     pub ledger: Ledger,
+    /// The spec's limits, kept so `restart` builds its engine with what this one was built with.
+    pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
     pub plan: Arc<PlanFactors>,
@@ -176,7 +178,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
         lifecycle: spec.lifecycle,
-        limits: spec.limits,
+        limits: spec.limits.clone(),
         metrics: metrics.clone(),
         plan: plan.clone(),
         pricing,
@@ -193,6 +195,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         engine,
         h,
         ledger,
+        limits: spec.limits,
         metrics,
         plan,
         sequence: 0,
@@ -244,8 +247,8 @@ pub fn session_start_as(
 
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
-    /// empty and has to rebuild `spent_today` and `meter_spent_today` from the rollups itself, unlike a
-    /// `load_spent_today` called back on this rig's own engine, which the running one already answers from.
+    /// empty and has to restore `spent_today` and `meter_spent_today` itself, unlike a `load_spent_today`
+    /// called back on this rig's own engine, which the running one already answers from.
     pub async fn restart(&self) -> Arc<Engine> {
         let clock: Clock = {
             let c = self.clock.clone();
@@ -257,7 +260,7 @@ impl Rig {
             cooldown_fallback: Duration::from_secs(60),
             ledger: self.ledger.clone(),
             lifecycle: None,
-            limits: KeepaliveLimits::default(),
+            limits: self.limits.clone(),
             metrics: Arc::new(Metrics::new()),
             plan: self.plan.clone(),
             pricing: Arc::new(Pricing::new(PriceTable::shipped())),

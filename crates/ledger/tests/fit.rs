@@ -392,6 +392,48 @@ fn a_non_finite_persisted_row_is_refused_at_load_and_rebuilt_from_the_prior() {
     }
 }
 
+/// Two streams of equal tokens overlap: one completes before the reading that shows the rise both caused, the
+/// other after it. The fold waits while the second is open, so it reads both streams' tokens over that rise, the
+/// same fit as the interval in which both completed before the reading.
+#[test]
+fn a_fold_waits_while_an_attempt_is_open_and_reads_both_overlapping_streams() {
+    let mut both = Run::at(EARLY);
+    both.read(FIVE_HOUR, 0.0);
+    both.step(10 * MINUTE);
+    both.send(OPUS, SIXTEENTH);
+    both.send(OPUS, SIXTEENTH);
+    both.step(MINUTE);
+    let completed = both
+        .read(FIVE_HOUR, 2.0 * SHARE)
+        .expect("both streams completed: the rise folds");
+
+    let mut r = Run::at(EARLY);
+    r.read(FIVE_HOUR, 0.0);
+    r.step(10 * MINUTE);
+    let went_out = r.now;
+    let early = r.start();
+    let late = r.start();
+    r.step(MINUTE);
+    r.complete(&early, went_out, OPUS, SIXTEENTH);
+    r.step(MINUTE);
+    assert!(
+        r.read(FIVE_HOUR, 2.0 * SHARE).is_none(),
+        "the late stream is still open: its share of the rise has no tokens booked yet"
+    );
+    r.step(MINUTE);
+    r.complete(&late, went_out, OPUS, SIXTEENTH);
+    r.step(MINUTE);
+    let row = r
+        .read(FIVE_HOUR, 2.0 * SHARE)
+        .expect("the first reading with nothing open folds the carried rise");
+    assert_eq!(
+        (row.scale, row.intervals),
+        (completed.scale, completed.intervals),
+        "the overlapping streams fit as the completed interval does"
+    );
+    assert_eq!(row.scale, MAX_5X_FIVE_HOUR);
+}
+
 #[test]
 fn samples_closer_than_a_minute_accumulate_and_fold_at_the_next() {
     let mut r = Run::at(EARLY);

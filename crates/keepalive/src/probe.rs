@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use phoebis_ledger::{PlanFactors, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
 use phoebis_routing::FIVE_HOUR;
-use phoebis_store::AccountKind;
+use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use http_body_util::BodyExt;
 use serde_json::Value;
 
@@ -245,11 +245,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     // the snapshot taken here, after the response, so a registry write mid-exchange never changes which account
     // this probe is charged against.
     let snapshot = engine.parts.router.snapshot();
-    let (record, applied) = {
+    let (record, applied, rolled, charge) = {
         let mut inner = engine.lock();
         let mut record = inner.probe_record(&job, &exchange, &table, &plan);
         record.kind = snapshot.account(&record.account).map(|a| a.kind);
-        inner.roll_day(now);
+        let rolled = inner.roll_day(now);
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
@@ -264,6 +264,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             record.outcome,
             record.cost_usd,
         );
+        let mut charge = None;
         if record.outcome != ProbeOutcome::Migrated {
             // The dollar cap counts what actually settles in dollars: an api_key account, a subscription
             // account in overage, or a plan-funded probe on a model the plan table lacks, which `unit` (the
@@ -274,6 +275,12 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     .spent_today
                     .entry(record.pool_id.clone())
                     .or_insert(0.0) += record.cost_usd;
+                charge = Some(BudgetRow {
+                    scope: BudgetScope::Pool,
+                    id: record.pool_id.clone(),
+                    usd: record.cost_usd,
+                    meter_tokens: 0.0,
+                });
             }
             if unit == SavingsUnit::MeterTokens {
                 let weighted = cost_in_unit * engine.parts.windows.band_factor(FIVE_HOUR, now);
@@ -281,8 +288,17 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     .meter_spent_today
                     .entry(record.account.clone())
                     .or_insert(0.0) += weighted;
+                charge = Some(BudgetRow {
+                    scope: BudgetScope::Account,
+                    id: record.account.clone(),
+                    usd: 0.0,
+                    meter_tokens: weighted,
+                });
             }
         }
+        // Filed under the day the in-memory sum is for: a probe whose `now` fell before a midnight another
+        // writer already rolled charged the new day's sum, and its row follows it.
+        let charge = charge.map(|c| (inner.spent_day, c));
         let covered_unit = funding.map(|_| unit);
         let applied = inner.apply_probe(
             &job,
@@ -293,8 +309,14 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             cost_in_unit,
             now,
         );
-        (record, applied)
+        (record, applied, rolled, charge)
     };
+    if rolled {
+        engine.purge_budgets_before(now);
+    }
+    if let Some((day, charge)) = charge {
+        engine.persist_charge(day, &charge);
+    }
     engine.record_probe(&record, applied, now);
     engine
         .parts

@@ -2,6 +2,7 @@
 
 mod accounts;
 mod alerts;
+mod budgets;
 mod credentials;
 mod lock;
 mod memory;
@@ -28,6 +29,7 @@ pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
 };
 pub use alerts::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow};
+pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
     ResolvedAttempt, Secret,

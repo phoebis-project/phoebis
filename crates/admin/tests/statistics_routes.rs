@@ -1300,8 +1300,54 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         1,
         0.0,
     ));
+    // An attempt that goes out a minute before the peak band's first minute inside the range and completes a
+    // minute into it: the meter charges it at its completion, so the series prices it at the band's factor.
+    let windows = phoebis_ledger::PlanWindows::shipped();
+    let band_edge = (1..24)
+        .flat_map(|h| (0..60).map(move |m| now - 24 * HOUR + h * HOUR + m * 60_000))
+        .find(|&at| {
+            windows.band_factor(phoebis_routing::FIVE_HOUR, at) > 1.0
+                && windows.band_factor(phoebis_routing::FIVE_HOUR, at - 60_000) == 1.0
+        })
+        .expect("a band edge inside the range");
+    let (edge_started, edge_finished) = (band_edge - 60_000, band_edge + 60_000);
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-edge".into(),
+            received_at: edge_started,
+            finished_at: Some(edge_finished),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s-edge".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-edge".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: edge_started,
+            finished_at: Some(edge_finished),
+            outcome: "succeeded".into(),
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-mid").await.unwrap()
+    })
+    .await;
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("r-edge").await.unwrap()
     })
     .await;
     let burn = json(
@@ -1347,6 +1393,20 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         mid_point["meter_tokens"].as_f64(),
         Some(0.0),
         "an api_key session prices in dollars alone"
+    );
+    let edge_point = points
+        .iter()
+        .find(|p| p["group"] == "s-edge" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
+        .unwrap_or_else(|| panic!("s-edge's bucket carries its meter tokens: {points:?}"));
+    let plain = phoebis_ledger::PlanFactors::shipped()
+        .meter_tokens("claude-sonnet-5", 100, 0, 0, 0, 10)
+        .unwrap();
+    let factor = windows.band_factor(phoebis_routing::FIVE_HOUR, edge_finished);
+    assert!(factor > 1.0, "the completion falls inside the band");
+    assert!(
+        (edge_point["meter_tokens"].as_f64().unwrap() - plain * factor).abs() < 1e-9,
+        "priced at the band's factor its completion fell in, not the start's: {edge_point} vs {}",
+        plain * factor
     );
 }
 

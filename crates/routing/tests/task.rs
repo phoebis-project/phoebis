@@ -1638,6 +1638,88 @@ async fn a_head_that_reads_one_shared_window_leaves_the_usage_poll_due() {
     up.shutdown().await;
 }
 
+/// Pace ranks subscription accounts by their readings, so it is a reason on its own to read a quiet sibling: with
+/// the kind order, the spent move, the thresholds and the overage policy all left without a reason to sample, a due
+/// sibling is still fetched, and its reading is what the next placement ranks it by.
+#[tokio::test]
+async fn a_pace_pool_with_its_other_sampling_reasons_off_still_reads_a_due_sibling() {
+    let up = usage_endpoint().await;
+    let store = seeded_oauth(&["a", "b"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.strategy = Strategy::Pace;
+    pool.prefer_subscription = false;
+    pool.overage_policy = OveragePolicy::Allow;
+    pool.shedding.migrate_when_spent = false;
+    pool.migrate_above_utilization = None;
+    pool.select_below_utilization = None;
+    store.update_pool(&pool, "test").unwrap();
+    let start = 1_000_000;
+    let now = Arc::new(AtomicI64::new(start));
+    let usage = usage_against(&up, &store, clock(&now));
+    store
+        .commit_credentials(
+            "b",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER-B"),
+                refresh_token: Some(Secret::new("rt")),
+                issued_at: 0,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let handle = spawn(
+        store.clone(),
+        Some(usage),
+        clock(&now),
+        RouterConfig::default(),
+    )
+    .unwrap();
+    // `a` answers from its own heads, which holds its fetch off; `b` has no reading and reads as untouched.
+    handle.report(observed("a", shared_windows(start)));
+    let inside = start + 1_000;
+    now.store(inside, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), inside))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
+    let b = wait_for_async(WRITTEN, || async {
+        handle
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| id == "b")
+            .map(|(_, sample)| sample)
+    })
+    .await;
+    assert_eq!(
+        b.reading(SEVEN_DAY).map(|r| r.utilization),
+        Some(0.4),
+        "the fetched document's weekly reading"
+    );
+    // The weekly reading leaves `b` far less allowance per hour to its reset than `a` has, so the next session
+    // is placed on `a`, which only a selection reading `b`'s sample can decide.
+    let next = start + 2_000;
+    now.store(next, Ordering::SeqCst);
+    let answer = handle
+        .select(request(&handle, Some("s2"), next))
+        .await
+        .unwrap();
+    match answer.result {
+        SelectResult::Selected(selection) => assert_eq!(selection.account.id, "a"),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+    stays_for(Duration::from_millis(100), || usage_fetches(&up) == 1).await;
+    up.shutdown().await;
+}
+
 async fn next_event(
     events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
 ) -> phoebis_routing::RouterEvent {

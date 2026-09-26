@@ -229,7 +229,9 @@ rate-limit bucket's utilization alone, with no division by hours, since a bucket
 reset never enters the score. Either way a window nobody has sampled, or one whose reset has already passed, reads as
 untouched: remaining 1 over the full week. Ties are random. An account whose remaining allowance is at or below the
 pool's `pace_floor` is kept as the last resort, ranked by the same score among the others below it, once no account
-above the floor remains; `priority` and `round_robin` read no sample and no floor at all.
+above the floor remains; `priority` and `round_robin` read no sample and no floor at all. A `pace` pool fetches a
+subscription account's usage at selection once its sample is older than the sample interval, whatever its other options,
+since a quiet account brings no response head of its own to refresh it.
 
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.

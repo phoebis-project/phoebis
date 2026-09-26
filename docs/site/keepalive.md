@@ -118,6 +118,11 @@ their cache TTL because a lead or jitter at or past the TTL would put a probe's 
 even written. `GET /admin/pools` answers the full policy with every default filled in, so a pool created with
 `{}` shows every value above.
 
+Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
+where they stood. A probe settled in dollars, on an api_key account, a subscription account in overage, or a model
+the plan table lacks, counts toward its pool's `probe_cost_cap_usd_per_day`; a plan-funded probe counts toward its
+account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
+
 ## The cost reference
 
 The Sessions view's Cost reference dialog builds its table from the shipped price table

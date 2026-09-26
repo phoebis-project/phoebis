@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_ledger::{
-    apply_filter, breakdown, bucket_index, burn_series, delta_of, fold_account, fold_event,
-    fold_keepalive, key_request_totals, moves_by_reason, read_account_rollups, read_rollups,
-    rewrite_series, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerDb, LiveKeys,
-    PlanFactors, PlanWindows, RequestRecord, RollupFilter, RollupRow, SeriesFilter, NO_CLASS,
-    UNATTRIBUTED,
+    apply_filter, breakdown, bucket_index, burn_rows, burn_series, burn_series_over, delta_of,
+    fold_account, fold_event, fold_keepalive, key_request_totals, moves_by_reason,
+    read_account_rollups, read_rollups, rewrite_series, AttemptRecord, EventRecord, Histogram,
+    KeepaliveDelta, LedgerDb, LiveKeys, PlanFactors, PlanWindows, RequestRecord, RollupFilter,
+    RollupRow, SeriesFilter, NO_CLASS, UNATTRIBUTED,
 };
 use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
@@ -889,6 +889,66 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         day.meter_tokens,
         base * 1.45 + base
     );
+}
+
+/// A caller that folds several scopes reads the range once: the series over the rows `burn_rows` read answers,
+/// point for point, what `burn_series` answers when it reads the range itself for each scope.
+#[test]
+fn the_burn_series_over_one_read_matches_a_read_per_scope() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (request, attempts) in &synthetic_day(5) {
+        db.insert_request(request, attempts, None).unwrap();
+    }
+    let factors = PlanFactors::shipped();
+    let windows = PlanWindows::shipped();
+    let kinds = HashMap::from([
+        ("a".to_string(), AccountKind::Oauth),
+        ("b".to_string(), AccountKind::ApiKey),
+        ("c".to_string(), AccountKind::Oauth),
+    ]);
+    for bucket_seconds in [3_600, 6 * 3_600] {
+        // A range that starts mid-bucket, so the read reaches back to the bucket's edge.
+        let base = SeriesFilter {
+            from: 90 * 60_000,
+            to: DAY_MS,
+            bucket_seconds,
+            ..SeriesFilter::default()
+        };
+        let rows = db.read_blocking(|c| burn_rows(c, &base)).unwrap();
+        let scopes = [
+            SeriesFilter::default(),
+            SeriesFilter {
+                accounts: vec!["a".into()],
+                ..SeriesFilter::default()
+            },
+            SeriesFilter {
+                keys: vec!["k2".into()],
+                ..SeriesFilter::default()
+            },
+            SeriesFilter {
+                pools: vec!["p1".into()],
+                request_classes: vec![NO_CLASS.into()],
+                ..SeriesFilter::default()
+            },
+        ];
+        for scope in scopes {
+            let filter = SeriesFilter {
+                from: base.from,
+                to: base.to,
+                bucket_seconds,
+                ..scope
+            };
+            let read = db
+                .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+                .unwrap();
+            let over = burn_series_over(&rows, &factors, &windows, &kinds, &filter).unwrap();
+            assert!(
+                read.iter().any(|p| p.meter_tokens > 0.0 || p.usd > 0.0),
+                "the scope reads something: {filter:?}"
+            );
+            assert_eq!(over, read, "{filter:?}");
+        }
+    }
 }
 
 #[test]

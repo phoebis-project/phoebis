@@ -485,6 +485,10 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<(String, String, String), PinRow>,
+    /// The pins some selection or completion renewed since their placement. A client error on the request that
+    /// created a pin releases the pin only while its key is absent here: a renewal means the pin serves another
+    /// turn, however close in time. Memory only, since no request outlives a restart to report on a loaded pin.
+    renewed: HashSet<(String, String, String)>,
     /// A folded spelling to the dated id it resolved to, so every lookup below can key a model's rows on the
     /// dated id once it is known, whichever spelling the caller names.
     resolutions: HashMap<String, String>,
@@ -540,6 +544,7 @@ impl RoutingState {
                 .into_iter()
                 .map(|p| ((p.key_id.clone(), p.session_id.clone(), p.model.clone()), p))
                 .collect(),
+            renewed: HashSet::new(),
             resolutions: load
                 .resolutions
                 .into_iter()
@@ -584,7 +589,8 @@ impl RoutingState {
     }
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one
-    /// off its account, so it spends that pin's mark as a removal does; a renewal keeps the epoch and the mark.
+    /// off its account, so it spends that pin's mark as a removal does and starts unrenewed; a renewal keeps the
+    /// epoch, the mark, and the renewal.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
         let key = (
@@ -593,11 +599,37 @@ impl RoutingState {
             pin.model.clone(),
         );
         let epoch = pin.epoch;
-        if let Some(replaced) = self.pins.insert(key, pin) {
-            if replaced.epoch != epoch {
+        match self.pins.insert(key.clone(), pin) {
+            Some(replaced) if replaced.epoch == epoch => {}
+            Some(replaced) => {
                 self.spend_mark(&replaced);
+                self.renewed.remove(&key);
+            }
+            None => {
+                self.renewed.remove(&key);
             }
         }
+    }
+
+    /// Records that a selection or a completion renewed the pin under the key since its placement.
+    pub(crate) fn mark_renewed(&mut self, key_id: &str, session_id: &str, model: &str) {
+        let key = (
+            key_id.to_string(),
+            session_id.to_string(),
+            self.canonical(model).to_string(),
+        );
+        if self.pins.contains_key(&key) {
+            self.renewed.insert(key);
+        }
+    }
+
+    /// Whether the pin under the key was renewed since its placement.
+    pub fn renewed_since_placement(&self, key_id: &str, session_id: &str, model: &str) -> bool {
+        self.renewed.contains(&(
+            key_id.to_string(),
+            session_id.to_string(),
+            self.canonical(model).to_string(),
+        ))
     }
 
     pub(crate) fn remove_pin(
@@ -615,6 +647,7 @@ impl RoutingState {
     /// that marked it before it left.
     fn take_pin(&mut self, key: &(String, String, String)) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
+        self.renewed.remove(key);
         self.spend_mark(&pin);
         Some(pin)
     }
@@ -1040,11 +1073,14 @@ impl RoutingState {
             .cloned()
             .collect();
         for pin in moved_pins {
-            self.take_pin(&(
+            let spelled = (
                 pin.key_id.clone(),
                 pin.session_id.clone(),
                 pin.model.clone(),
-            ));
+            );
+            // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there.
+            let renewed = self.renewed.contains(&spelled);
+            self.take_pin(&spelled);
             rekey.delete_pins.push((
                 pin.key_id.clone(),
                 pin.session_id.clone(),
@@ -1064,8 +1100,13 @@ impl RoutingState {
                     model: dated_id.to_string(),
                     ..pin
                 };
-                if let Some(replaced) = self.pins.insert(dated_key, moved.clone()) {
+                if let Some(replaced) = self.pins.insert(dated_key.clone(), moved.clone()) {
                     self.spend_mark(&replaced);
+                }
+                if renewed {
+                    self.renewed.insert(dated_key);
+                } else {
+                    self.renewed.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
             }

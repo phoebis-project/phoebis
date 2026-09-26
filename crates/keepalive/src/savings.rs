@@ -6,8 +6,7 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanFactors, PriceTable, Record, UNATTRIBUTED};
-use phoebis_routing::FIVE_HOUR;
-use phoebis_store::AccountKind;
+use phoebis_store::{BudgetRow, BudgetScope};
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
@@ -240,53 +239,66 @@ impl Engine {
         self.lock().meter_spent_today.clone()
     }
 
-    /// The pool's probe spend for the current UTC day, from the rollups: what a restart starts from. Rebuilds
-    /// `meter_spent_today` from the same rows: an api_key account's rollup counts toward the dollar cap, an
-    /// oauth account's toward the plan-side one, its tokens priced through the plan table and weighted by the
-    /// band its hour fell in. The rollup carries no funding, so an oauth account's overage or migrated probes
-    /// before the restart price into the plan-side figure and never reach the dollar one for the rest of that
-    /// day, a bounded gap. An oauth row whose model the plan table cannot price is dropped from the plan-side
-    /// figure and reaches neither: live, such a probe settles in dollars, so a restart forgets that share of the
-    /// day's dollar count, as bounded a gap.
+    /// The pool's probe spend for the current UTC day, and the accounts' plan-side figure beside it, as the
+    /// probes of the day settled them into the store: what a restart starts from. Days before today are deleted
+    /// here too, since a restart across midnight is a roll no running engine saw.
     pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
         let now = self.now();
-        let day_start = now.div_euclid(86_400_000) * 86_400_000 / 1_000;
-        let db = self.parts.ledger.db().clone();
-        let rows = db
-            .read(move |c| phoebis_ledger::read_rollups(c, day_start, day_start + 86_400))
-            .await
-            .unwrap_or_default();
-        let snapshot = self.parts.router.snapshot();
+        let day = now.div_euclid(86_400_000);
+        self.purge_budgets_before(now);
+        let rows = self
+            .parts
+            .store
+            .keepalive_budgets(&budget_date(day))
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "the keepalive's daily budgets could not be read; both start at zero");
+                Vec::new()
+            });
         let mut spent = BTreeMap::new();
         let mut meter_spent = BTreeMap::new();
-        for row in rows.into_iter().filter(|r| r.kind == "probe") {
-            match snapshot.account(&row.account_id).map(|a| a.kind) {
-                Some(AccountKind::ApiKey) => {
-                    *spent.entry(row.pool_id.clone()).or_insert(0.0) += row.probe_cost_usd;
+        for row in rows {
+            match row.scope {
+                BudgetScope::Account => {
+                    meter_spent.insert(row.id, row.meter_tokens);
                 }
-                Some(AccountKind::Oauth) => {
-                    if let Some(tokens) = self.parts.plan.meter_tokens(
-                        &row.canonical_model,
-                        row.input_tokens,
-                        row.cache_read_tokens,
-                        row.cache_write_5m_tokens,
-                        row.cache_write_1h_tokens,
-                        row.output_tokens,
-                    ) {
-                        let weighted =
-                            tokens * self.parts.windows.band_factor(FIVE_HOUR, row.hour * 1_000);
-                        *meter_spent.entry(row.account_id.clone()).or_insert(0.0) += weighted;
-                    }
+                BudgetScope::Pool => {
+                    spent.insert(row.id, row.usd);
                 }
-                None => {}
             }
         }
         let mut inner = self.lock();
         inner.spent_today = spent.clone();
         inner.meter_spent_today = meter_spent;
-        inner.spent_day = now.div_euclid(86_400_000);
+        inner.spent_day = day;
         spent
     }
+
+    /// Adds a settled probe's charge to its row for `day`, a day index since the epoch. A failed write costs the
+    /// restore that charge, never the running engine's own figure.
+    pub(crate) fn persist_charge(&self, day: i64, charge: &BudgetRow) {
+        if let Err(error) = self
+            .parts
+            .store
+            .add_keepalive_budget(&budget_date(day), charge)
+        {
+            tracing::warn!(%error, id = %charge.id, "a probe's charge could not be kept for a restart");
+        }
+    }
+
+    /// Deletes the stored budgets of every UTC day before `now`'s.
+    pub(crate) fn purge_budgets_before(&self, now: i64) {
+        let today = budget_date(now.div_euclid(86_400_000));
+        if let Err(error) = self.parts.store.purge_keepalive_budgets_before(&today) {
+            tracing::warn!(%error, "the keepalive's past daily budgets could not be deleted");
+        }
+    }
+}
+
+/// The UTC date, `YYYY-MM-DD`, of the day index `day` counts from the epoch.
+fn budget_date(day: i64) -> String {
+    jiff::Timestamp::from_millisecond(day * 86_400_000)
+        .map(|t| t.strftime("%Y-%m-%d").to_string())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

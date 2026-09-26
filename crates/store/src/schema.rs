@@ -57,11 +57,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (25, V25),
     (26, V26),
     (27, V27),
+    (28, V28),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 27;
+pub const SCHEMA_VERSION: u32 = 28;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -386,4 +387,15 @@ ALTER TABLE plan_fits ADD COLUMN band_inside_tokens REAL NOT NULL DEFAULT 0;
 ALTER TABLE plan_fits ADD COLUMN band_inside_delta REAL NOT NULL DEFAULT 0;
 ALTER TABLE plan_fits ADD COLUMN band_outside_tokens REAL NOT NULL DEFAULT 0;
 ALTER TABLE plan_fits ADD COLUMN band_outside_delta REAL NOT NULL DEFAULT 0;
+"#;
+
+// The keepalive's daily probe budgets as each probe settled them, so a restart resumes both caps where they stood;
+// the rollups carry no funding to rebuild them from. `scope` is `pool` for the dollar figure and `account` for the
+// meter one; `day` is the UTC date, and the day roll deletes the days before it.
+const V28: &str = r#"
+CREATE TABLE keepalive_budgets (
+  day TEXT NOT NULL, scope TEXT NOT NULL, id TEXT NOT NULL,
+  usd REAL NOT NULL DEFAULT 0, meter_tokens REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, scope, id)
+);
 "#;

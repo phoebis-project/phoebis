@@ -725,15 +725,6 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
         .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
     r.step().await;
     assert_eq!(r.status("main").probes, 3, "the cap resets at UTC midnight");
-    // A restart sums the day from the rollups, so the wait names the row that sum reads: the third probe's
-    // cost is a record of its own and lands in a batch the three request rows need not share.
-    let rows = rollups(&r, |rows| {
-        rows.iter().any(|row| {
-            row.kind == "probe" && row.hour >= midnight / 1_000 && row.probe_cost_usd > 0.0
-        })
-    })
-    .await;
-    assert!(probe_rows(&rows).probe_cost_usd > 0.0);
     let spent = r.engine.load_spent_today().await;
     assert!(
         (spent.get("main").copied().unwrap_or(0.0) - 0.0004).abs() < 1e-9,
@@ -758,10 +749,10 @@ async fn a_plan_funded_probe_leaves_the_dollar_cap_unchanged() {
     );
 }
 
-/// A restart rebuilds the plan-side figure from the same rollups the dollar one comes from: an oauth
-/// account's probe counts toward it there too, mid-day, not only while the engine has run continuously.
+/// A restart restores the plan-side figure beside the dollar one: an oauth account's probe counts toward it
+/// mid-day, not only while the engine has run continuously.
 #[tokio::test]
-async fn a_restart_mid_day_rebuilds_the_plan_side_figure_from_the_rollups() {
+async fn a_restart_mid_day_restores_the_plan_side_figure() {
     let mut r = rig(subscription_spec()).await;
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
@@ -775,13 +766,8 @@ async fn a_restart_mid_day_rebuilds_the_plan_side_figure_from_the_rollups() {
         .copied()
         .unwrap_or(0.0);
     assert!(live > 0.0, "{live}");
-    rollups(&r, |rows| {
-        rows.iter()
-            .any(|row| row.kind == "probe" && row.account_id == "o")
-    })
-    .await;
-    // A genuinely fresh engine over the same ledger: its own `Inner` starts empty, so the figure below is
-    // whatever `load_spent_today` rebuilt, never the first engine's own running total.
+    // A genuinely fresh engine over the same store: its own `Inner` starts empty, so the figure below is
+    // whatever `load_spent_today` restored, never the first engine's own running total.
     let restarted = r.restart().await;
     restarted.load_spent_today().await;
     let rebuilt = restarted
@@ -791,7 +777,239 @@ async fn a_restart_mid_day_rebuilds_the_plan_side_figure_from_the_rollups() {
         .unwrap_or(0.0);
     assert!(
         (rebuilt - live).abs() < 1e-6,
-        "the restart's rebuild reproduces the figure the running engine already had: {rebuilt} vs {live}"
+        "the restart reproduces the figure the running engine already had: {rebuilt} vs {live}"
+    );
+}
+
+/// Both figures equal key for key within a rounding step, a zero entry reading as an absent one.
+fn same_budgets(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> bool {
+    let nonzero = |m: &BTreeMap<String, f64>| -> BTreeMap<String, f64> {
+        m.iter()
+            .filter(|(_, v)| **v != 0.0)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect()
+    };
+    let (a, b) = (nonzero(a), nonzero(b));
+    a.len() == b.len()
+        && a.iter()
+            .all(|(k, v)| b.get(k).is_some_and(|w| (v - w).abs() < 1e-12))
+}
+
+/// A subscription account's probes served in overage settle in dollars, so the pool's dollar cap counts them
+/// live; a restart restores both budgets as they were settled, and the cap they reached refuses the first probe
+/// the restarted engine would send.
+#[tokio::test]
+async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budgets() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cost_cap_usd_per_day: Some(0.0005),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    r.enter_overage("o", r.now() + 10_000_000);
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // Each probe reads 2,000 tokens at 0.2 per million, 0.0004 in dollars; the second crosses the cap.
+    for _ in 0..3 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::CapReached)
+    );
+    let spent = r.engine.spent_today();
+    let meter = r.engine.meter_spent_today();
+    assert!(
+        spent.get("main").copied().unwrap_or(0.0) >= 0.0005,
+        "{spent:?}"
+    );
+    assert!(
+        same_budgets(&meter, &BTreeMap::new()),
+        "a probe served in overage never counts toward the plan side: {meter:?}"
+    );
+    // The rollups carry the probes' tokens under the subscription account; the restore must not read them there.
+    rollups(&r, |rows| {
+        rows.iter()
+            .filter(|row| row.kind == "probe" && row.account_id == "o")
+            .map(|row| row.cache_read_tokens)
+            .sum::<u64>()
+            >= 4_000
+    })
+    .await;
+    let restarted = r.restart().await;
+    restarted.load_spent_today().await;
+    assert!(
+        same_budgets(&restarted.spent_today(), &spent),
+        "the dollar figure the running engine had: {:?} vs {spent:?}",
+        restarted.spent_today()
+    );
+    assert!(
+        same_budgets(&restarted.meter_spent_today(), &meter),
+        "and the plan-side one: {:?} vs {meter:?}",
+        restarted.meter_spent_today()
+    );
+    r.engine = restarted;
+    r.event(session_start("session")).unwrap();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::CapReached),
+        "the cap the probes reached before the restart refuses the next one"
+    );
+}
+
+/// A plan-funded probe on a model the plan table lacks settles in dollars, so the dollar cap counts it live and a
+/// restart restores it there.
+#[tokio::test]
+async fn a_restart_restores_the_dollar_delta_of_a_plan_funded_probe_on_an_unlisted_model() {
+    let mut r = rig(RigSpec {
+        plan: plan_pricing_no_model(),
+        ..subscription_spec()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let spent = r.engine.spent_today();
+    assert!(spent.get("main").copied().unwrap_or(0.0) > 0.0, "{spent:?}");
+    rollups(&r, |rows| {
+        rows.iter()
+            .any(|row| row.kind == "probe" && row.account_id == "o" && row.cache_read_tokens > 0)
+    })
+    .await;
+    let restarted = r.restart().await;
+    restarted.load_spent_today().await;
+    assert!(
+        same_budgets(&restarted.spent_today(), &spent),
+        "the probe's dollar delta survives the restart: {:?} vs {spent:?}",
+        restarted.spent_today()
+    );
+    assert!(
+        same_budgets(&restarted.meter_spent_today(), &BTreeMap::new()),
+        "and reaches no plan-side figure: {:?}",
+        restarted.meter_spent_today()
+    );
+}
+
+/// A migrated probe costs nothing in either unit, live or after a restart, though the upstream served it.
+#[tokio::test]
+async fn a_restart_restores_nothing_for_a_migrated_probe() {
+    const OTHER_SECRET: &str = "sk-ant-oat01-PPPP";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0), oauth("p", OTHER_SECRET, 0)],
+        ..subscription_spec()
+    })
+    .await;
+    let body = priced_body();
+    // The two accounts rank equally, so which one serves the first request is not known until it has.
+    r.observe_with("main", &body).await;
+    let first = r.status("main").account_id.clone().unwrap();
+    let (mine, other) = if first == "o" {
+        (OAUTH_SECRET, OTHER_SECRET)
+    } else {
+        (OTHER_SECRET, OAUTH_SECRET)
+    };
+    r.up.push_credential_rule(
+        mine,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").migrations, 1, "{:?}", r.status("main"));
+    assert!(
+        same_budgets(&r.engine.spent_today(), &BTreeMap::new())
+            && same_budgets(&r.engine.meter_spent_today(), &BTreeMap::new()),
+        "a migrated probe charges neither budget live"
+    );
+    // The rollups carry the migrated probe's write under the account that served it.
+    rollups(&r, |rows| {
+        rows.iter()
+            .any(|row| row.kind == "probe" && row.cache_write_5m_tokens > 0)
+    })
+    .await;
+    let restarted = r.restart().await;
+    restarted.load_spent_today().await;
+    assert!(
+        same_budgets(&restarted.spent_today(), &BTreeMap::new())
+            && same_budgets(&restarted.meter_spent_today(), &BTreeMap::new()),
+        "nor after a restart: {:?} {:?}",
+        restarted.spent_today(),
+        restarted.meter_spent_today()
+    );
+}
+
+/// The UTC date a budget row is filed under.
+fn budget_day(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .unwrap()
+        .strftime("%Y-%m-%d")
+        .to_string()
+}
+
+/// The budgets are one UTC day's: the day roll deletes the rows of the day before, and the first charge after
+/// it starts the new day's row, which is all a restart restores.
+#[tokio::test]
+async fn the_day_roll_deletes_yesterdays_budget_rows() {
+    let mut r = rig(RigSpec {
+        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
+        policy: KeepalivePolicy {
+            max_idle_seconds: 0,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    let yesterday = budget_day(r.now());
+    let rows = r.h.store.keepalive_budgets(&yesterday).unwrap();
+    assert!(
+        rows.len() == 1 && rows[0].id == "main" && (rows[0].usd - 0.0004).abs() < 1e-12,
+        "the probe's charge is on its pool's row for the day: {rows:?}"
+    );
+    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
+    r.clock
+        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    r.step().await;
+    assert!(
+        r.h.store.keepalive_budgets(&yesterday).unwrap().is_empty(),
+        "the roll deleted the day before"
+    );
+    let today = r.h.store.keepalive_budgets(&budget_day(r.now())).unwrap();
+    assert!(
+        today.len() == 1 && (today[0].usd - 0.0004).abs() < 1e-12,
+        "the probe due after midnight started the new day's row: {today:?}"
+    );
+    let restarted = r.restart().await;
+    restarted.load_spent_today().await;
+    assert!(
+        same_budgets(
+            &restarted.spent_today(),
+            &BTreeMap::from([("main".to_string(), 0.0004)])
+        ),
+        "a restart restores the new day alone: {:?}",
+        restarted.spent_today()
     );
 }
 

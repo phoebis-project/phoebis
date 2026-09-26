@@ -1063,6 +1063,7 @@ fn renew(
         stamp_hashes(&mut renewed, request);
     }
     state.put_pin(renewed.clone());
+    state.mark_renewed(&current.key_id, &current.session_id, &current.model);
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {
         account: selected_row(snapshot, &current.account_id),

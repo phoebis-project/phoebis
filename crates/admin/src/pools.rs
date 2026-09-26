@@ -595,15 +595,21 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = state.store.accounts()?;
+    let snapshot = state.router.snapshot();
     let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
-    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready,
-    // an account-wide cooldown, or overage the pool's policy admits no substitute for. `None` is eligible.
+    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready, a
+    // subscription past its saved end, an account-wide cooldown, or overage the pool's policy admits no substitute
+    // for. `None` is eligible. An ended subscription reads `unavailable` as a paused account does: both stay
+    // skipped until an operator acts.
     let ineligible = |m: &PoolMember| -> Option<&'static str> {
         let ready = accounts
             .iter()
             .find(|a| a.id == m.account_id)
             .is_some_and(|a| a.enabled && a.state == phoebis_store::AccountState::Ready);
-        if !ready {
+        let ended = snapshot
+            .term(&m.account_id)
+            .is_some_and(|term| phoebis_routing::term::ended(term, now));
+        if !ready || ended {
             return Some("unavailable");
         }
         if cooldowns

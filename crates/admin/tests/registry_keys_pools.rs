@@ -946,6 +946,51 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     );
 }
 
+/// The selector skips an account whose saved subscription end has passed, so the pool status does too: its only
+/// such member reads unavailable and the pool exhausted, as a paused one leaves it.
+#[tokio::test]
+async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_exhausted() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_state("business", phoebis_store::AccountState::Ready)
+        .unwrap();
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"allow","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            pool["status"].as_str(),
+            pool["members"][0]["eligible"].as_str()
+        ),
+        (Some("active"), Some("eligible")),
+        "a ready member before any end: {pool}"
+    );
+    assert_eq!(
+        patch(
+            &parts.app,
+            "/admin/accounts/business",
+            &format!(
+                r#"{{"cancelled":true,"subscription_ends_at":{}}}"#,
+                common::NOW - 1
+            ),
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        200
+    );
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            pool["status"].as_str(),
+            pool["members"][0]["eligible"].as_str()
+        ),
+        (Some("exhausted"), Some("unavailable")),
+        "past its saved end the member is the selector's obstacle: {pool}"
+    );
+}
+
 #[tokio::test]
 async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage() {
     let parts = common::admin_parts_full().await;

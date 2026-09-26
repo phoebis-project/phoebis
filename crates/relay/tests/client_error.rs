@@ -442,3 +442,74 @@ async fn a_fresh_pin_a_later_request_renewed_survives_the_first_requests_400() {
     );
     up.shutdown().await;
 }
+
+/// A committed stream the fake holds after its first event until the test releases it.
+fn held_stream() -> Respond {
+    let ev = |event: &str, data: &str| fake_upstream::SseEvent {
+        event: event.into(),
+        data: data.into(),
+    };
+    Respond::SseGated {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            ev(
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1}}}"#,
+            ),
+            ev("message_stop", r#"{"type":"message_stop"}"#),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn a_fresh_pin_renewed_in_the_same_millisecond_survives_the_first_requests_400() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(json(400, INVALID_REQUEST))),
+    );
+    up.push_credential_rule(A, "/v1/messages", held_stream());
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let app = h.app.clone();
+    let first =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    let pin = h.router.pins().await.unwrap()[0].clone();
+    // A second turn of the session renews the pin with the clock where the placement left it, so the renewal
+    // leaves `last_used_at` equal to `created_at`, and stays open while the first turn's 400 lands.
+    let second = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(second.status().as_u16(), 200);
+    assert_eq!(
+        h.router.pins().await.unwrap()[0].last_used_at,
+        pin.created_at,
+        "the renewal shares the placement's millisecond"
+    );
+    up.release_one().await;
+    let first = first.await.unwrap();
+    assert_eq!(first.status().as_u16(), 400);
+    drain(first).await;
+    no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.epoch == pin.epoch),
+        "the pin serves the open second turn, so the first turn's 400 leaves it"
+    );
+    up.release();
+    drain(second).await;
+    up.shutdown().await;
+}

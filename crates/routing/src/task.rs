@@ -1189,12 +1189,16 @@ impl Task {
                 // checked against; a pin replaced since is another placement's to keep. A pin some selection
                 // renewed after its placement is serving another turn of the session, so the error that ended
                 // the first turn no longer speaks for it.
+                if self
+                    .state
+                    .renewed_since_placement(&pin.key_id, &pin.session_id, &pin.model)
+                {
+                    return;
+                }
                 let Some(account_id) = self
                     .state
                     .pin(&pin.key_id, &pin.session_id, &pin.model)
-                    .filter(|current| {
-                        current.epoch == pin.epoch && current.last_used_at == current.created_at
-                    })
+                    .filter(|current| current.epoch == pin.epoch)
                     .map(|current| current.account_id.clone())
                 else {
                     return;
@@ -1273,6 +1277,8 @@ impl Task {
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
                         }
                         self.state.put_pin(renewed.clone());
+                        self.state
+                            .mark_renewed(&pin.key_id, &pin.session_id, &pin.model);
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
                 }
@@ -1762,14 +1768,16 @@ impl Drop for SampleGuard {
 /// fresher one. The kind order is a third: it reads overage evidence to put an account in the second group, and
 /// nothing but a sample retires that evidence, so without one a recovered account would sit below its
 /// plan-funded siblings until the process restarts. The spent move is a fourth: it moves a pin only onto a
-/// sibling whose sample is younger than the TTL.
+/// sibling whose sample is younger than the TTL. Pace is a fifth: it ranks by the readings themselves, and a quiet
+/// sibling brings no head of its own to refresh them.
 fn needs_sample(
     pool: &phoebis_store::PoolRow,
     state: &RoutingState,
     account_id: &str,
     now: i64,
 ) -> bool {
-    pool.kind_ordered()
+    pool.strategy == phoebis_store::Strategy::Pace
+        || pool.kind_ordered()
         || pool.shedding.migrate_when_spent
         || pool.migrate_above_utilization.is_some()
         || pool.select_below_utilization.is_some()

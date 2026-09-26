@@ -1241,8 +1241,9 @@ struct UsageRow<'a> {
     cache_write_1h_tokens: u64,
     output_tokens: u64,
     estimated_usd: f64,
-    /// Milliseconds: the row's own hour for a rollup row, `started_at` for an attempt, since a bucket spanning
-    /// more than one band edge needs the charge's own instant to say which side it landed on.
+    /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
+    /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it and
+    /// the live fit weighs it. Per row, since a bucket spanning a band edge cannot say which side a charge fell on.
     at: i64,
 }
 
@@ -1275,10 +1276,14 @@ fn price_usage(
     point.uncached_tokens += row.input_tokens;
 }
 
-/// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the
-/// fitted scale they are later divided by was built with; read per row rather than per bucket, since a
-/// six-hour or daily bucket can straddle a band edge and only the row's own hour says which side of it the row
-/// fell on.
+/// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
+/// read serves `burn_series_over` for every scope over the same range and bucket.
+pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupRow>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    read_rollups(conn, first, last)
+}
+
+/// `burn_series_over` on the rows `burn_rows` reads for `filter`.
 pub fn burn_series(
     conn: &Connection,
     factors: &PlanFactors,
@@ -1286,8 +1291,23 @@ pub fn burn_series(
     kinds: &HashMap<String, AccountKind>,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
+    let rows = burn_rows(conn, filter)?;
+    burn_series_over(&rows, factors, windows, kinds, filter)
+}
+
+/// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket. A
+/// subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the fitted
+/// scale they are later divided by was built with; read per row rather than per bucket, since a six-hour or daily
+/// bucket can straddle a band edge and only the row's own hour says which side of it the row fell on. One pass:
+/// each row lands in its bucket by index.
+pub fn burn_series_over(
+    rows: &[RollupRow],
+    factors: &PlanFactors,
+    windows: &PlanWindows,
+    kinds: &HashMap<String, AccountKind>,
+    filter: &SeriesFilter,
+) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let rows = read_rollups(conn, first, last)?;
     let matches = |r: &RollupRow| {
         (filter.keys.is_empty() || filter.keys.contains(&r.key_id))
             && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
@@ -1295,36 +1315,36 @@ pub fn burn_series(
             && (filter.request_classes.is_empty()
                 || filter.request_classes.contains(&r.request_class))
     };
-    let mut points = Vec::new();
-    let mut at = first;
-    while at < last {
-        let mut point = BurnPoint {
-            at: at * 1_000,
+    // Ceiling, as `session_burn_series` counts them: a trailing partial bucket is a point of its own.
+    let count =
+        ((last - first + filter.bucket_seconds - 1) / filter.bucket_seconds).max(0) as usize;
+    let mut points: Vec<BurnPoint> = (0..count)
+        .map(|i| BurnPoint {
+            at: (first + i as i64 * filter.bucket_seconds) * 1_000,
             ..BurnPoint::default()
+        })
+        .collect();
+    for row in rows.iter().filter(|r| r.hour >= first && matches(r)) {
+        let index = ((row.hour - first) / filter.bucket_seconds) as usize;
+        let Some(point) = points.get_mut(index) else {
+            continue;
         };
-        for row in rows
-            .iter()
-            .filter(|r| r.hour >= at && r.hour < at + filter.bucket_seconds && matches(r))
-        {
-            price_usage(
-                &mut point,
-                kinds.get(&row.account_id).copied(),
-                factors,
-                windows,
-                &UsageRow {
-                    canonical_model: &row.canonical_model,
-                    input_tokens: row.input_tokens,
-                    cache_read_tokens: row.cache_read_tokens,
-                    cache_write_5m_tokens: row.cache_write_5m_tokens,
-                    cache_write_1h_tokens: row.cache_write_1h_tokens,
-                    output_tokens: row.output_tokens,
-                    estimated_usd: row.estimated_usd,
-                    at: row.hour * 1_000,
-                },
-            );
-        }
-        points.push(point);
-        at += filter.bucket_seconds;
+        price_usage(
+            point,
+            kinds.get(&row.account_id).copied(),
+            factors,
+            windows,
+            &UsageRow {
+                canonical_model: &row.canonical_model,
+                input_tokens: row.input_tokens,
+                cache_read_tokens: row.cache_read_tokens,
+                cache_write_5m_tokens: row.cache_write_5m_tokens,
+                cache_write_1h_tokens: row.cache_write_1h_tokens,
+                output_tokens: row.output_tokens,
+                estimated_usd: row.estimated_usd,
+                at: row.hour * 1_000,
+            },
+        );
     }
     Ok(points)
 }
@@ -1405,8 +1425,11 @@ fn top_sessions_by_tokens(
 struct SessionAttempt {
     session_id: String,
     account_id: String,
-    /// Milliseconds, `attempts.started_at`.
+    /// Milliseconds, `attempts.started_at`: the bucket the attempt lands in.
     at: i64,
+    /// Milliseconds: the attempt's completion, `attempts.finished_at`, else the request's, the one the live fit
+    /// books it at; the band that prices it is read here.
+    completed_at: i64,
     canonical_model: String,
     input_tokens: u64,
     cache_read_tokens: u64,
@@ -1427,7 +1450,8 @@ fn read_session_attempts(
     }
     let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT r.session_id, a.account_id, a.started_at, r.canonical_model, \
+        "SELECT r.session_id, a.account_id, a.started_at, \
+         COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
          a.output_tokens, a.estimated_usd \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
@@ -1446,13 +1470,14 @@ fn read_session_attempts(
             session_id: row.get(0)?,
             account_id: row.get(1)?,
             at: row.get(2)?,
-            canonical_model: row.get(3)?,
-            input_tokens: tokens(row.get(4)?),
-            cache_read_tokens: tokens(row.get(5)?),
-            cache_write_5m_tokens: tokens(row.get(6)?),
-            cache_write_1h_tokens: tokens(row.get(7)?),
-            output_tokens: tokens(row.get(8)?),
-            estimated_usd: row.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
+            completed_at: row.get(3)?,
+            canonical_model: row.get(4)?,
+            input_tokens: tokens(row.get(5)?),
+            cache_read_tokens: tokens(row.get(6)?),
+            cache_write_5m_tokens: tokens(row.get(7)?),
+            cache_write_1h_tokens: tokens(row.get(8)?),
+            output_tokens: tokens(row.get(9)?),
+            estimated_usd: row.get::<_, Option<f64>>(10)?.unwrap_or(0.0),
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -1460,8 +1485,9 @@ fn read_session_attempts(
 }
 
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
-/// `burn_series` prices an account row. One pass over the range's attempts: each lands in its bucket by index,
-/// rather than every session re-scanning every attempt for every bucket.
+/// `burn_series` prices an account row, save that an attempt lands in the bucket it started in and reads the band
+/// at its completion. One pass over the range's attempts: each lands in its bucket by index, rather than every
+/// session re-scanning every attempt for every bucket.
 pub fn session_burn_series(
     conn: &Connection,
     factors: &PlanFactors,
@@ -1515,7 +1541,7 @@ pub fn session_burn_series(
                 cache_write_1h_tokens: a.cache_write_1h_tokens,
                 output_tokens: a.output_tokens,
                 estimated_usd: a.estimated_usd,
-                at: a.at,
+                at: a.completed_at,
             },
         );
     }

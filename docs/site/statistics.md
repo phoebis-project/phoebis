@@ -98,13 +98,17 @@ account once it folds.
 **Live fit** The ledger fits each subscription account's window sizes from its own traffic: the meter tokens the router
 sent to the account, booked when each request completes, against the rise of the account's utilization readings. A run
 of readings folds once it has risen by three hundredths of the window, reading the booked tokens over the summed rise,
-so no fold rests on a single rounding step. The fit drops a run when a reset falls inside it (the reset time moved or
-the utilization fell by a hundredth or more; a smaller fall is rounding and reads as flat), when it outgrows its window,
-when the utilization rose while the router had nothing booked or in flight on the account, and when a request that went
-out before a reset finished after it. The ratios between token types stay the table's; a per-model correction moves only
-once the fit is confident and the model mix changed between folds. Spend another client sends while one of the router's
-requests is in flight counts as the router's, since the usage endpoint reports no per-surface breakdown. Each fit keeps
-its carried run and its band sums in the registry beside the size, so a restart continues them.
+so no fold rests on a single rounding step. A reading taken while one of the router's requests is in flight on the
+account folds nothing, since its rise may carry that request's charge before its tokens are booked; the run carries on
+to the next reading taken with nothing in flight. A response head always has its own request in flight, so the folds
+come from the usage poll and from the fetches that read an idle account. The fit drops a run when a reset falls inside
+it (the reset time moved or the utilization fell by a hundredth or more; a smaller fall is rounding and reads as flat),
+when it outgrows its window, when the utilization rose while the router had nothing booked or in flight on the account,
+and when a request that went out before a reset finished after it. The ratios between token types stay the table's; a
+per-model correction moves only once the fit is confident and the model mix changed between folds. Spend another client
+sends while one of the router's requests is in flight counts as the router's, since the usage endpoint reports no
+per-surface breakdown. Each fit keeps its carried run and its band sums in the registry beside the size, so a restart
+continues them.
 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
 UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and
@@ -267,13 +271,17 @@ beside it: the cache-write tokens the first request after a move paid to warm it
 counted, by reason. Burn reports the plan's burn in meter tokens for a subscription account and in dollars for an
 api-key account, side by side and each split into cached and uncached tokens, grouped by upstream, key, session, or
 request class, beside a Plan meter fit table (see [Plan meter](#plan-meter)); a subscription account's meter tokens
-carry the peak band's weight for the hour they landed in, the same weight the live fit divides by. Grouped by upstream,
-it adds a Plan per hour chart, the plan-percent view: the share of each subscription upstream's 5-hour window, at its
-fitted size or else its tier's, that its traffic used per hour, weighted by the peak band. Latency reports percentiles
-read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of
-input served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the
-range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization,
-ineligible time, and pin churn per upstream.
+carry the peak band's weight. The key, request class and upstream groupings read the hourly rollups, which fold a
+request under the hour it arrived in and weigh it by that hour's band, while the live fit weighs a request at its
+completion: a request that starts before the band and completes inside it reads at the off-peak weight in these charts
+and at the band's in the fit, and one that starts inside the band and completes after it the other way round. The
+session grouping weighs each attempt at its completion, as the fit does. Grouped by upstream, it adds a Plan per hour
+chart, the plan-percent view: the share of each subscription upstream's 5-hour window, at its fitted size or else its
+tier's, that its traffic used per hour, weighted by the peak band. Latency reports percentiles read from the merged
+per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
+cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range; Cache
+warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible time, and
+pin churn per upstream.
 
 Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives back only the
 hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later
