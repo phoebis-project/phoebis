@@ -1,11 +1,14 @@
+import type { SKIP_OBSTACLE_VALUES } from '@/api/decode';
 import type { PoolStrategy, SelectionTrace as Trace, Usage } from '@/api/types';
 import { Badge } from '@/components/ui/primitives';
-import { moveLabel } from '@/lib/analytics';
+import { moveLabel, own } from '@/lib/analytics';
 import { fmtCompact } from '@/lib/format';
 import { STRATEGY_LABEL } from '@/lib/selection';
 
+type Obstacle = (typeof SKIP_OBSTACLE_VALUES)[number];
+
 /** A hover hint per obstacle the router names; a name added later shows as sent, without one. */
-const OBSTACLE_HINT: Record<string, string> = {
+const OBSTACLE_HINT: Record<Obstacle, string> = {
   above_ceiling: 'above the utilization ceiling',
   at_cap: 'at its in-flight cap',
   attempted: 'already tried by this request',
@@ -19,10 +22,8 @@ const OBSTACLE_HINT: Record<string, string> = {
   winding_down: 'winding down toward its subscription end',
 };
 
-// Own keys only: the names are the router's data, and one could name a member every object inherits.
-const own = (map: object, key: string) => Object.prototype.hasOwnProperty.call(map, key);
 const strategyLabel = (s: string) => (own(STRATEGY_LABEL, s) ? STRATEGY_LABEL[s as PoolStrategy] : s);
-const obstacleHint = (o: string) => (own(OBSTACLE_HINT, o) ? OBSTACLE_HINT[o] : undefined);
+const obstacleHint = (o: string) => (own(OBSTACLE_HINT, o) ? OBSTACLE_HINT[o as Obstacle] : undefined);
 
 /**
  * Why one attempt landed where it did: the strategy and the tier it chose in, whether it continued the session's

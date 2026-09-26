@@ -415,9 +415,11 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 { label: 'Agent', value: r.agentId ?? '-', mono: true },
                 {
                   label: 'Client',
+                  // The class badge sits in the row, so only the client text takes the mono face; the badge keeps
+                  // the face every other badge in the drawer has.
                   value: (
                     <>
-                      {r.client ?? '-'}
+                      <span className="mono">{r.client ?? '-'}</span>
                       {r.requestClass !== null && (
                         <>
                           {' '}
@@ -426,7 +428,6 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                       )}
                     </>
                   ),
-                  mono: true,
                 },
                 { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },

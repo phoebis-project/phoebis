@@ -672,6 +672,14 @@ test('a session fold groups on the client each row named', () => {
   assert.equal(d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/*'] })[0].requests, 1, 'the pattern keeps only the clients it admits');
 });
 
+test('a session fold groups on the request class each row sent, and a classless row where the rollups file it', () => {
+  const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
+  const rows = [{ ...captured, requestClass: 'main' }, { ...failed, requestClass: 'auxiliary' }, { ...failed, id: 'r-main-2', requestClass: 'main' }, { ...failed, id: 'r-none', requestClass: null }];
+  const groups = d.foldGroups(rows, 'request_class');
+  assert.deepEqual(groups.map((g) => [g.key, g.requests]).sort(), [['-', 1], ['auxiliary', 1], ['main', 2]]);
+  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
+});
+
 test('a folded bucket carries one group per key the page groups on', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
   const rows = [captured, { ...failed, keyId: 'laptop' }];

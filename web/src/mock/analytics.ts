@@ -49,6 +49,8 @@ export interface HourlyRollup {
   /** Probes served by another account than the recipe's; they count for neither the cold streak nor the net. */
   probeMigrated: number;
   probes: { failed: number; ok: number; skipped: number };
+  /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
+  requestClass: string;
   requests: { ok: number; overloaded: number; rate_limited: number; upstream_error: number };
   savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
@@ -78,6 +80,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   kind: (r) => r.kind,
   model: (r) => r.model,
   pool: (r) => r.poolId,
+  request_class: (r) => r.requestClass,
   // Each key runs one client in this story, so the key names the client its rows were sent by.
   user_agent: (r) => USER_AGENTS[r.keyId] ?? '-',
 };
@@ -242,12 +245,6 @@ const METER_FACTORS: [string, number][] = [['fable', 2], ['haiku', 0.36], ['opus
 const meterTokensOf = (r: HourlyRollup) =>
   (METER_FACTORS.find(([family]) => r.model.includes(family))?.[1] ?? 1) * (r.tokens.uncachedInput + r.tokens.cacheRead * 0.1 + r.tokens.cacheWrite5m * 1.25 + r.tokens.cacheWrite1h * 2 + r.tokens.output * 5);
 
-/**
- * The fixture ledger files no request class, so each row's tokens split across the classes by fixed shares; a
- * probe replays no class of its own and files under `-` with a keepalive credit, as the rollups do.
- */
-const CLASS_SHARES: [string, number][] = [['auxiliary', 0.1], ['compaction', 0.03], ['main', 0.6], ['subagent', 0.22], ['workflow', 0.05]];
-
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
 
@@ -258,26 +255,20 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   // The route prices a row by its account's kind and skips a row whose account left the registry.
   const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId));
-  const sharesOf = (r: HourlyRollup): [string, number][] => {
-    if (groupBy === 'account') return [[r.accountId, 1]];
-    if (groupBy === 'key') return [[r.keyId, 1]];
-    if (groupBy === 'session') return [[r.sessionId, 1]];
-    return r.kind === 'probe' ? [['-', 1]] : CLASS_SHARES;
-  };
+  const groupOf = (r: HourlyRollup) => (groupBy === 'account' ? r.accountId : groupBy === 'key' ? r.keyId : groupBy === 'session' ? r.sessionId : r.requestClass);
   const sums = new Map<string, Map<number, { cached: number; meter: number; uncached: number; usd: number }>>();
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
-    for (const [group, share] of sharesOf(r)) {
-      const byAt = sums.get(group) ?? new Map();
-      sums.set(group, byAt);
-      const s = byAt.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
-      byAt.set(at, s);
-      s.cached += r.tokens.cacheRead * share;
-      s.uncached += r.tokens.uncachedInput * share;
-      s.meter += oauth ? meterTokensOf(r) * share : 0;
-      s.usd += oauth ? 0 : r.costUsd * share;
-    }
+    const group = groupOf(r);
+    const byAt = sums.get(group) ?? new Map();
+    sums.set(group, byAt);
+    const s = byAt.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
+    byAt.set(at, s);
+    s.cached += r.tokens.cacheRead;
+    s.uncached += r.tokens.uncachedInput;
+    s.meter += oauth ? meterTokensOf(r) : 0;
+    s.usd += oauth ? 0 : r.costUsd;
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();

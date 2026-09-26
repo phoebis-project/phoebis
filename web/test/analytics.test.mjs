@@ -50,6 +50,21 @@ test('the burn fold keeps the groups that burn the most tokens and sums the rest
   assert.deepEqual(d.foldBurn([point(0, '-', { cachedTokens: 60 })], 'key', 60).lines.map((l) => l.label), ['unattributed']);
 });
 
+test('under the upstream grouping the rest folds into one other per unit, so no dollars hide behind meter tokens', () => {
+  // Seven upstreams burn the most; the two smallest are a subscription one and an API-key one.
+  const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), meterTokens: 10 }));
+  const answered = [...kept, point(0, 'small-plan', { cachedTokens: 120, meterTokens: 30, planPercent: 0.01 }), point(0, 'small-key', { cachedTokens: 60, usd: 0.6 })];
+  const { lines, rows } = d.foldBurn(answered, 'account', 60);
+  const rest = lines.slice(7);
+  assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'meter_tokens', true], ['Other (dollars)', 'usd', true]]);
+  assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
+  assert.deepEqual([rows[0].meter[7], rows[0].usd[7], rows[0].cached[7]], [30, 0, 120], 'the plan side carries the subscription upstream alone');
+  assert.deepEqual([rows[0].usd[8], rows[0].meter[8], rows[0].cached[8]], [0.6, 0, 60], 'the dollar side keeps the API-key upstream\'s dollars');
+  assert.deepEqual([rows[0].plan[7], rows[0].plan[8]], [null, null], 'a folded rest draws no plan share');
+  const oneUnit = d.foldBurn([...kept, point(0, 'small-key', { cachedTokens: 60, usd: 0.6 }), point(0, 'tiny-key', { cachedTokens: 30, usd: 0.3 })], 'account', 60);
+  assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');
+});
+
 test('a fitted scale reads its drift as a signed share, and past 20% either way it is wide', () => {
   assert.deepEqual([d.driftLabel(1.25), d.driftLabel(0.5), d.driftLabel(1)], ['+25.0%', '-50.0%', '0.0%']);
   assert.deepEqual([d.driftWide(1.2), d.driftWide(1.21), d.driftWide(0.79), d.driftWide(0.8), d.driftWide(null)], [false, true, true, false, false]);

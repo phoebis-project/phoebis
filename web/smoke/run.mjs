@@ -2244,6 +2244,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const classes = trafficRows('client').map((row) => row[0]);
     results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('other'), missing: classes });
 
+    await groupBy('Request class');
+    const requestClasses = trafficRows('request class').map((row) => row[0]);
+    results.push({ name: '/analytics the page groups by request class, a classless row as unattributed', ok: ['main', 'subagent', 'unattributed'].every((c) => requestClasses.includes(c)), missing: requestClasses });
+
     await groupBy('User agent');
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
     await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');

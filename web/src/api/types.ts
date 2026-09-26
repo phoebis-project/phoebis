@@ -567,7 +567,7 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
-export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'user_agent';
+export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'user_agent';
 
 export interface AnalyticsQuery {
   accountIds?: string[];

@@ -10,13 +10,16 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   shed: 'shed',
   spent: 'window spent',
 };
+/**
+ * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
+ * every object inherits.
+ */
+export const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 /** A reason the console has no label for reads as the router sent it. */
-export const moveLabel = (reason: string): string => (Object.prototype.hasOwnProperty.call(PIN_MIGRATION_LABEL, reason) ? PIN_MIGRATION_LABEL[reason as PinMigrationReason] : reason);
+export const moveLabel = (reason: string): string => (own(PIN_MIGRATION_LABEL, reason) ? PIN_MIGRATION_LABEL[reason as PinMigrationReason] : reason);
 
 /** The classes that refresh a pin's warmth, the routing crate's `REFRESHING_CLASSES`: the conversation itself. */
 export const CONVERSATION_CLASSES = ['compaction', 'main', 'subagent'] as const;
-/** The classes the client documents; a class it adds later still reads as sent. */
-export const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'workflow'] as const;
 
 export type ClassLegend = 'conversation' | 'overhead';
 
@@ -25,8 +28,9 @@ export const classLegendOf = (requestClass: string): ClassLegend => ((CONVERSATI
 
 /** Lines a burn chart draws before the rest fold into one, the stacked cost chart's limit. */
 export const MAX_BURN_LINES = 7;
-/** The key the folded rest carries; colours and React keys read it, and no group is ever looked up by it. */
+/** The key the folded rest carries, suffixed by its unit under the upstream grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
+const OTHER_LABEL: Record<BurnUnit, string> = { meter_tokens: 'Other (plan)', usd: 'Other (dollars)' };
 
 export interface BurnLine {
   key: string;
@@ -68,17 +72,23 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
  * every other grouping keeps the groups with the most tokens and sums the rest as other, whose plan share stays
- * empty since shares of different windows do not add up.
+ * empty since shares of different windows do not add up. Under the upstream grouping the rest folds once per unit,
+ * since a subscription upstream's meter tokens and an API-key upstream's dollars chart on different axes.
  */
 export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds: number, max = MAX_BURN_LINES): { lines: BurnLine[]; rows: BurnRow[] } {
   const lineOf = (group: string) => (groupBy === 'request_class' ? classLegendOf(group) : group);
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
+  // A plan share or meter tokens mark a subscription upstream; the route answers neither for an API-key one.
+  const metered = new Set(groupBy === 'account' ? points.filter((p) => p.meterTokens > 0 || p.planPercent !== null).map((p) => p.group) : []);
+  const unitOf = (group: string): BurnUnit => (metered.has(group) ? 'meter_tokens' : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
-  // The rest takes the slot after the kept lines, so a group whose id happens to read `other` stays its own line.
-  const slots = kept.length + (groupBy !== 'request_class' && ranked.length > max ? 1 : 0);
-  const slotOf = (group: string) => (kept.includes(lineOf(group)) ? kept.indexOf(lineOf(group)) : kept.length);
+  const folded = groupBy === 'request_class' ? [] : ranked.slice(max);
+  const rests = (['meter_tokens', 'usd'] as const).filter((unit) => folded.some((g) => unitOf(g) === unit));
+  // The rests take the slots after the kept lines, so a group whose id happens to read `other` stays its own line.
+  const slots = kept.length + rests.length;
+  const slotOf = (group: string) => (kept.includes(lineOf(group)) ? kept.indexOf(lineOf(group)) : kept.length + rests.indexOf(unitOf(group)));
 
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
@@ -108,19 +118,12 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
 
   const mean = (read: (r: BurnRow) => number) => (rows.length ? rows.reduce((n, r) => n + read(r), 0) / rows.length : 0);
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
-    const other = i === kept.length;
+    const rest = i >= kept.length ? rests[i - kept.length] : null;
     const shares = rows.map((r) => r.plan[i]).filter((v): v is number => v !== null);
-    const meterPerMinute = mean((r) => r.meter[i]);
-    return {
-      key: other ? OTHER_KEY : kept[i],
-      label: other ? 'Other' : kept[i] === '-' ? 'unattributed' : kept[i],
-      meterPerMinute,
-      other,
-      planPeak: shares.length ? Math.max(...shares) : null,
-      tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
-      unit: groupBy === 'account' && (meterPerMinute > 0 || shares.length > 0) ? 'meter_tokens' : 'usd',
-      usdPerMinute: mean((r) => r.usd[i]),
-    };
+    const figures = { meterPerMinute: mean((r) => r.meter[i]), planPeak: shares.length ? Math.max(...shares) : null, tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]), usdPerMinute: mean((r) => r.usd[i]) };
+    if (rest === null) return { ...figures, key: kept[i], label: kept[i] === '-' ? 'unattributed' : kept[i], other: false, unit: unitOf(kept[i]) };
+    const byUnit = groupBy === 'account';
+    return { ...figures, key: byUnit ? `${OTHER_KEY}-${rest}` : OTHER_KEY, label: byUnit ? OTHER_LABEL[rest] : 'Other', other: true, unit: rest };
   });
   return { lines, rows };
 }

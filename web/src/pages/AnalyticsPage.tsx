@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, type BurnLine, type BurnRow } from '@/lib/analytics';
+import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, own, type BurnLine, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId } from '@/lib/format';
@@ -29,7 +29,7 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', user_agent: 'User agent' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', user_agent: 'User agent' };
 const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Upstream', key: 'Key', request_class: 'Request class', session: 'Session' };
 // Upstream first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
@@ -1219,7 +1219,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
     <div className="grid-2">
       <ChartCard
         title="Tokens per minute"
-        subtitle={`Input tokens per minute, stacked by ${label}; the lighter part of each is cached${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`}
+        subtitle={`Uncached input and cache reads per minute, stacked by ${label}; the fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`}
         error={error}
         loading={loading}
         empty={empty}
@@ -1325,7 +1325,7 @@ function FitTable({ error, fits }: { error: string | null; fits: WindowFit[] | n
               return (
                 <tr key={`${f.accountId}-${f.window}`}>
                   <td className="mono">{f.accountId}</td>
-                  <td>{FIT_WINDOW_LABEL[f.window] ?? f.window}</td>
+                  <td>{own(FIT_WINDOW_LABEL, f.window) ? FIT_WINDOW_LABEL[f.window] : f.window}</td>
                   <td className="right num" title={`fitted ${fmtAbsolute(f.fittedAt)}`}>
                     {fmtCompact(f.scale)}
                   </td>

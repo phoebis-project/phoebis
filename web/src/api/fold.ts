@@ -50,6 +50,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   if (by === 'kind') return r.kind;
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
+  if (by === 'request_class') return r.requestClass ?? '-';
   if (by === 'user_agent') {
     // The rollups file a row that named no client under '-', which every route answers as unattributed; under
     // a pattern list it falls with every other unmatched client under 'other', as the breakdown route does.

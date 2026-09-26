@@ -549,6 +549,28 @@ function wastedProbes(h: Rng, probes: number, probeCostUsd: number): Pick<Hourly
 
 const ZERO_WASTE: Pick<HourlyRollup, 'wastedProbeReasons' | 'wastedProbeUsd' | 'wastedProbes'> = { wastedProbeReasons: emptyWastedProbeReasons(), wastedProbeUsd: 0, wastedProbes: 0 };
 
+/** The class most of a lane-hour's requests sent; the rollups keep the class as a dimension, the fixture one per row. */
+function classOfRows(list: RequestLog[]): string {
+  const counts = new Map<string, number>();
+  for (const r of list) counts.set(r.requestClass ?? '-', (counts.get(r.requestClass ?? '-') ?? 0) + 1);
+  return [...counts.entries()].reduce((best, next) => (next[1] > best[1] ? next : best))[0];
+}
+
+/** The classes a synthesized hour's traffic sent, weighted toward the main conversation. */
+const HOUR_CLASSES: [string, number][] = [['auxiliary', 2], ['compaction', 1], ['main', 12], ['subagent', 5], ['workflow', 1]];
+
+/** A class picked from the row's own identity rather than drawn, so no seeded stream moves. */
+function classOfHour(seed: string): string {
+  let hash = 2_166_136_261;
+  for (let i = 0; i < seed.length; i += 1) hash = Math.imul(hash ^ seed.charCodeAt(i), 16_777_619) >>> 0;
+  let roll = hash % HOUR_CLASSES.reduce((n, [, w]) => n + w, 0);
+  for (const [name, weight] of HOUR_CLASSES) {
+    if (roll < weight) return name;
+    roll -= weight;
+  }
+  return 'main';
+}
+
 function rollups(): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -579,6 +601,7 @@ function rollups(): HourlyRollup[] {
       poolId,
       accountId,
       model,
+      requestClass: isProbe ? '-' : classOfRows(list),
       sessionId,
       requests: {
         ok: okRows.length,
@@ -714,6 +737,7 @@ function historicalRollups(): HourlyRollup[] {
         poolId: lane.poolId,
         accountId,
         model,
+        requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
         sessionId,
         requests: { ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
@@ -765,6 +789,7 @@ function historicalRollups(): HourlyRollup[] {
           poolId: lane.poolId,
           accountId,
           model,
+          requestClass: '-',
           sessionId,
           requests: { ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,

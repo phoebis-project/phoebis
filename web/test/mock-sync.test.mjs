@@ -87,6 +87,13 @@ for (const [name, row] of Object.entries(SYNC)) {
 }
 
 /**
+ * The values of `x-claude-code-request-class`, as Claude Code's gateway compatibility guide lists them
+ * (https://code.claude.com/docs/en/llm-gateway-protocol, Request headers). The console keeps any class as sent, so
+ * the list holds only the mock to the vocabulary.
+ */
+const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'workflow'];
+
+/**
  * Where a decoded member is a closed string set, the mock's values must be members: an unknown value falls
  * through every label table on a page, which the shape comparison above cannot see. Numbers and dates stay
  * unchecked. Every row of the mock's answer is walked, not only the first.
@@ -109,7 +116,7 @@ const CLOSED = {
     '.requests[].attempts[].selection.skipped[].obstacle': d.SKIP_OBSTACLE_VALUES,
     '.requests[].kind': d.REQUEST_KIND_VALUES,
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
-    '.requests[].requestClass': d.REQUEST_CLASS_VALUES,
+    '.requests[].requestClass': REQUEST_CLASS_VALUES,
   },
   sessions: { '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
 };
