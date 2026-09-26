@@ -396,7 +396,7 @@ async function poolRoutingCards(theme) {
   }
   if (!read.handle) say('the utilization bar draws no migrate handle with migration on');
   else if (!read.handle.inside || read.handle.value === null) say(`the migrate handle sits off its track (${JSON.stringify(read.handle)})`);
-  if (!read.preview || !/^(Would move|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
 }

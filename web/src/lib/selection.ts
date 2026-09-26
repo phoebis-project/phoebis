@@ -2,7 +2,7 @@ import type { Account, MemberEligibility, Pool, PoolStrategy, Session } from '@/
 
 /** One sentence per strategy, shown in the dialog's hint and the card; a later strategy adds its entry here. */
 export const STRATEGY_RULE: Record<PoolStrategy, string> = {
-  pace: 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.',
+  pace: 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.',
   priority: 'Within the first tier that has an eligible upstream, any of them at random.',
   round_robin: 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.',
 };
@@ -142,7 +142,8 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
   const strategy = pool.strategy;
   let nextFound = false;
   return built.map(({ group, placements, priority }) => {
-    // The router's tier is (priority, deferred): plan-funded members rank ahead of deferred ones, then the
+    // The last-resort group leads the sort, since the router narrows it away before it picks a tier. Inside a
+    // group the router's tier is (priority, deferred): plan-funded members rank ahead of deferred ones, then the
     // strategy orders inside each half; equal scores share a rank because the router draws among them at random.
     const eligible = placements
       .filter((p) => p.ineligible === null)
@@ -158,9 +159,9 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
     for (const p of eligible) {
       const score = keyOf(p.account, strategy, now);
       if (!previous || previous.order !== orderOf(p) || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
-      // Round robin and priority both score every member 0, so the rank only moves across the deferred
-      // boundary: each member of a subtier is equally the next, and the router rotates the plan-funded subtier
-      // on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
+      // Round robin and priority both score every member 0, so the rank only moves across the last-resort group
+      // boundary and the deferred one: each member of a subtier is equally the next, and the router rotates the
+      // plan-funded subtier on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
       p.rank = rank;
       previous = { deferred: p.deferred, order: orderOf(p), score };
     }

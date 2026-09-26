@@ -1,4 +1,5 @@
-import type { Account, BurnUnit, Pool, Session } from '@/api/types';
+import type { Account, BurnUnit, MemberEligibility, Pool, Session } from '@/api/types';
+import { fmtPct } from './format';
 import { windowOf } from './quota';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
@@ -70,8 +71,16 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
 }
 
 export interface ShedPreview {
+  /** The members that ran a round burn in different units, so `burnShare` is the mean of their own shares. */
+  averaged: boolean;
   /** The marked burn over the burn of the members that ran a round; 0 when they burn nothing. */
   burnShare: number;
+  /**
+   * Whether an eligible member reads under the band, where the router lands a marked session; without one the
+   * marks stand and nothing moves. The router also passes over a member at its in-flight cap or inside its own
+   * dwell, which the pool view does not carry.
+   */
+  cool: boolean;
   /** Members at or above the migrate threshold on either window, each of which runs a round. */
   members: number;
   sessions: number;
@@ -85,17 +94,29 @@ export interface ShedPreview {
  * Each member at or above the migrate threshold replays its round over its pins with each burn decayed to `now`,
  * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
  * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
- * different units cannot be summed, so their shares are averaged instead.
+ * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
+ * eligible, as a member of a pool not saved yet does.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string }[] },
+  pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
 ): ShedPreview {
   const threshold = pool.migrateAboveUtilization;
-  if (threshold === null) return { burnShare: 0, members: 0, sessions: 0, unit: null, warm: 0 };
+  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
+  const band = threshold - MIGRATE_BAND;
+  // The router's destination readings: a subscription account's two shared windows, an API-key account's worst
+  // live one; a window the row does not carry reads as under.
+  const under = (a: Account) =>
+    a.kind === 'api_key'
+      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < band
+      : (['5h', '7d'] as const).every((id) => (windowOf(a, id)?.utilization ?? 0) < band);
+  const cool = pool.members.some((m) => {
+    const account = byId.get(m.accountId);
+    return account !== undefined && (m.eligible ?? 'eligible') === 'eligible' && under(account);
+  });
   const hot = pool.members
     .map((m) => byId.get(m.accountId))
     .filter((a): a is Account => a !== undefined && (['5h', '7d'] as const).some((id) => (windowOf(a, id)?.utilization ?? -1) >= threshold));
@@ -127,12 +148,31 @@ export function shedPreview(
   const units = new Set(rounds.flatMap((r) => (r.unit === null ? [] : [r.unit])));
   const burning = rounds.filter((r) => r.total > 0);
   const total = burning.reduce((s, r) => s + r.total, 0);
-  const burnShare = burning.length === 0 ? 0 : units.size <= 1 ? burning.reduce((s, r) => s + r.burn, 0) / total : burning.reduce((s, r) => s + r.burn / r.total, 0) / burning.length;
+  const averaged = units.size > 1;
+  const burnShare = burning.length === 0 ? 0 : averaged ? burning.reduce((s, r) => s + r.burn / r.total, 0) / burning.length : burning.reduce((s, r) => s + r.burn, 0) / total;
   return {
+    averaged,
     burnShare,
+    cool,
     members: hot.length,
     sessions: rounds.reduce((s, r) => s + r.sessions, 0),
     unit: units.size === 1 ? [...units][0] : null,
     warm: rounds.reduce((s, r) => s + r.warm, 0),
   };
+}
+
+/** The shedding card's dry run in one sentence, naming the unit its share was taken in. */
+export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean): string {
+  if (!migrateOn) return 'No round runs while migrate above utilization is off.';
+  if (preview.members === 0) return 'No member is above the threshold.';
+  const of = preview.averaged
+    ? "of each upstream's burn on average"
+    : preview.unit === 'meter_tokens'
+      ? 'of the burn in meter tokens'
+      : preview.unit === 'usd'
+        ? 'of the burn in dollars'
+        : 'of the burn';
+  const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
+  const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
+  return preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`;
 }

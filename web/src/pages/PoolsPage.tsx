@@ -16,7 +16,7 @@ import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, Er
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
-import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, type FailoverPreset, type SheddingPreset, type ShedPreview } from '@/lib/presets';
+import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
 import { STRATEGY_LABEL, STRATEGY_RULE, kindOrdered } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -110,15 +110,6 @@ const WARM_CHOICES: { body: string; title: string; value: WarmSessions }[] = [
   { value: 'always', title: 'Always', body: 'every session by burn over the prompt it would rewrite, warm or cold alike' },
 ];
 const percentOf = (share: number) => Math.round(share * 10_000) / 100;
-
-/** The shedding card's dry run in one sentence, naming the unit its share was taken in. */
-function previewLine(preview: ShedPreview, migrateOn: boolean): string {
-  if (!migrateOn) return 'No round runs while migrate above utilization is off.';
-  if (preview.members === 0) return 'No member is above the threshold.';
-  const unit = preview.unit === 'meter_tokens' ? ' in meter tokens' : preview.unit === 'usd' ? ' in dollars' : '';
-  const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
-  return `Would move ${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} of the burn${unit}${across}.`;
-}
 
 /** The two groups name their presets alike, so one row of pills serves both. */
 function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPreset | FailoverPreset, string>; label: string; onPick: (name: SheddingPreset | FailoverPreset) => void; value: SheddingPreset | FailoverPreset }) {
@@ -761,7 +752,9 @@ export function PoolDialog({
   const band = bandRefusal(input);
   const memberAccounts = accounts.filter((a) => a.id in form.members);
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
-  const preview = shedPreview(input, accounts, sessions, now);
+  // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
+  const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
+  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
   const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
@@ -960,7 +953,7 @@ export function PoolDialog({
               </div>
             </div>
             <p className="shed-preview num" role="status">
-              {previewLine(preview, form.migrateOn)}
+              {shedPreviewLine(preview, form.migrateOn)}
             </p>
           </div>
           <h3 className="section-title" style={{ marginTop: 12 }}>

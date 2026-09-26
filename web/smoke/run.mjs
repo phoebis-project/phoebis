@@ -672,7 +672,7 @@ await m.navigate('/upstreams/spare');
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -691,7 +691,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const rows = [row('all', 'Migration'), row('all', 'Failover'), row('all', 'Moves'), row('codex', 'Migration'), row('codex', 'Failover'), row('codex', 'Moves')];
   results.push({
     name: '/pools the card names the shedding and failover presets and lists the moves per hour by reason',
-    ok: JSON.stringify(rows) === JSON.stringify(['Migrate off', 'balanced', '2.0/h shed, 0.5/h spent', 'Shed above 85%, custom', 'custom', 'none in the last hour']),
+    ok: JSON.stringify(rows) === JSON.stringify(['Migrate off', 'balanced', '0.5/h overage, 2.0/h spent', 'Shed above 85%, custom', 'custom', 'none in the last hour']),
     missing: rows.map(String),
   });
 }
@@ -703,7 +703,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools the next upstream is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
   const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
   results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets; an unsampled upstream counts as untouched; ties are random.']);
+  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.']);
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');

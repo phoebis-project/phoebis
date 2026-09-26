@@ -57,6 +57,9 @@ const pool = (over = {}) => ({
 });
 const preview = (sessions, over) => d.shedPreview(pool(over), [hot, cool], sessions, NOW);
 const four = [pin('warm-4', 4, true), pin('cold-3', 3, false), pin('warm-2', 2, true), pin('warm-1', 1, true)];
+const member = (accountId, eligible = 'eligible') => ({ accountId, eligible, priority: 0 });
+/** A round over `accounts`, every one of them a member, with the pool's balanced shedding settings. */
+const replay = (accounts, sessions, over = {}) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), ...over }), accounts, sessions, NOW);
 
 test('the preview orders cold pins first, stops at the share, and never marks the last pin', () => {
   assert.deepEqual(
@@ -98,4 +101,40 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   // Folded one burn window ago, 10 has decayed to 10/e, under the 5 folded now; a burn never folded reads as stored.
   const decayed = preview([pin('old', 10, false, { burnAt: at(NOW - 600_000) }), pin('new', 5, false), pin('unfolded', 1, false, { burnAt: null })]);
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
+});
+
+test('a round under always ranks a warm pin ahead of a cold one by burn over the prompt it would rewrite', () => {
+  // Burn over rewrite: warm-b's 3/100 leads cold-a's 4/1000 and cold-c's 3/1000, though both cold pins burn as much.
+  const pins = [pin('cold-a', 4, false), pin('warm-b', 3, true, { lastInputTokens: 100 }), pin('cold-c', 3, false)];
+  const whenNeeded = replay([hot, cool], pins);
+  const always = replay([hot, cool], pins, { warmSessions: 'always' });
+  assert.deepEqual([whenNeeded.sessions, whenNeeded.warm, whenNeeded.burnShare.toFixed(2)], [2, 0, '0.70'], 'cold-a then cold-c, the warm pin left');
+  assert.deepEqual([always.sessions, always.warm, always.burnShare.toFixed(2)], [2, 1, '0.70'], 'warm-b then cold-a');
+});
+
+test('two hot members in one unit share the burn by weight, and members in two units average their shares', () => {
+  const second = account('second', 0.85);
+  const heavy = (unit) => [pin('big', 18, false, { accountId: 'second', burnUnit: unit }), pin('small', 2, false, { accountId: 'second', burnUnit: unit })];
+  // The four pins mark 7 of 10; the second member marks 18 of 20.
+  const same = replay([hot, second, cool], [...four, ...heavy('meter_tokens')]);
+  assert.deepEqual([same.sessions, same.warm, same.members, same.unit, same.burnShare.toFixed(3)], [3, 1, 2, 'meter_tokens', (25 / 30).toFixed(3)]);
+  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in meter tokens, across 2 upstreams.');
+  const mixed = replay([hot, second, cool], [...four, ...heavy('usd')]);
+  assert.deepEqual([mixed.unit, mixed.averaged, mixed.burnShare.toFixed(3)], [null, true, ((0.7 + 0.9) / 2).toFixed(3)], 'meter tokens and dollars cannot be summed, so each member counts once');
+  assert.equal(same.averaged, false);
+  assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each upstream's burn on average, across 2 upstreams.");
+});
+
+test('with no member under the band the preview marks sessions it cannot move', () => {
+  // Under the threshold of 80 %, so it runs no round of its own, but above the 75 % a shed session has to land under.
+  const near = account('near', 0.78);
+  const stuck = replay([hot, near], four);
+  assert.deepEqual([stuck.sessions, stuck.cool], [2, false]);
+  assert.equal(d.shedPreviewLine(stuck, true), 'Would mark 2 sessions, 1 warm, 70% of the burn in meter tokens, but no member reads under the band to take them.');
+  const cooling = d.shedPreview(pool({ members: [member('hot'), member('cool', 'cooldown')] }), [hot, cool], four, NOW);
+  assert.equal(cooling.cool, false, 'a member the router skips is no destination');
+  const open = replay([hot, near, cool], four);
+  assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in meter tokens.']);
+  assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
+  assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is above the threshold.');
 });

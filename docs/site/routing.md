@@ -89,7 +89,8 @@ Each strategy's rule, as the console states it on the pool card (the pool dialog
 upstreams" toggle sets `prefer_subscription`):
 
 **`pace`**: Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance
-per hour until its window resets; an unsampled upstream counts as untouched; ties are random.
+per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as
+untouched; ties are random.
 
 **`priority`**: Within the first tier that has an eligible upstream, any of them at random.
 
