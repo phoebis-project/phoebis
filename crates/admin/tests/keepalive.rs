@@ -342,6 +342,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "key_id",
             "last_request_at",
             "model",
+            "net_meter_tokens",
+            "net_usd",
             "next_probe_at",
             "pool_id",
             "reason",
@@ -356,13 +358,35 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             recipe["state"].as_str(),
             recipe["reason"].is_null(),
             recipe["last_request_at"].as_i64(),
-            recipe["ttl_seconds"].as_i64()
+            recipe["ttl_seconds"].as_i64(),
+            recipe["net_usd"].as_f64(),
+            recipe["net_meter_tokens"].as_f64()
         ),
-        (Some("main"), Some("armed"), true, Some(now), Some(300))
+        (
+            Some("main"),
+            Some("armed"),
+            true,
+            Some(now),
+            Some(300),
+            Some(0.0),
+            Some(0.0)
+        ),
+        "no probe has landed yet, so both balances still read zero"
     );
     assert_eq!(
         row["keepalive"]["next_probe_at"].as_i64(),
         recipe["next_probe_at"].as_i64()
+    );
+    assert_eq!(
+        (
+            row["keepalive"]["net_usd"].as_f64(),
+            row["keepalive"]["net_meter_tokens"].as_f64()
+        ),
+        (
+            recipe["net_usd"].as_f64(),
+            recipe["net_meter_tokens"].as_f64()
+        ),
+        "the session's keepalive summary reads the same main-agent balances the recipe view does"
     );
     // Silent after the lease lapses: the recipe stays and the row says since when.
     parts

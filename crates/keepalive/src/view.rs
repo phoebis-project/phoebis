@@ -96,6 +96,8 @@ pub struct RecipeView {
     pub key_id: String,
     pub last_request_at: Option<i64>,
     pub model: String,
+    pub net_meter_tokens: f64,
+    pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub pool_id: String,
     pub reason: Option<ViewReason>,
@@ -106,6 +108,8 @@ pub struct RecipeView {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
+    pub net_meter_tokens: Option<f64>,
+    pub net_usd: Option<f64>,
     pub next_probe_at: Option<i64>,
     pub state: Option<AgentState>,
 }
@@ -140,6 +144,8 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str) -> RecipeView {
         key_id: key_id.into(),
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
+        net_meter_tokens: agent.net.meter_tokens,
+        net_usd: agent.net.usd,
         next_probe_at: agent.due_at(),
         pool_id: agent.pool_id.clone(),
         reason,
@@ -184,6 +190,8 @@ impl Engine {
                     key_id: s.key_id.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
+                        net_meter_tokens: main.map(|a| a.net.meter_tokens),
+                        net_usd: main.map(|a| a.net.usd),
                         next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),
                         state: main.map(|a| a.state),
                     },

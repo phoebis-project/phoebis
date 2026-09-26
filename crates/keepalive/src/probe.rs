@@ -117,6 +117,40 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
+/// The unit and the cost a non-migrated probe settles in: `default_unit` (the serving account's own funding)
+/// when the plan table prices the model there, dollars instead when it does not, so a later credit for the
+/// same coverage never splits from the cost that earned it, and a model the plan table lacks never drains a
+/// meter balance it can never repay. A migrated probe costs nothing in either unit.
+#[allow(clippy::too_many_arguments)]
+fn settled_cost(
+    default_unit: SavingsUnit,
+    table: &PriceTable,
+    plan: &PlanFactors,
+    canonical_model: &str,
+    usage: ProbeUsage,
+    outcome: ProbeOutcome,
+    cost_usd: f64,
+) -> (SavingsUnit, f64) {
+    if outcome == ProbeOutcome::Migrated {
+        return (default_unit, 0.0);
+    }
+    match probe_cost(default_unit, table, plan, canonical_model, usage) {
+        Some(cost) => (default_unit, cost),
+        None => (
+            SavingsUnit::Usd,
+            probe_cost(SavingsUnit::Usd, table, plan, canonical_model, usage).unwrap_or(cost_usd),
+        ),
+    }
+}
+
+/// A pool-at-its-cap 429's `Retry-After` seconds, `None` for anything else or a header that does not parse.
+fn retry_after_secs(headers: &axum::http::HeaderMap) -> Option<u64> {
+    headers
+        .get(header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
 /// The body read frame by frame with a running total, so a response that keeps sending never grows past the
 /// usage bound in memory: the first frame past it ends the read, and the response is dropped with it.
 async fn read_bounded(body: Body) -> Option<Bytes> {
@@ -179,11 +213,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 let status = response.status().as_u16();
                 let outcome = response.extensions().get::<RelayOutcome>().cloned();
                 let served_under = response.extensions().get::<ServedUnder>().copied();
-                let retry_after_secs = response
-                    .headers()
-                    .get(header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok());
+                let retry_after_secs = retry_after_secs(response.headers());
                 let body = read_bounded(response.into_body()).await;
                 ProbeResult {
                     status,
@@ -219,31 +249,49 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         let mut record = inner.probe_record(&job, &exchange, &table, &plan);
         record.kind = snapshot.account(&record.account).map(|a| a.kind);
         inner.roll_day(now);
-        if record.outcome != ProbeOutcome::Migrated {
-            *inner
-                .spent_today
-                .entry(record.pool_id.clone())
-                .or_insert(0.0) += record.cost_usd;
-        }
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        let unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
-        let cost_in_unit = if record.outcome != ProbeOutcome::Migrated {
-            probe_cost(unit, &table, &plan, &record.canonical_model, record.usage)
-                .unwrap_or(record.cost_usd)
-        } else {
-            0.0
-        };
-        if funding == Some(Funding::Plan) && record.outcome != ProbeOutcome::Migrated {
-            let weighted = cost_in_unit * engine.parts.windows.band_factor("five_hour", now);
-            *inner
-                .meter_spent_today
-                .entry(record.account.clone())
-                .or_insert(0.0) += weighted;
+        let default_unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
+        let (unit, cost_in_unit) = settled_cost(
+            default_unit,
+            &table,
+            &plan,
+            &record.canonical_model,
+            record.usage,
+            record.outcome,
+            record.cost_usd,
+        );
+        if record.outcome != ProbeOutcome::Migrated {
+            // The dollar cap counts what an api_key account, or a subscription account in overage, actually
+            // spends; a plan-funded probe's cost is quota, never money, whatever the price table would have
+            // charged for it, so `default_unit` (the account's own funding, before any unlisted-model fallback)
+            // decides rather than `unit`.
+            if default_unit == SavingsUnit::Usd {
+                *inner
+                    .spent_today
+                    .entry(record.pool_id.clone())
+                    .or_insert(0.0) += record.cost_usd;
+            }
+            if unit == SavingsUnit::MeterTokens {
+                let weighted = cost_in_unit * engine.parts.windows.band_factor("five_hour", now);
+                *inner
+                    .meter_spent_today
+                    .entry(record.account.clone())
+                    .or_insert(0.0) += weighted;
+            }
         }
-        let applied = inner.apply_probe(&job, exchange, &record, funding, cost_in_unit, now);
+        let covered_unit = funding.map(|_| unit);
+        let applied = inner.apply_probe(
+            &job,
+            exchange,
+            &record,
+            covered_unit,
+            unit,
+            cost_in_unit,
+            now,
+        );
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
@@ -322,12 +370,14 @@ impl Inner {
     /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
     /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
     /// as one wasted probe under the stop that orphaned it, since the upstream served it either way.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_probe(
         &mut self,
         job: &ProbeJob,
         exchange: Exchange,
         record: &ProbeRecord,
-        funding: Option<Funding>,
+        covered_unit: Option<SavingsUnit>,
+        unit: SavingsUnit,
         cost_in_unit: f64,
         now: i64,
     ) -> Applied {
@@ -437,7 +487,6 @@ impl Inner {
             .unanswered
             .push(if migrated { 0.0 } else { record.cost_usd });
         if !migrated {
-            let unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
             let was_negative = agent.net.in_unit(unit) < 0.0;
             agent.net.add(unit, -cost_in_unit);
             // The grace budget is granted on the way into a negative net, so the first paid probe leaves the
@@ -547,7 +596,7 @@ impl Inner {
         if covered {
             agent.covered_since_real = true;
             agent.covered_account = Some(record.account.clone());
-            agent.covered_funding = funding;
+            agent.covered_unit = covered_unit;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
@@ -588,8 +637,14 @@ impl Inner {
         now: i64,
     ) {
         if status == 429 && error_code == Some("accounts_at_cap") {
-            let delay_ms = retry_after_secs.map(|secs| (secs * 1_000) as i64);
-            self.retry(key, agent_id, Reason::ProbeQuotaExhausted, now, delay_ms);
+            // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
+            // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
+            let delay_ms = retry_after_secs.map(|secs| {
+                i64::try_from(secs)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(1_000)
+            });
+            self.retry(key, agent_id, Reason::RetryableProbeError, now, delay_ms);
             return;
         }
         let reason = match status {
@@ -628,10 +683,13 @@ impl Inner {
             self.pause(key, agent_id);
             return;
         }
-        let delay = override_delay_ms.unwrap_or_else(|| {
-            let exponent = (agent.failures - 1).min(4);
-            (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms())
-        });
+        let delay = match override_delay_ms {
+            Some(delay) => delay.min(agent.policy.retry_max_ms()),
+            None => {
+                let exponent = (agent.failures - 1).min(4);
+                (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms())
+            }
+        };
         agent.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
@@ -671,19 +729,21 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use crate::engine::{Agent, Session};
 
     use super::*;
 
-    /// One session holding one never-probed agent, the minimum `probe_error`/`retry` need.
+    /// One session holding one never-probed agent, the minimum `probe_error`/`retry` need, built onto the same
+    /// `Inner::empty` a fresh engine starts from.
     fn one_agent_inner() -> (Inner, SessionKey) {
         let key: SessionKey = ("k".into(), "s".into());
         let mut agents = BTreeMap::new();
         agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
-        let mut sessions = BTreeMap::new();
-        sessions.insert(
+        let mut inner = Inner::empty(None);
+        inner.agents = 1;
+        inner.sessions.insert(
             key.clone(),
             Session {
                 key_id: "k".into(),
@@ -700,28 +760,7 @@ mod tests {
                 agents,
             },
         );
-        (
-            Inner {
-                lifecycle: None,
-                sessions,
-                pending: HashMap::new(),
-                reasons: BTreeMap::new(),
-                retained: 0,
-                agents: 1,
-                running: 0,
-                closed: false,
-                spent_today: BTreeMap::new(),
-                meter_spent_today: BTreeMap::new(),
-                spent_day: 0,
-                settlements: Vec::new(),
-                skipped: Vec::new(),
-                bus_gaps: 0,
-                gap_backlog: 0,
-                next_incarnation: 1,
-                fits: Vec::new(),
-            },
-            key,
-        )
+        (inner, key)
     }
 
     #[test]
@@ -743,7 +782,7 @@ mod tests {
             Some(4_000),
             "the header's seconds replace the backoff"
         );
-        assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
+        assert_eq!(agent.reason, Reason::RetryableProbeError);
     }
 
     #[test]
@@ -770,5 +809,111 @@ mod tests {
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
         assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
+    }
+
+    #[test]
+    fn retry_after_secs_reads_the_header_run_job_passes_on() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, "2".parse().unwrap());
+        assert_eq!(retry_after_secs(&headers), Some(2));
+        assert_eq!(
+            retry_after_secs(&axum::http::HeaderMap::new()),
+            None,
+            "no header at all"
+        );
+        let mut not_a_number = axum::http::HeaderMap::new();
+        not_a_number.insert(header::RETRY_AFTER, "soon".parse().unwrap());
+        assert_eq!(
+            retry_after_secs(&not_a_number),
+            None,
+            "a header that does not parse"
+        );
+    }
+
+    /// A table pricing a model the shipped plan table has no row for, so `settled_cost` must fall all the way
+    /// back to dollars rather than mixing a dollar figure into a meter-priced settlement.
+    fn table_pricing_an_unlisted_model() -> PriceTable {
+        PriceTable {
+            version: "test".into(),
+            effective: "test".into(),
+            source: "test".into(),
+            models: BTreeMap::from([(
+                "unlisted-model".to_string(),
+                phoebis_ledger::ModelPrice {
+                    input: 2.0,
+                    cache_write_5m: 2.5,
+                    cache_write_1h: 4.0,
+                    cache_read: 0.2,
+                    output: 10.0,
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn a_plan_funded_probe_on_an_unlisted_model_settles_in_dollars() {
+        let table = table_pricing_an_unlisted_model();
+        let plan = PlanFactors::shipped();
+        let usage = ProbeUsage {
+            write: 2_000,
+            five_minutes: 2_000,
+            ..ProbeUsage::default()
+        };
+        let (unit, cost) = settled_cost(
+            SavingsUnit::MeterTokens,
+            &table,
+            &plan,
+            "unlisted-model",
+            usage,
+            ProbeOutcome::Ok,
+            0.0,
+        );
+        assert_eq!(
+            unit,
+            SavingsUnit::Usd,
+            "the plan table has no row, so the unit falls back too"
+        );
+        let expected =
+            probe_cost(SavingsUnit::Usd, &table, &plan, "unlisted-model", usage).unwrap();
+        assert!(expected > 0.0, "{expected}");
+        assert_eq!(cost, expected);
+    }
+
+    #[test]
+    fn a_plan_funded_probe_on_a_listed_model_keeps_meter_tokens() {
+        let table = PriceTable::shipped();
+        let plan = PlanFactors::shipped();
+        let usage = ProbeUsage {
+            write: 2_000,
+            five_minutes: 2_000,
+            ..ProbeUsage::default()
+        };
+        let (unit, cost) = settled_cost(
+            SavingsUnit::MeterTokens,
+            &table,
+            &plan,
+            "claude-sonnet-5",
+            usage,
+            ProbeOutcome::Ok,
+            0.0,
+        );
+        assert_eq!(unit, SavingsUnit::MeterTokens);
+        assert!(cost > 0.0, "{cost}");
+    }
+
+    #[test]
+    fn a_migrated_probe_settles_at_zero_in_its_funding_unit() {
+        let table = PriceTable::shipped();
+        let plan = PlanFactors::shipped();
+        let (unit, cost) = settled_cost(
+            SavingsUnit::MeterTokens,
+            &table,
+            &plan,
+            "claude-sonnet-5",
+            ProbeUsage::default(),
+            ProbeOutcome::Migrated,
+            0.0,
+        );
+        assert_eq!((unit, cost), (SavingsUnit::MeterTokens, 0.0));
     }
 }

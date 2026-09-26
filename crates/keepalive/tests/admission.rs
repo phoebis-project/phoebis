@@ -4,7 +4,7 @@ mod common;
 use std::time::Duration;
 
 use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage};
-use phoebis_keepalive::{AgentState, Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_keepalive::{AgentState, Event, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState};
 use common::*;
 
 /// The ledger row for a request, once the writer has landed it.
@@ -153,6 +153,70 @@ async fn an_unverified_oauth_account_waits_but_a_measured_one_retains() {
     .await;
     r.observe("main").await;
     assert_eq!(r.status("main").reason, Reason::Scheduled);
+}
+
+/// The selection sets `OauthUnverified` and returns before the observation is ever marked ready; a title
+/// request the guard sets aside in that window must leave it for the completion to read back unchanged.
+#[tokio::test]
+async fn a_title_request_between_an_oauth_unverified_selection_and_its_completion_leaves_the_reason_alone(
+) {
+    let r = rig(RigSpec {
+        accounts: vec![oauth("o", "sk-ant-oat01-OOOO", 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.engine.observe(r.observed("req", "main", BODY));
+    r.engine.observe(r.selected("req", "o"));
+    assert_eq!(r.status("main").reason, Reason::OauthUnverified);
+    r.engine.observe(r.observed_with(
+        "aux",
+        "main",
+        Some("title"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        r.status("main").reason,
+        Reason::OauthUnverified,
+        "the title request left the selection's reason alone"
+    );
+    r.engine
+        .observe(r.complete("req", Outcome::Succeeded, None));
+    assert_eq!(
+        r.status("main").reason,
+        Reason::OauthUnverified,
+        "the completion read the reason the selection set, not the guard's own auxiliary note"
+    );
+}
+
+/// A request the guard sets aside never touches `reason`, so the admin view still reads the recipe armed
+/// rather than held under the guard's own note.
+#[tokio::test]
+async fn an_armed_recipe_that_saw_an_auxiliary_request_still_reports_armed() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.engine.observe(r.observed_with(
+        "aux",
+        "main",
+        Some("title"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    let recipe = r
+        .engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.agent_id == "main")
+        .expect("the armed recipe");
+    assert_eq!(
+        (recipe.state, recipe.reason),
+        (RecipeState::Armed, None),
+        "{recipe:?}"
+    );
 }
 
 #[tokio::test]
@@ -668,15 +732,15 @@ async fn warm_subagents_off_retains_the_main_agent_and_declines_a_subagent() {
     );
 }
 
-/// An armed recipe against the unchanged code before this test's assertions ran: every request below replaced
-/// it, since the guard did not exist. Run first to confirm the failure, per the plan's convention.
+/// An auxiliary or a foreign request must leave an armed recipe's schedule and retained bytes exactly as they
+/// were, proving the guard set the request aside before it ever reached `make_recipe`.
 #[tokio::test]
 async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let armed_probe_at = r.status("main").next_probe_at;
     let armed_bytes = r.engine.stats().retained_bytes;
-    r.engine.observe(r.observed_with_facts(
+    r.engine.observe(r.observed_with(
         "aux",
         "main",
         Some("auxiliary"),
@@ -695,7 +759,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
     );
     assert_eq!(r.engine.reasons().get(&Reason::Auxiliary).copied(), Some(1));
     let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
-    r.engine.observe(r.observed_with_facts(
+    r.engine.observe(r.observed_with(
         "foreign",
         "main",
         None,
@@ -738,8 +802,7 @@ async fn a_tool_loop_request_re_arms_the_recipe() {
 async fn a_compaction_restart_replaces_the_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    let armed_bytes = r.engine.stats().retained_bytes;
-    r.engine.observe(r.observed_with_facts(
+    r.engine.observe(r.observed_with(
         "compaction",
         "main",
         Some("compaction"),
@@ -760,6 +823,7 @@ async fn a_compaction_restart_replaces_the_recipe() {
     // Without the class, the same static prefix on a fresh message chain restarts the recipe too.
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
+    let before_restart = r.engine.stats().retained_bytes;
     let restarted = BODY.replace("hello", "a fresh conversation");
     assert_ne!(restarted, BODY);
     r.observe_with("main", &restarted).await;
@@ -768,14 +832,18 @@ async fn a_compaction_restart_replaces_the_recipe() {
         Reason::Scheduled,
         "the same system prompt on a fresh chain restarts rather than staying foreign"
     );
-    assert!(r.engine.stats().retained_bytes > armed_bytes || r.engine.stats().retained_bytes > 0);
+    assert_ne!(
+        r.engine.stats().retained_bytes,
+        before_restart,
+        "the restart replaced the body"
+    );
 }
 
 #[tokio::test]
 async fn without_a_chain_every_request_re_arms() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.engine.observe(r.observed_with_facts(
+    r.engine.observe(r.observed_with(
         "no-chain",
         "main",
         None,

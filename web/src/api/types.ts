@@ -601,8 +601,8 @@ export interface Session {
   epoch: number | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** `state` is null when the session carries no cache-warming recipe at all. */
-  keepalive: { nextProbeAt: string | null; state: KeepaliveState | null };
+  /** `state` is null when the session carries no cache-warming recipe at all; the two nets are null with it. */
+  keepalive: { netMeterTokens: number | null; netUsd: number | null; nextProbeAt: string | null; state: KeepaliveState | null };
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
@@ -647,6 +647,8 @@ export interface KeepaliveRecipe {
   /** This agent's last real request; null for an agent that has not sent one yet. */
   lastRequestAt: string | null;
   model: string;
+  netMeterTokens: number;
+  netUsd: number;
   nextProbeAt: string | null;
   poolId: string;
   reason: RecipeReason | null;

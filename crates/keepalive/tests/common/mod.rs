@@ -82,6 +82,9 @@ pub struct RigSpec {
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
     pub session_expiry: Duration,
+    /// The shipped table by default; a test naming the plan-side cap's tier fall-back overrides this to a size
+    /// one probe can cross, so it need not shape a real probe's cost around the shipped windows' true scale.
+    pub windows: PlanWindows,
 }
 
 impl Default for RigSpec {
@@ -106,6 +109,7 @@ impl Default for RigSpec {
             },
             pool: PoolSpec::default(),
             session_expiry: Duration::from_secs(86_400),
+            windows: PlanWindows::shipped(),
         }
     }
 }
@@ -170,7 +174,8 @@ pub async fn rig(spec: RigSpec) -> Rig {
         relay: h.relay.clone(),
         router: h.router.clone(),
         session_expiry: spec.session_expiry,
-        windows: Arc::new(PlanWindows::shipped()),
+        store: h.store.clone(),
+        windows: Arc::new(spec.windows),
     });
     let mut rig = Rig {
         bus,
@@ -439,7 +444,7 @@ impl Rig {
     /// A second observation whose class, static hash, and boundary chain a guard test drives directly, rather
     /// than the ones `observed` infers from the body alone.
     #[allow(clippy::too_many_arguments)]
-    pub fn observed_with_facts(
+    pub fn observed_with(
         &self,
         id: &str,
         agent: &str,

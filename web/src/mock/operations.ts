@@ -88,6 +88,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
+      netMeterTokens: null,
+      netUsd: null,
       nextProbeAt: null,
     },
   };
@@ -104,7 +106,7 @@ SESSIONS.push({
   createdAt: null,
   epoch: null,
   historical: false,
-  keepalive: { nextProbeAt: null, state: null },
+  keepalive: { netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -166,6 +168,10 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       keyId: pin.keyId,
       lastRequestAt,
       model,
+      // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
+      // nothing further since its last hold began.
+      netMeterTokens: 0,
+      netUsd: state === 'armed' && reason === null ? -0.0004 * (j + 1) : 0,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       reason,
@@ -184,6 +190,10 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
+  // The session's own summary reads the main agent's balances, the way the admin route does.
+  const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
+  pin.keepalive.netMeterTokens = main?.netMeterTokens ?? null;
+  pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story already draws as `desktop (deleted)`:
@@ -198,7 +208,7 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   historical: true,
-  keepalive: { nextProbeAt: null, state: null },
+  keepalive: { netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: DELETED_HOLDER_GENERATION,
   lastUsedAt: null,
   pinned: false,

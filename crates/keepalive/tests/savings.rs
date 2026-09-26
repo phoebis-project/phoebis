@@ -741,6 +741,58 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
     );
 }
 
+/// A plan-funded probe's would-be price is quota, never money: the dollar cap that bounds an api_key
+/// account's own spend must stay at zero for it, whatever the price table would have charged.
+#[tokio::test]
+async fn a_plan_funded_probe_leaves_the_dollar_cap_unchanged() {
+    let mut r = rig(subscription_spec()).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(
+        r.engine.spent_today().get("main").copied().unwrap_or(0.0),
+        0.0,
+        "a plan-funded probe's would-be price is quota, never money"
+    );
+}
+
+/// A restart rebuilds the plan-side figure from the same rollups the dollar one comes from: an oauth
+/// account's probe counts toward it there too, mid-day, not only while the engine has run continuously.
+#[tokio::test]
+async fn a_restart_mid_day_rebuilds_the_plan_side_figure_from_the_rollups() {
+    let mut r = rig(subscription_spec()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let live = r
+        .engine
+        .meter_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(live > 0.0, "{live}");
+    rollups(&r, |rows| {
+        rows.iter()
+            .any(|row| row.kind == "probe" && row.account_id == "o")
+    })
+    .await;
+    r.engine.load_spent_today().await;
+    let rebuilt = r
+        .engine
+        .meter_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(
+        (rebuilt - live).abs() < 1e-6,
+        "the restart's rebuild reproduces the figure the running engine already had: {rebuilt} vs {live}"
+    );
+}
+
 #[tokio::test]
 async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
     // A caller that asks for `Claude-Sonnet-5[1m]` is served under `claude-sonnet-5`: the replay keeps the
@@ -1275,7 +1327,7 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
             .is_some_and(|e| e.in_use && e.reset.unwrap() > r.now())
     })
     .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", probe_answer(2_000, 0));
     r.advance(270_000);
     r.step().await;
     let after_overage_probe = r.status("main");
@@ -1296,6 +1348,31 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
         r.status("main").net_meter_tokens,
         meter_balance,
         "still positive relative to where it started, and untouched by the dollar-side stop"
+    );
+    // A real request still reads the held recipe's own cache normally: its credit lands in the unit the
+    // withheld probe settled in, dollars here, and leaves the meter balance it never touched alone.
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    r.observe_with("main", &body).await;
+    let after_overage_credit = r.status("main");
+    assert!(
+        after_overage_credit.net_usd > after_overage_probe.net_usd,
+        "the credit for a probe that settled in dollars lands in dollars too: {after_overage_credit:?}"
+    );
+    assert_eq!(
+        after_overage_credit.net_meter_tokens, meter_balance,
+        "a warm request while in overage leaves the meter balance untouched"
+    );
+    // The credit paid back past zero; one more dollar-funded probe returns the stop before the reset test.
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::NetNegative,
+        "{:?}",
+        r.status("main")
     );
 
     // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in meter tokens.
@@ -1336,7 +1413,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.up.push_credential_rule(
         OAUTH_SECRET,
         "/v1/messages",
-        Respond::Gated(Box::new(cold_answer())),
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
     r.advance(270_000);
     r.engine.step().await;
@@ -1361,6 +1438,14 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
         status.net_meter_tokens < 0.0 && status.net_usd == 0.0,
         "dispatched before the flip, so it settles in the unit it was dispatched under: {status:?}"
     );
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    r.observe_with("main", &body).await;
+    let credited = r.status("main");
+    assert!(
+        credited.net_meter_tokens > status.net_meter_tokens && credited.net_usd == 0.0,
+        "the credit for a probe settled on plan lands in meter tokens too, whatever the account is now: {credited:?}"
+    );
 
     // The reverse: dispatched in overage; the reset passes before the gated response is released.
     let mut r = rig(subscription_spec()).await;
@@ -1378,7 +1463,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.up.push_credential_rule(
         OAUTH_SECRET,
         "/v1/messages",
-        Respond::Gated(Box::new(cold_answer())),
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
     r.advance(270_000);
     r.engine.step().await;
@@ -1402,6 +1487,14 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     assert!(
         status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
         "dispatched in overage, so it settles in dollars whatever the reset does meanwhile: {status:?}"
+    );
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    r.observe_with("main", &body).await;
+    let credited = r.status("main");
+    assert!(
+        credited.net_usd > status.net_usd && credited.net_meter_tokens == 0.0,
+        "the credit for a probe settled in dollars lands in dollars too, whatever the reset did meanwhile: {credited:?}"
     );
 }
 
@@ -1499,5 +1592,79 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::CapReached)
+    );
+}
+
+/// An account the router has not fitted yet still named a tier on its profile; the cap falls back to that
+/// tier's predicted window rather than leaving a fresh subscription account uncapped for however long
+/// calibration takes.
+#[tokio::test]
+async fn the_window_share_cap_falls_back_to_the_tiers_predicted_window_without_a_fit() {
+    fn tier(name: &str, five_hour: f64) -> phoebis_ledger::PlanWindows {
+        phoebis_ledger::PlanWindows::from_yaml(&format!(
+            "measured: 2026-09-24\ntiers:\n  default_{name}:\n    five_hour: {five_hour}\nbands: []\n"
+        ))
+        .unwrap()
+    }
+    fn name_the_tier(r: &Rig, name: &str) {
+        r.h.store
+            .set_profile(
+                "o",
+                "{}",
+                &phoebis_store::SubscriptionRow {
+                    plan: None,
+                    tier: Some(name.to_string()),
+                    since: None,
+                    trial_ends_at: None,
+                },
+            )
+            .unwrap();
+    }
+
+    // Baseline: what one probe spends under an oversized window, for the size below to bound against.
+    let mut r = rig(RigSpec {
+        windows: tier("claude_max_5x", 1e12),
+        ..subscription_spec()
+    })
+    .await;
+    name_the_tier(&r, "claude_max_5x");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    let spent = r
+        .engine
+        .meter_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(spent > 0.0, "{spent}");
+
+    // The tier's window sized so this same probe alone crosses half of it.
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.5),
+            ..RigSpec::default().policy
+        },
+        windows: tier("claude_max_5x", spent * 1.5),
+        ..subscription_spec()
+    })
+    .await;
+    name_the_tier(&r, "claude_max_5x");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the first probe alone spends past half the tier's predicted window"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::CapReached),
+        "the tier's predicted window bounds the cap without a fitted row"
     );
 }

@@ -17,8 +17,8 @@ pub use config::{
     MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
 };
 pub use engine::{
-    spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Reason, SessionKey,
-    Wasted, MAIN_AGENT,
+    guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,
+    Guard, Net, Reason, SavingsUnit, SessionKey, Wasted, MAIN_AGENT,
 };
 pub use events::{
     decode_query_event, rfc3339, Ack, Event, EventError, Snapshot, SnapshotAgent, SnapshotSession,

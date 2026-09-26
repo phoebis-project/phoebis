@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790386992696,
+        "key_generation": 1790396800836,
         "session_id": "s1",
         "model": "claude-sonnet-5",
         "account_id": "business",
@@ -18,14 +18,16 @@
         "companion_since": null,
         "agents": 1,
         "keepalive": {
-          "next_probe_at": 1238742,
+          "net_meter_tokens": 0.0,
+          "net_usd": 0.0,
+          "next_probe_at": 1238299,
           "state": "busy"
         },
         "historical": false
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790386992696,
+        "key_generation": 1790396800836,
         "session_id": "s2",
         "model": "claude-sonnet-5",
         "account_id": "business",
@@ -40,6 +42,8 @@
         "companion_since": null,
         "agents": 0,
         "keepalive": {
+          "net_meter_tokens": null,
+          "net_usd": null,
           "next_probe_at": null,
           "state": null
         }
@@ -61,6 +65,8 @@
         "companion_since": null,
         "agents": 0,
         "keepalive": {
+          "net_meter_tokens": null,
+          "net_usd": null,
           "next_probe_at": null,
           "state": null
         }

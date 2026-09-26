@@ -839,6 +839,7 @@ async fn app_with_webhook_policy(
         relay: relay.clone(),
         router: router_handle.clone(),
         session_expiry: Duration::from_secs(86_400),
+        store: store.clone(),
         windows: Arc::new(PlanWindows::shipped()),
     });
     let webhook = FakeWebhook::new();

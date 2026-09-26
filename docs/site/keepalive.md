@@ -79,10 +79,10 @@ under the `auxiliary` reason.
 
 Without a class, the request's own two boundary-hash chains decide. A boundary that holds the recipe's last
 message hash re-arms it, since the request continues the same conversation. The same static prefix, the tools
-array and the system blocks, with no continuation restarts the recipe, replacing its cached body the way a
-compaction does. A request matching neither the chain nor the prefix is counted under the `foreign` reason, and
-its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all re-arms on every
-request, the fallback the router's own warmth check applies for a client that sends none.
+array and the system blocks, on the same model, with no continuation restarts the recipe, replacing its cached
+body the way a compaction does. A request matching neither the chain nor the prefix is counted under the
+`foreign` reason, and its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all
+re-arms on every request, the fallback the router's own warmth check applies for a client that sends none.
 
 The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
 foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.
@@ -176,7 +176,7 @@ the reason only names the last request the guard set aside (see
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
 | `auxiliary` | auxiliary request | The last request was not the conversation's next turn, and left the recipe alone. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
-| `cap_reached` | cap reached | The pool spent its daily probe cap; probes resume at midnight UTC. |
+| `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
 | `foreign` | foreign request | The last request matched neither the recipe's chain nor its static prefix. |

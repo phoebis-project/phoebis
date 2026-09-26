@@ -14,8 +14,8 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, PlanFactors, PlanWindows, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
-use phoebis_routing::{RegistrySnapshot, RouterHandle};
-use phoebis_store::{AccountKind, AccountState, FitRow, OveragePolicy};
+use phoebis_routing::{RegistrySnapshot, RouterHandle, FIVE_HOUR};
+use phoebis_store::{AccountKind, AccountState, FitRow, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -179,13 +179,13 @@ pub enum Guard {
 /// carries no chain at all. `recipe` is the armed recipe's `(static_hash, tail_hash)`, `None` for a first
 /// observation with nothing to compare against.
 pub fn guard(
-    class: Option<&str>,
+    request_class: Option<&str>,
     static_hash: Option<&str>,
     boundaries: &[String],
     recipe: Option<(&str, &str)>,
     model_matches: bool,
 ) -> Guard {
-    if let Some(class) = class {
+    if let Some(class) = request_class {
         return if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
             Guard::Rearm
         } else {
@@ -276,6 +276,9 @@ pub struct EngineParts {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
+    /// The registry's own store, read for a subscription account's tier: the plan-side cap's fallback when the
+    /// router has not yet fitted the account's window.
+    pub store: Arc<Store>,
     /// The shipped window sizes and peak band, for the plan-side probe cap.
     pub windows: Arc<PlanWindows>,
 }
@@ -344,6 +347,11 @@ pub(crate) struct Agent {
     /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
     pub canonical_model: String,
     pub reason: Reason,
+    /// The guard's verdict on the last request the agent observed, `Auxiliary` or `Foreign` only: a request the
+    /// guard set aside never reaches `reason`, which stays the recipe's own gating state, so a hold's `began`
+    /// check, the completion's gate-reason match, and the view's armed-or-held state all read it undisturbed.
+    /// Cleared on the next request that re-arms or restarts the recipe.
+    pub last_guard: Option<Reason>,
     /// Whether the current hold has already ledgered the probe it withheld. A hold can begin before its
     /// probe is due, so the skip is counted when the due time passes rather than where the hold started.
     pub hold_counted: bool,
@@ -362,9 +370,9 @@ pub(crate) struct Agent {
     /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
     pub covered_account: Option<String>,
-    /// How the covering probe's serving attempt was funded, so the credit it earns later settles in the same
-    /// unit the probe's own cost did.
-    pub covered_funding: Option<Funding>,
+    /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
+    /// a model the plan table lacks falls the unit back to dollars along with the cost, so the two never split.
+    pub covered_unit: Option<SavingsUnit>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -395,6 +403,7 @@ impl Agent {
             pool_id: String::new(),
             canonical_model: String::new(),
             reason: Reason::AwaitingRequest,
+            last_guard: None,
             hold_counted: false,
             paused: false,
             in_flight: false,
@@ -406,7 +415,7 @@ impl Agent {
             unanswered: Vec::new(),
             covered_since_real: false,
             covered_account: None,
-            covered_funding: None,
+            covered_unit: None,
             last_real_at: None,
             last_stop: None,
         }
@@ -442,10 +451,10 @@ impl Agent {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
-    /// How the covering probe's serving attempt was funded; `None` when the account it warmed left the
-    /// registry before the probe landed, in which case the credit never fires (`same_account` cannot match a
-    /// gone account either).
-    pub funding: Option<Funding>,
+    /// The unit the covering probe's cost settled in; `None` when the account it warmed left the registry
+    /// before the probe landed, in which case the credit never fires (`same_account` cannot match a gone
+    /// account either).
+    pub unit: Option<SavingsUnit>,
     pub model: String,
     pub real_at: i64,
     pub ttl_ms: i64,
@@ -528,25 +537,7 @@ impl Engine {
         // `Inner` holds the only sender, so `close` dropping it is the channel ending for the consumer.
         let lifecycle = parts.lifecycle.take();
         Arc::new(Engine {
-            inner: Mutex::new(Inner {
-                lifecycle,
-                sessions: BTreeMap::new(),
-                pending: HashMap::new(),
-                reasons: BTreeMap::new(),
-                retained: 0,
-                agents: 0,
-                running: 0,
-                closed: false,
-                spent_today: BTreeMap::new(),
-                meter_spent_today: BTreeMap::new(),
-                spent_day: 0,
-                settlements: Vec::new(),
-                skipped: Vec::new(),
-                bus_gaps: 0,
-                gap_backlog: 0,
-                next_incarnation: 0,
-                fits: Vec::new(),
-            }),
+            inner: Mutex::new(Inner::empty(lifecycle)),
             parts,
             cancel: CancellationToken::new(),
             idle: Notify::new(),
@@ -632,6 +623,30 @@ impl Engine {
 }
 
 impl Inner {
+    /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
+    /// is named, so a field this struct gains needs no second literal to keep in step.
+    pub(crate) fn empty(lifecycle: Option<LifecycleSender>) -> Inner {
+        Inner {
+            lifecycle,
+            sessions: BTreeMap::new(),
+            pending: HashMap::new(),
+            reasons: BTreeMap::new(),
+            retained: 0,
+            agents: 0,
+            running: 0,
+            closed: false,
+            spent_today: BTreeMap::new(),
+            meter_spent_today: BTreeMap::new(),
+            spent_day: 0,
+            settlements: Vec::new(),
+            skipped: Vec::new(),
+            bus_gaps: 0,
+            gap_backlog: 0,
+            next_incarnation: 0,
+            fits: Vec::new(),
+        }
+    }
+
     /// A send never blocks and a closed receiver is the alerts having shut down first, which loses nothing worth
     /// a log line.
     pub(crate) fn emit(&self, event: SessionLifecycle) {
@@ -1059,7 +1074,9 @@ impl Engine {
             None => KeepalivePolicy::default(),
         };
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
-        // covered-since-real flag a re-arming request's credit depends on; only the reason it counted is.
+        // covered-since-real flag a re-arming request's credit depends on. Only the count and the agent's own
+        // `last_guard` note it; `reason` stays the recipe's gating state, since a hold's `began` check, the
+        // completion's gate-reason match, and the view's armed-or-held state all read that field as state.
         let recipe_hashes = agent.current.as_ref().map(|observation| {
             (
                 observation.recipe.static_hash.as_deref().unwrap_or(""),
@@ -1070,22 +1087,29 @@ impl Engine {
             .current
             .as_ref()
             .is_some_and(|observation| observation.recipe.model == observed.model);
-        match guard(
+        let verdict = guard(
             observed.client.request_class.as_deref(),
             observed.static_hash.as_deref(),
             &observed.boundaries,
             recipe_hashes,
             model_matches,
-        ) {
-            Guard::Auxiliary => {
-                inner.set_reason(&key, &agent_id, Reason::Auxiliary);
-                return;
-            }
-            Guard::Foreign => {
-                inner.set_reason(&key, &agent_id, Reason::Foreign);
-                return;
-            }
-            Guard::Rearm | Guard::Restart => {}
+        );
+        let guard_reason = match verdict {
+            Guard::Auxiliary => Some(Reason::Auxiliary),
+            Guard::Foreign => Some(Reason::Foreign),
+            Guard::Rearm | Guard::Restart => None,
+        };
+        if let Some(guard_reason) = guard_reason {
+            *inner.reasons.entry(guard_reason).or_default() += 1;
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_guard = Some(guard_reason);
+            return;
         }
         if agent_id != MAIN_AGENT && !policy.warm_subagents {
             // The session's last real time still moves: a subagent working is a session in use, which the main
@@ -1101,7 +1125,7 @@ impl Engine {
             agent.last_real_at.map(|real_at| PriorCoverage {
                 account: agent.covered_account.clone(),
                 covered: agent.covered_since_real,
-                funding: agent.covered_funding,
+                unit: agent.covered_unit,
                 model: agent.canonical_model.clone(),
                 real_at,
                 ttl_ms: agent.ttl_ms,
@@ -1114,7 +1138,8 @@ impl Engine {
         let agent = session.agents.get_mut(&agent_id).unwrap();
         agent.covered_since_real = false;
         agent.covered_account = None;
-        agent.covered_funding = None;
+        agent.covered_unit = None;
+        agent.last_guard = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -1357,16 +1382,16 @@ impl Engine {
                     // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
                     // saving to claim.
                     let same_account = prior.account == agent.account;
-                    // A dangling account (ruling: the probe that covered this recipe served on one the
-                    // registry has since dropped) earns no credit; `same_account` would already exclude it
-                    // once a real selection lands somewhere else, but a gone account funds nothing to check.
-                    let funded = prior.funding;
+                    // The probe that covered this recipe may have served on an account the registry has
+                    // since dropped, which earns no credit: `same_account` would already exclude it once a
+                    // real selection lands somewhere else, but a gone account funds nothing to check.
+                    let unit = prior.unit;
                     (prior.covered
                         && gap_exceeded
                         && same_model
                         && same_account
                         && read > 0
-                        && funded.is_some())
+                        && unit.is_some())
                     .then(|| {
                         (
                             read,
@@ -1374,19 +1399,18 @@ impl Engine {
                             agent.pool_id.clone(),
                             agent.account.clone(),
                             agent.canonical_model.clone(),
-                            funded.unwrap(),
+                            unit.unwrap(),
                         )
                     })
                 })
         };
-        if let Some((read, key_generation, pool_id, account, model, funding)) = credit {
+        if let Some((read, key_generation, pool_id, account, model, unit)) = credit {
             // The mark says a probe kept this request warm, which is true whatever the price table knows;
             // the saving is what the table can put a number on, zero for a model it does not price. The
             // agent's own net settles in the covering probe's unit; the ledger's kept-warm column stays
             // dollars whatever that unit was.
             let plan = &self.parts.plan;
             let table = self.parts.pricing.current();
-            let unit = funding.unit();
             let saving_net = gross_saving(unit, &table, plan, &model, read).unwrap_or(0.0);
             let saving_ledger = if unit == SavingsUnit::Usd {
                 saving_net
@@ -1596,7 +1620,14 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    gate(&view, agent, &key.1, spent, meter_spent)
+                    gate(
+                        &view,
+                        agent,
+                        &key.1,
+                        spent,
+                        meter_spent,
+                        &self.parts.windows,
+                    )
                 };
                 match held {
                     Some(Gate::Drop(reason, label)) => {
@@ -1737,6 +1768,9 @@ pub(crate) struct RouterView {
     /// `(key, session, canonical model)` to the pinned account: the account a probe would actually run on.
     pub pins: BTreeMap<(String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
+    /// A subscription account's own `organization.rate_limit_tier`, for the plan-side cap's fallback when the
+    /// router has not fitted the account's window yet.
+    pub tiers: HashMap<String, String>,
 }
 
 /// What the gate decided for a due recipe: wait with a reason, or drop it with the label its probes settle under.
@@ -1804,6 +1838,16 @@ impl Engine {
             }
             Err(_) => self.lock().fits.clone(),
         };
+        // Read beside the fits copy, for the same cap: an account the router has not calibrated yet still has
+        // a tier the profile named, which bounds the cap until a fit arrives.
+        let tiers = snapshot
+            .accounts()
+            .filter(|a| a.kind == AccountKind::Oauth)
+            .filter_map(|a| {
+                let tier = self.parts.store.subscription(&a.id).ok().flatten()?.tier?;
+                Some((a.id.clone(), tier))
+            })
+            .collect();
         RouterView {
             canonical,
             cooled,
@@ -1811,6 +1855,7 @@ impl Engine {
             overage,
             pins,
             snapshot,
+            tiers,
         }
     }
 
@@ -1853,6 +1898,7 @@ pub(crate) fn gate(
     session_id: &str,
     spent_today: &BTreeMap<String, f64>,
     meter_spent_today: &BTreeMap<String, f64>,
+    windows: &PlanWindows,
 ) -> Option<Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
@@ -1934,9 +1980,15 @@ pub(crate) fn gate(
             let scale = view
                 .fits
                 .iter()
-                .find(|row| row.account_id == account.id && row.window == "five_hour")
+                .find(|row| row.account_id == account.id && row.window == FIVE_HOUR)
                 .map(|row| row.scale)
-                .filter(|scale| scale.is_finite() && *scale > 0.0);
+                .filter(|scale| scale.is_finite() && *scale > 0.0)
+                // No fit yet: the tier's predicted window bounds the cap until the router calibrates one.
+                .or_else(|| {
+                    view.tiers
+                        .get(&account.id)
+                        .and_then(|tier| windows.predicted(tier, FIVE_HOUR))
+                });
             if let Some(scale) = scale {
                 if spent_meter / scale >= share {
                     return Some(Gate::Hold(Reason::CapReached));

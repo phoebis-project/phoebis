@@ -6,7 +6,7 @@ use std::str::FromStr;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_store::AccountState;
 use common::*;
-use fake_upstream::Respond;
+use fake_upstream::{Respond, SseEvent};
 
 fn json(status: u16, body: &str) -> Respond {
     Respond::Json {
@@ -1001,4 +1001,74 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
         Some(start + 540_000),
         "late usage did not undo the completed refresh"
     );
+}
+
+/// A stream held past `message_start`, so a request that reaches it commits before it ever completes.
+fn held_stream() -> Respond {
+    Respond::SseGated {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            SseEvent {
+                event: "message_start".into(),
+                data: r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1}}}"#
+                    .into(),
+            },
+            SseEvent {
+                event: "message_stop".into(),
+                data: r#"{"type":"message_stop"}"#.into(),
+            },
+        ],
+    }
+}
+
+/// A pool at its cap answers a probe `429 accounts_at_cap` with `Retry-After` the bound: momentarily full,
+/// never out of quota, so the engine retries at the header's seconds rather than pausing under a quota reason.
+#[tokio::test]
+async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pausing() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+        pool: PoolSpec {
+            failover: phoebis_store::Failover {
+                in_flight_cap: 1,
+                retry_in_place_seconds: 2,
+                ..phoebis_store::Failover::default()
+            },
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+    // One-shot: a regression that sent the probe to `b` gets a fast wrong answer here, never a stream that
+    // holds it for the full probe deadline.
+    r.up.push_credential_rule(B, "/v1/messages", held_stream());
+    r.h.store
+        .set_state("a", AccountState::Disconnected)
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+
+    // A second session takes `b`, over its cap of one: the probe's own selection can find nothing free.
+    let mut req = r.request("main");
+    relay_common::set_header(&mut req, "x-claude-code-session-id", "other");
+    let other = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(relay_common::outcome(&other).account_id, "b");
+    assert_eq!(r.h.router.in_flight().account("b"), 1, "b is at its cap");
+
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.failures, status.next_probe_at.map(|at| at - r.now())),
+        (1, Some(2_000)),
+        "retried after the header rather than paused: {status:?}"
+    );
+    assert_eq!(
+        relay_common::credentials_seen(&r.up),
+        [A, B],
+        "the pool answered at_cap before either account was dialled for the probe"
+    );
+    drop(other);
+    r.up.release();
 }

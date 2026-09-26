@@ -711,6 +711,58 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
     assert_eq!(skipped(&r, 2).await, 2, "one withheld probe per hold");
 }
 
+/// A request the guard sets aside never touches `reason`, so it must not read as the hold beginning again: an
+/// overage hold that spans an auxiliary request still withholds exactly the one probe it always did.
+#[tokio::test]
+async fn an_auxiliary_request_mid_hold_leaves_the_skipped_count_at_one() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.enter_overage("a", r.now() + 600_000);
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("a")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Overage)
+    );
+    r.engine.observe(r.observed_with(
+        "aux",
+        "main",
+        Some("auxiliary"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        r.status("main").reason,
+        Reason::Overage,
+        "the auxiliary request left the hold's own reason alone"
+    );
+    for _ in 0..5 {
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Overage)
+    );
+    assert_eq!(
+        skipped(&r, 1).await,
+        1,
+        "one withheld probe, not one per auxiliary request the hold spanned"
+    );
+}
+
 /// A pause clears the schedule, so a recipe paused by a 429 is not armed; the retention rules still have to
 /// reach it, or an opt-out could never discard it and the idle limit could never settle it while the
 /// companion keeps reporting.

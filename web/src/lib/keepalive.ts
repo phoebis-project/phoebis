@@ -26,7 +26,7 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   affinity_too_short: "The pool's session affinity expires before the cache this probe would warm, so the session could move away from it.",
   auxiliary: "The last request was not the conversation's next turn (a title, a summary, or another side request), so it left the recipe, the schedule, and its credit untouched.",
   awaiting_cache_evidence: "The agent's request went out and its stream has not yet reported cache usage. The first stream event carries it, within seconds; the probe timer arms from that event and probes then run while the response is still streaming, so a long turn does not go cold.",
-  cap_reached: 'The pool spent its daily probe cap; probes resume at midnight UTC.',
+  cap_reached: 'The pool spent its daily probe cap, or a subscription upstream spent its share of the 5-hour window; probes resume at midnight UTC or when the window rolls.',
   cold_probes: "The probe read no cache for the prefix it was meant to keep warm, so that entry had already expired and the next turn writes regardless. Consecutive cold probes past the pool's cold probe limit pause the recipe until the next real request.",
   cooled: 'The upstream the session is pinned to is under a cooldown; the probe waits for it to end.',
   foreign: 'The last request matched neither the recipe chain nor its static prefix, so it left the recipe, the schedule, and its credit untouched.',

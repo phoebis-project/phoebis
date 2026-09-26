@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanFactors, PriceTable, Record, UNATTRIBUTED};
+use phoebis_routing::FIVE_HOUR;
+use phoebis_store::AccountKind;
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
@@ -238,7 +240,12 @@ impl Engine {
         self.lock().meter_spent_today.clone()
     }
 
-    /// The pool's probe spend for the current UTC day, from the rollups: what a restart starts from.
+    /// The pool's probe spend for the current UTC day, from the rollups: what a restart starts from. Rebuilds
+    /// `meter_spent_today` from the same rows: an api_key account's rollup counts toward the dollar cap, an
+    /// oauth account's toward the plan-side one, its tokens priced through the plan table and weighted by the
+    /// band its hour fell in. Neither rebuild can tell a subscription account's plan-funded probes from its
+    /// overage ones (the rollup carries no funding), so an account's overage probes before the restart are
+    /// missing from the plan-side figure for the rest of that day, a bounded gap.
     pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
         let now = self.now();
         let day_start = now.div_euclid(86_400_000) * 86_400_000 / 1_000;
@@ -247,12 +254,34 @@ impl Engine {
             .read(move |c| phoebis_ledger::read_rollups(c, day_start, day_start + 86_400))
             .await
             .unwrap_or_default();
+        let snapshot = self.parts.router.snapshot();
         let mut spent = BTreeMap::new();
+        let mut meter_spent = BTreeMap::new();
         for row in rows.into_iter().filter(|r| r.kind == "probe") {
-            *spent.entry(row.pool_id).or_insert(0.0) += row.probe_cost_usd;
+            match snapshot.account(&row.account_id).map(|a| a.kind) {
+                Some(AccountKind::ApiKey) => {
+                    *spent.entry(row.pool_id.clone()).or_insert(0.0) += row.probe_cost_usd;
+                }
+                Some(AccountKind::Oauth) => {
+                    if let Some(tokens) = self.parts.plan.meter_tokens(
+                        &row.canonical_model,
+                        row.input_tokens,
+                        row.cache_read_tokens,
+                        row.cache_write_5m_tokens,
+                        row.cache_write_1h_tokens,
+                        row.output_tokens,
+                    ) {
+                        let weighted =
+                            tokens * self.parts.windows.band_factor(FIVE_HOUR, row.hour * 1_000);
+                        *meter_spent.entry(row.account_id.clone()).or_insert(0.0) += weighted;
+                    }
+                }
+                None => {}
+            }
         }
         let mut inner = self.lock();
         inner.spent_today = spent.clone();
+        inner.meter_spent_today = meter_spent;
         inner.spent_day = now.div_euclid(86_400_000);
         spent
     }
