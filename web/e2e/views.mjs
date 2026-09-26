@@ -1006,6 +1006,42 @@ async function costReference(theme) {
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
 }
 
+/**
+ * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, which
+ * at 1280px already scrolls for the session row's own last columns, and Net closes the line after State. A reason
+ * badge is measured and logged; the longest ones ran past that edge before Net joined the line too.
+ */
+async function agentLines(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const expand = page.getByRole('button', { name: 'Expand all', exact: true });
+  if ((await expand.count()) === 0) {
+    if (mock) say('the story has sessions to expand, yet there is no Expand all button');
+    return;
+  }
+  await expand.click();
+  await settle();
+  const read = await page.evaluate(() => {
+    const edge = document.querySelector('.sessions-table')?.closest('.table-wrap')?.getBoundingClientRect().right ?? null;
+    const head = [...(document.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim());
+    const lines = [...document.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => {
+      const badges = [...row.children[6].querySelectorAll('.badge')].map((b) => Math.round(b.getBoundingClientRect().right));
+      return { agent: row.children[0].textContent?.trim(), reasonRight: badges[1] ?? null, stateRight: badges[0] ?? null };
+    });
+    return { edge: edge === null ? null : Math.round(edge), head, lines };
+  });
+  measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: read.lines.filter((l) => l.reasonRight !== null && l.reasonRight > read.edge) })}`);
+  if (read.lines.length > 0 && read.head.slice(-2).join(',') !== 'State,Net') say(`the agent lines end ${JSON.stringify(read.head.slice(-2))}, not State then Net`);
+  if (mock && read.lines.length === 0) say('Expand all opened no agent line');
+  for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
+    say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
+  }
+  await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
+  // The pointer and the focus leave the toggle, so the view's shot draws it at rest rather than hovered.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await settle();
+}
+
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
@@ -1048,6 +1084,7 @@ try {
       if (view.path === '/sessions') {
         await costCapRows(theme);
         await costReference(theme);
+        await agentLines(theme);
       }
       if (view.path === '/pools') {
         await poolChips(theme);

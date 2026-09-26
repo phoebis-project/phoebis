@@ -70,7 +70,7 @@ const factorOf = (factors: PlanFactors, model: string): PlanFactor | null => {
   const undated = model.replace(/-\d{8}$/, '');
   return own(factors.models, model) ? factors.models[model] : own(factors.models, undated) ? factors.models[undated] : null;
 };
-/** Meter tokens per token, three significant digits at most: 0.094, 4.44, 16.9. */
+/** Meter tokens per token, three significant digits at most: 0.0939, 4.44, 16.9. */
 const meter = (n: number) => String(Number(n.toPrecision(3)));
 const PLAN_COLUMNS: { key: keyof Pick<PlanFactor, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input' | 'output'>; label: string }[] = [
   { key: 'input', label: 'Input' },

@@ -65,6 +65,15 @@ export function fmtEndsIn(at: string, now: number): string {
   return delta > 0 ? `ends in ${span}` : `ended ${span} ago`;
 }
 
+/** A `datetime-local` value in the browser's zone, which is how the field reads and writes an instant. */
+export const toLocalInput = (ms: number) => {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+export const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function fmtAbsolute(isoTime: string | null): string {
   if (!isoTime) return '-';
   const d = new Date(isoTime);

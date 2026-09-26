@@ -483,8 +483,8 @@ function SessionRows({
                   <span>TTL</span>
                   <span>Next probe</span>
                   <span>Last request</span>
-                  <span title={NET_HINT}>Net</span>
                   <span>State</span>
+                  <span title={NET_HINT}>Net</span>
                 </div>
                 {agents.map((a) => (
                   <div className="agents__row" key={a.agentId}>
@@ -496,9 +496,6 @@ function SessionRows({
                       {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'armed' ? 'on first stream event' : 'not scheduled'}</span>}
                     </span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
-                    <span className="num agents__net" title={NET_HINT}>
-                      {netOf(a).length ? netOf(a).map((part) => <span key={part}>{part}</span>) : <span className="muted">0</span>}
-                    </span>
                     <span className="row" style={{ gap: 6 }}>
                       <Badge tone={STATE_TONE[a.state]} dot title={STATE_HINT[a.state]}>
                         {a.state}
@@ -508,6 +505,9 @@ function SessionRows({
                           {REASON_LABEL[a.reason]}
                         </Badge>
                       )}
+                    </span>
+                    <span className="num agents__net" title={NET_HINT}>
+                      {netOf(a).length ? netOf(a).map((part) => <span key={part}>{part}</span>) : <span className="muted">0</span>}
                     </span>
                   </div>
                 ))}

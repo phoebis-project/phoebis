@@ -1,6 +1,7 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import { toLocalInput } from './format';
 import { checkPattern } from './patterns';
 import { MIGRATE_BAND } from './presets';
 
@@ -165,16 +166,9 @@ export interface SubscriptionEndForm {
   endsAt: string;
 }
 
-/** A `datetime-local` value in the browser's zone, which is how the field reads and writes a date. */
-const localInput = (at: string) => {
-  const d = new Date(at);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-
 export function subscriptionEndFormOf(account: Pick<Account, 'cancelled' | 'subscription'>): SubscriptionEndForm {
   const end = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
-  return { cancelled: account.cancelled, endsAt: end ? localInput(end) : '' };
+  return { cancelled: account.cancelled, endsAt: end ? toLocalInput(Date.parse(end)) : '' };
 }
 
 /**
@@ -183,7 +177,7 @@ export function subscriptionEndFormOf(account: Pick<Account, 'cancelled' | 'subs
  */
 export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean, derivedEndsAt: string | null): SubscriptionEndForm {
   if (!cancelled) return { cancelled: false, endsAt: '' };
-  return { cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? localInput(derivedEndsAt) : '') };
+  return { cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? toLocalInput(Date.parse(derivedEndsAt)) : '') };
 }
 
 /** Why the account route would refuse the pair, or null. */

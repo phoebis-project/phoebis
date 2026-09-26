@@ -2301,13 +2301,14 @@
 
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px 110px minmax(0, 1fr);
+  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(0, 1fr) 110px;
   gap: 12px;
   align-items: center;
   padding: 6px 12px;
 }
 
-/* Two balances stack rather than widen the column, which would push State out of a 1280px window. */
+/* Net closes the line so State keeps its place in a 1280px window, and two balances stack rather than widen the
+   column. */
 .agents__net {
   display: flex;
   flex-direction: column;
@@ -2371,7 +2372,7 @@
   white-space: nowrap;
 }
 
-.cost-ref__table th:first-child,
+.cost-ref__table thead tr:first-child th:first-child,
 .cost-ref__table td:first-child {
   padding-left: 12px;
 }

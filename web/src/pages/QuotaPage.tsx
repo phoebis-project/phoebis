@@ -5,14 +5,12 @@ import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
 
 type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
-
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
@@ -205,7 +203,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           {/* Unlabelled: the phrase itself says what ends, where a label would read "Ends ends in 12 days". */}
           {endsAt && (
             <span className={`chip ${soon(endsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(endsAt)}>
-              {capitalize(fmtEndsIn(endsAt, now))}
+              {upperFirst(fmtEndsIn(endsAt, now))}
             </span>
           )}
           {trialEndsAt && (

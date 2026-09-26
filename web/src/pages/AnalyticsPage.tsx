@@ -14,7 +14,7 @@ import { Badge, Button, Card, ErrorState, Input, Segmented, Select, Skeleton, To
 import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, own, type BurnLine, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
@@ -99,12 +99,6 @@ function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
     return <ChartTooltip title={fmtAbsolute(new Date(p.at).toISOString())} rows={rows(p)} />;
   };
 }
-
-const toLocalInput = (ms: number) => {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
 
 /** Every key the range holds on one dimension, read once per range so a filter never hides its own options. */
 function useDimensionKeys(from: string, to: string, groupBy: GroupBy) {
@@ -1144,7 +1138,6 @@ function CostByGroup({ points, groupBy, groupSlot, loading, tick }: { groupBy: G
 }
 
 const UNFILTERED_NOTE = '; the filters above do not apply here';
-const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const tickFor = (bucketMs: number) => (v: number) => (bucketMs >= 6 * HOUR ? fmtDayShort(v) : fmtHourTick(v));
 
 function RewritesCard({ answer, error, loading, tick, unfiltered }: { answer: { moves: Record<string, number>; points: RewritePoint[] } | null; error: string | null; loading: boolean; tick: (v: number) => string; unfiltered: boolean }) {
