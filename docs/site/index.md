@@ -10,7 +10,7 @@ itself, and picks that account from a pool. Three listeners make up one process:
 | [Installation](installation.md) | The build, the service, the commands, and every bootstrap setting. |
 | [Downstream client](client.md) | The client's environment block and what each variable changes. |
 | [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
-| [Pools, keys, and routing](routing.md) | Accounts, pools, keys, selection, cooldowns, failover, and overage. |
+| [Pools, keys, and routing](routing.md) | Pace, load shedding, the plan meter, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
 | [Statistics and alerts](statistics.md) | The ledger, the views, metrics, the live feed, and webhook alerts. |
 | [Operations](operations.md) | Backup, the storage key, upgrades, re-pinning a client build, publishing. |

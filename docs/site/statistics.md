@@ -109,10 +109,11 @@ its carried run and its band sums in the registry beside the size, so a restart 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
 UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and
 input 1.33 on 2026-09-25, so the factor lies between 1.3 and 1.45 until one window reads both; the edges are steps, and
-weekends are untested, so the row is provisional. The meter charges a request when it completes, so the band in force
-then sets its weight: the fit books its tokens that way, and a session's burn in meter tokens folds a renewal inside the
-band at the band's factor, so the shedding order reads what the meter charges. A band row with a later date takes over
-from that date and never re-weights an earlier request.
+a weekend probe read the off-peak rate on 2026-09-26, so the band is weekdays only; the row stays provisional for its
+factor until one in-band window reads both input and output. The meter charges a request when it completes, so the band
+in force then sets its weight: the fit books its tokens that way, and a session's burn in meter tokens folds a renewal
+inside the band at the band's factor, so the shedding order reads what the meter charges. A band row with a later date
+takes over from that date and never re-weights an earlier request.
 
 The analytics set each fit beside its tier's row, which shows the drift between the table and the meter, and the band
 factor the fit observes beside the row's.
@@ -240,11 +241,11 @@ window spent. When its pin was released without a move, the drawer says from whi
 router found, among: already tried this request, the creating request's own client error, an account cooldown, the
 account deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing
 reauthorization, released outright, window spent, the subscription ended, never paired, or no longer serving the
-model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin was renewed, the
-cache-read tokens the response reported, and every candidate it passed over with the obstacle in its way: already
-tried, above the ceiling, at its in-flight cap, an account cooldown, at the pace floor, an operator hold, in overage,
-ranked behind another candidate, its subscription ended, its window spent, or winding down; three placement fields
-wait on a later release and read empty until then.
+model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin continued and
+was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and by how many
+of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
+above the ceiling, at its in-flight cap, an account cooldown, at the pace floor, an operator hold, in overage,
+ranked behind another candidate, its subscription ended, its window spent, or winding down.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -259,24 +260,28 @@ classless request folds under the reserved value alongside a keepalive credit. A
 the same id appears twice under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures
 stay with the key that spent them. The client and user agent filters take the same patterns as the request log's, and
 under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two
-groups, every other agent under `other`. Traffic reports request volume by outcome and the error rate; Latency
-reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired
-between turns, the share of input served from cache, and the output split into thinking and plain output; Cost
-reports the estimated spend for the range; Cache warming reports what probes cost against what they saved; and
-Upstreams reports peak utilization, ineligible time, and pin churn per upstream. The range also carries what the
-account rollups keep: the plan's burn in meter tokens for a subscription account and in dollars for an api-key
-account, side by side and each split into cached and uncached tokens, a subscription account's meter tokens
-carrying the peak band's weight for the hour they landed in, the same weight the live fit divides by; the
-cache-write tokens the first request after a move paid to warm its new upstream; and the moves the range counted,
-by reason. Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives
-back only the hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and
-a later announcement books the next stretch. Filtered to one session, the view sums the request log instead of the
-rollups, and the cost split, the cache write and read costs, and the Cache warming figures read as unavailable
-because the request log does not carry them; the Upstreams section keeps reading the rollups for the range, since
-they carry no session, and its subtitle says so.
+groups, every other agent under `other`.
 
-![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
-![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)
+Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
+beside it: the cache-write tokens the first request after a move paid to warm its new upstream, and the moves the range
+counted, by reason. Burn reports the plan's burn in meter tokens for a subscription account and in dollars for an
+api-key account, side by side and each split into cached and uncached tokens, grouped by upstream, key, session, or
+request class, beside a Plan meter fit table (see [Plan meter](#plan-meter)); a subscription account's meter tokens
+carry the peak band's weight for the hour they landed in, the same weight the live fit divides by. Latency reports
+percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
+the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
+spend for the range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak
+utilization, ineligible time, and pin churn per upstream.
+
+Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives back only the
+hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later
+announcement books the next stretch. Filtered to one session, the view sums the request log instead of the rollups, and
+the cost split, the cache write and read costs, and the Cache warming figures read as unavailable because the request
+log does not carry them; the Upstreams section keeps reading the rollups for the range, since they carry no session, and
+its subtitle says so.
+
+![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-light.png#only-light)
+![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-dark.png#only-dark)
 
 ### Settings
 

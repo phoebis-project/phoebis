@@ -65,6 +65,7 @@ Every field, in the order the request body takes them:
 | `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
 | `retry_in_place_seconds` | `10` | 0 to 300; see Retry in place |
 | `in_flight_cap` | `16` | at least 1; see In-flight caps |
+| `pace_floor` | `0.05` | 0 to 1; see Selection |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
@@ -236,15 +237,6 @@ A non-portable request, one whose body references a `file_id`, a `container`, or
 answered by its live pin's account or not at all. With affinity off, an expired pin, or no session id, it runs
 the normal selection instead, and the account-scoped reference it carries may then not resolve.
 
-**Subscription end** An operator can mark an OAuth account cancelled and save the end it stops serving at; the
-account form prefills that end from the profile's start, or a trial end already passed, advanced to the next
-occurrence of the same day of the month and time of day, editable before it is saved. A trial end still ahead of
-now counts as an end the same way, even on an account nobody has cancelled. Inside `wind_down_minutes` (default
-30) of its end, an account takes a fresh session only as the last resort, and a cold pin moves off it once
-another account can serve; a warm session stays. Past the end, a cancelled account is the obstacle
-`subscription_ended`, and the upstream refuses the now-dead credential, so the session's next request fails over
-to a sibling.
-
 ### Moves
 
 A live pin on a portable request moves only when its session sends a request, and only by one of five rules,
@@ -281,7 +273,7 @@ overage once its cache is cold, or once it has sat on the key for `source_dwell_
 API key names no reset, so no grace applies.
 
 **Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is
-not winding down. A warm one stays (see **Subscription end**, above).
+not winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With `migrate_above_utilization` set, a request pinned to an account that reads at or above the
 threshold on its 5-hour or 7-day window starts a shedding round there, at most once per `source_dwell_seconds`.
@@ -293,6 +285,10 @@ whose burn carries the total past the share stays marked, and the round stops th
 order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
 orders every pin by burn over rewrite cost, cold or warm.
 
+The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
+presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative
+(0.3, 900 s, 1800 s).
+
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A marked pin whose account is cooling for the session's model is released instead, with
 `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can hold
@@ -301,13 +297,14 @@ that stays idle never moves, no new round runs on the account until the dwell pa
 so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
-or `compaction` request (`x-claude-code-request-class`) refreshes it, and any other class leaves it alone. Without the
-class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats the
-session's static prefix (tools and system prompt) without extending its messages restarted the conversation and reads
-cold; one that matches neither changes nothing. A request that carries `x-claude-code-context-compacted` reads cold
-whatever else it says, so a compacted session goes first in the round's order on the request that carries the fact. A
-body the router cannot read refreshes the pin on every request. A keepalive probe replays another request's headers and
-body, so the router judges none of them: a probe never colds a session, and its renewal counts as a refresh.
+or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
+any other class leaves it alone. Without the class header, a request whose messages extend the session's conversation
+refreshes the pin; one that repeats the session's static prefix (tools and system prompt) without extending its messages
+restarted the conversation and reads cold; one that matches neither changes nothing. A request that carries
+`x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the round's
+order on the request that carries the fact. A body the router cannot read refreshes the pin on every request. A
+keepalive probe replays another request's headers and body, so the router judges none of them: a probe never colds a
+session, and its renewal counts as a refresh.
 
 **Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
 tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
@@ -417,6 +414,10 @@ The Upstreams view shows what an upstream is cooling under in a cooling-down blo
 upstream or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
 by model.
 
+The console's Pools form offers `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor` together as three
+presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative (16, 20 s,
+5 %); balanced and conservative differ in the retry-in-place bound alone.
+
 ### Retry in place
 
 A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
@@ -483,8 +484,13 @@ session is not using.
 
 A pool's `overage_policy` chooses what happens once an upstream starts billing extra usage:
 
-- **Prefer plan quota** (`prefer_plan`): move sessions to a sibling with plan quota when this upstream starts
-  billing extra usage.
+- **Prefer plan quota** (`prefer_plan`): a pinned session on this upstream moves to a plan-funded subscription
+  sibling with allowance, warm or cold, once the reset the overage evidence names is further away than
+  `overage_move_grace_minutes` (default 30); an API-key sibling is never its destination, since a subscription
+  account in overage still costs less than one. A hard reason on the account instead, such as a spent window or a
+  cooldown, takes the move it already has, which may land on an API-key sibling. An API-key member returns to plan
+  quota the same way, independent of this policy, once its pin is cold or has sat on the key for
+  `source_dwell_seconds` (see [Moves](#moves)).
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an upstream in extra usage as unavailable until its window resets.
 
@@ -500,3 +506,15 @@ Whether the flag still counts is one rule every reader applies alike, the select
 included: an account counts as in overage while the reset its evidence names is ahead of now; evidence that names
 none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past its observation, and is then
 re-read against the same rule.
+
+## Subscription end
+
+An operator can mark an OAuth account cancelled and save the end it stops serving at; the account form prefills
+that end from the profile's start, or a trial end already passed, advanced to the next occurrence of the same day
+of the month and time of day, editable before it is saved. A trial end still ahead of now counts as an end the
+same way, even on an account nobody has cancelled.
+
+Inside `wind_down_minutes` (default 30) of its end, an account takes a fresh session only as the last resort, and
+a cold pin moves off it once another account can serve; a warm session stays (the **Drain** rule of
+[Moves](#moves)). Past the end, a cancelled account is the obstacle `subscription_ended`, and the upstream refuses
+the now-dead credential, so the session's next request fails over to a sibling.
