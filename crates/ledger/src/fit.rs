@@ -316,12 +316,14 @@ impl WindowFit {
 /// Tokens are booked when an attempt completes, since the meter charges a request on the reading that follows
 /// it, weighted by the band in force at that instant; an attempt still open tells the fitter that a rise
 /// meanwhile is its own. A reading at least `MIN_INTERVAL_MS` past the previous one adds its rise to the run, and
-/// the run folds once its delta reaches three quanta with tokens booked and no attempt open on the account: a
-/// rise read while one is open may carry that attempt's charge, whose tokens are not booked yet, so the run
-/// carries both until a reading with nothing open. A run is dropped when a reset falls inside it (the reset moved,
-/// or the utilization fell by a quantum or more; a smaller fall reads as flat), when it outgrows the window, when
-/// it rose with nothing booked and nothing open (spend the router did not send), or when a stream that straddles a
-/// reset lands in it.
+/// the run folds once its delta reaches three quanta with tokens booked and no attempt open on the account other
+/// than the one whose response head carried the reading: a rise read while another is open may carry that
+/// attempt's charge, whose tokens are not booked yet, so the run carries both until a reading with no other open,
+/// while the carrier's own charge falls on a later reading and is not in this one. A run is dropped when a reset
+/// falls inside it (the reset moved, or the utilization fell by a quantum or more; a smaller fall reads as flat),
+/// when it outgrows the window, when it rose with nothing booked and nothing open, the carrier included (spend the
+/// router did not send; a head with nothing booked carries a rise its own completion may still book), or when a
+/// stream that straddles a reset lands in it.
 /// A window that has folded answers its row, carry included, at every reading judged, so a restart continues
 /// the run rather than starting it over.
 pub struct Fitter {
@@ -437,7 +439,9 @@ impl Fitter {
     }
 
     /// A sample landed; answers the row to report when the window has folded and the reading moved its state
-    /// (a fold, a dropped run, or the carry), `None` otherwise.
+    /// (a fold, a dropped run, or the carry), `None` otherwise. `carrier` names the request id and attempt whose
+    /// response head carried the reading, `None` for a poll.
+    #[allow(clippy::too_many_arguments)]
     pub fn sampled(
         &mut self,
         account_id: &str,
@@ -445,16 +449,22 @@ impl Fitter {
         window: &str,
         utilization: f64,
         reset: Option<i64>,
+        carrier: Option<(&str, u32)>,
         at: i64,
     ) -> Option<FitRow> {
         let window = window_key(window)?;
         if !utilization.is_finite() {
             return None;
         }
-        let open = self
+        let (open, open_others) = self
             .open
             .get(account_id)
-            .is_some_and(|attempts| !attempts.is_empty());
+            .map_or((false, false), |attempts| {
+                let others = attempts
+                    .keys()
+                    .any(|(id, attempt)| carrier != Some((id.as_str(), *attempt)));
+                (!attempts.is_empty(), others)
+            });
         let fit = self
             .fits
             .entry((account_id.to_string(), window))
@@ -521,7 +531,7 @@ impl Fitter {
                     fit.run.since = Some(at);
                 }
             }
-        } else if !open && booked.is_finite() && fit.run.delta + SLACK >= FOLD_DELTA {
+        } else if !open_others && booked.is_finite() && fit.run.delta + SLACK >= FOLD_DELTA {
             fit.fold(reading);
         }
         fit.report(account_id, window)

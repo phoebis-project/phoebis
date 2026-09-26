@@ -98,17 +98,19 @@ account once it folds.
 **Live fit** The ledger fits each subscription account's window sizes from its own traffic: the meter tokens the router
 sent to the account, booked when each request completes, against the rise of the account's utilization readings. A run
 of readings folds once it has risen by three hundredths of the window, reading the booked tokens over the summed rise,
-so no fold rests on a single rounding step. A reading taken while one of the router's requests is in flight on the
-account folds nothing, since its rise may carry that request's charge before its tokens are booked; the run carries on
-to the next reading taken with nothing in flight. A response head always has its own request in flight, so the folds
-come from the usage poll and from the fetches that read an idle account. The fit drops a run when a reset falls inside
-it (the reset time moved or the utilization fell by a hundredth or more; a smaller fall is rounding and reads as flat),
-when it outgrows its window, when the utilization rose while the router had nothing booked or in flight on the account,
-and when a request that went out before a reset finished after it. The ratios between token types stay the table's; a
-per-model correction moves only once the fit is confident and the model mix changed between folds. Spend another client
-sends while one of the router's requests is in flight counts as the router's, since the usage endpoint reports no
-per-surface breakdown. Each fit keeps its carried run and its band sums in the registry beside the size, so a restart
-continues them.
+so no fold rests on a single rounding step. A reading folds nothing while any of the router's requests other than the
+one whose response head carried it is in flight on the account, since its rise may carry that request's charge before
+its tokens are booked; the run carries on to the next reading with no other request in flight. The carrying request's
+own charge is not in its head's reading, since the meter charges a request on the reading that follows it, so an account
+whose requests run one after another folds at each head, and one that keeps two or more requests in flight folds only at
+a reading with at most its own in flight; a run that outgrows its window that way is dropped. The fit drops a run when a
+reset falls inside it (the reset time moved or the utilization fell by a hundredth or more; a smaller fall is rounding
+and reads as flat), when it outgrows its window, when the utilization rose while the router had nothing booked or in
+flight on the account, and when a request that went out before a reset finished after it. The ratios between token types
+stay the table's; a per-model correction moves only once the fit is confident and the model mix changed between folds.
+Spend another client sends while one of the router's requests is in flight counts as the router's, since the usage
+endpoint reports no per-surface breakdown. Each fit keeps its carried run and its band sums in the registry beside the
+size, so a restart continues them.
 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
 UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and

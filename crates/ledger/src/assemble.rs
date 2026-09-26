@@ -64,6 +64,9 @@ pub enum Record {
     Samples {
         quota: Vec<QuotaSampleRecord>,
         extra: Option<ExtraUsageSampleRecord>,
+        /// The request id and attempt whose response head carried the samples, `None` for a poll. The fitter
+        /// alone reads it: the samples table keeps the readings, not where they came from.
+        carrier: Option<(String, u32)>,
     },
 }
 
@@ -300,7 +303,11 @@ impl Assembler {
                             head.observed_at,
                         );
                         if !quota.is_empty() || extra.is_some() {
-                            records.push(Record::Samples { quota, extra });
+                            records.push(Record::Samples {
+                                quota,
+                                extra,
+                                carrier: Some((head.request_id.clone(), attempt.attempt)),
+                            });
                         }
                     }
                 }

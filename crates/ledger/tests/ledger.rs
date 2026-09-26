@@ -1303,6 +1303,7 @@ async fn reading(h: &Harness, at: i64, utilization: f64) {
             source: "header".into(),
         }],
         extra: None,
+        carrier: None,
     });
     landed_reading(h, bucket, utilization).await;
 }

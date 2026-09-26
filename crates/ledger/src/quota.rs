@@ -180,7 +180,11 @@ impl QuotaPoll {
         match usage.snapshot(&account.id).await {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);
-                ledger.record(Record::Samples { quota, extra });
+                ledger.record(Record::Samples {
+                    quota,
+                    extra,
+                    carrier: None,
+                });
                 if let Some(router) = router {
                     // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
                     // from selection; both halves go, as the selection's own pull sends them, so the first

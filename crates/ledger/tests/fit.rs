@@ -95,7 +95,20 @@ impl Run {
 
     fn read_reset(&mut self, window: &str, utilization: f64, reset: Option<i64>) -> Option<FitRow> {
         self.fit
-            .sampled(self.account, 1, window, utilization, reset, self.now)
+            .sampled(self.account, 1, window, utilization, reset, None, self.now)
+    }
+
+    /// The reading the response head of attempt 1 of `id` carries, where `read` is a poll's.
+    fn head(&mut self, id: &str, window: &str, utilization: f64) -> Option<FitRow> {
+        self.fit.sampled(
+            self.account,
+            1,
+            window,
+            utilization,
+            None,
+            Some((id, 1)),
+            self.now,
+        )
     }
 
     /// An interval of `tokens` Opus input tokens that the reading answers with a rise of `rise`.
@@ -416,6 +429,7 @@ fn a_fold_waits_while_an_attempt_is_open_and_reads_both_overlapping_streams() {
     r.step(MINUTE);
     r.complete(&early, went_out, OPUS, SIXTEENTH);
     r.step(MINUTE);
+    // A poll, never the late stream's own head, whose attempt holds no fold.
     assert!(
         r.read(FIVE_HOUR, 2.0 * SHARE).is_none(),
         "the late stream is still open: its share of the rise has no tokens booked yet"
@@ -430,6 +444,38 @@ fn a_fold_waits_while_an_attempt_is_open_and_reads_both_overlapping_streams() {
         (row.scale, row.intervals),
         (completed.scale, completed.intervals),
         "the overlapping streams fit as the completed interval does"
+    );
+    assert_eq!(row.scale, MAX_5X_FIVE_HOUR);
+}
+
+/// The meter charges a request on the reading that follows it, so the reading a stream's own head carries holds
+/// none of that stream's charge: with the stream the only attempt open, its head folds the rise the completed
+/// stream before it caused, as a poll with nothing open would.
+#[test]
+fn a_head_reading_carried_by_the_only_open_attempt_folds() {
+    let mut polled = Run::at(EARLY);
+    polled.read(FIVE_HOUR, 0.0);
+    polled.step(10 * MINUTE);
+    polled.send(OPUS, SIXTEENTH);
+    polled.step(2 * MINUTE);
+    let reference = polled
+        .read(FIVE_HOUR, SHARE)
+        .expect("nothing open: the rise folds");
+
+    let mut r = Run::at(EARLY);
+    r.read(FIVE_HOUR, 0.0);
+    r.step(10 * MINUTE);
+    r.send(OPUS, SIXTEENTH);
+    r.step(MINUTE);
+    let next = r.start();
+    r.step(MINUTE);
+    let row = r
+        .head(&next, FIVE_HOUR, SHARE)
+        .expect("the next stream's own head folds the completed stream's rise");
+    assert_eq!(
+        (row.scale, row.intervals),
+        (reference.scale, reference.intervals),
+        "the head folds as the poll does"
     );
     assert_eq!(row.scale, MAX_5X_FIVE_HOUR);
 }

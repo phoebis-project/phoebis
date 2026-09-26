@@ -420,7 +420,7 @@ fn fit_batch(fitter: &mut Fitter, router: &RouterHandle, clock: &Clock, batch: &
                     );
                 }
             }
-            Record::Samples { quota, .. } => {
+            Record::Samples { quota, carrier, .. } => {
                 let snapshot = router.snapshot();
                 // The record carries only its five-minute bucket; the writer sees it within moments of the
                 // reading, which is the precision the fit's one-minute gate needs.
@@ -441,6 +441,9 @@ fn fit_batch(fitter: &mut Fitter, router: &RouterHandle, clock: &Clock, batch: &
                         &sample.window,
                         utilization,
                         sample.reset_at,
+                        carrier
+                            .as_ref()
+                            .map(|(id, attempt)| (id.as_str(), *attempt)),
                         now,
                     ) {
                         router.report(Report::Fit {
@@ -534,7 +537,7 @@ async fn land(
                             attempts,
                         });
                     }
-                    Record::Samples { quota, extra } => {
+                    Record::Samples { quota, extra, .. } => {
                         insert_samples_in(&tx, quota, extra.as_ref())?;
                         observations.push(Observation::Samples {
                             quota: quota.clone(),
