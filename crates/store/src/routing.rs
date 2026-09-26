@@ -1,13 +1,24 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 use crate::{Store, StoreError, LOCK_POISONED};
+
+/// The identity a pin is held under: one conversation of one agent under one key, per model.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PinKey {
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub model: String,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinRow {
     pub key_id: String,
     pub session_id: String,
+    pub agent_id: String,
     pub model: String,
     pub account_id: String,
     pub epoch: u64,
@@ -36,6 +47,17 @@ pub struct PinRow {
     pub shed_at: Option<i64>,
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
+}
+
+impl PinRow {
+    pub fn key(&self) -> PinKey {
+        PinKey {
+            key_id: self.key_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            model: self.model.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,16 +188,104 @@ fn fit_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<FitRow> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RekeyWrite {
     pub resolution: ResolutionRow,
-    /// `(key_id, session_id, model)` of each pin under the spelling.
-    pub delete_pins: Vec<(String, String, String)>,
+    pub delete_pins: Vec<PinKey>,
     pub upsert_pins: Vec<PinRow>,
     /// `(account_id, scope)` of each cooldown under the spelling.
     pub delete_cooldowns: Vec<(String, String)>,
     pub upsert_cooldowns: Vec<CooldownRow>,
 }
 
+/// What a hash in the `affinity` table is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AffinityChain {
+    Message,
+    Request,
+    Response,
+    Static,
+}
+
+impl AffinityChain {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AffinityChain::Message => "message",
+            AffinityChain::Request => "request",
+            AffinityChain::Response => "response",
+            AffinityChain::Static => "static",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<AffinityChain> {
+        match value {
+            "message" => Some(AffinityChain::Message),
+            "request" => Some(AffinityChain::Request),
+            "response" => Some(AffinityChain::Response),
+            "static" => Some(AffinityChain::Static),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for AffinityChain {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        AffinityChain::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for AffinityChain {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// One boundary or parent id: which account the conversation it names last ran on, whose conversation it belongs
+/// to, and, when the cache confirmed it, how warm it is. The links (the account, the key, the root) are written
+/// for every completed response; the warmth is written only with cache evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AffinityRow {
+    pub model: String,
+    pub hash: String,
+    pub chain: AffinityChain,
+    /// The account and its incarnation, as the routing state's other account-bound rows carry them: a row
+    /// under another incarnation is a replaced account's and is dropped.
+    pub account_id: String,
+    pub incarnation: u64,
+    /// `written_at` is the last report's time (the purge reads it). `ttl_ms` is the lifetime of the marker the
+    /// writing request carried on this boundary's tier, as sent upstream; 0 for a link the cache never
+    /// confirmed, which never places. `prefix_tokens` is the promised prefix: for a `static` row the relay's
+    /// estimate of the blocks the boundary covers (canonical bytes over four), for a `message`, `response` or
+    /// `request` row the cached tokens the upstream reported for the writing request.
+    pub written_at: i64,
+    pub ttl_ms: i64,
+    pub prefix_tokens: u64,
+    pub key_id: String,
+    pub key_generation: i64,
+    /// The conversation the writing request belonged to: its resolved session under an identity, its own first
+    /// message boundary for a request with none.
+    pub root: String,
+}
+
+const AFFINITY_COLUMNS: &str =
+    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root";
+
+fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
+    Ok(AffinityRow {
+        model: r.get(0)?,
+        hash: r.get(1)?,
+        chain: r.get(2)?,
+        account_id: r.get(3)?,
+        incarnation: r.get::<_, i64>(4)? as u64,
+        written_at: r.get(5)?,
+        ttl_ms: r.get(6)?,
+        prefix_tokens: r.get::<_, i64>(7)? as u64,
+        key_id: r.get(8)?,
+        key_generation: r.get(9)?,
+        root: r.get(10)?,
+    })
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
+    pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
     pub fits: Vec<FitRow>,
     pub overage: Vec<OverageRow>,
@@ -194,14 +304,14 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare("SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd FROM pins ORDER BY key_id, session_id, model")?
+            pins: tx.prepare("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd FROM pins ORDER BY key_id, session_id, agent_id, model")?
                 .query_map([], |r| Ok(PinRow {
-                    key_id: r.get(0)?, session_id: r.get(1)?, model: r.get(2)?, account_id: r.get(3)?,
-                    epoch: r.get::<_, i64>(4)? as u64, created_at: r.get(5)?, last_used_at: r.get(6)?,
-                    key_generation: r.get(7)?, incarnation: r.get::<_, i64>(8)? as u64,
-                    burn: r.get(9)?, burn_at: r.get(10)?, burn_usd: r.get(18)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
-                    last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
-                    shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
+                    key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
+                    epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
+                    key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64,
+                    burn: r.get(10)?, burn_at: r.get(11)?, burn_usd: r.get(19)?, last_input_tokens: r.get::<_, i64>(12)? as u64,
+                    last_refresh_at: r.get(13)?, cache_ttl_ms: r.get(14)?,
+                    shed_from: r.get(15)?, shed_at: r.get(16)?, static_hash: r.get(17)?, tail_hash: r.get(18)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -209,6 +319,9 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             fits: tx.prepare(&format!("SELECT {FIT_COLUMNS} FROM plan_fits ORDER BY account_id, window"))?
                 .query_map([], fit_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            affinity: tx.prepare(&format!("SELECT {AFFINITY_COLUMNS} FROM affinity ORDER BY model, hash"))?
+                .query_map([], affinity_of)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -219,18 +332,52 @@ impl Store {
         upsert_pin_on(&self.conn.lock().expect(LOCK_POISONED), pin)
     }
 
-    pub fn delete_pin(
-        &self,
-        key_id: &str,
-        session_id: &str,
-        model: &str,
-    ) -> Result<bool, StoreError> {
-        delete_pin_on(
-            &self.conn.lock().expect(LOCK_POISONED),
-            key_id,
-            session_id,
-            model,
-        )
+    pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
+        delete_pin_on(&self.conn.lock().expect(LOCK_POISONED), key)
+    }
+
+    /// Every row lands or none does; a row under an existing (model, hash) replaces it.
+    pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for row in rows {
+            tx.execute(
+                &format!(
+                    "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                     ON CONFLICT(model, hash) DO UPDATE SET \
+                       chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
+                       written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
+                       key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root"
+                ),
+                params![
+                    row.model,
+                    row.hash,
+                    row.chain,
+                    row.account_id,
+                    row.incarnation as i64,
+                    row.written_at,
+                    row.ttl_ms,
+                    row.prefix_tokens as i64,
+                    row.key_id,
+                    row.key_generation,
+                    row.root
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_affinity(&self, keys: &[(String, String)]) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut deleted = 0;
+        for (model, hash) in keys {
+            deleted += conn.execute(
+                "DELETE FROM affinity WHERE model = ?1 AND hash = ?2",
+                params![model, hash],
+            )?;
+        }
+        Ok(deleted)
     }
 
     /// The later deadline always wins: a short `Retry-After` arriving after a long unified reset must not
@@ -272,8 +419,8 @@ impl Store {
                 rekey.resolution.resolved_at
             ],
         )?;
-        for (key_id, session_id, model) in &rekey.delete_pins {
-            delete_pin_on(&tx, key_id, session_id, model)?;
+        for key in &rekey.delete_pins {
+            delete_pin_on(&tx, key)?;
         }
         for pin in &rekey.upsert_pins {
             upsert_pin_on(&tx, pin)?;
@@ -364,9 +511,9 @@ impl Store {
 
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
-         ON CONFLICT(key_id, session_id, model) DO UPDATE SET \
+        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
+         ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
            account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
            last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
            incarnation = excluded.incarnation, burn = excluded.burn, burn_at = excluded.burn_at, \
@@ -376,6 +523,7 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         params![
             pin.key_id,
             pin.session_id,
+            pin.agent_id,
             pin.model,
             pin.account_id,
             pin.epoch as i64,
@@ -398,15 +546,10 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn delete_pin_on(
-    conn: &Connection,
-    key_id: &str,
-    session_id: &str,
-    model: &str,
-) -> Result<bool, StoreError> {
+fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
     Ok(conn.execute(
-        "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND model = ?3",
-        params![key_id, session_id, model],
+        "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
+        params![key.key_id, key.session_id, key.agent_id, key.model],
     )? > 0)
 }
 

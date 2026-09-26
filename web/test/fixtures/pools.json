@@ -50,15 +50,24 @@
         },
         "cache_ttl": {
           "enabled": false,
-          "in_overage": "5m",
-          "main": "1h",
-          "models": [],
-          "subagent": "1h"
+          "inject_when_absent": false,
+          "metered": {
+            "keepalive": "5m",
+            "main": "5m",
+            "models": [],
+            "subagent": "5m"
+          },
+          "plan": {
+            "keepalive": "1h",
+            "main": "1h",
+            "models": [],
+            "subagent": "1h"
+          }
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790412878204,
-        "updated_at": 1790412878204,
+        "created_at": 1790465806561,
+        "updated_at": 1790465806561,
         "members": [
           {
             "account_id": "business",
@@ -75,7 +84,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "TAamlUMm",
+            "prefix": "KOUbhRXc",
             "enabled": true
           }
         ],

@@ -4,8 +4,8 @@ mod common;
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    ApiKeyRow, CooldownRow, Failover, ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding,
-    Strategy,
+    Affinity, AffinitySource, ApiKeyRow, CooldownRow, Failover, MemberWrite,
+    ModelRule, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Shedding, Strategy,
 };
 use common::{get, json, login, NOW};
 use serde_json::json as j;
@@ -66,6 +66,8 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: Affinity::default(),
+                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -76,7 +78,20 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
         .store
         .set_pool_members(
             "main",
-            &[("business".into(), 0), ("direct".into(), 1)],
+            &[
+                MemberWrite {
+                    account_id: "business".into(),
+                    priority: 0,
+                    budget_usd: None,
+                    budget_period: phoebis_store::BudgetPeriod::Month,
+                },
+                MemberWrite {
+                    account_id: "direct".into(),
+                    priority: 1,
+                    budget_usd: None,
+                    budget_period: phoebis_store::BudgetPeriod::Month,
+                },
+            ],
             "test",
         )
         .unwrap();
@@ -107,6 +122,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

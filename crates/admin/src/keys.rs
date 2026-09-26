@@ -264,6 +264,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         last_used_at: None,
         retired_secret_last_used_at: None,
         in_flight_cap: None,
+        affinity_source: phoebis_store::AffinitySource::Auto,
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;

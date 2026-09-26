@@ -1,6 +1,6 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, FitRow, OverageRow, PinRow, RekeyWrite,
-    ResolutionRow, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, FitRow,
+    OverageRow, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -12,6 +12,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
     PinRow {
         key_id: key_id.into(),
         session_id: session_id.into(),
+        agent_id: "main".into(),
         model: model.into(),
         account_id: account_id.into(),
         epoch: 1,
@@ -208,6 +209,29 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
 }
 
 #[test]
+fn two_agents_of_one_session_hold_two_pins() {
+    let store = store_with(&["a"]);
+    let main = pin("k", "s", "claude-sonnet-5", "a");
+    let subagent = PinRow {
+        agent_id: "sub-1".into(),
+        ..main.clone()
+    };
+    store.upsert_pin(&main).unwrap();
+    store.upsert_pin(&subagent).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins.len(),
+        2,
+        "the two agents of one session each hold their own pin"
+    );
+    assert!(store.delete_pin(&subagent.key()).unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![main],
+        "the other agent's pin is untouched"
+    );
+}
+
+#[test]
 fn overage_evidence_only_moves_forward_in_time() {
     let store = store_with(&["a"]);
     let newer = OverageRow {
@@ -307,7 +331,12 @@ fn rekey_of_a() -> RekeyWrite {
             dated_id: DATED.into(),
             resolved_at: 1_500,
         },
-        delete_pins: vec![("k".into(), "s".into(), SPELLING.into())],
+        delete_pins: vec![PinKey {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: SPELLING.into(),
+        }],
         upsert_pins: vec![PinRow {
             model: DATED.into(),
             ..spelling_pin()
@@ -427,5 +456,87 @@ fn a_fit_row_round_trips_and_a_second_write_replaces_it() {
         store.fits().unwrap(),
         vec![refitted],
         "a second write for the same account and window replaces it rather than adding a row"
+    );
+}
+
+fn affinity_row(model: &str, hash: &str, account_id: &str) -> AffinityRow {
+    AffinityRow {
+        model: model.into(),
+        hash: hash.into(),
+        chain: AffinityChain::Message,
+        account_id: account_id.into(),
+        incarnation: 1,
+        written_at: 1_000,
+        ttl_ms: 300_000,
+        prefix_tokens: 500,
+        key_id: "k".into(),
+        key_generation: 1,
+        root: "root-1".into(),
+    }
+}
+
+#[test]
+fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
+    let store = store_with(&["a"]);
+    let rows = vec![
+        affinity_row("claude-sonnet-5", "hash-1", "a"),
+        affinity_row("claude-sonnet-5", "hash-2", "a"),
+        affinity_row("claude-opus-5", "hash-3", "a"),
+    ];
+    store.upsert_affinity(&rows).unwrap();
+    let replacement = AffinityRow {
+        written_at: 2_000,
+        ..affinity_row("claude-sonnet-5", "hash-1", "a")
+    };
+    store.upsert_affinity(&[replacement]).unwrap();
+    let loaded = store.load_routing().unwrap().affinity;
+    assert_eq!(
+        loaded.len(),
+        3,
+        "the row under the existing key replaced rather than added"
+    );
+    assert_eq!(
+        loaded
+            .iter()
+            .find(|r| r.hash == "hash-1")
+            .unwrap()
+            .written_at,
+        2_000,
+        "the replacement landed"
+    );
+    assert_eq!(
+        loaded
+            .iter()
+            .map(|r| (r.model.as_str(), r.hash.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("claude-opus-5", "hash-3"),
+            ("claude-sonnet-5", "hash-1"),
+            ("claude-sonnet-5", "hash-2"),
+        ],
+        "the load reads model, hash order"
+    );
+    let deleted = store
+        .delete_affinity(&[
+            ("claude-sonnet-5".into(), "hash-1".into()),
+            ("claude-opus-5".into(), "hash-3".into()),
+        ])
+        .unwrap();
+    assert_eq!(deleted, 2);
+    let remaining = store.load_routing().unwrap().affinity;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].hash, "hash-2");
+}
+
+#[test]
+fn an_affinity_row_cascades_with_its_account() {
+    let store = store_with(&["a"]);
+    store
+        .upsert_affinity(&[affinity_row("claude-sonnet-5", "hash-1", "a")])
+        .unwrap();
+    store.delete_account("a", "test").unwrap();
+    assert!(
+        store.load_routing().unwrap().affinity.is_empty(),
+        "foreign keys cascade the row"
     );
 }

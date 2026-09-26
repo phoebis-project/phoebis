@@ -2,7 +2,7 @@
 mod common;
 use std::sync::atomic::Ordering;
 
-use phoebis_store::{ApiKeyRow, CooldownRow, RulesMode};
+use phoebis_store::{AffinitySource, ApiKeyRow, CooldownRow, RulesMode};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -126,6 +126,7 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

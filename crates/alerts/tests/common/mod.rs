@@ -21,8 +21,9 @@ use phoebis_ledger::{
 use phoebis_oauth::Clock;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AlertRuleRow, ApiKeyRow, Failover, OveragePolicy,
-    PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, AlertRuleRow, ApiKeyRow,
+    Failover, MemberWrite, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Secret,
+    Shedding, StorageKey, Store, Strategy,
 };
 
 pub const NOW: i64 = 1_700_000_000_000;
@@ -193,6 +194,8 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: Affinity::default(),
+                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -202,7 +205,20 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
     store
         .set_pool_members(
             "main",
-            &[("business".into(), 0), ("direct".into(), 1)],
+            &[
+                MemberWrite {
+                    account_id: "business".into(),
+                    priority: 0,
+                    budget_usd: None,
+                    budget_period: phoebis_store::BudgetPeriod::Month,
+                },
+                MemberWrite {
+                    account_id: "direct".into(),
+                    priority: 1,
+                    budget_usd: None,
+                    budget_period: phoebis_store::BudgetPeriod::Month,
+                },
+            ],
             "test",
         )
         .unwrap();
@@ -228,6 +244,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

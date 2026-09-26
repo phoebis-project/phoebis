@@ -946,6 +946,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let pin = |session: &str, account: &str| phoebis_store::PinRow {
         key_id: "desktop".into(),
         session_id: session.into(),
+        agent_id: "main".into(),
         model: "claude-sonnet-5".into(),
         account_id: account.into(),
         epoch: 1,

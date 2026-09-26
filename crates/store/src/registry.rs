@@ -209,6 +209,264 @@ impl ToSql for OveragePolicy {
     }
 }
 
+/// Whether a session or a subagent cohort holds its pin to one account regardless of cache evidence, or only
+/// while the evidence still confirms a warm prefix there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AffinityMode {
+    #[default]
+    Always,
+    WhenCached,
+}
+
+impl AffinityMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AffinityMode::Always => "always",
+            AffinityMode::WhenCached => "when_cached",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<AffinityMode> {
+        match value {
+            "always" => Some(AffinityMode::Always),
+            "when_cached" => Some(AffinityMode::WhenCached),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for AffinityMode {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        AffinityMode::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for AffinityMode {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// Where a subagent of a pinned session lands without a pin of its own: by its cohort's own placement rules, by
+/// the pool's ordinary selection strategy, or beside the session's main agent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SubagentPlacement {
+    #[default]
+    ByCohort,
+    ByStrategy,
+    WithMain,
+}
+
+impl SubagentPlacement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubagentPlacement::ByCohort => "by_cohort",
+            SubagentPlacement::ByStrategy => "by_strategy",
+            SubagentPlacement::WithMain => "with_main",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<SubagentPlacement> {
+        match value {
+            "by_cohort" => Some(SubagentPlacement::ByCohort),
+            "by_strategy" => Some(SubagentPlacement::ByStrategy),
+            "with_main" => Some(SubagentPlacement::WithMain),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for SubagentPlacement {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        SubagentPlacement::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for SubagentPlacement {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// Where a fresh session with no pin of its own lands: by the pool's ordinary selection strategy, or on whichever
+/// account holds the warmest matching prefix.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionPlacement {
+    #[default]
+    ByStrategy,
+    ByWarmPrefix,
+}
+
+impl SessionPlacement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionPlacement::ByStrategy => "by_strategy",
+            SessionPlacement::ByWarmPrefix => "by_warm_prefix",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<SessionPlacement> {
+        match value {
+            "by_strategy" => Some(SessionPlacement::ByStrategy),
+            "by_warm_prefix" => Some(SessionPlacement::ByWarmPrefix),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for SessionPlacement {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        SessionPlacement::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for SessionPlacement {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// Whether the upstream's own identity and quota headers reach the client on a pool's responses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuotaHeaders {
+    Hide,
+    #[default]
+    Pass,
+}
+
+impl QuotaHeaders {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QuotaHeaders::Hide => "hide",
+            QuotaHeaders::Pass => "pass",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<QuotaHeaders> {
+        match value {
+            "hide" => Some(QuotaHeaders::Hide),
+            "pass" => Some(QuotaHeaders::Pass),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for QuotaHeaders {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        QuotaHeaders::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for QuotaHeaders {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// Which source of the conversation climb a key's conversations are identified by, `Auto` running the climb as the
+/// spec orders it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AffinitySource {
+    #[default]
+    Auto,
+    Content,
+    Session,
+    UserId,
+    WholeKey,
+}
+
+impl AffinitySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AffinitySource::Auto => "auto",
+            AffinitySource::Content => "content",
+            AffinitySource::Session => "session",
+            AffinitySource::UserId => "user_id",
+            AffinitySource::WholeKey => "whole_key",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<AffinitySource> {
+        match value {
+            "auto" => Some(AffinitySource::Auto),
+            "content" => Some(AffinitySource::Content),
+            "session" => Some(AffinitySource::Session),
+            "user_id" => Some(AffinitySource::UserId),
+            "whole_key" => Some(AffinitySource::WholeKey),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for AffinitySource {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        AffinitySource::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for AffinitySource {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// The period a member's spend budget resets over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BudgetPeriod {
+    Day,
+    #[default]
+    Month,
+}
+
+impl BudgetPeriod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BudgetPeriod::Day => "day",
+            BudgetPeriod::Month => "month",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<BudgetPeriod> {
+        match value {
+            "day" => Some(BudgetPeriod::Day),
+            "month" => Some(BudgetPeriod::Month),
+            _ => None,
+        }
+    }
+}
+
+impl FromSql for BudgetPeriod {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        BudgetPeriod::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+    }
+}
+
+impl ToSql for BudgetPeriod {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
+/// The pin and placement knobs of a pool beside `affinity_ttl_seconds`; `Default` is the shipped preset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Affinity {
+    pub mode: AffinityMode,
+    pub subagent_placement: SubagentPlacement,
+    pub session_placement: SessionPlacement,
+    pub min_shared_prefix_tokens: u64,
+}
+
+impl Default for Affinity {
+    fn default() -> Self {
+        Affinity {
+            mode: AffinityMode::Always,
+            subagent_placement: SubagentPlacement::ByCohort,
+            session_placement: SessionPlacement::ByStrategy,
+            min_shared_prefix_tokens: 20_000,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PoolRow {
     pub id: String,
@@ -229,6 +487,9 @@ pub struct PoolRow {
     pub cache_ttl_json: String,
     /// `None` inherits `compatibility.cache_diagnostics`; `Some` overrides it for this pool.
     pub cache_diagnostics: Option<bool>,
+    pub affinity: Affinity,
+    /// Whether a member's own identity and quota headers reach the client on this pool's responses.
+    pub quota_headers: QuotaHeaders,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -246,6 +507,19 @@ pub struct PoolMember {
     pub pool_id: String,
     pub account_id: String,
     pub priority: u32,
+    /// `None` is no budget; the member spends without a cap.
+    pub budget_usd: Option<f64>,
+    pub budget_period: BudgetPeriod,
+}
+
+/// What `set_pool_members` writes for one member: its priority beside its own account and spend budget, so a
+/// caller cannot set one without the other.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberWrite {
+    pub account_id: String,
+    pub priority: u32,
+    pub budget_usd: Option<f64>,
+    pub budget_period: BudgetPeriod,
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +546,7 @@ pub struct ApiKeyRow {
     pub retired_secret_last_used_at: Option<i64>,
     /// Requests in flight this key may hold at once; `None` is no cap.
     pub in_flight_cap: Option<u32>,
+    pub affinity_source: AffinitySource,
 }
 
 #[derive(Clone, Debug)]
@@ -409,9 +684,15 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             keys: all_keys(&tx)?,
             members: tx
-                .prepare("SELECT pool_id, account_id, priority FROM pool_members ORDER BY pool_id, account_id")?
+                .prepare("SELECT pool_id, account_id, priority, budget_usd, budget_period FROM pool_members ORDER BY pool_id, account_id")?
                 .query_map([], |r| {
-                    Ok(PoolMember { pool_id: r.get(0)?, account_id: r.get(1)?, priority: r.get::<_, i64>(2)? as u32 })
+                    Ok(PoolMember {
+                        pool_id: r.get(0)?,
+                        account_id: r.get(1)?,
+                        priority: r.get::<_, i64>(2)? as u32,
+                        budget_usd: r.get(3)?,
+                        budget_period: r.get(4)?,
+                    })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pools: all_pools(&tx)?,
@@ -485,8 +766,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?25)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?30)",
             params![
                 row.id,
                 row.label,
@@ -512,6 +793,11 @@ impl Store {
                 row.failover.wind_down_minutes as i64,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
+                row.affinity.mode,
+                row.affinity.subagent_placement,
+                row.affinity.session_placement,
+                row.affinity.min_shared_prefix_tokens as i64,
+                row.quota_headers,
                 now
             ],
         )?;
@@ -525,7 +811,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, updated_at = ?25 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, quota_headers = ?29, updated_at = ?30 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -551,6 +837,11 @@ impl Store {
                 row.failover.wind_down_minutes as i64,
                 row.cache_ttl_json,
                 row.cache_diagnostics,
+                row.affinity.mode,
+                row.affinity.subagent_placement,
+                row.affinity.session_placement,
+                row.affinity.min_shared_prefix_tokens as i64,
+                row.quota_headers,
                 now
             ],
         )?;
@@ -585,12 +876,14 @@ impl Store {
     pub fn pool_members(&self, pool_id: &str) -> Result<Vec<PoolMember>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt =
-            conn.prepare("SELECT pool_id, account_id, priority FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
+            conn.prepare("SELECT pool_id, account_id, priority, budget_usd, budget_period FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
         let rows = stmt.query_map(params![pool_id], |r| {
             Ok(PoolMember {
                 pool_id: r.get(0)?,
                 account_id: r.get(1)?,
                 priority: r.get::<_, i64>(2)? as u32,
+                budget_usd: r.get(3)?,
+                budget_period: r.get(4)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -600,7 +893,7 @@ impl Store {
     pub fn set_pool_members(
         &self,
         pool_id: &str,
-        members: &[(String, u32)],
+        members: &[MemberWrite],
         actor: &str,
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
@@ -613,28 +906,31 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(pool_id.to_string()));
         }
-        for (account_id, _) in members {
+        for member in members {
             if tx.query_row(
                 "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                params![account_id],
+                params![member.account_id],
                 |r| r.get::<_, i64>(0),
             )? == 0
             {
-                return Err(StoreError::AccountNotFound(account_id.clone()));
+                return Err(StoreError::AccountNotFound(member.account_id.clone()));
             }
         }
         tx.execute(
             "DELETE FROM pool_members WHERE pool_id = ?1",
             params![pool_id],
         )?;
-        for (account_id, priority) in members {
+        for member in members {
             tx.execute(
-                "INSERT INTO pool_members (pool_id, account_id, priority) VALUES (?1, ?2, ?3)",
-                params![pool_id, account_id, *priority as i64],
+                "INSERT INTO pool_members (pool_id, account_id, priority, budget_usd, budget_period) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![pool_id, member.account_id, member.priority as i64, member.budget_usd, member.budget_period],
             )?;
         }
-        let diff = serde_json::json!({ "members": members.iter().map(|(a, p)| serde_json::json!({ "account_id": a, "priority": p })).collect::<Vec<_>>() })
-            .to_string();
+        let diff = serde_json::json!({ "members": members.iter().map(|m| serde_json::json!({
+            "account_id": m.account_id, "priority": m.priority,
+            "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
+        })).collect::<Vec<_>>() })
+        .to_string();
         record_change(&tx, now_ms(), actor, "pool_members_set", pool_id, &diff)?;
         tx.commit()?;
         Ok(())
@@ -680,8 +976,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, in_flight_cap, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, in_flight_cap, affinity_source, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -698,6 +994,7 @@ impl Store {
                 row.secret_digest,
                 row.prefix,
                 row.in_flight_cap.map(|c| c as i64),
+                row.affinity_source,
                 now
             ],
         )?;
@@ -718,7 +1015,7 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -731,7 +1028,8 @@ impl Store {
                 row.long_context_twins,
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64),
-                row.in_flight_cap.map(|c| c as i64)
+                row.in_flight_cap.map(|c| c as i64),
+                row.affinity_source
             ],
         )?;
         if updated == 0 {
@@ -976,8 +1274,8 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, in_flight_cap FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, in_flight_cap, affinity_source FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1028,6 +1326,13 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         },
         cache_ttl_json: r.get(24)?,
         cache_diagnostics: r.get::<_, Option<bool>>(25)?,
+        affinity: Affinity {
+            mode: r.get(26)?,
+            subagent_placement: r.get(27)?,
+            session_placement: r.get(28)?,
+            min_shared_prefix_tokens: r.get::<_, i64>(29)? as u64,
+        },
+        quota_headers: r.get(30)?,
     })
 }
 
@@ -1055,6 +1360,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         last_used_at: r.get(13)?,
         retired_secret_last_used_at: r.get(14)?,
         in_flight_cap: r.get::<_, Option<i64>>(18)?.map(|c| c as u32),
+        affinity_source: r.get(19)?,
     })
 }
 
@@ -1082,6 +1388,11 @@ fn pool_diff(row: &PoolRow) -> String {
         "wind_down_minutes": row.failover.wind_down_minutes,
         "cache_ttl": serde_json::from_str::<serde_json::Value>(&row.cache_ttl_json).unwrap_or(serde_json::Value::Null),
         "cache_diagnostics": row.cache_diagnostics,
+        "affinity_mode": row.affinity.mode.as_str(),
+        "subagent_placement": row.affinity.subagent_placement.as_str(),
+        "session_placement": row.affinity.session_placement.as_str(),
+        "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
+        "quota_headers": row.quota_headers.as_str(),
     })
     .to_string()
 }
@@ -1100,6 +1411,7 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "body_capture_hours": row.body_capture_hours,
         "in_flight_cap": row.in_flight_cap,
         "prefix": row.prefix,
+        "affinity_source": row.affinity_source.as_str(),
     })
     .to_string()
 }

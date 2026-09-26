@@ -202,6 +202,7 @@ async fn select_main(r: &Rig) -> SelectResult {
         .select(SelectRequest {
             key_id: "desktop".into(),
             key_generation: key.created_at,
+            agent_id: "main".into(),
             session_id: Some("session".into()),
             canonical_model: model,
             candidates,
@@ -467,54 +468,91 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
 }
 
 #[tokio::test]
-async fn a_pin_migrated_by_a_sibling_agent_moves_the_next_probe_to_the_new_account() {
-    let mut r = armed(RigSpec {
+async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_account() {
+    let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        pool: PoolSpec {
+            strategy: phoebis_store::Strategy::RoundRobin,
+            ..PoolSpec::default()
+        },
         ..RigSpec::default()
     })
     .await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
-    let other_id = if first == "a" { "b" } else { "a" };
+    r.observe("main").await;
     r.event(Event {
         event: "agent_start".into(),
         agent_id: Some("worker".into()),
         ..Default::default()
     })
     .unwrap();
-    // The worker's real request meets a 429 on the pinned account and migrates the session's pin.
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
+    // Round robin lands the session's second fresh placement on the pool's other account, so main and its
+    // subagent hold two pins on two accounts rather than sharing one.
     r.observe("worker").await;
-    assert_eq!(r.status("worker").account_id.as_deref(), Some(other_id));
-    assert_eq!(
-        r.status("main").account_id.as_deref(),
-        Some(first.as_str()),
-        "the main recipe still names the old account until the tick reads the pin"
-    );
-    r.h.router.clear_cooldown(&first, "account").await.unwrap();
+    let main_account = r.status("main").account_id.clone().unwrap();
+    let worker_account = r.status("worker").account_id.clone().unwrap();
+    assert_ne!(main_account, worker_account);
+    let credential_of = |account: &str| if account == "a" { A } else { B };
+
     r.advance(270_000);
     r.step().await;
-    let probes: Vec<_> =
+    let probe_credentials: Vec<Option<String>> =
         r.up.requests()
             .into_iter()
             .filter(|q| q.body.windows(14).any(|w| w == b"\"max_tokens\":0"))
+            .map(|q| q.credential().map(str::to_string))
             .collect();
-    assert_eq!(probes.len(), 2);
+    assert_eq!(probe_credentials.len(), 2, "both agents' recipes are due");
     assert!(
-        probes.iter().all(|q| q.credential() == Some(other)),
-        "both probes followed the pin to the new account"
+        probe_credentials.contains(&Some(credential_of(&main_account).to_string())),
+        "the gate reads main's own pin"
+    );
+    assert!(
+        probe_credentials.contains(&Some(credential_of(&worker_account).to_string())),
+        "the gate reads the subagent's own pin"
+    );
+
+    // A cooldown on the subagent's account holds its recipe alone.
+    let until = r.now() + 600_000;
+    r.h.router.report(Report::Cooldown {
+        account_id: worker_account.clone(),
+        row: CooldownRow {
+            account_id: worker_account.clone(),
+            scope: "account".into(),
+            until,
+            set_at: r.now(),
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    settled(&r, |r| {
+        let worker_account = worker_account.clone();
+        async move {
+            r.h.router
+                .cooldowns()
+                .await
+                .unwrap()
+                .iter()
+                .any(|c| c.account_id == worker_account)
+        }
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("worker").probes, r.status("worker").reason),
+        (1, Reason::Cooled),
+        "the subagent's own account is cooled, so its recipe alone holds"
     );
     assert_eq!(
-        (
-            r.status("main").account_id.as_deref(),
-            r.status("main").migrations
-        ),
-        (Some(other_id), 0),
-        "the account moved with the pin, which is not a probe migration"
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::Scheduled),
+        "the main agent's own account is untouched by its sibling's cooldown"
     );
 }
 

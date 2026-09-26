@@ -4600,15 +4600,24 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cache_ttl": {
             "enabled": false,
-            "in_overage": "5m",
-            "main": "1h",
-            "models": [],
-            "subagent": "1h"
+            "inject_when_absent": false,
+            "metered": {
+              "keepalive": "5m",
+              "main": "5m",
+              "models": [],
+              "subagent": "5m"
+            },
+            "plan": {
+              "keepalive": "1h",
+              "main": "1h",
+              "models": [],
+              "subagent": "1h"
+            }
           },
           "cache_diagnostics": null,
           "body_capture_hours": 24,
-          "created_at": 1790412878204,
-          "updated_at": 1790412878204,
+          "created_at": 1790465806561,
+          "updated_at": 1790465806561,
           "members": [
             {
               "account_id": "business",
@@ -4625,7 +4634,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "TAamlUMm",
+              "prefix": "KOUbhRXc",
               "enabled": true
             }
           ],
@@ -5614,8 +5623,9 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790465806565,
           "session_id": "s-fixture",
+          "agent_id": "main",
           "model": "claude-sonnet-5",
           "account_id": "business",
           "epoch": 1,
@@ -5634,7 +5644,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "historical": false,
           "companion": "none",
           "companion_since": null,
-          "agents": 0,
+          "agents": 1,
           "keepalive": {
             "last_guard": null,
             "net_meter_tokens": null,
@@ -5645,8 +5655,9 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790465806565,
           "session_id": "s1",
+          "agent_id": null,
           "model": "claude-sonnet-5",
           "account_id": "business",
           "epoch": null,
@@ -5669,15 +5680,16 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_guard": "rearm",
             "net_meter_tokens": 0,
             "net_usd": 0,
-            "next_probe_at": 1237118,
+            "next_probe_at": 1236323,
             "state": "busy"
           },
           "historical": false
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790465806565,
           "session_id": "s2",
+          "agent_id": null,
           "model": "claude-sonnet-5",
           "account_id": "business",
           "epoch": null,
@@ -5709,6 +5721,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "key_id": "desktop",
           "key_generation": 940000,
           "session_id": "s0",
+          "agent_id": null,
           "model": "claude-sonnet-5",
           "account_id": "business",
           "epoch": null,

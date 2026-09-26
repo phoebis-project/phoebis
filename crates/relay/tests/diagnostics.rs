@@ -506,7 +506,7 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
         .set_api_key_secret("acct", &phoebis_store::Secret::new(ACCT_SECRET))
         .unwrap();
     h.store
-        .set_pool_members("main", &[("acct".to_string(), 0)], "test")
+        .set_pool_members("main", &[member("acct", 0)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());

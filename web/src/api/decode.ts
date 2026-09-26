@@ -2,10 +2,10 @@ import type {
   Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, Settings, Subscription, WarmSessions, WindowFit, WindowId,
+  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, Settings, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
-import { CACHE_TTL_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
+import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
@@ -239,15 +239,24 @@ export const WARM_SESSIONS_VALUES = ['always', 'never', 'when_needed'] as const 
 export const POOL_STRATEGY_VALUES = ['pace', 'priority', 'round_robin'] as const;
 const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '5m' ? v : fallback);
 
-/** Read field by field against the defaults, so a route that answers a partial rule never yields an empty TTL. */
+/** Read field by field against `fallback`, so a route that answers a partial rule set never yields an empty TTL. */
+function decodeTtlRules(v: unknown, fallback: TtlRules): TtlRules {
+  const c = rec(v);
+  return {
+    keepalive: ttl(c.keepalive, fallback.keepalive),
+    main: ttl(c.main, fallback.main),
+    models: list(c.models).map(rec).map((m) => ({ main: ttl(m.main, fallback.main), model: str(m.model), subagent: ttl(m.subagent, fallback.subagent) })),
+    subagent: ttl(c.subagent, fallback.subagent),
+  };
+}
+
 export function decodeCacheTtl(v: unknown): PoolCacheTtl {
   const c = rec(v);
   return {
     enabled: bool(c.enabled, CACHE_TTL_DEFAULTS.enabled),
-    inOverage: c.in_overage === '1h' || c.in_overage === '5m' ? c.in_overage : CACHE_TTL_DEFAULTS.inOverage,
-    main: ttl(c.main, CACHE_TTL_DEFAULTS.main),
-    models: list(c.models).map(rec).map((m) => ({ main: ttl(m.main, CACHE_TTL_DEFAULTS.main), model: str(m.model), subagent: ttl(m.subagent, CACHE_TTL_DEFAULTS.subagent) })),
-    subagent: ttl(c.subagent, CACHE_TTL_DEFAULTS.subagent),
+    injectWhenAbsent: bool(c.inject_when_absent, CACHE_TTL_DEFAULTS.injectWhenAbsent),
+    metered: decodeTtlRules(c.metered, METERED_TTL_DEFAULTS),
+    plan: decodeTtlRules(c.plan, PLAN_TTL_DEFAULTS),
   };
 }
 
@@ -424,7 +433,7 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netMeterTokens: numOrNull(k.net_meter_tokens), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netMeterTokens: numOrNull(k.net_meter_tokens), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
@@ -531,6 +540,7 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
 }
 
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
+const encodeTtlRules = (r: TtlRules) => ({ keepalive: r.keepalive, main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
@@ -542,7 +552,7 @@ export const encodeKey = (i: KeyInput) => ({
 });
 export const encodePool = (i: PoolInput) => ({
   affinity_ttl_seconds: i.affinityTtlSeconds, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
-  cache_ttl: { enabled: i.cacheTtl.enabled, in_overage: i.cacheTtl.inOverage, main: i.cacheTtl.main, models: i.cacheTtl.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: i.cacheTtl.subagent },
+  cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,

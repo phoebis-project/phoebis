@@ -1182,7 +1182,19 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools moved key leaves the list', ok: !keyRows().some((li) => li.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((li) => li.children[0]?.textContent?.trim()) });
 
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
-  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Main conversation', 'Subagents', 'In overage', 'Per-model overrides', 'Also warm subagent caches']);
+  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents', 'Per-model overrides', 'Also warm subagent caches']);
+
+  {
+    const ruleSets = [...(dlg?.querySelectorAll('[data-rule-set]') ?? [])];
+    const names = ruleSets.map((el) => el.getAttribute('data-rule-set')).sort();
+    results.push({
+      name: '/pools the caching section renders one root per rule set, plan and metered, each with its own Main and Subagents selects',
+      ok:
+        names.join(',') === 'metered,plan' &&
+        ruleSets.every((el) => el.querySelector('select[aria-label$="main conversation TTL"]') && el.querySelector('select[aria-label$="subagent TTL"]')),
+      missing: names,
+    });
+  }
 
   // The gateway dials one host, so the hint no longer distinguishes Anthropic upstreams from custom ones.
   const cacheTtlLabel = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Set the cache TTL for this pool');

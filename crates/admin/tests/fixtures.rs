@@ -240,6 +240,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .select(phoebis_routing::SelectRequest {
             key_id: "desktop".into(),
             key_generation,
+            agent_id: "main".into(),
             session_id: Some("s-fixture".into()),
             canonical_model: "claude-sonnet-5".into(),
             candidates,

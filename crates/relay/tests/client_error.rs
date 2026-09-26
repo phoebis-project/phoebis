@@ -66,6 +66,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
         .select(SelectRequest {
             key_id: key.id.clone(),
             key_generation: key.created_at,
+            agent_id: "main".into(),
             session_id: Some(session.into()),
             canonical_model: canonical,
             candidates,

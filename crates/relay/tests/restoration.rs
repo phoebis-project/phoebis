@@ -7,7 +7,9 @@ use axum::body::Body;
 use axum::http::Request;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, AffinitySource, ApiKeyRow, RulesMode, StorageKey, Store,
+};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -793,6 +795,7 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )
@@ -1107,7 +1110,7 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
     // `a` is out of the pool for the first turn, so it lands on `b` and establishes b's own saved record;
     // readmitted before the second turn so the failover from `a` retries against that earlier data.
     h.store
-        .set_pool_members("main", &[("b".to_string(), 0)], "test")
+        .set_pool_members("main", &[member("b", 0)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
     h.app
@@ -1117,11 +1120,7 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
         .unwrap();
     h.relay.flush_memory().await;
     h.store
-        .set_pool_members(
-            "main",
-            &[("a".to_string(), 0), ("b".to_string(), 1)],
-            "test",
-        )
+        .set_pool_members("main", &[member("a", 0), member("b", 1)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
     // The first turn pinned the session to `b`; releasing it lets the second turn's selection start over from

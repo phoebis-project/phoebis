@@ -23,8 +23,9 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity, NewBundle, OveragePolicy,
-    PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
+    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders, RulesMode,
+    Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
@@ -113,6 +114,8 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: Affinity::default(),
+                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -120,7 +123,16 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         )
         .unwrap();
     store
-        .set_pool_members("main", &[("a".into(), 0)], "test")
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
         .unwrap();
     store
         .insert_api_key(
@@ -144,6 +156,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

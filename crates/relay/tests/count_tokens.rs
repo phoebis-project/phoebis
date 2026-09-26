@@ -134,7 +134,7 @@ async fn under_the_policy_the_recorded_count_travels_as_sent_since_it_carries_no
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        policy(r#"{"enabled":true,"main":"1h"}"#),
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
     let resp = h
@@ -184,8 +184,8 @@ async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_infe
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
-        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
+        // An api_key account always pays, so its writes take the metered set's own `main` here.
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
     let marked = marked_count(BodyFixture::CountApiKey);
@@ -245,7 +245,7 @@ async fn a_marked_count_under_an_oauth_key_takes_the_same_rule_and_no_restoratio
     let h = harness(
         &up,
         &[oauth("acct", OA, 0)],
-        policy(r#"{"enabled":true,"main":"1h"}"#),
+        policy(r#"{"enabled":true,"plan":{"main":"1h"}}"#),
     )
     .await;
     for (kind, fixture) in [
@@ -298,8 +298,8 @@ async fn a_400_on_a_count_strips_the_beta_for_that_leg_and_leaves_the_account_un
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
-        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
+        // An api_key account always pays, so its writes take the metered set's own `main` here.
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
     let resp = h

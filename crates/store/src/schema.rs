@@ -58,11 +58,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (26, V26),
     (27, V27),
     (28, V28),
+    (29, V29),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 28;
+pub const SCHEMA_VERSION: u32 = 29;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -398,4 +399,79 @@ CREATE TABLE keepalive_budgets (
   usd REAL NOT NULL DEFAULT 0, meter_tokens REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (day, scope, id)
 );
+"#;
+
+// A pin's agent joins its key so a subagent of a session pins apart from its main turn; every row the chain
+// wrote reads 'main', which is what every request before this migration was. The primary key cannot be altered
+// in place, so the table is rebuilt rather than columned onto in place. The cache TTL text is reshaped from one
+// rule set into two, `plan` and `metered`, so a metered account's TTL no longer rides the same object as a plan
+// account's; the in-overage override leaves with its five-minute default carried onto the metered set. The
+// affinity table is the placement index that lets a fresh session or a subagent cohort land where its prefix is
+// warm.
+const V29: &str = r#"
+CREATE TABLE pins_next (
+  key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  epoch INTEGER NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL,
+  key_generation INTEGER NOT NULL DEFAULT 0, incarnation INTEGER NOT NULL DEFAULT 0,
+  burn REAL NOT NULL DEFAULT 0, burn_at INTEGER, burn_usd REAL NOT NULL DEFAULT 0,
+  last_input_tokens INTEGER NOT NULL DEFAULT 0, last_refresh_at INTEGER NOT NULL DEFAULT 0,
+  cache_ttl_ms INTEGER NOT NULL DEFAULT 300000,
+  shed_from TEXT, shed_at INTEGER, static_hash TEXT, tail_hash TEXT,
+  PRIMARY KEY (key_id, session_id, agent_id, model)
+);
+INSERT INTO pins_next (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at,
+  key_generation, incarnation, burn, burn_at, burn_usd, last_input_tokens, last_refresh_at, cache_ttl_ms,
+  shed_from, shed_at, static_hash, tail_hash)
+SELECT key_id, session_id, 'main', model, account_id, epoch, created_at, last_used_at,
+  key_generation, incarnation, burn, burn_at, burn_usd, last_input_tokens, last_refresh_at, cache_ttl_ms,
+  shed_from, shed_at, static_hash, tail_hash
+FROM pins;
+DROP TABLE pins;
+ALTER TABLE pins_next RENAME TO pins;
+ALTER TABLE pools ADD COLUMN affinity_mode TEXT NOT NULL DEFAULT 'always';
+ALTER TABLE pools ADD COLUMN subagent_placement TEXT NOT NULL DEFAULT 'by_cohort';
+ALTER TABLE pools ADD COLUMN session_placement TEXT NOT NULL DEFAULT 'by_strategy';
+ALTER TABLE pools ADD COLUMN min_shared_prefix_tokens INTEGER NOT NULL DEFAULT 20000;
+ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass';
+UPDATE pools SET cache_ttl_json = json_object(
+  'enabled', json(CASE WHEN json_extract(cache_ttl_json, '$.enabled') THEN 'true' ELSE 'false' END),
+  'in_overage', CASE json_type(cache_ttl_json, '$.in_overage')
+                  WHEN 'null' THEN json('null')
+                  WHEN 'text' THEN json_extract(cache_ttl_json, '$.in_overage')
+                  ELSE '5m' END,
+  'main', COALESCE(json_extract(cache_ttl_json, '$.main'), '1h'),
+  'models', json(COALESCE(json_extract(cache_ttl_json, '$.models'), '[]')),
+  'subagent', COALESCE(json_extract(cache_ttl_json, '$.subagent'), '1h'))
+WHERE json_valid(cache_ttl_json) AND json_type(cache_ttl_json) = 'object' AND cache_ttl_json <> '{}';
+UPDATE pools SET cache_ttl_json = json_object(
+  'enabled', json(CASE WHEN json_extract(cache_ttl_json, '$.enabled') THEN 'true' ELSE 'false' END),
+  'inject_when_absent', json('false'),
+  'metered', CASE WHEN json_type(cache_ttl_json, '$.in_overage') = 'null' THEN json_object(
+      'keepalive', json_extract(cache_ttl_json, '$.main'),
+      'main', json_extract(cache_ttl_json, '$.main'),
+      'models', json(json_extract(cache_ttl_json, '$.models')),
+      'subagent', json_extract(cache_ttl_json, '$.subagent'))
+    ELSE json_object(
+      'keepalive', json_extract(cache_ttl_json, '$.in_overage'),
+      'main', json_extract(cache_ttl_json, '$.in_overage'),
+      'models', json('[]'),
+      'subagent', json_extract(cache_ttl_json, '$.in_overage')) END,
+  'plan', json_object(
+    'keepalive', json_extract(cache_ttl_json, '$.main'),
+    'main', json_extract(cache_ttl_json, '$.main'),
+    'models', json(json_extract(cache_ttl_json, '$.models')),
+    'subagent', json_extract(cache_ttl_json, '$.subagent')))
+WHERE json_valid(cache_ttl_json) AND json_type(cache_ttl_json) = 'object' AND cache_ttl_json <> '{}';
+ALTER TABLE pool_members ADD COLUMN budget_usd REAL;
+ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month';
+ALTER TABLE api_keys ADD COLUMN affinity_source TEXT NOT NULL DEFAULT 'auto';
+CREATE TABLE affinity (
+  model TEXT NOT NULL, hash TEXT NOT NULL, chain TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, incarnation INTEGER NOT NULL,
+  written_at INTEGER NOT NULL, ttl_ms INTEGER NOT NULL, prefix_tokens INTEGER NOT NULL DEFAULT 0,
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, root TEXT NOT NULL,
+  PRIMARY KEY (model, hash)
+);
+CREATE INDEX affinity_written_at ON affinity (written_at);
 "#;

@@ -194,8 +194,8 @@ async function poolChips(theme) {
 /**
  * The caching tab of a served pool: its TTL policy toggle, the diagnostics override, and the subagent switch
  * the keepalive block carries, each reached the way an operator reaches it. The diagnostics select is measured
- * against the "In overage" select beside it, since a control that reads a size smaller than its neighbours is
- * the defect this dialog would show first.
+ * against the metered rule set's own "Main conversation" select beside it, since a control that reads a size
+ * smaller than its neighbours is the defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -224,7 +224,7 @@ async function poolCachingControls(theme) {
     }
   }
   if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle, with keepalive on');
-  // The in-overage select is drawn only while the policy is on, which is also the state the two are compared in.
+  // The metered rule set's selects are drawn only while the policy is on, which is also the state the two are compared in.
   if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
   const pair = await dialog.evaluate((el) => {
     const read = (select) => {
@@ -236,18 +236,19 @@ async function poolCachingControls(theme) {
         padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
       };
     };
-    const labelled = (text) => [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('select');
-    const overage = labelled('In overage');
-    const diagnostics = labelled('Cache diagnostics');
-    return overage && diagnostics ? { diagnostics: read(diagnostics), overage: read(overage) } : null;
+    const labelled = (scope, text) => [...scope.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('select');
+    const metered = el.querySelector('[data-rule-set="metered"]');
+    const main = metered && labelled(metered, 'Main conversation');
+    const diagnostics = labelled(el, 'Cache diagnostics');
+    return main && diagnostics ? { diagnostics: read(diagnostics), main: read(main) } : null;
   });
   if (!pair) {
-    say('the diagnostics select and the in-overage select are not both drawn to compare');
+    say('the diagnostics select and the metered rule set\'s main select are not both drawn to compare');
   } else {
     measurements.push(`${theme} /pools cache diagnostics ${JSON.stringify(pair.diagnostics)}`);
-    measurements.push(`${theme} /pools in overage ${JSON.stringify(pair.overage)}`);
-    const differs = ['border', 'font', 'height', 'padding'].filter((key) => String(pair.diagnostics[key]) !== String(pair.overage[key]));
-    if (differs.length) say(`the cache diagnostics select's ${differs.join(', ')} differs from the in-overage select's`);
+    measurements.push(`${theme} /pools metered main ${JSON.stringify(pair.main)}`);
+    const differs = ['border', 'font', 'height', 'padding'].filter((key) => String(pair.diagnostics[key]) !== String(pair.main[key]));
+    if (differs.length) say(`the cache diagnostics select's ${differs.join(', ')} differs from the metered rule set's main select's`);
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));

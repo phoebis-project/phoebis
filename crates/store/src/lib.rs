@@ -37,12 +37,15 @@ pub use credentials::{
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use pricing::PricingVersion;
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, ApiKeyRow, Failover, ModelRule, OveragePolicy,
-    PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, Shedding,
-    Strategy, SubscriptionTerm, WarmSessions, ROTATION_GRACE_MS,
+    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
+    BudgetPeriod, Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember,
+    PoolRow, QuotaHeaders, RegistryChange, RegistryLoad, RetiredSecret, RulesMode,
+    SessionPlacement, Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    ROTATION_GRACE_MS,
 };
 pub use routing::{
-    CooldownRow, FitRow, OverageRow, PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
+    AffinityChain, AffinityRow, CooldownRow, FitRow, OverageRow, PinKey, PinRow, RekeyWrite,
+    ResolutionRow, RoutingLoad,
 };
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's

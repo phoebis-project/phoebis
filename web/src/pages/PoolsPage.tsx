@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
-import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session, WarmSessions } from '@/api/types';
+import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session, TtlRules, WarmSessions } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -256,6 +256,112 @@ function Tile({ label, value }: { label: string; value: string | null }) {
   );
 }
 
+/** One cache TTL rule set's controls, rendered once per set; its root carries `data-rule-set={name}`, and the
+ *  per-model picker's state is its own, so each set adds overrides independently. */
+function CacheTtlRuleSet({
+  hint,
+  label,
+  models,
+  name,
+  onChange,
+  rules,
+}: {
+  hint?: string;
+  label: string;
+  models: { label: string; value: string }[];
+  name: 'metered' | 'plan';
+  onChange: (rules: TtlRules) => void;
+  rules: TtlRules;
+}) {
+  const [addModelId, setAddModelId] = useState('');
+  const setField = (key: 'main' | 'subagent', value: CacheTtl) => onChange({ ...rules, [key]: value });
+  const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
+    onChange({ ...rules, models: rules.models.map((m) => (m.model === model ? { ...m, [key]: value } : m)) });
+  const removeModelOverride = (model: string) => onChange({ ...rules, models: rules.models.filter((m) => m.model !== model) });
+  const addModelOverride = () => {
+    if (!addModelId) return;
+    onChange({ ...rules, models: [...rules.models, { model: addModelId, main: rules.main, subagent: rules.subagent }] });
+    setAddModelId('');
+  };
+  return (
+    <div data-rule-set={name} className="field">
+      <span className="field__label">{label}</span>
+      {hint && <p className="field__hint">{hint}</p>}
+      <div className="form-row">
+        <Field label="Main conversation">
+          <Select value={rules.main} onChange={(e) => setField('main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL`}>
+            <option value="5m">5 minutes</option>
+            <option value="1h">1 hour</option>
+          </Select>
+        </Field>
+        <Field label="Subagents">
+          <Select value={rules.subagent} onChange={(e) => setField('subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL`}>
+            <option value="5m">5 minutes</option>
+            <option value="1h">1 hour</option>
+          </Select>
+        </Field>
+      </div>
+      <div className="field">
+        <span className="field__label">Per-model overrides</span>
+        <p className="field__hint">A model absent here takes the rule above.</p>
+        {rules.models.length > 0 && (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Main conversation</th>
+                  <th>Subagents</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rules.models.map((m) => (
+                  <tr key={m.model}>
+                    <td className="mono">{m.model}</td>
+                    <td>
+                      <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
+                        <option value="5m">5 minutes</option>
+                        <option value="1h">1 hour</option>
+                      </Select>
+                    </td>
+                    <td>
+                      <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL for ${m.model}`}>
+                        <option value="5m">5 minutes</option>
+                        <option value="1h">1 hour</option>
+                      </Select>
+                    </td>
+                    <td>
+                      <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
+                        Remove
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="row">
+          <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label={`Model to add a ${label.toLowerCase()} cache TTL override for`} style={{ maxWidth: 260 }}>
+            <option value="">Choose a model…</option>
+            {models
+              .filter((m) => !rules.models.some((x) => x.model === m.value))
+              .map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+          </Select>
+          <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
+            Add
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PoolCard({
   pool,
   keys,
@@ -365,13 +471,17 @@ function PoolCard({
                 {pool.cacheTtl.enabled ? (
                   <>
                     <Badge tone="neutral">
-                      Main <span className="mono">{pool.cacheTtl.main}</span>
+                      Plan <span className="mono">{pool.cacheTtl.plan.main} / {pool.cacheTtl.plan.subagent}</span>
                     </Badge>
                     <Badge tone="neutral">
-                      Subagents <span className="mono">{pool.cacheTtl.subagent}</span>
+                      Metered <span className="mono">{pool.cacheTtl.metered.main} / {pool.cacheTtl.metered.subagent}</span>
                     </Badge>
-                    {pool.cacheTtl.inOverage && <Badge tone="warning">{pool.cacheTtl.inOverage} in overage</Badge>}
-                    {pool.cacheTtl.models.length > 0 && <Badge tone="neutral">{pool.cacheTtl.models.length} model override{pool.cacheTtl.models.length === 1 ? '' : 's'}</Badge>}
+                    {(pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length) > 0 && (
+                      <Badge tone="neutral">
+                        {pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length} model override
+                        {pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length === 1 ? '' : 's'}
+                      </Badge>
+                    )}
                   </>
                 ) : (
                   <span className="muted">off</span>
@@ -574,7 +684,11 @@ const blankForm = (): PoolForm => ({
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   cacheDiagnostics: pool.cacheDiagnostics,
-  cacheTtl: { ...pool.cacheTtl, models: pool.cacheTtl.models.map((m) => ({ ...m })) },
+  cacheTtl: {
+    ...pool.cacheTtl,
+    metered: { ...pool.cacheTtl.metered, models: pool.cacheTtl.metered.models.map((m) => ({ ...m })) },
+    plan: { ...pool.cacheTtl.plan, models: pool.cacheTtl.plan.models.map((m) => ({ ...m })) },
+  },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
   captureHours: pool.bodyCaptureHours || 24,
@@ -670,8 +784,6 @@ export function PoolDialog({
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   // Held apart from the form so a priority keystroke cannot move the row under the cursor.
   const [memberOrder, setMemberOrder] = useState<string[]>([]);
-  // The model picked in the "add a per-model override" row, before it joins form.cacheTtl.models.
-  const [addModelId, setAddModelId] = useState('');
   useEffect(() => {
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
@@ -680,7 +792,6 @@ export function PoolDialog({
     setLocalKeys([]);
     setMoved(new Set());
     setRevoked(new Set());
-    setAddModelId('');
     setBusy(false);
     setError(null);
     // `accounts` is read but not tracked: the parent hands down a fresh array on
@@ -757,14 +868,6 @@ export function PoolDialog({
   const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
-  const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
-    setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, models: f.cacheTtl.models.map((m) => (m.model === model ? { ...m, [key]: value } : m)) } }));
-  const removeModelOverride = (model: string) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, models: f.cacheTtl.models.filter((m) => m.model !== model) } }));
-  const addModelOverride = () => {
-    if (!addModelId) return;
-    setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, models: [...f.cacheTtl.models, { model: addModelId, main: f.cacheTtl.main, subagent: f.cacheTtl.subagent }] } }));
-    setAddModelId('');
-  };
 
   const startMove = (k: ApiKey) => {
     setMoveTo(otherPools[0]?.id ?? '');
@@ -1041,89 +1144,26 @@ export function PoolDialog({
             </div>
             {form.cacheTtl.enabled && (
               <>
-                <div className="form-row">
-                  <Field label="Main conversation">
-                    <Select value={form.cacheTtl.main} onChange={(e) => setCacheTtl('main', e.target.value as CacheTtl)}>
-                      <option value="5m">5 minutes</option>
-                      <option value="1h">1 hour</option>
-                    </Select>
-                  </Field>
-                  <Field label="Subagents">
-                    <Select value={form.cacheTtl.subagent} onChange={(e) => setCacheTtl('subagent', e.target.value as CacheTtl)}>
-                      <option value="5m">5 minutes</option>
-                      <option value="1h">1 hour</option>
-                    </Select>
-                  </Field>
-                </div>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <span className="field__label">Write cost</span>
                   <CostReferenceLink />
                 </div>
                 <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
-                <Field label="In overage" hint="Applies while the upstream serving the request is in overage, where writes cost money rather than plan quota.">
-                  <Select value={form.cacheTtl.inOverage ?? ''} onChange={(e) => setCacheTtl('inOverage', (e.target.value || null) as CacheTtl | null)}>
-                    <option value="">Keep the rules above</option>
-                    <option value="5m">5 minutes</option>
-                    <option value="1h">1 hour</option>
-                  </Select>
-                </Field>
-                <div className="field">
-                  <span className="field__label">Per-model overrides</span>
-                  <p className="field__hint">A model absent here takes the pool rule above.</p>
-                  {form.cacheTtl.models.length > 0 && (
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Model</th>
-                            <th>Main conversation</th>
-                            <th>Subagents</th>
-                            <th />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {form.cacheTtl.models.map((m) => (
-                            <tr key={m.model}>
-                              <td className="mono">{m.model}</td>
-                              <td>
-                                <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`Main conversation TTL for ${m.model}`}>
-                                  <option value="5m">5 minutes</option>
-                                  <option value="1h">1 hour</option>
-                                </Select>
-                              </td>
-                              <td>
-                                <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`Subagent TTL for ${m.model}`}>
-                                  <option value="5m">5 minutes</option>
-                                  <option value="1h">1 hour</option>
-                                </Select>
-                              </td>
-                              <td>
-                                <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
-                                  Remove
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="row">
-                    <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label="Model to add a cache TTL override for" style={{ maxWidth: 260 }}>
-                      <option value="">Choose a model…</option>
-                      {models
-                        .filter((m) => !form.cacheTtl.models.some((x) => x.model === m.value))
-                        .map((m) => (
-                          <option key={m.value} value={m.value}>
-                            {m.label}
-                          </option>
-                        ))}
-                    </Select>
-                    <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
-                      Add
-                    </Button>
-                  </div>
-                </div>
+                <CacheTtlRuleSet
+                  name="plan"
+                  label="Plan writes"
+                  rules={form.cacheTtl.plan}
+                  onChange={(rules) => setCacheTtl('plan', rules)}
+                  models={models}
+                />
+                <CacheTtlRuleSet
+                  name="metered"
+                  label="Metered writes"
+                  hint="An api_key upstream, or a subscription upstream in overage, where writes cost money rather than plan quota."
+                  rules={form.cacheTtl.metered}
+                  onChange={(rules) => setCacheTtl('metered', rules)}
+                  models={models}
+                />
               </>
             )}
           </div>

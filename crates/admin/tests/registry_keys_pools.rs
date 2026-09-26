@@ -1,4 +1,5 @@
 mod common;
+use phoebis_store::{Affinity, AffinitySource, QuotaHeaders};
 use common::{delete, get, json, login, patch, post, put};
 
 #[tokio::test]
@@ -653,6 +654,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
             .upsert_pin(&phoebis_store::PinRow {
                 key_id: "k".into(),
                 session_id: "s1".into(),
+                agent_id: "main".into(),
                 model: model.into(),
                 account_id: account.into(),
                 epoch,
@@ -715,6 +717,8 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: Affinity::default(),
+                quota_headers: QuotaHeaders::Pass,
                 created_at: common::NOW,
                 updated_at: common::NOW,
             },
@@ -743,6 +747,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )
@@ -751,6 +756,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
         .upsert_pin(&phoebis_store::PinRow {
             key_id: "k".into(),
             session_id: "s1".into(),
+            agent_id: "main".into(),
             model: "claude-sonnet-4-5".into(),
             account_id: "direct".into(),
             epoch: 3,
@@ -774,6 +780,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
         .upsert_pin(&phoebis_store::PinRow {
             key_id: "k".into(),
             session_id: "old".into(),
+            agent_id: "main".into(),
             model: "claude-sonnet-4-5".into(),
             account_id: "direct".into(),
             epoch: 2,
@@ -1302,10 +1309,9 @@ async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag() 
 async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    let created = json(post(&app, "/admin/pools", r#"{"id":"cached","label":"Cached","cache_ttl":{"enabled":true,"main":"1h","subagent":"5m","in_overage":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]},"cache_diagnostics":true}"#, Some(&cookie)).await).await;
-    assert_eq!(created["cache_ttl"]["in_overage"], "5m");
+    let created = json(post(&app, "/admin/pools", r#"{"id":"cached","label":"Cached","cache_ttl":{"enabled":true,"plan":{"main":"1h","subagent":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]},"metered":{"main":"5m"}},"cache_diagnostics":true}"#, Some(&cookie)).await).await;
     assert_eq!(
-        created["cache_ttl"]["models"][0]["model"],
+        created["cache_ttl"]["plan"]["models"][0]["model"],
         "claude-haiku-4-5-20251001"
     );
     assert_eq!(created["cache_diagnostics"], true);
@@ -1322,17 +1328,18 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
     assert_eq!(
         (
             plain["cache_ttl"]["enabled"].as_bool(),
-            plain["cache_ttl"]["main"].as_str(),
+            plain["cache_ttl"]["plan"]["main"].as_str(),
+            plain["cache_ttl"]["metered"]["main"].as_str(),
             plain["cache_diagnostics"].is_null()
         ),
-        (Some(false), Some("1h"), true),
+        (Some(false), Some("1h"), Some("5m"), true),
         "defaults are answered in full; null inherits the bootstrap option"
     );
     let patched = json(
         patch(
             &app,
             "/admin/pools/cached",
-            r#"{"cache_ttl":{"subagent":"1h"},"cache_diagnostics":null}"#,
+            r#"{"cache_ttl":{"plan":{"subagent":"1h"}},"cache_diagnostics":null}"#,
             Some(&cookie),
         )
         .await,
@@ -1340,29 +1347,48 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
     .await;
     assert_eq!(
         (
-            patched["cache_ttl"]["subagent"].as_str(),
-            patched["cache_ttl"]["in_overage"].as_str(),
+            patched["cache_ttl"]["plan"]["subagent"].as_str(),
+            patched["cache_ttl"]["metered"]["main"].as_str(),
             patched["cache_diagnostics"].is_null()
         ),
         (Some("1h"), Some("5m"), true),
-        "a partial policy merges over the stored one"
+        "a partial policy merges over the stored one, one set at a time"
+    );
+    let repatched = json(
+        patch(
+            &app,
+            "/admin/pools/cached",
+            r#"{"cache_ttl":{"metered":{"models":[{"model":"Claude-Sonnet-4-5[1m]","main":"5m","subagent":"5m"}]}}}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            repatched["cache_ttl"]["metered"]["models"][0]["model"].as_str(),
+            repatched["cache_ttl"]["metered"]["main"].as_str(),
+            repatched["cache_ttl"]["plan"]["subagent"].as_str(),
+        ),
+        (Some("claude-sonnet-4-5"), Some("5m"), Some("1h")),
+        "an undated id under metered.models reads back canonical, and the untouched fields of both sets merge one level deep"
     );
     for (body, message) in [
         (
-            r#"{"cache_ttl":{"main":"2h"}}"#,
+            r#"{"cache_ttl":{"plan":{"main":"2h"}}}"#,
             "cache_ttl is not a policy object",
         ),
         (
-            r#"{"cache_ttl":{"strategy":"x"}}"#,
+            r#"{"cache_ttl":{"unknown_field":"5m"}}"#,
             "cache_ttl is not a policy object",
         ),
         (
-            r#"{"cache_ttl":{"models":[{"model":"","main":"5m","subagent":"5m"}]}}"#,
-            "cache_ttl.models[].model must be a model id",
+            r#"{"cache_ttl":{"plan":{"models":[{"model":"","main":"5m","subagent":"5m"}]}}}"#,
+            "cache_ttl.plan.models[].model must be a model id",
         ),
         (
-            r#"{"cache_ttl":{"models":[{"model":"m","main":"5m","subagent":"5m"},{"model":"m","main":"1h","subagent":"1h"}]}}"#,
-            "cache_ttl.models lists m twice",
+            r#"{"cache_ttl":{"plan":{"models":[{"model":"m","main":"5m","subagent":"5m"},{"model":"m","main":"1h","subagent":"1h"}]}}}"#,
+            "cache_ttl.plan.models lists m twice",
         ),
         (r#"{"cache_ttl":[]}"#, "cache_ttl is not a policy object"),
     ] {

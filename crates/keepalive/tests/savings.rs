@@ -266,9 +266,9 @@ async fn a_pool_policy_dispatches_the_hour_a_five_minute_body_asked_for_and_the_
     // relay actually dispatched, so the engine learns the hour the pool rewrote the request to.
     let mut r = rig(RigSpec {
         pool: PoolSpec {
-            // `in_overage` pinned off: the account is api_key, so its default would otherwise take over and
-            // mask the `main` rule this test is about.
-            cache_ttl: r#"{"enabled":true,"main":"1h","in_overage":null}"#,
+            // The account is api_key, so its writes take the metered set's own `main`, the rule this test is
+            // about.
+            cache_ttl: r#"{"enabled":true,"metered":{"main":"1h"}}"#,
             ..PoolSpec::default()
         },
         ..RigSpec::default()
@@ -1254,6 +1254,8 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: phoebis_store::Affinity::default(),
+                quota_headers: phoebis_store::QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -1261,7 +1263,16 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
         )
         .unwrap();
     r.h.store
-        .set_pool_members("warm", &[("a".to_string(), 0)], "test")
+        .set_pool_members(
+            "warm",
+            &[phoebis_store::MemberWrite {
+                account_id: "a".to_string(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
         .unwrap();
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.pool_id = "warm".into();

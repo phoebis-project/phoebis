@@ -8,8 +8,8 @@ use std::time::Duration;
 use phoebis_bus::{Bus, Event};
 use phoebis_relay::{Warmth, MAX_BODY};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite, ResolutionRow,
-    RulesMode, Secret, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AffinitySource, ApiKeyRow, NewBundle,
+    RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
 };
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -659,6 +659,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

@@ -229,7 +229,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.keepalive.costCapUsdPerDay, 4);
   assert.equal(p.keepalive.warmSubagents, true);
   assert.equal(p.cacheTtl.enabled, false);
-  assert.equal(p.cacheTtl.main, '1h');
+  assert.equal(p.cacheTtl.plan.main, '1h');
   assert.equal(p.cacheDiagnostics, null);
   assert.equal(p.status, 'active');
   assert.equal(p.traffic24h.length, 24);
@@ -261,23 +261,30 @@ test('a pool decodes the three strategies and the flag, and encodes the stored f
   assert.deepEqual([back.strategy, back.prefer_subscription], ['round_robin', true]);
 });
 
-test('a pool decodes its cache TTL policy, its diagnostics override, and warm_subagents, and encodes them back', () => {
+test("a pool's cache TTL decodes the two rule sets and encodes them back", () => {
   const row = fixture('pools').pools[0];
   const wire = {
     ...row,
-    cache_ttl: { enabled: true, main: '5m', subagent: '1h', in_overage: '5m', models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }] },
+    cache_ttl: {
+      enabled: true,
+      inject_when_absent: true,
+      plan: { keepalive: '1h', main: '5m', subagent: '1h', models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }] },
+      metered: { keepalive: '5m', main: '5m', subagent: '5m', models: [] },
+    },
     cache_diagnostics: true,
     keepalive: { ...row.keepalive, warm_subagents: false },
   };
   const p = d.decodePool(wire);
-  assert.deepEqual([p.cacheTtl.enabled, p.cacheTtl.main, p.cacheTtl.subagent, p.cacheTtl.inOverage], [true, '5m', '1h', '5m']);
-  assert.deepEqual(p.cacheTtl.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
+  assert.deepEqual([p.cacheTtl.enabled, p.cacheTtl.injectWhenAbsent, p.cacheTtl.plan.main, p.cacheTtl.plan.subagent], [true, true, '5m', '1h']);
+  assert.deepEqual(p.cacheTtl.plan.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
+  assert.deepEqual([p.cacheTtl.metered.main, p.cacheTtl.metered.subagent], ['5m', '5m']);
   assert.equal(p.cacheDiagnostics, true);
   assert.equal(p.keepalive.warmSubagents, false);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.equal(back.cache_ttl.enabled, true);
-  assert.equal(back.cache_ttl.in_overage, '5m');
-  assert.equal(back.cache_ttl.models[0].model, 'claude-haiku-4-5-20251001');
+  assert.equal(back.cache_ttl.inject_when_absent, true);
+  assert.equal(back.cache_ttl.plan.models[0].model, 'claude-haiku-4-5-20251001');
+  assert.equal(back.cache_ttl.metered.main, '5m');
   assert.equal(back.cache_diagnostics, true);
   assert.equal(back.keepalive.warm_subagents, false);
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
@@ -320,9 +327,18 @@ test('a pool decodes the engine fields and encodes them back', () => {
 test('a pool the route answers without a cache TTL policy decodes to the defaults', () => {
   const wire = { ...fixture('pools').pools[0] };
   delete wire.cache_ttl;
-  assert.deepEqual(d.decodePool(wire).cacheTtl, { enabled: false, inOverage: '5m', main: '1h', models: [], subagent: '1h' });
-  const partial = d.decodePool({ ...wire, cache_ttl: { enabled: true } });
-  assert.deepEqual([partial.cacheTtl.enabled, partial.cacheTtl.main, partial.cacheTtl.subagent, partial.cacheTtl.inOverage], [true, '1h', '1h', '5m'], 'a field the route leaves out falls back one field at a time');
+  assert.deepEqual(d.decodePool(wire).cacheTtl, {
+    enabled: false,
+    injectWhenAbsent: false,
+    metered: { keepalive: '5m', main: '5m', models: [], subagent: '5m' },
+    plan: { keepalive: '1h', main: '1h', models: [], subagent: '1h' },
+  });
+  const partial = d.decodePool({ ...wire, cache_ttl: { enabled: true, plan: { main: '5m' } } });
+  assert.deepEqual(
+    [partial.cacheTtl.enabled, partial.cacheTtl.plan.main, partial.cacheTtl.plan.subagent, partial.cacheTtl.metered.main],
+    [true, '5m', '1h', '5m'],
+    'a field the route leaves out falls back one field at a time, each set against its own default',
+  );
   const keepalive = { ...wire.keepalive };
   delete keepalive.warm_subagents;
   assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');

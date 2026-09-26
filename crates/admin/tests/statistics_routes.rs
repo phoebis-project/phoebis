@@ -700,6 +700,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
             .upsert_pin(&phoebis_store::PinRow {
                 key_id: "desktop".into(),
                 session_id: session.into(),
+                agent_id: "main".into(),
                 model: "claude-sonnet-5".into(),
                 account_id: "business".into(),
                 epoch: 1,

@@ -802,7 +802,7 @@ async fn a_member_removed_under_a_non_portable_session_answers_that_accounts_exh
         "a"
     );
     h.store
-        .set_pool_members("main", &[("b".into(), 1)], "test")
+        .set_pool_members("main", &[member("b", 1)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
     let resp = h

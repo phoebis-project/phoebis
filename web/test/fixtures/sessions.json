@@ -4,8 +4,9 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790412878207,
+        "key_generation": 1790465806565,
         "session_id": "s-fixture",
+        "agent_id": "main",
         "model": "claude-sonnet-5",
         "account_id": "business",
         "epoch": 1,
@@ -24,7 +25,7 @@
         "historical": false,
         "companion": "none",
         "companion_since": null,
-        "agents": 0,
+        "agents": 1,
         "keepalive": {
           "last_guard": null,
           "net_meter_tokens": null,
@@ -35,8 +36,9 @@
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790412878207,
+        "key_generation": 1790465806565,
         "session_id": "s1",
+        "agent_id": null,
         "model": "claude-sonnet-5",
         "account_id": "business",
         "epoch": null,
@@ -59,15 +61,16 @@
           "last_guard": "rearm",
           "net_meter_tokens": 0.0,
           "net_usd": 0.0,
-          "next_probe_at": 1237118,
+          "next_probe_at": 1236323,
           "state": "busy"
         },
         "historical": false
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790412878207,
+        "key_generation": 1790465806565,
         "session_id": "s2",
+        "agent_id": null,
         "model": "claude-sonnet-5",
         "account_id": "business",
         "epoch": null,
@@ -99,6 +102,7 @@
         "key_id": "desktop",
         "key_generation": 940000,
         "session_id": "s0",
+        "agent_id": null,
         "model": "claude-sonnet-5",
         "account_id": "business",
         "epoch": null,

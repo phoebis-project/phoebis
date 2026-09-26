@@ -150,9 +150,9 @@ spent by then.</dd>
 client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
 <dt>Plan meter</dt>
 <dd>One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the
-same as a 5-minute one, so on plan-funded traffic the long TTL is free and the pool's cache TTL policy keeps `1h`
+same as a 5-minute one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps `1h`
 for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the
-in-overage default is `5m`.</dd>
+metered rule set's `keepalive` TTL defaults to `5m`.</dd>
 </dl>
 
 Beside the prices a Plan meter column group reads the dated factor table the ledger ships

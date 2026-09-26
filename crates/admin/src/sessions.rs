@@ -58,20 +58,39 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
         std::collections::BTreeMap::new();
+    // Whether the pin currently held for a session is its main agent's, so a subagent's pin (however recently
+    // used) never displaces it; the keepalive's own agent count answers `agents` when a session has no engine
+    // view, so every agent a pin names is counted here regardless of which one the row displays.
+    let mut held_is_main: std::collections::BTreeMap<(String, i64, String), bool> =
+        std::collections::BTreeMap::new();
+    let mut agents_by_session: std::collections::BTreeMap<
+        (String, i64, String),
+        std::collections::BTreeSet<String>,
+    > = std::collections::BTreeMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
         // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
         let Some(&generation) = live.get(&p.key_id) else {
             continue;
         };
         let key = (p.key_id.clone(), generation, p.session_id.clone());
-        // A session holds a pin per model and the row shows one of them, so it shows the one the caller used
-        // last rather than whichever model the sorted list ends on.
-        if rows
-            .get(&key)
-            .is_some_and(|held| held["last_used_at"].as_i64().unwrap_or(0) >= p.last_used_at)
-        {
+        agents_by_session
+            .entry(key.clone())
+            .or_default()
+            .insert(p.agent_id.clone());
+        let is_main = p.agent_id == "main";
+        // A session holds a pin per agent and the row shows one of them: the main agent's pin once one exists,
+        // else whichever the caller used last.
+        let keep = match (held_is_main.get(&key).copied(), rows.get(&key)) {
+            (Some(true), _) => false,
+            (Some(false), Some(held)) => {
+                is_main || held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at
+            }
+            _ => true,
+        };
+        if !keep {
             continue;
         }
+        held_is_main.insert(key.clone(), is_main);
         // The unit a reader takes for `burn`, the account's kind and whether its overage evidence stands now:
         // the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
         // whose account left the registry has no kind to pick a unit from, so both read null rather than
@@ -90,7 +109,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         rows.insert(
             key,
             json!({
-                "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
+                "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
                 "burn": burn, "burn_unit": unit, "burn_at": p.burn_at, "cache_ttl_ms": p.cache_ttl_ms,
                 "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from,
@@ -102,7 +121,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .entry((a.key_id.clone(), a.key_generation, a.session_id.clone()))
             .or_insert_with(|| {
                 json!({
-                    "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "model": a.model, "account_id": null, "epoch": null,
+                    "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
                     "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
                     "last_refresh_at": null, "shed_from": null,
@@ -130,7 +149,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
             json!({
-                "key_id": key.0, "key_generation": key.1, "session_id": key.2, "model": null, "account_id": null, "epoch": null,
+                "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
                 "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
                 "last_refresh_at": null, "shed_from": null,
@@ -151,7 +170,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         if historical || !engine.contains_key(key) {
             entry["companion"] = json!("none");
             entry["companion_since"] = json!(null);
-            entry["agents"] = json!(0);
+            entry["agents"] = json!(agents_by_session.get(key).map_or(0, |a| a.len()));
             entry["keepalive"] = json!({
                 "last_guard": null, "net_meter_tokens": null, "net_usd": null, "next_probe_at": null, "state": null
             });

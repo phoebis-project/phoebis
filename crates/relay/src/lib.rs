@@ -32,7 +32,9 @@ pub use body::{
     edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, VersionCheck, CACHE_DIAGNOSIS_BETA,
     EXTENDED_TTL_BETA,
 };
-pub use cache_ttl::{CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl};
+pub use cache_ttl::{
+    CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, PartialTtlRules, TtlBranch, TtlRules,
+};
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
     derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,

@@ -11,7 +11,7 @@ use axum::http::Request;
 use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, RequestRecord, KEY_RANGE_PREDICATE,
 };
-use phoebis_store::{ApiKeyRow, RulesMode, Store};
+use phoebis_store::{AffinitySource, ApiKeyRow, RulesMode, Store};
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
@@ -443,6 +443,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )
@@ -496,6 +497,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         in_flight_cap: None,
+        affinity_source: AffinitySource::Auto,
     }
 }
 
@@ -607,6 +609,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

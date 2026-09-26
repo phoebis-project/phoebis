@@ -11,7 +11,8 @@ use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{
-    Failover, OveragePolicy, PoolMember, PoolRow, Shedding, StoreError, Strategy, WarmSessions,
+    Affinity, BudgetPeriod, Failover, MemberWrite, OveragePolicy, PoolMember, PoolRow,
+    QuotaHeaders, Shedding, StoreError, Strategy, WarmSessions,
 };
 use serde_json::{json, Value};
 
@@ -101,8 +102,9 @@ fn merged_keepalive(row: &PoolRow, incoming: &Value) -> Value {
     merged
 }
 
-/// Mirrors `merged_keepalive`: a PATCH's `cache_ttl` names only the fields the operator touched, and the
-/// struct fills the rest with defaults on parse.
+/// Mirrors `merged_keepalive`, except `plan` and `metered` merge one level deeper: a PATCH naming
+/// `{"metered": {"main": "5m"}}` overlays that field alone, leaving the set's other three where they stood
+/// rather than falling back to the set's own defaults.
 fn merged_cache_ttl(row: &PoolRow, incoming: &Value) -> Value {
     let Value::Object(patch) = incoming else {
         return incoming.clone();
@@ -111,6 +113,16 @@ fn merged_cache_ttl(row: &PoolRow, incoming: &Value) -> Value {
         .unwrap_or_else(|_| json!({}));
     if let Value::Object(base) = &mut merged {
         for (key, value) in patch {
+            if let (true, Value::Object(set_patch)) =
+                (matches!(key.as_str(), "metered" | "plan"), value)
+            {
+                if let Some(Value::Object(set_base)) = base.get_mut(key) {
+                    for (field, field_value) in set_patch {
+                        set_base.insert(field.clone(), field_value.clone());
+                    }
+                    continue;
+                }
+            }
             base.insert(key.clone(), value.clone());
         }
     }
@@ -207,14 +219,20 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(cache_ttl) = &input.cache_ttl {
         let mut merged = merged_cache_ttl(row, cache_ttl);
-        if let Some(models) = merged.get_mut("models").and_then(Value::as_array_mut) {
-            for entry in models.iter_mut() {
-                if let Some(model) = entry
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(phoebis_store::canonical_id)
-                {
-                    entry["model"] = Value::String(model);
+        for set in ["metered", "plan"] {
+            if let Some(models) = merged
+                .get_mut(set)
+                .and_then(|s| s.get_mut("models"))
+                .and_then(Value::as_array_mut)
+            {
+                for entry in models.iter_mut() {
+                    if let Some(model) = entry
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .map(phoebis_store::canonical_id)
+                    {
+                        entry["model"] = Value::String(model);
+                    }
                 }
             }
         }
@@ -382,6 +400,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        affinity: Affinity::default(),
+        quota_headers: QuotaHeaders::Pass,
         created_at: now,
         updated_at: now,
     };
@@ -396,7 +416,12 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             &row.id,
             &members
                 .iter()
-                .map(|m| (m.account_id.clone(), m.priority))
+                .map(|m| MemberWrite {
+                    account_id: m.account_id.clone(),
+                    priority: m.priority,
+                    budget_usd: None,
+                    budget_period: BudgetPeriod::Month,
+                })
                 .collect::<Vec<_>>(),
             ACTOR,
         ) {
@@ -462,7 +487,12 @@ pub(crate) async fn patch(
             &row.id,
             &members
                 .iter()
-                .map(|m| (m.account_id.clone(), m.priority))
+                .map(|m| MemberWrite {
+                    account_id: m.account_id.clone(),
+                    priority: m.priority,
+                    budget_usd: None,
+                    budget_period: BudgetPeriod::Month,
+                })
                 .collect::<Vec<_>>(),
             ACTOR,
         ) {
@@ -529,7 +559,12 @@ pub(crate) async fn set_members(
         &input
             .members
             .iter()
-            .map(|m| (m.account_id.clone(), m.priority))
+            .map(|m| MemberWrite {
+                account_id: m.account_id.clone(),
+                priority: m.priority,
+                budget_usd: None,
+                budget_period: BudgetPeriod::Month,
+            })
             .collect::<Vec<_>>(),
         ACTOR,
     ) {

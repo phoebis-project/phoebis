@@ -1,6 +1,7 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover, Identity, MemoryKey,
-    MemoryRecord, MemoryStore, ModelRule, OveragePolicy, PoolRow, RulesMode, Secret, Shedding,
+    AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinitySource, ApiKeyRow,
+    BudgetPeriod, Failover, Identity, MemberWrite, MemoryKey, MemoryRecord,
+    MemoryStore, ModelRule, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Secret, Shedding,
     StorageKey, Store, StoreError, Strategy, SubscriptionRow,
 };
 
@@ -56,6 +57,42 @@ ALTER TABLE plan_fits DROP COLUMN carry_weighted;
 ALTER TABLE plan_fits DROP COLUMN band_factor;
 "#;
 const UNDO_V28: &str = "DROP TABLE keepalive_budgets;";
+// The exact reverse of `V29`: the affinity table and its index, the key and member columns it added, the pool's
+// five placement columns, then the pin rebuilt back to its three-column key. A pin under another agent has no
+// home in that key, so it is dropped rather than collided into one; a seed that needs it back plants it after.
+const UNDO_V29: &str = r#"
+DROP INDEX affinity_written_at;
+DROP TABLE affinity;
+ALTER TABLE api_keys DROP COLUMN affinity_source;
+ALTER TABLE pool_members DROP COLUMN budget_period;
+ALTER TABLE pool_members DROP COLUMN budget_usd;
+ALTER TABLE pools DROP COLUMN quota_headers;
+ALTER TABLE pools DROP COLUMN min_shared_prefix_tokens;
+ALTER TABLE pools DROP COLUMN session_placement;
+ALTER TABLE pools DROP COLUMN subagent_placement;
+ALTER TABLE pools DROP COLUMN affinity_mode;
+DELETE FROM pins WHERE agent_id <> 'main';
+CREATE TABLE pins_prev (
+  key_id TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  epoch INTEGER NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL,
+  key_generation INTEGER NOT NULL DEFAULT 0, incarnation INTEGER NOT NULL DEFAULT 0,
+  burn REAL NOT NULL DEFAULT 0, burn_at INTEGER, burn_usd REAL NOT NULL DEFAULT 0,
+  last_input_tokens INTEGER NOT NULL DEFAULT 0, last_refresh_at INTEGER NOT NULL DEFAULT 0,
+  cache_ttl_ms INTEGER NOT NULL DEFAULT 300000,
+  shed_from TEXT, shed_at INTEGER, static_hash TEXT, tail_hash TEXT,
+  PRIMARY KEY (key_id, session_id, model)
+);
+INSERT INTO pins_prev (key_id, session_id, model, account_id, epoch, created_at, last_used_at,
+  key_generation, incarnation, burn, burn_at, burn_usd, last_input_tokens, last_refresh_at, cache_ttl_ms,
+  shed_from, shed_at, static_hash, tail_hash)
+SELECT key_id, session_id, model, account_id, epoch, created_at, last_used_at,
+  key_generation, incarnation, burn, burn_at, burn_usd, last_input_tokens, last_refresh_at, cache_ttl_ms,
+  shed_from, shed_at, static_hash, tail_hash
+FROM pins;
+DROP TABLE pins;
+ALTER TABLE pins_prev RENAME TO pins;
+"#;
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
@@ -89,6 +126,8 @@ fn pool(id: &str) -> PoolRow {
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        affinity: Affinity::default(),
+        quota_headers: QuotaHeaders::Pass,
         created_at: 1,
         updated_at: 1,
     }
@@ -115,6 +154,16 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         in_flight_cap: None,
+        affinity_source: AffinitySource::Auto,
+    }
+}
+
+fn member(account_id: &str, priority: u32) -> MemberWrite {
+    MemberWrite {
+        account_id: account_id.into(),
+        priority,
+        budget_usd: None,
+        budget_period: BudgetPeriod::Month,
     }
 }
 
@@ -158,12 +207,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 28);
+    assert_eq!(store.schema_version().unwrap(), 29);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        28,
+        29,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -177,7 +226,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -186,7 +235,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -215,14 +264,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -241,14 +290,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -260,14 +309,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -279,7 +328,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "{UNDO_V29} DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -287,7 +336,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -326,12 +375,12 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 28);
+    assert_eq!(migrated.schema_version().unwrap(), 29);
     let pools = migrated.pools().unwrap();
     let legacy = pools.iter().find(|p| p.id == "legacy").unwrap();
     let random = pools.iter().find(|p| p.id == "random").unwrap();
@@ -370,6 +419,188 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
     );
 }
 
+/// The pre-migration shape of five pools' `cache_ttl_json`, a pin under the three-column key, a member and a
+/// key: a seed that restores the dropped shape plays the roll-back constant's role, so the sweep's marker
+/// covers it the same way.
+const SEED_PRE_V29: &str = r#"
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('full', 'full', 1, 'priority', 'prefer_plan', '{}', '{"enabled":true,"in_overage":"5m","main":"1h","subagent":"1h","models":[{"model":"claude-haiku-4-5-20251001","main":"1h","subagent":"5m"}]}', 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('null-override', 'null-override', 1, 'priority', 'prefer_plan', '{}', '{"enabled":true,"in_overage":null,"main":"1h","subagent":"1h","models":[{"model":"claude-haiku-4-5-20251001","main":"1h","subagent":"5m"}]}', 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('partial-main', 'partial-main', 1, 'priority', 'prefer_plan', '{}', '{"enabled":true,"main":"1h"}', 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('partial-override', 'partial-override', 1, 'priority', 'prefer_plan', '{}', '{"in_overage":"1h"}', 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('empty', 'empty', 1, 'priority', 'prefer_plan', '{}', '{}', 1, 1); -- rollback
+INSERT INTO pool_members (pool_id, account_id, priority) VALUES ('full', 'a', 0); -- rollback
+INSERT INTO api_keys (id, label, pool_id, enabled, secret_digest, prefix, created_at) VALUES ('k', 'k', 'full', 1, x'00', '00000000', 1); -- rollback
+INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last_used_at) VALUES ('k', 's', 'm', 'a', 1, 1, 1); -- rollback
+"#;
+
+#[test]
+fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V29} UPDATE meta SET value = '28' WHERE key = 'schema_version'; {SEED_PRE_V29}"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 29);
+
+    let pin = migrated
+        .load_routing()
+        .unwrap()
+        .pins
+        .into_iter()
+        .find(|p| p.key_id == "k")
+        .unwrap();
+    assert_eq!(pin.agent_id, "main");
+
+    let pools = migrated.pools().unwrap();
+    for pool in &pools {
+        assert_eq!(pool.affinity, Affinity::default(), "{}", pool.id);
+        assert_eq!(pool.quota_headers, QuotaHeaders::Pass, "{}", pool.id);
+        assert!(
+            !pool.cache_ttl_json.contains("in_overage"), // -- rollback
+            "{}: the old key does not survive the rewrite",
+            pool.id
+        );
+    }
+    let policy = |id: &str| {
+        phoebis_relay::CacheTtlPolicy::from_json(
+            &pools.iter().find(|p| p.id == id).unwrap().cache_ttl_json,
+        )
+    };
+    let haiku = phoebis_relay::ModelTtl {
+        model: "claude-haiku-4-5-20251001".into(),
+        main: phoebis_relay::CacheTtl::OneHour,
+        subagent: phoebis_relay::CacheTtl::FiveMinutes,
+    };
+
+    let full = policy("full");
+    assert!(full.enabled);
+    assert_eq!(
+        full.metered,
+        phoebis_relay::TtlRules {
+            keepalive: phoebis_relay::CacheTtl::FiveMinutes,
+            main: phoebis_relay::CacheTtl::FiveMinutes,
+            models: Vec::new(),
+            subagent: phoebis_relay::CacheTtl::FiveMinutes,
+        },
+        "the override's TTL throughout, no per-model rule"
+    );
+    assert_eq!(
+        full.plan,
+        phoebis_relay::TtlRules {
+            keepalive: phoebis_relay::CacheTtl::OneHour,
+            main: phoebis_relay::CacheTtl::OneHour,
+            models: vec![haiku.clone()],
+            subagent: phoebis_relay::CacheTtl::OneHour,
+        },
+        "the old main, subagent and models"
+    );
+
+    let null_override = policy("null-override");
+    assert!(null_override.enabled);
+    assert_eq!(
+        null_override.metered, null_override.plan,
+        "a null override reads no override, so metered equals plan"
+    );
+    assert_eq!(null_override.plan.models, vec![haiku.clone()]);
+
+    let partial_main = policy("partial-main");
+    assert!(partial_main.enabled);
+    assert_eq!(partial_main.plan, phoebis_relay::TtlRules::plan_default());
+    assert_eq!(
+        partial_main.metered,
+        phoebis_relay::TtlRules::metered_default(),
+        "the omitted override was the old five-minute default"
+    );
+
+    let partial_override = policy("partial-override");
+    assert_eq!(partial_override.plan, phoebis_relay::TtlRules::plan_default());
+    assert_eq!(
+        partial_override.metered,
+        phoebis_relay::TtlRules {
+            keepalive: phoebis_relay::CacheTtl::OneHour,
+            main: phoebis_relay::CacheTtl::OneHour,
+            models: Vec::new(),
+            subagent: phoebis_relay::CacheTtl::OneHour,
+        },
+        "the sole override names an hour, so metered reads it throughout"
+    );
+
+    let empty = policy("empty");
+    assert_eq!(empty, phoebis_relay::CacheTtlPolicy::default());
+    assert_eq!(
+        pools
+            .iter()
+            .find(|p| p.id == "empty")
+            .unwrap()
+            .cache_ttl_json,
+        "{}",
+        "a row holding the default is left alone"
+    );
+
+    let member = migrated.pool_members("full").unwrap().pop().unwrap();
+    assert_eq!(
+        (member.budget_usd, member.budget_period),
+        (None, BudgetPeriod::Month)
+    );
+
+    let key = migrated.api_key("k").unwrap().unwrap();
+    assert_eq!(
+        key.affinity_source,
+        AffinitySource::Auto
+    );
+}
+
+#[test]
+fn the_pins_columns_after_the_rebuild_are_the_old_set_plus_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    Store::open(&path, &StorageKey::generate()).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let columns: std::collections::BTreeSet<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('pins')")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let mut expected: std::collections::BTreeSet<String> = [
+        "key_id",
+        "session_id",
+        "model",
+        "account_id",
+        "epoch",
+        "created_at",
+        "last_used_at",
+        "key_generation",
+        "incarnation",
+        "burn",
+        "burn_at",
+        "last_input_tokens",
+        "last_refresh_at",
+        "cache_ttl_ms",
+        "shed_from",
+        "shed_at",
+        "static_hash",
+        "tail_hash",
+        "burn_usd",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    expected.insert("agent_id".into());
+    assert_eq!(columns, expected);
+}
+
 #[test]
 fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_the_first_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -389,14 +620,14 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     // the version this migration reads from rather than rolled back through every later one.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        28,
+        29,
         "the direct 23 to 28 open runs every migration between"
     );
     assert_eq!(
@@ -598,7 +829,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
+        "{UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
          DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -627,7 +858,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 28);
+    assert_eq!(migrated.schema_version().unwrap(), 29);
     migrated
         .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
         .unwrap();
@@ -744,11 +975,11 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         .unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
-        .set_pool_members("main", &[("a".into(), 2)], "test")
+        .set_pool_members("main", &[member("a", 2)], "test")
         .unwrap();
     assert_eq!(store.pool_members("main").unwrap()[0].priority, 2);
     assert!(matches!(
-        store.set_pool_members("main", &[("ghost".into(), 0)], "test"),
+        store.set_pool_members("main", &[member("ghost", 0)], "test"),
         Err(StoreError::AccountNotFound(_))
     ));
     let k = key(&store, "desktop", "main", "phoebis-0123456789abcdef");
@@ -1030,7 +1261,7 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
         .unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
-        .set_pool_members("main", &[("a".into(), 0)], "test")
+        .set_pool_members("main", &[member("a", 0)], "test")
         .unwrap();
     let load = store.load_registry().unwrap();
     assert_eq!(

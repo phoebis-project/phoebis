@@ -1768,8 +1768,9 @@ pub(crate) struct RouterView {
     /// ask when the router is gone.
     pub fits: Vec<FitRow>,
     pub overage: BTreeSet<String>,
-    /// `(key, session, canonical model)` to the pinned account: the account a probe would actually run on.
-    pub pins: BTreeMap<(String, String, String), String>,
+    /// `(key, session, agent, canonical model)` to the pinned account: the account a probe would actually run
+    /// on, so a sibling's pin never overwrites an agent's own.
+    pub pins: BTreeMap<(String, String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
     /// A subscription account's own `organization.rate_limit_tier`, for the plan-side cap's fallback when the
     /// router has not fitted the account's window yet.
@@ -1810,7 +1811,7 @@ impl Engine {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+            .map(|p| ((p.key_id, p.session_id, p.agent_id, p.model), p.account_id))
             .collect();
         let cooled = self
             .parts
@@ -1935,6 +1936,7 @@ pub(crate) fn gate(
     let pinned = view.pins.get(&(
         key_id.clone(),
         session_id.to_string(),
+        agent.id.clone(),
         agent.canonical_model.clone(),
     ));
     if let Some(pinned) = pinned {

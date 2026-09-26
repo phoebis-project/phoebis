@@ -67,7 +67,7 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
-    DriftGuard, Markerless, NativeEdit, RelayError, VersionCheck, EXTENDED_TTL_BETA,
+    DriftGuard, Markerless, NativeEdit, RelayError, TtlBranch, VersionCheck, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -1187,6 +1187,7 @@ impl Relay {
                 .select(SelectRequest {
                     key_id: key.id.clone(),
                     key_generation: key.created_at,
+                    agent_id: identity.agent_id.clone(),
                     session_id: identity.session_id.clone(),
                     canonical_model: identity.canonical_model.clone(),
                     candidates: candidates.clone(),
@@ -1416,11 +1417,19 @@ impl Relay {
             // retry reuses this body rather than pricing again. A count is priced too: the markers it
             // carries follow the inference request's under the same policy, or the count would read an
             // entry the inference request wrote under another TTL.
-            let priced = admitted.cache_ttl_policy.ttl_for(
-                canonical_model,
-                admitted.identity.agent_id == "main",
-                writes_cost_money,
-            );
+            // A probe replays another turn's markers under its own keepalive TTL; otherwise the branch follows
+            // the agent, so a subagent's rewrite never reads the main turn's per-model override.
+            let branch = if admitted.trace.kind == Kind::Probe {
+                TtlBranch::Keepalive
+            } else if admitted.identity.agent_id == "main" {
+                TtlBranch::Main
+            } else {
+                TtlBranch::Subagent
+            };
+            let priced =
+                admitted
+                    .cache_ttl_policy
+                    .ttl_for(canonical_model, branch, writes_cost_money);
             // Only the markers a count already carries: the `count_tokens` schema is not documented to
             // accept a top-level member the client never sent, and a 400 naming one has no strip path.
             let markerless = match admitted.trace.kind {

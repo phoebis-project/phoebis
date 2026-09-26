@@ -13,9 +13,9 @@ use phoebis_routing::{
     SelectResult, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, FitRow,
-    ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
-    Strategy,
+    key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
+    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, NewBundle, OveragePolicy,
+    PoolRow, QuotaHeaders, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::{
     connector_builder,
@@ -71,6 +71,8 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                affinity: Affinity::default(),
+                quota_headers: QuotaHeaders::Pass,
                 created_at: 0,
                 updated_at: 0,
             },
@@ -80,7 +82,14 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     store
         .set_pool_members(
             "p",
-            &ids.iter().map(|id| (id.to_string(), 0)).collect::<Vec<_>>(),
+            &ids.iter()
+                .map(|id| MemberWrite {
+                    account_id: id.to_string(),
+                    priority: 0,
+                    budget_usd: None,
+                    budget_period: phoebis_store::BudgetPeriod::Month,
+                })
+                .collect::<Vec<_>>(),
             "test",
         )
         .unwrap();
@@ -106,6 +115,7 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )
@@ -123,6 +133,7 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
     SelectRequest {
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
+        agent_id: "main".into(),
         session_id: session.map(String::from),
         canonical_model: "claude-sonnet-5".into(),
         candidates: resolve(
@@ -188,7 +199,16 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
         })
         .unwrap();
     store
-        .set_pool_members("p", &[("b".into(), 0)], "test")
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "b".into(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
         .unwrap();
     assert!(
         handle
@@ -499,6 +519,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
         SelectRequest {
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
+            agent_id: "main".into(),
             session_id: Some("s1".into()),
             canonical_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
@@ -618,6 +639,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
         .select(SelectRequest {
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
+            agent_id: "main".into(),
             session_id: Some("s1".into()),
             canonical_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
@@ -1115,6 +1137,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
     phoebis_routing::PinRef {
         key_id: row.key_id,
         session_id: row.session_id,
+        agent_id: row.agent_id,
         model: row.model,
         epoch: row.epoch,
     }
@@ -1165,7 +1188,16 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
         })
         .unwrap();
     store
-        .set_pool_members("p", &[("a".to_string(), 0)], "test")
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".to_string(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
         .unwrap();
     handle.reload().await.unwrap();
 
@@ -1197,7 +1229,16 @@ fn insert_account_a(store: &Store) {
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
         .unwrap();
     store
-        .set_pool_members("p", &[("a".to_string(), 0)], "test")
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".to_string(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
         .unwrap();
 }
 
@@ -1225,6 +1266,7 @@ fn insert_key_k(store: &Store) {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
+                affinity_source: AffinitySource::Auto,
             },
             "test",
         )

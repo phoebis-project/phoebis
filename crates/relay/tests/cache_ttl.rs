@@ -83,8 +83,8 @@ async fn a_marker_inside_a_tool_results_own_content_is_rewritten_like_every_othe
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
-        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
+        // An api_key account always pays, so its writes take the metered set's own `main` here.
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
     let native = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]}],"stream":true}"#;
@@ -115,8 +115,8 @@ async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_b
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
-        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
-        policy(r#"{"enabled":true,"main":"1h","subagent":"5m","in_overage":null}"#),
+        // An api_key account always pays, so its writes take the metered set's own turns here.
+        policy(r#"{"enabled":true,"metered":{"main":"1h","subagent":"5m"}}"#),
     )
     .await;
 
@@ -166,7 +166,7 @@ async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_b
     let oh = harness(
         &up,
         &[oauth("o", OA, 0)],
-        policy(r#"{"enabled":true,"main":"1h","subagent":"5m"}"#),
+        policy(r#"{"enabled":true,"plan":{"main":"1h","subagent":"5m"}}"#),
     )
     .await;
     let mut sub_oauth = request_from_fixture(
@@ -271,7 +271,7 @@ async fn the_per_model_override_and_the_in_overage_value_apply_and_overage_is_re
         &up,
         &[oauth("a", OA, 0), oauth("b", OB, 1)],
         PoolSpec {
-            cache_ttl: r#"{"enabled":true,"main":"1h","in_overage":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]}"#,
+            cache_ttl: r#"{"enabled":true,"metered":{"main":"5m"},"plan":{"main":"1h","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]}}"#,
             overage_policy: OveragePolicy::Allow,
             ..Default::default()
         },
@@ -358,8 +358,8 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
     let h = harness(
         &up,
         &[api_key("a", A, 0), api_key("b", B, 1)],
-        // `in_overage` pinned off: an api_key account's default would otherwise take over `main`.
-        policy(r#"{"enabled":true,"main":"1h","in_overage":null}"#),
+        // An api_key account always pays, so its writes take the metered set's own `main` here.
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
 
@@ -446,7 +446,7 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
 
 #[tokio::test]
 async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage_state() {
-    const POLICY: &str = r#"{"enabled":true,"main":"1h","in_overage":"5m"}"#;
+    const POLICY: &str = r#"{"enabled":true,"metered":{"main":"5m"},"plan":{"main":"1h"}}"#;
 
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

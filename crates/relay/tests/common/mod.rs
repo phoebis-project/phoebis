@@ -19,8 +19,9 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity, ModelRule, NewBundle,
-    OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
+    Failover, Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, QuotaHeaders,
+    RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -115,6 +116,16 @@ impl Default for PoolSpec {
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::Priority,
         }
+    }
+}
+
+/// A member of a pool at `priority`, no budget: the shorthand every `set_pool_members` call in these tests uses.
+pub fn member(account_id: &str, priority: u32) -> MemberWrite {
+    MemberWrite {
+        account_id: account_id.into(),
+        priority,
+        budget_usd: None,
+        budget_period: phoebis_store::BudgetPeriod::Month,
     }
 }
 
@@ -606,6 +617,8 @@ async fn build(
                     failover: pool.failover,
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
+                    affinity: Affinity::default(),
+                    quota_headers: QuotaHeaders::Pass,
                     created_at: NOW,
                     updated_at: NOW,
                 },
@@ -617,7 +630,12 @@ async fn build(
                 "main",
                 &accounts
                     .iter()
-                    .map(|a| (a.id.to_string(), a.priority))
+                    .map(|a| MemberWrite {
+                        account_id: a.id.to_string(),
+                        priority: a.priority,
+                        budget_usd: None,
+                        budget_period: phoebis_store::BudgetPeriod::Month,
+                    })
                     .collect::<Vec<_>>(),
                 "test",
             )
@@ -644,6 +662,7 @@ async fn build(
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     in_flight_cap: pool.key_in_flight_cap,
+                    affinity_source: AffinitySource::Auto,
                 },
                 "test",
             )

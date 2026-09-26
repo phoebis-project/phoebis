@@ -37,10 +37,14 @@ const POOL_ROWS: Pool[] = [
     cacheDiagnostics: true,
     cacheTtl: {
       enabled: true,
-      main: '1h',
-      subagent: '5m',
-      inOverage: '5m',
-      models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }],
+      injectWhenAbsent: false,
+      plan: {
+        keepalive: '1h',
+        main: '1h',
+        subagent: '5m',
+        models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }],
+      },
+      metered: { keepalive: '5m', main: '5m', subagent: '5m', models: [] },
     },
     bodyCaptureHours: 24,
     modelRules: [{ not: true, pattern: 'claude-3*' }],

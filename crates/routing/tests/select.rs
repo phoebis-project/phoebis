@@ -5,9 +5,10 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, Failover, OveragePolicy, PinRow,
-    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
-    SubscriptionTerm, WarmSessions,
+    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow, BudgetPeriod,
+    CooldownRow, Failover, OveragePolicy, PinKey, PinRow, PoolMember, PoolRow,
+    QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy, SubscriptionTerm,
+    WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -114,6 +115,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             last_used_at: None,
             retired_secret_last_used_at: None,
             in_flight_cap: None,
+            affinity_source: AffinitySource::Auto,
         }],
         members: pool
             .members
@@ -122,6 +124,8 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
                 pool_id: "p".into(),
                 account_id: (*a).into(),
                 priority: *p,
+                budget_usd: None,
+                budget_period: BudgetPeriod::Month,
             })
             .collect(),
         pools: vec![PoolRow {
@@ -141,6 +145,8 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
+            affinity: Affinity::default(),
+            quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
         }],
@@ -206,6 +212,7 @@ fn request(
     SelectRequest {
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
+        agent_id: "main".into(),
         session_id: session.map(String::from),
         canonical_model: model.into(),
         candidates: resolve(s, s.key("k").unwrap(), model, model).unwrap(),
@@ -318,6 +325,46 @@ fn picked(result: &SelectResult) -> &str {
 
 fn rng() -> StdRng {
     StdRng::seed_from_u64(7)
+}
+
+#[test]
+fn a_subagent_and_the_main_agent_of_one_session_pin_separately() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let main = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000);
+    let sub = SelectRequest {
+        agent_id: "sub-1".into(),
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000)
+    };
+    select(&mut st, &s, &main, &mut rng());
+    select(&mut st, &s, &sub, &mut rng());
+    assert_eq!(
+        st.pins().len(),
+        2,
+        "the main agent and its subagent each hold their own pin"
+    );
+    let main_key = pin_key("s1");
+    let sub_key = PinKey {
+        agent_id: "sub-1".into(),
+        ..pin_key("s1")
+    };
+    let main_epoch = st.pin(&main_key).unwrap().epoch;
+    let sub_last_used = st.pin(&sub_key).unwrap().last_used_at;
+    let renewal = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    select(&mut st, &s, &renewal, &mut rng());
+    assert_eq!(
+        st.pin(&main_key).unwrap().epoch,
+        main_epoch,
+        "the third select renews the main agent's pin alone"
+    );
+    assert_eq!(
+        st.pin(&sub_key).unwrap().last_used_at,
+        sub_last_used,
+        "the subagent's pin is untouched by the main agent's renewal"
+    );
 }
 
 #[test]
@@ -1000,9 +1047,7 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
         "and the pin the migration would have moved is still there"
     );
     assert!(
-        !writes
-            .iter()
-            .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))),
+        !writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))),
         "so nothing deleted it on the way"
     );
     st.record_sample("b", with_fable(sample(0.5, 0.1, 3), 0.2, Some(9 * HOUR)));
@@ -1021,9 +1066,7 @@ fn a_staged_migration_keeps_the_pin_when_no_destination_holds_fable_allowance() 
         "one sibling with allowance left is enough to move the pin"
     );
     assert!(
-        writes
-            .iter()
-            .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))),
+        writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))),
         "and that migration releases the old pin"
     );
 }
@@ -1961,9 +2004,7 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
     st.record_sample("a", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 500));
     let (result, writes) = select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng());
     assert_eq!(landed(result), ("a".into(), Some(MigrateReason::Spent)));
-    assert!(writes
-        .iter()
-        .any(|w| matches!(w, StateWrite::DeletePin(_, _, _))));
+    assert!(writes.iter().any(|w| matches!(w, StateWrite::DeletePin(_))));
 }
 
 #[test]
@@ -2097,7 +2138,7 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
         picked(&select(&mut st, &s, &req(1_000, &[]), &mut rng()).0),
         "a"
     );
-    let pin = st.pin("k", "s1", "claude-sonnet-5").cloned().unwrap();
+    let pin = st.pin(&pin_key("s1")).cloned().unwrap();
     assert_eq!(
         release_reasons(&st, &s, &pin, &req(2_000, &[])),
         vec!["released"],
@@ -2574,11 +2615,12 @@ fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_afte
     let rekey = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
     assert_eq!(
         rekey.delete_pins,
-        [(
-            "k".to_string(),
-            "s1".to_string(),
-            "claude-sonnet-4-5".to_string()
-        )],
+        [PinKey {
+            key_id: "k".to_string(),
+            session_id: "s1".to_string(),
+            agent_id: "main".to_string(),
+            model: "claude-sonnet-4-5".to_string()
+        }],
         "the pin under the folded spelling is dropped"
     );
     assert!(
@@ -2925,6 +2967,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
     let pin = PinRow {
         key_id: "k".into(),
         session_id: "s1".into(),
+        agent_id: "main".into(),
         model: "claude-sonnet-5".into(),
         account_id: "a".into(),
         epoch: 1,
@@ -3363,7 +3406,7 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
         "a still serves before its end"
     );
     let pin = st
-        .pin("k", "s1", "claude-sonnet-5")
+        .pin(&pin_key("s1"))
         .cloned()
         .expect("the first select pinned a");
     let after_end = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 6_000);
@@ -3501,7 +3544,7 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
         "a held answer places nothing: {writes:?}"
     );
     assert!(
-        st.pin("k", "s1", "claude-sonnet-5").is_none(),
+        st.pin(&pin_key("s1")).is_none(),
         "no pin is made for a request that is held"
     );
     drop(tickets.remove(2));
@@ -3611,7 +3654,7 @@ fn a_move_whose_every_destination_is_at_its_cap_is_not_made_and_the_pin_renews_i
         )
     };
     assert_eq!(picked(&pick(&mut st, 1_000).0), "a");
-    let epoch = st.pin("k", "s1", "claude-sonnet-5").unwrap().epoch;
+    let epoch = st.pin(&pin_key("s1")).unwrap().epoch;
     // a's window is spent and b holds allowance, so the spent move is due; b is at its cap.
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
     st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
@@ -3631,7 +3674,7 @@ fn a_move_whose_every_destination_is_at_its_cap_is_not_made_and_the_pin_renews_i
             .any(|w| matches!(w, StateWrite::DeletePin(..))),
         "the pin is never deleted, so no release is reported: {writes:?}"
     );
-    assert_eq!(st.pin("k", "s1", "claude-sonnet-5").unwrap().epoch, epoch);
+    assert_eq!(st.pin(&pin_key("s1")).unwrap().epoch, epoch);
     drop(on_b);
     let SelectResult::Selected(sel) = pick(&mut st, 3_000).0 else {
         panic!("b has a slot again")
@@ -3722,8 +3765,17 @@ fn with_facts(
     }
 }
 
+fn pin_key(session: &str) -> PinKey {
+    PinKey {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+    }
+}
+
 fn pinned(st: &RoutingState, session: &str) -> PinRow {
-    st.pin("k", session, "claude-sonnet-5")
+    st.pin(&pin_key(session))
         .cloned()
         .expect("the session holds a pin")
 }
@@ -3972,6 +4024,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
     PinRow {
         key_id: "k".into(),
         session_id: session.into(),
+        agent_id: "main".into(),
         model: "claude-sonnet-5".into(),
         account_id: account.into(),
         epoch: 1,
@@ -4039,7 +4092,7 @@ fn landed(result: SelectResult) -> (String, Option<MigrateReason>) {
 }
 
 fn marked(st: &RoutingState, session: &str, now: i64) -> bool {
-    st.shed_marked("k", session, "claude-sonnet-5", now, 900_000)
+    st.shed_marked(&pin_key(session), now, 900_000)
 }
 
 const MINUTE: i64 = 60_000;
@@ -4835,6 +4888,7 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
             &PinRef {
                 key_id: "k".into(),
                 session_id: "s1".into(),
+                agent_id: "main".into(),
                 model: "claude-sonnet-5".into(),
                 epoch,
             },

@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
-use phoebis_store::{AccountState, CooldownRow, FitRow, PinRow, RekeyWrite, Store, StoreError};
+use phoebis_store::{AccountState, CooldownRow, FitRow, PinKey, PinRow, RekeyWrite, Store, StoreError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -692,8 +692,8 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
             StateWrite::DeleteCooldown(account_id, scope) => {
                 store.delete_cooldown(&account_id, &scope)?;
             }
-            StateWrite::DeletePin(key_id, session_id, model) => {
-                store.delete_pin(&key_id, &session_id, &model)?;
+            StateWrite::DeletePin(key) => {
+                store.delete_pin(&key)?;
             }
             StateWrite::Rekey(rekey) => {
                 if let Err(error) = store.rekey_resolution(&rekey) {
@@ -786,16 +786,15 @@ impl Task {
                     request.revision = snapshot.revision;
                 }
                 self.pull_samples(&request);
-                let triple = request.session_id.as_ref().map(|s| {
-                    (
-                        request.key_id.clone(),
-                        s.clone(),
-                        request.canonical_model.clone(),
-                    )
+                let pin_key = request.session_id.as_ref().map(|s| PinKey {
+                    key_id: request.key_id.clone(),
+                    session_id: s.clone(),
+                    agent_id: request.agent_id.clone(),
+                    model: request.canonical_model.clone(),
                 });
-                let before = triple
+                let before = pin_key
                     .as_ref()
-                    .and_then(|(k, s, m)| self.state.pin(k, s, m).cloned());
+                    .and_then(|key| self.state.pin(key).cloned());
                 // The facts are read against the state the selection runs on, before it moves anything.
                 let released = before
                     .as_ref()
@@ -804,8 +803,9 @@ impl Task {
                 let (mut result, writes) =
                     select(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
-                if let Some((k, s, m)) = &triple {
-                    let after = self.state.pin(k, s, m).cloned();
+                if let Some(key) = &pin_key {
+                    let (k, s, m) = (&key.key_id, &key.session_id, &key.model);
+                    let after = self.state.pin(key).cloned();
                     let now = request.now;
                     let selected = matches!(result, SelectResult::Selected(_));
                     match (before, after) {
@@ -951,32 +951,30 @@ impl Task {
                 reply,
             } => {
                 // The account a pin names is only readable while it is still held, so the rows come first.
-                let held: HashMap<(String, String, String), String> = self
+                let held: HashMap<PinKey, String> = self
                     .state
                     .pins()
                     .into_iter()
                     .filter(|p| p.key_id == key_id && p.session_id == session_id)
-                    .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+                    .map(|p| (p.key(), p.account_id))
                     .collect();
+                // Every agent's pin of the session leaves together: the session's next request starts fresh
+                // wherever each of its agents lands, not only its main turn's.
                 let gone = self.state.release_session(&key_id, &session_id);
                 let count = gone.len();
                 let now = (self.clock)();
-                for triple in &gone {
-                    if let Some(account_id) = held.get(triple) {
+                for key in &gone {
+                    if let Some(account_id) = held.get(key) {
                         self.emit(RouterEvent::PinReleased {
-                            key_id: triple.0.clone(),
-                            session_id: triple.1.clone(),
-                            model: triple.2.clone(),
+                            key_id: key.key_id.clone(),
+                            session_id: key.session_id.clone(),
+                            model: key.model.clone(),
                             account_id: account_id.clone(),
                             at: now,
                         });
                     }
                 }
-                self.write(
-                    gone.into_iter()
-                        .map(|(k, s, m)| StateWrite::DeletePin(k, s, m))
-                        .collect(),
-                );
+                self.write(gone.into_iter().map(StateWrite::DeletePin).collect());
                 let _ = reply.send(count);
             }
             Command::ClearCooldown {
@@ -1096,7 +1094,12 @@ impl Task {
                             ),
                             (account_id.clone(), "cooldown", (self.clock)()),
                         );
-                        writes.push(StateWrite::DeletePin(pin.key_id, pin.session_id, pin.model));
+                        writes.push(StateWrite::DeletePin(PinKey {
+                            key_id: pin.key_id,
+                            session_id: pin.session_id,
+                            agent_id: pin.agent_id,
+                            model: pin.model,
+                        }));
                     }
                 }
                 self.write(writes);
@@ -1171,11 +1174,12 @@ impl Task {
                         ),
                         (account_id.clone(), "mark", (self.clock)()),
                     );
-                    self.write(vec![StateWrite::DeletePin(
-                        pin.key_id,
-                        pin.session_id,
-                        pin.model,
-                    )]);
+                    self.write(vec![StateWrite::DeletePin(PinKey {
+                        key_id: pin.key_id,
+                        session_id: pin.session_id,
+                        agent_id: pin.agent_id,
+                        model: pin.model,
+                    })]);
                 }
             }
             Report::PinReleased {
@@ -1185,19 +1189,22 @@ impl Task {
                 credential_generation,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
+                let key = PinKey {
+                    key_id: pin.key_id.clone(),
+                    session_id: pin.session_id.clone(),
+                    agent_id: pin.agent_id.clone(),
+                    model: pin.model.clone(),
+                };
                 // The epoch names the one pin the request created, and with it the account the generations are
                 // checked against; a pin replaced since is another placement's to keep. A pin some selection
                 // renewed after its placement is serving another turn of the session, so the error that ended
                 // the first turn no longer speaks for it.
-                if self
-                    .state
-                    .renewed_since_placement(&pin.key_id, &pin.session_id, &pin.model)
-                {
+                if self.state.renewed_since_placement(&key) {
                     return;
                 }
                 let Some(account_id) = self
                     .state
-                    .pin(&pin.key_id, &pin.session_id, &pin.model)
+                    .pin(&key)
                     .filter(|current| current.epoch == pin.epoch)
                     .map(|current| current.account_id.clone())
                 else {
@@ -1213,21 +1220,16 @@ impl Task {
                 }
                 // Nothing enters `invalidated`: the pin never served, so the session's next request is a fresh
                 // placement rather than a move away from it.
-                self.state
-                    .remove_pin(&pin.key_id, &pin.session_id, &pin.model);
+                self.state.remove_pin(&key);
                 self.emit(RouterEvent::PinExpired {
-                    key_id: pin.key_id.clone(),
-                    session_id: pin.session_id.clone(),
-                    model: pin.model.clone(),
+                    key_id: key.key_id.clone(),
+                    session_id: key.session_id.clone(),
+                    model: key.model.clone(),
                     account_id,
                     reasons: vec!["client_error"],
                     at: (self.clock)(),
                 });
-                self.write(vec![StateWrite::DeletePin(
-                    pin.key_id,
-                    pin.session_id,
-                    pin.model,
-                )]);
+                self.write(vec![StateWrite::DeletePin(key)]);
             }
             Report::PinRenewed {
                 mut pin,
@@ -1238,11 +1240,13 @@ impl Task {
                 cache_ttl_ms,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
-                if let Some(current) = self
-                    .state
-                    .pin(&pin.key_id, &pin.session_id, &pin.model)
-                    .cloned()
-                {
+                let key = PinKey {
+                    key_id: pin.key_id.clone(),
+                    session_id: pin.session_id.clone(),
+                    agent_id: pin.agent_id.clone(),
+                    model: pin.model.clone(),
+                };
+                if let Some(current) = self.state.pin(&key).cloned() {
                     if current.epoch == pin.epoch {
                         let mut renewed = PinRow {
                             last_used_at: now,
@@ -1277,8 +1281,7 @@ impl Task {
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
                         }
                         self.state.put_pin(renewed.clone());
-                        self.state
-                            .mark_renewed(&pin.key_id, &pin.session_id, &pin.model);
+                        self.state.mark_renewed(&key);
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
                 }
@@ -1528,11 +1531,11 @@ impl Task {
         // idle bound with no bound of its own.
         self.state.in_flight().expire(now);
         // The account a pin names is only readable while it is still held, so the rows come first.
-        let held: HashMap<(String, String, String), String> = self
+        let held: HashMap<PinKey, String> = self
             .state
             .pins()
             .into_iter()
-            .map(|p| ((p.key_id, p.session_id, p.model), p.account_id))
+            .map(|p| (p.key(), p.account_id))
             .collect();
         let purged = self.state.purge(&snapshot, now);
         tracing::debug!(
@@ -1550,12 +1553,12 @@ impl Task {
                 at: now,
             });
         }
-        for (triple, reason) in &purged.pins {
-            if let Some(account_id) = held.get(triple) {
+        for (key, reason) in &purged.pins {
+            if let Some(account_id) = held.get(key) {
                 self.emit(RouterEvent::PinExpired {
-                    key_id: triple.0.clone(),
-                    session_id: triple.1.clone(),
-                    model: triple.2.clone(),
+                    key_id: key.key_id.clone(),
+                    session_id: key.session_id.clone(),
+                    model: key.model.clone(),
                     account_id: account_id.clone(),
                     reasons: vec![*reason],
                     at: now,
@@ -1571,7 +1574,7 @@ impl Task {
             purged
                 .pins
                 .into_iter()
-                .map(|((k, s, m), _)| StateWrite::DeletePin(k, s, m)),
+                .map(|(key, _)| StateWrite::DeletePin(key)),
         );
         self.write(writes);
     }
@@ -1861,7 +1864,9 @@ pub fn sample_from_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoebis_store::{Failover, OveragePolicy, PoolRow, RoutingLoad, Shedding, Strategy};
+    use phoebis_store::{
+        Affinity, Failover, OveragePolicy, PoolRow, QuotaHeaders, RoutingLoad, Shedding, Strategy,
+    };
 
     /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, an
     /// overage policy that never keeps an account out, and no spent move.
@@ -1886,6 +1891,8 @@ mod tests {
             failover: Failover::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
+            affinity: Affinity::default(),
+            quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
         }

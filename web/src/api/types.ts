@@ -233,15 +233,23 @@ export interface PoolKeepalive {
 
 export type CacheTtl = '5m' | '1h';
 
+/** One rule set's shape: the TTL by branch, with per-model overrides on `main` and `subagent`. */
+export interface TtlRules {
+  keepalive: CacheTtl;
+  main: CacheTtl;
+  /** Per-model overrides; a model absent here takes `main` and `subagent`. */
+  models: { main: CacheTtl; model: string; subagent: CacheTtl }[];
+  subagent: CacheTtl;
+}
+
 export interface PoolCacheTtl {
   /** Off leaves every breakpoint as the client sent it. */
   enabled: boolean;
-  /** What applies while the serving upstream is in overage; null keeps the rules below. */
-  inOverage: CacheTtl | null;
-  main: CacheTtl;
-  /** Per-model overrides; a model absent here takes the pool rule. */
-  models: { main: CacheTtl; model: string; subagent: CacheTtl }[];
-  subagent: CacheTtl;
+  /** Whether the rewrite adds a top-level breakpoint to a body that carries none. */
+  injectWhenAbsent: boolean;
+  /** The rules while a write costs money: an api_key account, or a subscription account in overage. */
+  metered: TtlRules;
+  plan: TtlRules;
 }
 
 export interface TrafficBucket {
@@ -717,6 +725,8 @@ export type BurnUnit = 'meter_tokens' | 'usd';
 
 export interface Session {
   accountId: string | null;
+  /** The pin's own agent: `main`, or a subagent's id; null for a session with no pin. */
+  agentId: string | null;
   agents: number;
   /** The moving average priced in `burnUnit`; 0 for a pin never renewed with usage, null with no pin at all or
    *  with one whose account left the registry. */

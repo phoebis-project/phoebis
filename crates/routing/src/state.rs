@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use phoebis_store::{
-    AccountKind, AccountState, CooldownRow, FitRow, OverageRow, PinRow, RekeyWrite, ResolutionRow,
-    RoutingLoad,
+    AccountKind, AccountState, CooldownRow, FitRow, OverageRow, PinKey, PinRow, RekeyWrite,
+    ResolutionRow, RoutingLoad,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -23,6 +23,7 @@ const DEFAULT_SAMPLE_TTL_MS: i64 = 60_000;
 pub struct PinRef {
     pub key_id: String,
     pub session_id: String,
+    pub agent_id: String,
     pub model: String,
     pub epoch: u64,
 }
@@ -138,7 +139,7 @@ pub enum StateWrite {
         credential_generation: u64,
     },
     DeleteCooldown(String, String),
-    DeletePin(String, String, String),
+    DeletePin(PinKey),
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
@@ -152,7 +153,7 @@ pub enum StateWrite {
 pub struct Purged {
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
-    pub pins: Vec<((String, String, String), &'static str)>,
+    pub pins: Vec<(PinKey, &'static str)>,
 }
 
 /// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; 0, priority,
@@ -272,7 +273,7 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
 }
 
 /// The pins a round marks, in the round's order: never the last unmarked pin, nothing for a zero target.
-pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<(String, String, String)> {
+pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<PinKey> {
     let mut marks = Vec::new();
     if target.is_nan() || target <= 0.0 {
         return marks;
@@ -284,11 +285,7 @@ pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<(String, String
         if marked >= target || marks.len() + 1 >= ordered.len() {
             break;
         }
-        marks.push((
-            pin.key_id.clone(),
-            pin.session_id.clone(),
-            pin.model.clone(),
-        ));
+        marks.push(pin.key());
         marked += burn;
     }
     marks
@@ -474,8 +471,8 @@ impl Drop for AccountTicket {
     }
 }
 
-/// When a shedding round ran, and the pins it marked by `(key_id, session_id, model)`.
-type ShedRound = (i64, HashSet<(String, String, String)>);
+/// When a shedding round ran, and the pins it marked.
+type ShedRound = (i64, HashSet<PinKey>);
 
 pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
@@ -484,11 +481,11 @@ pub struct RoutingState {
     in_flight: InFlight,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
-    pins: HashMap<(String, String, String), PinRow>,
+    pins: HashMap<PinKey, PinRow>,
     /// The pins some selection or completion renewed since their placement. A client error on the request that
     /// created a pin releases the pin only while its key is absent here: a renewal means the pin serves another
     /// turn, however close in time. Memory only, since no request outlives a restart to report on a loaded pin.
-    renewed: HashSet<(String, String, String)>,
+    renewed: HashSet<PinKey>,
     /// A folded spelling to the dated id it resolved to, so every lookup below can key a model's rows on the
     /// dated id once it is known, whichever spelling the caller names.
     resolutions: HashMap<String, String>,
@@ -539,11 +536,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
-            pins: load
-                .pins
-                .into_iter()
-                .map(|p| ((p.key_id.clone(), p.session_id.clone(), p.model.clone()), p))
-                .collect(),
+            pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
             renewed: HashSet::new(),
             resolutions: load
                 .resolutions
@@ -579,13 +572,12 @@ impl RoutingState {
         }
     }
 
-    pub fn pin(&self, key_id: &str, session_id: &str, model: &str) -> Option<&PinRow> {
-        let model = self.canonical(model);
-        self.pins.get(&(
-            key_id.to_string(),
-            session_id.to_string(),
-            model.to_string(),
-        ))
+    pub fn pin(&self, key: &PinKey) -> Option<&PinRow> {
+        let canonical = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        self.pins.get(&canonical)
     }
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one
@@ -593,11 +585,7 @@ impl RoutingState {
     /// epoch, the mark, and the renewal.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
-        let key = (
-            pin.key_id.clone(),
-            pin.session_id.clone(),
-            pin.model.clone(),
-        );
+        let key = pin.key();
         let epoch = pin.epoch;
         match self.pins.insert(key.clone(), pin) {
             Some(replaced) if replaced.epoch == epoch => {}
@@ -612,40 +600,37 @@ impl RoutingState {
     }
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
-    pub(crate) fn mark_renewed(&mut self, key_id: &str, session_id: &str, model: &str) {
-        let key = (
-            key_id.to_string(),
-            session_id.to_string(),
-            self.canonical(model).to_string(),
-        );
+    pub(crate) fn mark_renewed(&mut self, key: &PinKey) {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
         if self.pins.contains_key(&key) {
             self.renewed.insert(key);
         }
     }
 
     /// Whether the pin under the key was renewed since its placement.
-    pub fn renewed_since_placement(&self, key_id: &str, session_id: &str, model: &str) -> bool {
-        self.renewed.contains(&(
-            key_id.to_string(),
-            session_id.to_string(),
-            self.canonical(model).to_string(),
-        ))
+    pub fn renewed_since_placement(&self, key: &PinKey) -> bool {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        self.renewed.contains(&key)
     }
 
-    pub(crate) fn remove_pin(
-        &mut self,
-        key_id: &str,
-        session_id: &str,
-        model: &str,
-    ) -> Option<PinRow> {
-        let model = self.canonical(model).to_string();
-        self.take_pin(&(key_id.to_string(), session_id.to_string(), model))
+    pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        self.take_pin(&key)
     }
 
     /// The one way a pin leaves the map: a pin that left its account, by a move, a fail-over, an expiry, a
     /// release or the purge, spends its mark there, so coming back inside the dwell does not shed it on a round
     /// that marked it before it left.
-    fn take_pin(&mut self, key: &(String, String, String)) -> Option<PinRow> {
+    fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
         self.spend_mark(&pin);
@@ -654,11 +639,7 @@ impl RoutingState {
 
     fn spend_mark(&mut self, pin: &PinRow) {
         if let Some((_, marks)) = self.shed_rounds.get_mut(&pin.account_id) {
-            marks.remove(&(
-                pin.key_id.clone(),
-                pin.session_id.clone(),
-                pin.model.clone(),
-            ));
+            marks.remove(&pin.key());
         }
     }
 
@@ -954,9 +935,10 @@ impl RoutingState {
             })
             .collect();
         pins.sort_by(|a, b| {
-            (&a.0.key_id, &a.0.session_id, &a.0.model).cmp(&(
+            (&a.0.key_id, &a.0.session_id, &a.0.agent_id, &a.0.model).cmp(&(
                 &b.0.key_id,
                 &b.0.session_id,
+                &b.0.agent_id,
                 &b.0.model,
             ))
         });
@@ -966,28 +948,13 @@ impl RoutingState {
 
     /// Whether the latest round on the pin's current account, run within `dwell_ms`, marked it. A pin marked
     /// on one account and moved keeps its key, so the round read is the one of the account it now sits on.
-    pub fn shed_marked(
-        &self,
-        key_id: &str,
-        session_id: &str,
-        model: &str,
-        now: i64,
-        dwell_ms: i64,
-    ) -> bool {
-        let model = self.canonical(model);
-        let Some(pin) = self.pin(key_id, session_id, model) else {
+    pub fn shed_marked(&self, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
+        let Some(pin) = self.pin(key) else {
             return false;
         };
         self.shed_rounds
             .get(&pin.account_id)
-            .is_some_and(|(at, marks)| {
-                now - at < dwell_ms
-                    && marks.contains(&(
-                        key_id.to_string(),
-                        session_id.to_string(),
-                        model.to_string(),
-                    ))
-            })
+            .is_some_and(|(at, marks)| now - at < dwell_ms && marks.contains(&pin.key()))
     }
 
     /// When the account's latest shedding round ran.
@@ -995,23 +962,19 @@ impl RoutingState {
         self.shed_rounds.get(account_id).map(|(at, _)| *at)
     }
 
-    pub(crate) fn record_shed(
-        &mut self,
-        account_id: &str,
-        at: i64,
-        marks: Vec<(String, String, String)>,
-    ) {
+    pub(crate) fn record_shed(&mut self, account_id: &str, at: i64, marks: Vec<PinKey>) {
         self.shed_rounds
             .insert(account_id.to_string(), (at, marks.into_iter().collect()));
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
     pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> bool {
-        let key = (
-            pin.key_id.clone(),
-            pin.session_id.clone(),
-            self.canonical(&pin.model).to_string(),
-        );
+        let key = PinKey {
+            key_id: pin.key_id.clone(),
+            session_id: pin.session_id.clone(),
+            agent_id: pin.agent_id.clone(),
+            model: self.canonical(&pin.model).to_string(),
+        };
         let matches = self
             .pins
             .get(&key)
@@ -1073,24 +1036,15 @@ impl RoutingState {
             .cloned()
             .collect();
         for pin in moved_pins {
-            let spelled = (
-                pin.key_id.clone(),
-                pin.session_id.clone(),
-                pin.model.clone(),
-            );
+            let spelled = pin.key();
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there.
             let renewed = self.renewed.contains(&spelled);
             self.take_pin(&spelled);
-            rekey.delete_pins.push((
-                pin.key_id.clone(),
-                pin.session_id.clone(),
-                pin.model.clone(),
-            ));
-            let dated_key = (
-                pin.key_id.clone(),
-                pin.session_id.clone(),
-                dated_id.to_string(),
-            );
+            rekey.delete_pins.push(spelled);
+            let dated_key = PinKey {
+                model: dated_id.to_string(),
+                ..pin.key()
+            };
             let keep_existing = self
                 .pins
                 .get(&dated_key)
@@ -1143,15 +1097,13 @@ impl RoutingState {
         rekey
     }
 
-    pub fn release_session(
-        &mut self,
-        key_id: &str,
-        session_id: &str,
-    ) -> Vec<(String, String, String)> {
+    /// Every agent's pin of the session, released together: the session leaves every account it was on, not
+    /// just its main turn's.
+    pub fn release_session(&mut self, key_id: &str, session_id: &str) -> Vec<PinKey> {
         let gone: Vec<_> = self
             .pins
             .keys()
-            .filter(|(k, s, _)| k == key_id && s == session_id)
+            .filter(|k| k.key_id == key_id && k.session_id == session_id)
             .cloned()
             .collect();
         for key in &gone {
@@ -1163,7 +1115,12 @@ impl RoutingState {
     pub fn pins(&self) -> Vec<PinRow> {
         let mut v: Vec<_> = self.pins.values().cloned().collect();
         v.sort_by(|a, b| {
-            (&a.key_id, &a.session_id, &a.model).cmp(&(&b.key_id, &b.session_id, &b.model))
+            (&a.key_id, &a.session_id, &a.agent_id, &a.model).cmp(&(
+                &b.key_id,
+                &b.session_id,
+                &b.agent_id,
+                &b.model,
+            ))
         });
         v
     }
@@ -1273,6 +1230,7 @@ mod tests {
         let pin = PinRow {
             key_id: "k".into(),
             session_id: session.into(),
+            agent_id: "main".into(),
             model: "m".into(),
             account_id: "a".into(),
             epoch: 1,
@@ -1294,8 +1252,8 @@ mod tests {
         (pin, burn)
     }
 
-    fn sessions(marks: &[(String, String, String)]) -> Vec<&str> {
-        marks.iter().map(|(_, s, _)| s.as_str()).collect()
+    fn sessions(marks: &[PinKey]) -> Vec<&str> {
+        marks.iter().map(|k| k.session_id.as_str()).collect()
     }
 
     #[test]

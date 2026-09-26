@@ -655,6 +655,7 @@ name = "phoebis-store"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "phoebis-relay",
  "phoebis-store",
  "fd-lock",
  "hmac",

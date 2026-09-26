@@ -1,7 +1,8 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, OveragePolicy, PinRow, PoolRow, Strategy, WarmSessions,
+    AccountKind, AccountRow, AccountState, OveragePolicy, PinKey, PinRow, PoolRow, Strategy,
+    WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -18,6 +19,8 @@ pub struct SelectRequest {
     /// The authenticated key's `created_at` at admission. The id is reusable, so the lifetime is the identity: a
     /// stale-revision re-authentication that finds another generation under the id refuses the request.
     pub key_generation: i64,
+    /// The identity's agent: `main`, or a subagent's own id, so a pin is held per agent of a session.
+    pub agent_id: String,
     pub session_id: Option<String>,
     pub canonical_model: String,
     pub candidates: Vec<Candidate>,
@@ -368,22 +371,21 @@ pub fn select(
     // because no other account holds the state the request refers to.
     let mut pin = None;
     if let Some(session) = session {
-        if let Some(current) = state
-            .pin(&request.key_id, session, &request.canonical_model)
-            .cloned()
-        {
+        let key = PinKey {
+            key_id: request.key_id.clone(),
+            session_id: session.to_string(),
+            agent_id: request.agent_id.clone(),
+            model: request.canonical_model.clone(),
+        };
+        if let Some(current) = state.pin(&key).cloned() {
             let serves = request
                 .candidates
                 .iter()
                 .any(|c| c.account_id == current.account_id);
             let idle = request.now - current.last_used_at > ttl_ms;
             if idle || (!serves && request.portable) {
-                state.remove_pin(&request.key_id, session, &request.canonical_model);
-                writes.push(StateWrite::DeletePin(
-                    request.key_id.clone(),
-                    session.to_string(),
-                    request.canonical_model.clone(),
-                ));
+                state.remove_pin(&key);
+                writes.push(StateWrite::DeletePin(key));
             } else {
                 pin = Some(current);
             }
@@ -483,12 +485,8 @@ pub fn select(
             set.iter()
                 .any(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
         }) {
-            state.remove_pin(&current.key_id, &current.session_id, &current.model);
-            writes.push(StateWrite::DeletePin(
-                current.key_id.clone(),
-                current.session_id.clone(),
-                current.model.clone(),
-            ));
+            state.remove_pin(&current.key());
+            writes.push(StateWrite::DeletePin(current.key()));
             if reason == MigrateReason::Shed {
                 shed_from = Some(current.account_id.clone());
             }
@@ -647,6 +645,7 @@ pub fn select(
         let mut row = PinRow {
             key_id: request.key_id.clone(),
             session_id: session.to_string(),
+            agent_id: request.agent_id.clone(),
             model: request.canonical_model.clone(),
             account_id: chosen.account_id.clone(),
             epoch,
@@ -677,6 +676,7 @@ pub fn select(
         PinRef {
             key_id: request.key_id.clone(),
             session_id: session.to_string(),
+            agent_id: request.agent_id.clone(),
             model: request.canonical_model.clone(),
             epoch,
         }
@@ -910,13 +910,7 @@ fn move_of<'a>(
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request.
-    if !state.shed_marked(
-        &current.key_id,
-        &current.session_id,
-        &current.model,
-        now,
-        dwell_ms,
-    ) {
+    if !state.shed_marked(&current.key(), now, dwell_ms) {
         return None;
     }
     let set = destinations(state, &|c| {
@@ -939,7 +933,7 @@ fn shed_round(
     current_cold: bool,
     now: i64,
     fallback_ms: i64,
-) -> Vec<(String, String, String)> {
+) -> Vec<PinKey> {
     let account_id = &current.account_id;
     let kind = snapshot
         .account(account_id)
@@ -951,9 +945,7 @@ fn shed_round(
         now,
         seconds_ms(pool.shedding.burn_window_seconds),
     );
-    let is_current = |p: &PinRow| {
-        p.key_id == current.key_id && p.session_id == current.session_id && p.model == current.model
-    };
+    let is_current = |p: &PinRow| p.key() == current.key();
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| {
         if is_current(p) {
             current_cold
@@ -1063,7 +1055,7 @@ fn renew(
         stamp_hashes(&mut renewed, request);
     }
     state.put_pin(renewed.clone());
-    state.mark_renewed(&current.key_id, &current.session_id, &current.model);
+    state.mark_renewed(&current.key());
     writes.push(StateWrite::UpsertPin(renewed));
     Selection {
         account: selected_row(snapshot, &current.account_id),
@@ -1077,6 +1069,7 @@ fn renew(
         pin: Some(PinRef {
             key_id: current.key_id.clone(),
             session_id: current.session_id.clone(),
+            agent_id: current.agent_id.clone(),
             model: current.model.clone(),
             epoch: current.epoch,
         }),
