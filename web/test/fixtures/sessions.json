@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790396800836,
+        "key_generation": 1790401813285,
         "session_id": "s1",
         "model": "claude-sonnet-5",
         "account_id": "business",
@@ -18,16 +18,17 @@
         "companion_since": null,
         "agents": 1,
         "keepalive": {
+          "last_guard": "rearm",
           "net_meter_tokens": 0.0,
           "net_usd": 0.0,
-          "next_probe_at": 1238299,
+          "next_probe_at": 1236921,
           "state": "busy"
         },
         "historical": false
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790396800836,
+        "key_generation": 1790401813285,
         "session_id": "s2",
         "model": "claude-sonnet-5",
         "account_id": "business",

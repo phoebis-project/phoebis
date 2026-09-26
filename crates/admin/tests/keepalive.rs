@@ -340,6 +340,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "account_id",
             "agent_id",
             "key_id",
+            "last_guard",
             "last_request_at",
             "model",
             "net_meter_tokens",
@@ -360,7 +361,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             recipe["last_request_at"].as_i64(),
             recipe["ttl_seconds"].as_i64(),
             recipe["net_usd"].as_f64(),
-            recipe["net_meter_tokens"].as_f64()
+            recipe["net_meter_tokens"].as_f64(),
+            recipe["last_guard"].as_str()
         ),
         (
             Some("main"),
@@ -369,9 +371,61 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             Some(now),
             Some(300),
             Some(0.0),
-            Some(0.0)
+            Some(0.0),
+            Some("rearm")
         ),
-        "no probe has landed yet, so both balances still read zero"
+        "no probe has landed yet, so both balances still read zero; the first request re-armed a fresh recipe"
+    );
+    // An auxiliary request never re-arms, but the guard's own verdict still reaches the view.
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved {
+        request_id: "r2".into(),
+        origin: phoebis_bus::Origin::Client,
+        kind: phoebis_bus::Kind::Inference,
+        key_id: Some("desktop".into()),
+        key_generation: common::generation(&parts.store, "desktop"),
+        pool_id: Some("main".into()),
+        session_id: Some("s1".into()),
+        agent_id: Some("main".into()),
+        parent_agent_id: None,
+        owner_id: None,
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        wire_model: "claude-sonnet-5".into(),
+        stream: false,
+        headers: vec![],
+        body: bytes::Bytes::from(
+            r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#,
+        ),
+        body_capture_hours: 0,
+        shape: phoebis_bus::RequestShape::default(),
+        static_hash: None,
+        boundaries: Vec::new(),
+        client: phoebis_bus::ClientFacts {
+            request_class: Some("title".into()),
+            ..phoebis_bus::ClientFacts::default()
+        },
+        presented_retired: false,
+        rotation_at: None,
+        received_at: now,
+    }));
+    let recipes = json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await;
+    let recipe = &recipes["recipes"][0];
+    assert_eq!(
+        recipe["last_guard"].as_str(),
+        Some("auxiliary"),
+        "the title request left the recipe alone, and the view shows the guard's own note for it"
+    );
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .unwrap();
+    assert_eq!(
+        row["keepalive"]["last_guard"].as_str(),
+        Some("auxiliary"),
+        "the session's keepalive summary reads the same guard note the recipe view does"
     );
     assert_eq!(
         row["keepalive"]["next_probe_at"].as_i64(),

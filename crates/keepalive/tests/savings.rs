@@ -780,9 +780,11 @@ async fn a_restart_mid_day_rebuilds_the_plan_side_figure_from_the_rollups() {
             .any(|row| row.kind == "probe" && row.account_id == "o")
     })
     .await;
-    r.engine.load_spent_today().await;
-    let rebuilt = r
-        .engine
+    // A genuinely fresh engine over the same ledger: its own `Inner` starts empty, so the figure below is
+    // whatever `load_spent_today` rebuilt, never the first engine's own running total.
+    let restarted = r.restart().await;
+    restarted.load_spent_today().await;
+    let rebuilt = restarted
         .meter_spent_today()
         .get("o")
         .copied()
@@ -871,6 +873,81 @@ async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
         ),
         (0.0, 1),
         "a probe at no cost is still a probe nobody answered yet"
+    );
+}
+
+/// A plan table lacking every model, so "claude-haiku-4-5-20251001" (which the shipped dollar table prices) is
+/// unlisted on purpose rather than by a coincidence of the shipped one's date-suffix fall-back.
+fn plan_pricing_no_model() -> phoebis_ledger::PlanFactors {
+    phoebis_ledger::PlanFactors::from_yaml(
+        "measured: 2026-09-24\nreference: claude-opus-5\nmodels: {}\n",
+    )
+    .unwrap()
+}
+
+/// A model the dollar table prices but the plan table lacks settles a plan-funded probe in dollars, the same
+/// fall-back the settlement takes; the stop and the dollar cap must read that unit too, or nothing bounds it.
+#[tokio::test]
+async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_net() {
+    let mut r = rig(RigSpec {
+        plan: plan_pricing_no_model(),
+        policy: KeepalivePolicy {
+            net_negative_grace_probes: 0,
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert!(
+        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
+        "the plan table lacks this model, so the probe settles in dollars whatever the funding: {status:?}"
+    );
+    assert!(
+        r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
+        "the dollar cap is the only one that bounds this probe: the plan-side cap counts meter tokens alone"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::NetNegative,
+        "a negative dollar net stops the recipe even though the funding is plan: {:?}",
+        r.status("main")
+    );
+}
+
+/// The credit for a probe that settled in dollars on the unlisted-model fall-back must land in dollars too, in
+/// the unit `covered_unit` actually captured rather than the account's own nominal funding.
+#[tokio::test]
+async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
+    let mut r = rig(RigSpec {
+        plan: plan_pricing_no_model(),
+        ..subscription_spec()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert!(
+        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
+        "the plan table lacks this model, so the probe settles in dollars: {status:?}"
+    );
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    r.observe_with("main", &body).await;
+    let credited = r.status("main");
+    assert!(
+        credited.net_usd > status.net_usd && credited.net_meter_tokens == 0.0,
+        "the credit for a probe settled in dollars lands in dollars too, the meter balance untouched: {credited:?}"
     );
 }
 

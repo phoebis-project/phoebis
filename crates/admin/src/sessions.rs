@@ -124,7 +124,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["companion"] = json!("none");
             entry["companion_since"] = json!(null);
             entry["agents"] = json!(0);
-            entry["keepalive"] = json!({ "net_meter_tokens": null, "net_usd": null, "next_probe_at": null, "state": null });
+            entry["keepalive"] = json!({
+                "last_guard": null, "net_meter_tokens": null, "net_usd": null, "next_probe_at": null, "state": null
+            });
         }
     }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and

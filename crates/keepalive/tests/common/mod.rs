@@ -80,6 +80,9 @@ pub struct RigSpec {
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
+    /// The shipped factors by default; a test naming a model the plan table lacks (though the price table
+    /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
+    pub plan: PlanFactors,
     pub pool: PoolSpec,
     pub session_expiry: Duration,
     /// The shipped table by default; a test naming the plan-side cap's tier fall-back overrides this to a size
@@ -107,6 +110,7 @@ impl Default for RigSpec {
                 jitter_seconds_1h: 0,
                 ..KeepalivePolicy::default()
             },
+            plan: PlanFactors::shipped(),
             pool: PoolSpec::default(),
             session_expiry: Duration::from_secs(86_400),
             windows: PlanWindows::shipped(),
@@ -169,7 +173,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         lifecycle: spec.lifecycle,
         limits: spec.limits,
         metrics: metrics.clone(),
-        plan: Arc::new(PlanFactors::shipped()),
+        plan: Arc::new(spec.plan),
         pricing,
         relay: h.relay.clone(),
         router: h.router.clone(),
@@ -232,6 +236,32 @@ pub fn session_start_as(
 }
 
 impl Rig {
+    /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
+    /// empty and has to rebuild `spent_today` and `meter_spent_today` from the rollups itself, unlike a
+    /// `load_spent_today` called back on this rig's own engine, which the running one already answers from.
+    pub async fn restart(&self) -> Arc<Engine> {
+        let clock: Clock = {
+            let c = self.clock.clone();
+            Arc::new(move || c.load(Ordering::SeqCst))
+        };
+        Engine::new(EngineParts {
+            bus: Bus::new(),
+            clock,
+            cooldown_fallback: Duration::from_secs(60),
+            ledger: self.ledger.clone(),
+            lifecycle: None,
+            limits: KeepaliveLimits::default(),
+            metrics: Arc::new(Metrics::new()),
+            plan: Arc::new(PlanFactors::shipped()),
+            pricing: Arc::new(Pricing::new(PriceTable::shipped())),
+            relay: self.h.relay.clone(),
+            router: self.h.router.clone(),
+            session_expiry: Duration::from_secs(86_400),
+            store: self.h.store.clone(),
+            windows: Arc::new(PlanWindows::shipped()),
+        })
+    }
+
     pub fn now(&self) -> i64 {
         self.clock.load(Ordering::SeqCst)
     }

@@ -5,18 +5,16 @@ use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{Agent, AgentState, Engine, Reason, Wasted, MAIN_AGENT};
+use crate::engine::{Agent, AgentState, Engine, Guard, Reason, Wasted, MAIN_AGENT};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewReason {
     AffinityTooShort,
-    Auxiliary,
     AwaitingCacheEvidence,
     CapReached,
     ColdProbes,
     Cooled,
-    Foreign,
     IdleLimit,
     NetNegative,
     OauthUnverified,
@@ -37,14 +35,12 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
     Some(match reason {
         AwaitingRequest | AwaitingSelection | Probing | Scheduled => return None,
         AffinityTooShort => ViewReason::AffinityTooShort,
-        Auxiliary => ViewReason::Auxiliary,
         AwaitingCacheEvidence | NoCacheEvidence | NoProbeCacheEvidence => {
             ViewReason::AwaitingCacheEvidence
         }
         CapReached => ViewReason::CapReached,
         RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
         Cooled => ViewReason::Cooled,
-        Foreign => ViewReason::Foreign,
         IdleLimit => ViewReason::IdleLimit,
         NetNegative => ViewReason::NetNegative,
         OauthUnverified => ViewReason::OauthUnverified,
@@ -94,6 +90,9 @@ pub struct RecipeView {
     pub account_id: Option<String>,
     pub agent_id: String,
     pub key_id: String,
+    /// The guard's verdict on the last request the agent observed, `null` before the first one. Never a hold:
+    /// `auxiliary` and `foreign` both leave the recipe scheduled exactly as `state` and `reason` already say.
+    pub last_guard: Option<Guard>,
     pub last_request_at: Option<i64>,
     pub model: String,
     pub net_meter_tokens: f64,
@@ -108,6 +107,7 @@ pub struct RecipeView {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
+    pub last_guard: Option<Guard>,
     pub net_meter_tokens: Option<f64>,
     pub net_usd: Option<f64>,
     pub next_probe_at: Option<i64>,
@@ -142,6 +142,7 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str) -> RecipeView {
         account_id: agent.account.clone(),
         agent_id: agent.id.clone(),
         key_id: key_id.into(),
+        last_guard: agent.last_guard,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
         net_meter_tokens: agent.net.meter_tokens,
@@ -190,6 +191,7 @@ impl Engine {
                     key_id: s.key_id.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
+                        last_guard: main.and_then(|a| a.last_guard),
                         net_meter_tokens: main.map(|a| a.net.meter_tokens),
                         net_usd: main.map(|a| a.net.usd),
                         next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),

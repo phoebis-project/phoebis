@@ -3089,11 +3089,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "account_id": "direct",
           "agent_id": "main",
           "key_id": "desktop",
+          "last_guard": "rearm",
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
           "net_meter_tokens": 0,
           "net_usd": 0,
-          "next_probe_at": 1238299,
+          "next_probe_at": 1236921,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -5155,7 +5156,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790396800836,
+          "key_generation": 1790401813285,
           "session_id": "s1",
           "model": "claude-sonnet-5",
           "account_id": "business",
@@ -5169,16 +5170,17 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
+            "last_guard": "rearm",
             "net_meter_tokens": 0,
             "net_usd": 0,
-            "next_probe_at": 1238299,
+            "next_probe_at": 1236921,
             "state": "busy"
           },
           "historical": false
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790396800836,
+          "key_generation": 1790401813285,
           "session_id": "s2",
           "model": "claude-sonnet-5",
           "account_id": "business",

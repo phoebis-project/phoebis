@@ -166,20 +166,24 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of nineteen reasons attached. Two
-of those, `auxiliary` and `foreign`, are not a hold at all: the recipe stays scheduled exactly as it was, and
-the reason only names the last request the guard set aside (see
-[Which requests re-arm a recipe](#which-requests-re-arm-a-recipe)).
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of seventeen reasons attached.
+
+### The guard field
+
+Every request the recipe observes also updates `last_guard`, `null` before the first one: `rearm` or `restart`
+for a request that continued or restarted the conversation, `auxiliary` or `foreign` for one the guard set aside
+(see [Which requests re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by
+itself; an auxiliary or a foreign request leaves `state` and the reason below exactly as they were, so a recipe
+`held` under `net_negative` with `last_guard: rearm` is a real request that re-armed it, followed later by a
+probe that made its net negative, not a contradiction.
 
 | Reason | Console label | What it means |
 | --- | --- | --- |
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
-| `auxiliary` | auxiliary request | The last request was not the conversation's next turn, and left the recipe alone. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
-| `foreign` | foreign request | The last request matched neither the recipe's chain nor its static prefix. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
 | `net_negative` | net negative | Probes have cost more than they saved; held until a request lands warm. |
 | `oauth_unverified` | subscription probes off | Off until the account's expiry-crossing experiment passes. |

@@ -105,7 +105,6 @@ reasons! {
     AffinityTooShort => "affinity_too_short",
     AgentReleased => "agent_released",
     AgentUnknown => "agent_unknown",
-    Auxiliary => "auxiliary",
     AwaitingCacheEvidence => "awaiting_cache_evidence",
     AwaitingRequest => "awaiting_request",
     AwaitingSelection => "awaiting_selection",
@@ -114,7 +113,6 @@ reasons! {
     Cooled => "cooled",
     FixedThinking => "fixed_thinking",
     ForcedTool => "forced_tool",
-    Foreign => "foreign",
     HeadersTooLarge => "headers_too_large",
     IdleLimit => "idle_limit",
     IneligibleCredential => "ineligible_credential",
@@ -166,7 +164,8 @@ reasons! {
 }
 
 /// What an observation does to the agent's recipe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Guard {
     Auxiliary,
     Foreign,
@@ -347,11 +346,11 @@ pub(crate) struct Agent {
     /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
     pub canonical_model: String,
     pub reason: Reason,
-    /// The guard's verdict on the last request the agent observed, `Auxiliary` or `Foreign` only: a request the
-    /// guard set aside never reaches `reason`, which stays the recipe's own gating state, so a hold's `began`
-    /// check, the completion's gate-reason match, and the view's armed-or-held state all read it undisturbed.
-    /// Cleared on the next request that re-arms or restarts the recipe.
-    pub last_guard: Option<Reason>,
+    /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
+    /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
+    /// state, so a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held state
+    /// all read it undisturbed.
+    pub last_guard: Option<Guard>,
     /// Whether the current hold has already ledgered the probe it withheld. A hold can begin before its
     /// probe is due, so the skip is counted when the due time passes rather than where the hold started.
     pub hold_counted: bool,
@@ -1074,9 +1073,10 @@ impl Engine {
             None => KeepalivePolicy::default(),
         };
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
-        // covered-since-real flag a re-arming request's credit depends on. Only the count and the agent's own
-        // `last_guard` note it; `reason` stays the recipe's gating state, since a hold's `began` check, the
-        // completion's gate-reason match, and the view's armed-or-held state all read that field as state.
+        // covered-since-real flag a re-arming request's credit depends on. `reason` stays the recipe's gating
+        // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
+        // state all read that field as state; the agent's own `last_guard` carries the verdict itself, every
+        // request's, for the view to show.
         let recipe_hashes = agent.current.as_ref().map(|observation| {
             (
                 observation.recipe.static_hash.as_deref().unwrap_or(""),
@@ -1094,21 +1094,15 @@ impl Engine {
             recipe_hashes,
             model_matches,
         );
-        let guard_reason = match verdict {
-            Guard::Auxiliary => Some(Reason::Auxiliary),
-            Guard::Foreign => Some(Reason::Foreign),
-            Guard::Rearm | Guard::Restart => None,
-        };
-        if let Some(guard_reason) = guard_reason {
-            *inner.reasons.entry(guard_reason).or_default() += 1;
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
-                .last_guard = Some(guard_reason);
+        inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap()
+            .last_guard = Some(verdict);
+        if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
         if agent_id != MAIN_AGENT && !policy.warm_subagents {
@@ -1139,7 +1133,6 @@ impl Engine {
         agent.covered_since_real = false;
         agent.covered_account = None;
         agent.covered_unit = None;
-        agent.last_guard = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -1627,6 +1620,7 @@ impl Engine {
                         spent,
                         meter_spent,
                         &self.parts.windows,
+                        &self.parts.plan,
                     )
                 };
                 match held {
@@ -1899,6 +1893,7 @@ pub(crate) fn gate(
     spent_today: &BTreeMap<String, f64>,
     meter_spent_today: &BTreeMap<String, f64>,
     windows: &PlanWindows,
+    plan: &PlanFactors,
 ) -> Option<Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
@@ -1973,7 +1968,8 @@ pub(crate) fn gate(
     }
     let in_overage = view.overage.contains(&account.id);
     // The plan side counts a subscription account's probe meter tokens against the share of its 5-hour window,
-    // scaled by the fitted row when the router has calibrated one; uncapped otherwise.
+    // scaled by the fitted row when the router has calibrated one, else by the tier's predicted window; skipped
+    // only when the account has neither.
     if let Some(share) = policy.probe_cap_window_share_per_day {
         if account.kind == AccountKind::Oauth {
             let spent_meter = meter_spent_today.get(&account.id).copied().unwrap_or(0.0);
@@ -1996,7 +1992,17 @@ pub(crate) fn gate(
             }
         }
     }
-    let unit = Funding::of(account.kind, in_overage).unit();
+    let default_unit = Funding::of(account.kind, in_overage).unit();
+    // A model the plan table lacks settles every probe in dollars whatever the funding, the same fall-back
+    // `settled_cost` takes; the stop has to read the balance in that unit too, or a zero meter balance masks a
+    // negative dollar one no cap would otherwise catch.
+    let unit = if default_unit == SavingsUnit::MeterTokens
+        && plan.factor(&agent.canonical_model).is_none()
+    {
+        SavingsUnit::Usd
+    } else {
+        default_unit
+    };
     if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
         return Some(Gate::Hold(Reason::NetNegative));
     }

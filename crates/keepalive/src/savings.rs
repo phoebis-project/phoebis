@@ -243,9 +243,9 @@ impl Engine {
     /// The pool's probe spend for the current UTC day, from the rollups: what a restart starts from. Rebuilds
     /// `meter_spent_today` from the same rows: an api_key account's rollup counts toward the dollar cap, an
     /// oauth account's toward the plan-side one, its tokens priced through the plan table and weighted by the
-    /// band its hour fell in. Neither rebuild can tell a subscription account's plan-funded probes from its
-    /// overage ones (the rollup carries no funding), so an account's overage probes before the restart are
-    /// missing from the plan-side figure for the rest of that day, a bounded gap.
+    /// band its hour fell in. The rollup carries no funding, so an oauth account's overage or migrated probes
+    /// before the restart price into the plan-side figure and never reach the dollar one for the rest of that
+    /// day, a bounded gap.
     pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
         let now = self.now();
         let day_start = now.div_euclid(86_400_000) * 86_400_000 / 1_000;

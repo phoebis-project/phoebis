@@ -601,8 +601,14 @@ export interface Session {
   epoch: number | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** `state` is null when the session carries no cache-warming recipe at all; the two nets are null with it. */
-  keepalive: { netMeterTokens: number | null; netUsd: number | null; nextProbeAt: string | null; state: KeepaliveState | null };
+  /** `state` is null when the session carries no cache-warming recipe at all; the other three are null with it. */
+  keepalive: {
+    lastGuard: GuardVerdict | null;
+    netMeterTokens: number | null;
+    netUsd: number | null;
+    nextProbeAt: string | null;
+    state: KeepaliveState | null;
+  };
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
@@ -620,12 +626,10 @@ export interface Session {
 export type RecipeState = 'armed' | 'held' | 'probing';
 export type RecipeReason =
   | 'affinity_too_short'
-  | 'auxiliary'
   | 'awaiting_cache_evidence'
   | 'cap_reached'
   | 'cold_probes'
   | 'cooled'
-  | 'foreign'
   | 'idle_limit'
   | 'net_negative'
   | 'oauth_unverified'
@@ -639,11 +643,17 @@ export type RecipeReason =
   | 'storage_limit'
   | 'unsupported_shape';
 
+/** What the last request the agent observed did to its recipe: `auxiliary` and `foreign` both left it alone,
+ * `rearm` and `restart` both fed it. Never a hold; `reason` names that separately. */
+export type GuardVerdict = 'auxiliary' | 'foreign' | 'rearm' | 'restart';
+
 /** One cache-warming recipe per agent: what the next probe replays and why it may be held. */
 export interface KeepaliveRecipe {
   accountId: string | null;
   agentId: string;
   keyId: string;
+  /** Null only before the agent's first observation. */
+  lastGuard: GuardVerdict | null;
   /** This agent's last real request; null for an agent that has not sent one yet. */
   lastRequestAt: string | null;
   model: string;

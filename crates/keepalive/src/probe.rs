@@ -264,11 +264,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             record.cost_usd,
         );
         if record.outcome != ProbeOutcome::Migrated {
-            // The dollar cap counts what an api_key account, or a subscription account in overage, actually
-            // spends; a plan-funded probe's cost is quota, never money, whatever the price table would have
-            // charged for it, so `default_unit` (the account's own funding, before any unlisted-model fallback)
-            // decides rather than `unit`.
-            if default_unit == SavingsUnit::Usd {
+            // The dollar cap counts what actually settles in dollars: an api_key account, a subscription
+            // account in overage, or a plan-funded probe on a model the plan table lacks, which `unit` (the
+            // post-fallback settlement) already reads as `Usd`. That last case is the only cap bounding such a
+            // probe at all, since the plan-side cap below counts `MeterTokens` alone.
+            if unit == SavingsUnit::Usd {
                 *inner
                     .spent_today
                     .entry(record.pool_id.clone())

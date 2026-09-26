@@ -4,7 +4,9 @@ mod common;
 use std::time::Duration;
 
 use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage};
-use phoebis_keepalive::{AgentState, Event, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState};
+use phoebis_keepalive::{
+    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
+};
 use common::*;
 
 /// The ledger row for a request, once the writer has landed it.
@@ -22,6 +24,15 @@ fn usage(read: u64, write_5m: u64) -> Usage {
         output_tokens: Some(10),
         ..Default::default()
     }
+}
+
+/// The guard's verdict on the last request the named agent observed, off the recipe view.
+fn last_guard(r: &Rig, agent_id: &str) -> Option<Guard> {
+    r.engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.agent_id == agent_id)
+        .and_then(|v| v.last_guard)
 }
 
 #[tokio::test]
@@ -213,8 +224,8 @@ async fn an_armed_recipe_that_saw_an_auxiliary_request_still_reports_armed() {
         .find(|v| v.agent_id == "main")
         .expect("the armed recipe");
     assert_eq!(
-        (recipe.state, recipe.reason),
-        (RecipeState::Armed, None),
+        (recipe.state, recipe.reason, recipe.last_guard),
+        (RecipeState::Armed, None, Some(Guard::Auxiliary)),
         "{recipe:?}"
     );
 }
@@ -757,7 +768,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
         (armed_probe_at, armed_bytes),
         "an auxiliary class leaves the schedule and the recipe alone"
     );
-    assert_eq!(r.engine.reasons().get(&Reason::Auxiliary).copied(), Some(1));
+    assert_eq!(last_guard(&r, "main"), Some(Guard::Auxiliary));
     let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
     r.engine.observe(r.observed_with(
         "foreign",
@@ -773,7 +784,7 @@ async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
         (armed_probe_at, armed_bytes),
         "a request matching neither the chain nor the static prefix leaves the schedule and the recipe alone"
     );
-    assert_eq!(r.engine.reasons().get(&Reason::Foreign).copied(), Some(1));
+    assert_eq!(last_guard(&r, "main"), Some(Guard::Foreign));
 }
 
 #[tokio::test]

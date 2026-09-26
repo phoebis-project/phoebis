@@ -1,4 +1,5 @@
 import type { AlertEvent, AlertRule, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
+import { accountById } from './accounts';
 import { PRICES } from './catalog';
 import { keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
@@ -88,6 +89,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
+      lastGuard: null,
       netMeterTokens: null,
       netUsd: null,
       nextProbeAt: null,
@@ -106,7 +108,7 @@ SESSIONS.push({
   createdAt: null,
   epoch: null,
   historical: false,
-  keepalive: { netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -161,17 +163,25 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
+    const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
+    // The unit a probe settles in follows the serving account's own funding: meter tokens on a subscription
+    // upstream, dollars on an api_key one, the same split the engine's own net carries.
+    const paid = state === 'armed' && reason === null ? -0.0004 * (j + 1) : 0;
+    const onPlan = accountById.get(accountId ?? '')?.kind === 'oauth';
     return {
       ...RECIPE_SAMPLE,
-      accountId: j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId,
+      accountId,
       agentId,
       keyId: pin.keyId,
+      // The last real request re-armed this recipe; whatever else holds its next probe now is the gate's
+      // reason, not the guard's, which the mock has no event sequence to distinguish further.
+      lastGuard: 'rearm',
       lastRequestAt,
       model,
       // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
       // nothing further since its last hold began.
-      netMeterTokens: 0,
-      netUsd: state === 'armed' && reason === null ? -0.0004 * (j + 1) : 0,
+      netMeterTokens: onPlan ? paid * 1_000 : 0,
+      netUsd: onPlan ? 0 : paid,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       reason,
@@ -190,8 +200,9 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
-  // The session's own summary reads the main agent's balances, the way the admin route does.
+  // The session's own summary reads the main agent's guard note and balances, the way the admin route does.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
+  pin.keepalive.lastGuard = main?.lastGuard ?? null;
   pin.keepalive.netMeterTokens = main?.netMeterTokens ?? null;
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
@@ -208,7 +219,7 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   historical: true,
-  keepalive: { netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: DELETED_HOLDER_GENERATION,
   lastUsedAt: null,
   pinned: false,
