@@ -7,7 +7,7 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { keyFormOf, keyInputOf, modelRulesRefusal, type CaptureMode } from '@/lib/forms';
+import { inFlightCapRefusal, keyFormOf, keyInputOf, modelRulesRefusal, type CaptureMode } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -20,6 +20,7 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
+const IN_FLIGHT_CAP_HINT = 'Past this many requests in flight the key is refused with a 429 and a Retry-After until one finishes.';
 
 export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), []);
@@ -165,6 +166,11 @@ export function KeysPage() {
                             )}
                           </span>
                           {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
+                          {k.inFlightCap !== null && (
+                            <span className="sub" title={IN_FLIGHT_CAP_HINT}>
+                              at most {fmtInt(k.inFlightCap)} in flight
+                            </span>
+                          )}
                         </td>
                         <td className="mono">{k.prefix}…</td>
                         <td className="mono">{k.poolId}</td>
@@ -317,6 +323,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [modelRules, setModelRules] = useState<ModelRule[]>([]);
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
+  const [inFlightCap, setInFlightCap] = useState('');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
   const [captureHours, setCaptureHours] = useState(6);
@@ -333,6 +340,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
   const rulesRefusal = modelRulesRefusal(modelRules);
+  const capRefusal = inFlightCapRefusal(inFlightCap);
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
   useEffect(() => {
@@ -345,6 +353,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setModelRules(form.modelRules);
     setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
+    setInFlightCap(form.inFlightCap);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
     setCaptureHours(form.captureHours);
@@ -365,7 +374,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId }, Date.now());
+    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId }, Date.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input);
@@ -439,6 +448,15 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
               {existing && <option value="never">No expiration</option>}
             </Select>
           </Field>
+          <Field label="Requests in flight" hint={IN_FLIGHT_CAP_HINT}>
+            <Input type="number" min={1} step={1} value={inFlightCap} onChange={(e) => setInFlightCap(e.target.value)} placeholder="No cap" style={{ width: 120 }} aria-label="Requests in flight" />
+          </Field>
+          {capRefusal && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{capRefusal}</div>
+            </div>
+          )}
           <Field label="Notes">
             <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this key lives and who holds it" />
           </Field>
@@ -553,7 +571,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!name.trim() || !poolId || busy || rulesRefusal !== null} onClick={submit}>
+          <Button variant="primary" disabled={!name.trim() || !poolId || busy || rulesRefusal !== null || capRefusal !== null} onClick={submit}>
             {busy ? (existing ? 'Saving…' : 'Creating…') : existing ? 'Save' : 'Create'}
           </Button>
         </>

@@ -1,6 +1,6 @@
-import type { KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
+import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { WARM_SESSIONS_VALUES } from '@/api/decode';
-import type { ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { checkPattern } from './patterns';
 import { MIGRATE_BAND } from './presets';
 
@@ -102,6 +102,8 @@ export interface KeyForm {
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
   expiry: string;
+  /** The number field's text; empty is no cap. */
+  inFlightCap: string;
   longContextTwins: boolean;
   modelRules: ModelRule[];
   modelRulesMode: ModelRulesMode;
@@ -120,6 +122,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
+    inFlightCap: existing?.inFlightCap == null ? '' : String(existing.inFlightCap),
     longContextTwins: existing?.longContextTwins ?? true,
     modelRules: existing?.modelRules ?? [],
     modelRulesMode: existing?.modelRulesMode ?? 'extend',
@@ -135,6 +138,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),
+    inFlightCap: form.inFlightCap.trim() === '' ? null : Number(form.inFlightCap),
     keepaliveOptOut: form.optOut,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
@@ -143,4 +147,52 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
     notes: form.notes.trim() || null,
     poolId: form.poolId,
   };
+}
+
+/** The key route's bound on `in_flight_cap`, a u32 of at least 1. */
+const KEY_CAP_MAX = 4_294_967_295;
+
+/** Why the key route would refuse the cap field as it stands, or null; empty is no cap. */
+export function inFlightCapRefusal(value: string): string | null {
+  if (value.trim() === '') return null;
+  const n = Number(value);
+  return whole(n, 1, KEY_CAP_MAX) ? null : 'Requests in flight is a whole number of at least 1; leave it empty for no cap.';
+}
+
+/** The identity card's subscription end as the operator leaves it; `endsAt` is a `datetime-local` value, empty for none. */
+export interface SubscriptionEndForm {
+  cancelled: boolean;
+  endsAt: string;
+}
+
+/** A `datetime-local` value in the browser's zone, which is how the field reads and writes a date. */
+const localInput = (at: string) => {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+export function subscriptionEndFormOf(account: Pick<Account, 'cancelled' | 'subscription'>): SubscriptionEndForm {
+  const end = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+  return { cancelled: account.cancelled, endsAt: end ? localInput(end) : '' };
+}
+
+/**
+ * Ticking fills an empty field with the derived end, so the form sends an end whenever the box is ticked; unticking
+ * clears the field, since the route keeps no end without the flag.
+ */
+export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean, derivedEndsAt: string | null): SubscriptionEndForm {
+  if (!cancelled) return { cancelled: false, endsAt: '' };
+  return { cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? localInput(derivedEndsAt) : '') };
+}
+
+/** Why the account route would refuse the pair, or null. */
+export function subscriptionEndRefusal(form: SubscriptionEndForm): string | null {
+  if (form.cancelled && form.endsAt === '') return 'A cancelled plan needs the date it ends.';
+  if (!form.cancelled && form.endsAt !== '') return 'An end is saved only with Cancelled ticked.';
+  return null;
+}
+
+export function accountPatchOf(form: SubscriptionEndForm): AccountPatch {
+  return { cancelled: form.cancelled, subscriptionEndsAt: form.endsAt === '' ? null : new Date(form.endsAt).toISOString() };
 }

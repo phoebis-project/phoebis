@@ -186,9 +186,12 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     // The unit a probe settles in follows the serving account's own funding: meter tokens on a subscription
-    // upstream, dollars on an api_key one, the same split the engine's own net carries.
-    const paid = state === 'armed' && reason === null ? -0.0004 * (j + 1) : 0;
+    // upstream, dollars on an api_key one, the same split the engine's own net carries. A probe replays a
+    // prefix of about 20k tokens at the cache-read rate: some 520 meter tokens, or $0.004 in dollars.
+    const probes = state === 'armed' && reason === null ? j + 1 : 0;
     const onPlan = accountById.get(accountId ?? '')?.kind === 'oauth';
+    // Held for overage after probing on plan quota, so it settled in both units and carries a balance in each.
+    const crossed = reason === 'overage';
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -201,8 +204,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       model,
       // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
       // nothing further since its last hold began.
-      netMeterTokens: onPlan ? paid * 1_000 : 0,
-      netUsd: onPlan ? 0 : paid,
+      netMeterTokens: crossed ? 1_560 : onPlan ? -520 * probes : 0,
+      netUsd: crossed ? -0.012 : onPlan ? 0 : -0.004 * probes,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       reason,
@@ -783,6 +786,8 @@ export const SETTINGS: Settings = {
   compatibility: { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' },
   keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
+  // The route answers the table the ledger ships, so the captured answer is the table itself.
+  planFactors: SETTINGS_SAMPLE.planFactors,
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped table' },
   quota: { pollIntervalSeconds: 3_600, sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },

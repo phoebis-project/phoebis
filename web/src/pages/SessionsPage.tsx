@@ -6,7 +6,7 @@ import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtUsd, shortId } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtUsd, shortId } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -41,6 +41,14 @@ const COMPANION_HINT: Record<CompanionState, string> = {
 const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
+const NET_HINT =
+  "What the agent's probes saved minus what they cost, in the unit each probe settled in: plan tokens on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both.";
+
+/** Each balance that is not zero, so an agent that settled in one unit shows that unit alone. */
+const netOf = (agent: Pick<KeepaliveRecipe, 'netMeterTokens' | 'netUsd'>): string[] => [
+  ...(agent.netMeterTokens !== 0 ? [`${fmtCompact(agent.netMeterTokens)} plan tokens`] : []),
+  ...(agent.netUsd !== 0 ? [fmtUsd(agent.netUsd)] : []),
+];
 
 interface Row {
   account: Account | null;
@@ -475,6 +483,7 @@ function SessionRows({
                   <span>TTL</span>
                   <span>Next probe</span>
                   <span>Last request</span>
+                  <span title={NET_HINT}>Net</span>
                   <span>State</span>
                 </div>
                 {agents.map((a) => (
@@ -487,6 +496,9 @@ function SessionRows({
                       {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'armed' ? 'on first stream event' : 'not scheduled'}</span>}
                     </span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
+                    <span className="num agents__net" title={NET_HINT}>
+                      {netOf(a).length ? netOf(a).map((part) => <span key={part}>{part}</span>) : <span className="muted">0</span>}
+                    </span>
                     <span className="row" style={{ gap: 6 }}>
                       <Badge tone={STATE_TONE[a.state]} dot title={STATE_HINT[a.state]}>
                         {a.state}

@@ -1,11 +1,11 @@
 import type {
   Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, Settings, Subscription, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
-import { CACHE_TTL_DEFAULTS, POOL_ENGINE_DEFAULTS, type KeyInput, type PoolInput } from './client';
+import { CACHE_TTL_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
@@ -464,6 +464,15 @@ const price = (m: Rec): ModelPrice => ({ cacheReadPerM: num(m.cache_read_per_m),
 export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
 export const decodePriceImport = (v: unknown): PriceImportPreview => ({ changes: list(rec(v).changes).length, inFile: num(rec(v).in_file), models: list(rec(v).models).map(rec).map(price), served: num(rec(v).served), token: str(rec(v).token) });
 
+const planFactor = (v: unknown): PlanFactor => {
+  const f = rec(v);
+  return { cacheRead: num(f.cache_read), cacheWrite1h: num(f.cache_write_1h), cacheWrite5m: num(f.cache_write_5m), factor: num(f.factor), input: num(f.input), measured: strOrNull(f.measured), output: num(f.output), unmeasured: bool(f.unmeasured) };
+};
+const decodePlanFactors = (v: unknown): PlanFactors => {
+  const p = rec(v);
+  return { measured: str(p.measured), models: Object.fromEntries(Object.entries(rec(p.models)).map(([model, f]) => [model, planFactor(f)])), reference: str(p.reference) };
+};
+
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
   const c = rec(s.compatibility);
@@ -481,6 +490,7 @@ export function decodeSettings(v: unknown): Settings {
     compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), outboundGzip: bool(c.outbound_gzip), profile: str(c.profile, str(rec(s.about).profile)), usageEntrypoint: str(c.usage_entrypoint, 'cli') },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
+    planFactors: decodePlanFactors(s.plan_factors),
     pricing: decodePricing(s.pricing),
     quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
@@ -522,9 +532,11 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
 
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
 
+export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
   body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
+  ...(i.inFlightCap === undefined ? {} : { in_flight_cap: i.inFlightCap }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });

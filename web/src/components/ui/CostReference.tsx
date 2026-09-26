@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { ModelPrice } from '@/api/types';
+import type { ModelPrice, PlanFactor, PlanFactors } from '@/api/types';
+import { own } from '@/lib/analytics';
 import { useAsync } from '@/lib/hooks';
-import { Button, Dialog, Skeleton } from './primitives';
+import { Badge, Button, Dialog, Skeleton } from './primitives';
 
-const CAVEAT = 'API list prices. For subscription upstreams these approximate quota consumption and are not billed as money.';
+const CAVEAT = 'API list prices. A subscription upstream on plan quota spends the plan meter columns instead of money.';
 /** One term per column group, in table order, so a reader can find the one column they are looking at. */
-const NOTES: { body: string; term: string }[] = [
+const NOTES: { body: ReactNode; term: string }[] = [
   { term: 'Per prefix token', body: 'Every column is per prefix token, so the comparison leaves out the new tokens each turn writes.' },
   {
     term: 'Turns to pay off',
@@ -24,8 +25,18 @@ const NOTES: { body: string; term: string }[] = [
     term: 'Fable 5.1',
     body: 'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client. Without warming, the 1-hour entry wins after a 5-minute pause.',
   },
-  { term: 'Subscription upstreams', body: 'Everything in this table is spent in plan quota rather than money.' },
+  {
+    term: 'Plan meter',
+    body: (
+      <>
+        One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free and the
+        pool's cache TTL policy keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the in-overage default is{' '}
+        <code>5m</code>.
+      </>
+    ),
+  },
 ];
+const UNMEASURED_HINT = 'No meter run has measured this model yet; the row carries its list-price ratio to the reference.';
 // An idle 5m entry is rewritten by a probe about every four minutes; a 1h entry once an hour.
 const PROBES_PER_IDLE_HOUR = 15;
 
@@ -54,6 +65,21 @@ const payoffMinutes = (p: ModelPrice) => {
 
 const dash = <span className="muted">-</span>;
 
+/** The model's row, exact first and then undated, since the price table lists dated ids and the factors ship undated. */
+const factorOf = (factors: PlanFactors, model: string): PlanFactor | null => {
+  const undated = model.replace(/-\d{8}$/, '');
+  return own(factors.models, model) ? factors.models[model] : own(factors.models, undated) ? factors.models[undated] : null;
+};
+/** Meter tokens per token, three significant digits at most: 0.094, 4.44, 16.9. */
+const meter = (n: number) => String(Number(n.toPrecision(3)));
+const PLAN_COLUMNS: { key: keyof Pick<PlanFactor, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input' | 'output'>; label: string }[] = [
+  { key: 'input', label: 'Input' },
+  { key: 'cacheRead', label: 'Cache read' },
+  { key: 'cacheWrite5m', label: '5m write' },
+  { key: 'cacheWrite1h', label: '1h write' },
+  { key: 'output', label: 'Output' },
+];
+
 /** Opens the shipped price table next to anything that spends tokens on the user's behalf. */
 export function CostReferenceLink() {
   const [open, setOpen] = useState(false);
@@ -66,8 +92,8 @@ export function CostReferenceLink() {
         open={open}
         onClose={() => setOpen(false)}
         title="Cost reference"
-        subtitle="USD per million tokens, from the shipped price table, and what they make a kept-warm prefix cost."
-        width={1240}
+        subtitle="USD per million tokens, from the shipped price table, what they make a kept-warm prefix cost, and each token's weight on the plan meter."
+        width={1600}
         footer={
           <Button variant="primary" onClick={() => setOpen(false)}>
             Close
@@ -83,6 +109,7 @@ export function CostReferenceLink() {
 function PriceTable() {
   const settings = useAsync(() => api.getSettings(), []);
   const prices = settings.data?.pricing.models ?? null;
+  const factors = settings.data?.planFactors ?? null;
   return (
     <div className="cost-ref">
       <p className="secondary">{CAVEAT}</p>
@@ -90,17 +117,28 @@ function PriceTable() {
         <table className="table cost-ref__table">
           <thead>
             <tr>
-              <th>Model</th>
-              <th className="right">Uncached input</th>
-              <th className="right">Cache write 5m</th>
-              <th className="right">Cache write 1h</th>
-              <th className="right">Cache read</th>
-              <th className="right">Output</th>
-              <th className="right cost-ref__sep">Turns to pay off, 5m</th>
-              <th className="right">Turns to pay off, 1h</th>
-              <th className="right cost-ref__sep">Hold warm 1h, 5m + probes</th>
-              <th className="right">Hold warm 1h, 1h + probe</th>
-              <th className="right">1h pays off after</th>
+              <th rowSpan={2}>Model</th>
+              <th rowSpan={2} className="right">Uncached input</th>
+              <th rowSpan={2} className="right">Cache write 5m</th>
+              <th rowSpan={2} className="right">Cache write 1h</th>
+              <th rowSpan={2} className="right">Cache read</th>
+              <th rowSpan={2} className="right">Output</th>
+              <th rowSpan={2} className="right cost-ref__sep">Turns to pay off, 5m</th>
+              <th rowSpan={2} className="right">Turns to pay off, 1h</th>
+              <th rowSpan={2} className="right cost-ref__sep">Hold warm 1h, 5m + probes</th>
+              <th rowSpan={2} className="right">Hold warm 1h, 1h + probe</th>
+              <th rowSpan={2} className="right">1h pays off after</th>
+              <th colSpan={PLAN_COLUMNS.length + 1} className="cost-ref__sep" title={factors ? `Meter tokens per token; one plain ${factors.reference} input token is 1` : undefined}>
+                Plan meter
+              </th>
+            </tr>
+            <tr>
+              {PLAN_COLUMNS.map((c, i) => (
+                <th key={c.key} className={`right ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                  {c.label}
+                </th>
+              ))}
+              <th>Measured</th>
             </tr>
           </thead>
           <tbody>
@@ -109,6 +147,7 @@ function PriceTable() {
                 const idle5m = idleHour(p, p.cacheWrite5mPerM, PROBES_PER_IDLE_HOUR);
                 const idle1h = idleHour(p, p.cacheWrite1hPerM, 1);
                 const payoff = payoffMinutes(p);
+                const f = factors ? factorOf(factors, p.model) : null;
                 return (
                   <tr key={p.model}>
                     <td className="mono">{p.model}</td>
@@ -122,12 +161,26 @@ function PriceTable() {
                     <td className="right num cost-ref__sep">{idle5m ?? dash}</td>
                     <td className="right num">{idle1h ?? dash}</td>
                     <td className="right num">{payoff ?? dash}</td>
+                    {PLAN_COLUMNS.map((c, i) => (
+                      <td key={c.key} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                        {f ? meter(f[c.key] * f.factor) : dash}
+                      </td>
+                    ))}
+                    <td>
+                      {f?.unmeasured ? (
+                        <Badge tone="warning" title={UNMEASURED_HINT}>
+                          unmeasured
+                        </Badge>
+                      ) : (
+                        (f?.measured ?? dash)
+                      )}
+                    </td>
                   </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan={11}>
+                <td colSpan={11 + PLAN_COLUMNS.length + 1}>
                   <Skeleton />
                 </td>
               </tr>

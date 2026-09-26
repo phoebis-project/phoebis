@@ -547,6 +547,12 @@ textarea.input {
   resize: vertical;
 }
 
+/* Chromium pads a date field's inner fields by a pixel above and below, which draws it 2px taller than a text
+   field or a select beside it. */
+.input::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+}
+
 .search {
   position: relative;
   display: flex;

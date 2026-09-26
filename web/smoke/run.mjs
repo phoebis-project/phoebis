@@ -273,7 +273,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Trial ends', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
+expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -282,18 +282,32 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Re
   // The story dates each subscription by its distance from the anchor, so each needle is the pinned origin moved by
   // that distance and rendered with fmtDate's own options.
   const dayOf = (days) => new Date(CLOCK_ORIGIN + days * 86_400_000).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-  const chipsOf = (label) => {
-    const card = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
-    return [...(card?.querySelectorAll('.qcard__chips .chip') ?? [])]
-      .filter((c) => ['Plan', 'Trial ends'].includes(c.querySelector('.chip__label')?.textContent?.trim() ?? ''))
+  const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const chipsOf = (label) =>
+    [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])]
+      .filter((c) => ['Plan', 'Trial'].includes(c.querySelector('.chip__label')?.textContent?.trim() ?? ''))
       .map((c) => [...c.childNodes].map((n) => n.textContent?.trim()).filter(Boolean).join(' '));
-  };
+  // The story ends mail's trial eight days after the anchor and the page reads it a moment later, so the whole days
+  // still to run are seven.
   const drawn = { business: chipsOf('business'), mail: chipsOf('mail'), team: chipsOf('team') };
-  const wanted = { business: [`Plan Max since ${dayOf(-200)}`], mail: [`Plan Pro since ${dayOf(-20)}`, `Trial ends ${dayOf(8)}`], team: ['Plan Team'] };
+  const wanted = { business: [`Plan Max since ${dayOf(-200)}`], mail: [`Plan Pro since ${dayOf(-20)}`, 'Trial ends in 7 days'], team: ['Plan Team'] };
   results.push({
-    name: '/quota each card names its plan with the subscription start, and the trial end where the profile reports one',
+    name: '/quota each card names its plan with the subscription start, and counts down the trial where the profile reports one',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
+  });
+  // mail is cancelled with its end five days after the anchor: inside a week, so the chip reads serious.
+  const endChips = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])].filter((c) => /^End(s in|ed) /.test(c.textContent?.trim() ?? ''));
+  const mailEnd = endChips('mail')[0];
+  const mailAccount = (await api.listAccounts()).find((a) => a.id === 'mail');
+  results.push({
+    name: '/quota a cancelled upstream says when it ends, serious inside a week, and one not cancelled says nothing',
+    ok:
+      mailEnd?.textContent?.trim() === 'Ends in 4 days' &&
+      mailEnd.classList.contains('chip--serious') &&
+      (mailEnd.getAttribute('title') ?? '').startsWith(new Date(mailAccount.subscription.endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })) &&
+      endChips('business').length === 0,
+    missing: [mailEnd?.textContent?.trim() ?? 'no end chip on mail', String(mailEnd?.className), mailEnd?.getAttribute('title') ?? 'no title', `business ${endChips('business').length}`],
   });
 }
 {
@@ -395,6 +409,69 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
     results.push({ name: '/upstreams/business the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
+  }
+  {
+    // The subscription end edits in place on the identity card: ticking prefills the derived end, a cleared date is
+    // refused, and a saved end reads as a countdown row until the flag is cleared again.
+    const identity = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const labels = () => [...(identity()?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
+    const button = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+    const box = () => identity()?.querySelector('label.row input[type="checkbox"]');
+    const field = () => identity()?.querySelector('input[type="datetime-local"]');
+    button('Edit end')?.click();
+    await m.settle(100);
+    expect('/upstreams/business the subscription end editor', identity()?.textContent ?? '', [
+      'Cancelled',
+      'Ends',
+      "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
+    ]);
+    const before = field()?.value;
+    box()?.click();
+    await m.settle(100);
+    const derived = (await api.listAccounts()).find((a) => a.id === 'business')?.subscription?.derivedEndsAt ?? '';
+    // The smoke runs in UTC, so the field's local value is the instant's own minute.
+    results.push({
+      name: '/upstreams/business ticking Cancelled prefills the end the plan derives',
+      ok: before === '' && box()?.checked === true && derived !== '' && field()?.value === derived.slice(0, 16),
+      missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', derived],
+    });
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(field(), '');
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    const refusal = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
+    results.push({
+      name: '/upstreams/business a ticked box whose date was cleared is refused before the save',
+      ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
+      missing: [refusal || 'no callout', String(button('Save')?.disabled)],
+    });
+    box()?.click();
+    await m.settle(80);
+    const cleared = field()?.value;
+    box()?.click();
+    await m.settle(80);
+    button('Save')?.click();
+    await m.settle(600);
+    const endRow = [...(identity()?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Ends');
+    const endValue = endRow?.querySelector('dd');
+    results.push({
+      name: '/upstreams/business unticking clears the date, and a saved end reads as a countdown row after the tier',
+      ok: cleared === '' && labels().join('|') === 'Type|Plan|Rate-limit tier|Ends|Organization|Billing type' && /^ends in \d+ days$/.test(endValue?.textContent?.trim() ?? '') && (endValue?.getAttribute('title') ?? '') !== '',
+      missing: [String(cleared), ...labels(), endRow?.textContent ?? 'no Ends row'],
+    });
+    // Cleared again, so every later check reads the story as it was.
+    button('Edit end')?.click();
+    await m.settle(100);
+    box()?.click();
+    await m.settle(80);
+    button('Save')?.click();
+    await m.settle(600);
+    const business = (await api.listAccounts()).find((a) => a.id === 'business');
+    results.push({
+      name: '/upstreams/business saving the box unticked clears the flag and its end',
+      ok: !labels().includes('Ends') && business?.cancelled === false && business?.subscription?.endsAt === null,
+      missing: [...labels(), String(business?.cancelled), String(business?.subscription?.endsAt)],
+    });
   }
   const pair = m.container.querySelector('.detail__pair');
   results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
@@ -541,7 +618,14 @@ expect('/upstreams/mail', m.text(), [
   results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
-  results.push({ name: '/upstreams/mail the identity card reads the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Trial ends|Organization|Billing type', missing: labels });
+  results.push({ name: '/upstreams/mail the identity card reads the end and the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Ends|Trial ends|Organization|Billing type', missing: labels });
+  const value = (label) => [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
+  // The story ends the plan five days after the anchor and the trial eight, and the page reads both a moment later.
+  results.push({
+    name: '/upstreams/mail both ends count down in whole days, the date on hover',
+    ok: value('Ends')?.textContent?.trim() === 'ends in 4 days' && value('Trial ends')?.textContent?.trim() === 'ends in 7 days' && Boolean(value('Ends')?.getAttribute('title')) && Boolean(value('Trial ends')?.getAttribute('title')),
+    missing: [value('Ends')?.textContent ?? 'no Ends row', value('Trial ends')?.textContent ?? 'no Trial ends row'],
+  });
 }
 {
   // Each row clears its own scope by name, so the upstream's other scope stays through the clear.
@@ -1302,13 +1386,41 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: JSON.stringify(effective) === JSON.stringify(['bodies captured, 24h inherited', 'bodies captured, 6h', 'bodies not captured']),
     missing: effective,
   });
+  const subsOf = (name) => [...([...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name)?.children[0]?.querySelectorAll('.sub') ?? [])].map((sub) => sub.textContent?.trim());
+  results.push({
+    name: "/keys a key's in-flight cap reads under its name, and a key without one draws no line",
+    ok: subsOf('laptop').includes('at most 8 in flight') && !subsOf('desktop').some((t) => t?.includes('in flight')),
+    missing: [JSON.stringify(subsOf('laptop')), JSON.stringify(subsOf('desktop'))],
+  });
 }
 {
   const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'));
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Requests in flight', 'Past this many requests in flight the key is refused with a 429 and a Retry-After until one finishes.', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  {
+    // The cap sits with the rows that decide whether the key is let in at all, right after the expiry.
+    const general = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((sec) => sec.getAttribute('aria-label') === 'General');
+    const labels = [...(general?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    results.push({ name: '/keys the in-flight cap follows the expiry in the General section', ok: labels.indexOf('Requests in flight') === labels.indexOf('Expiry') + 1 && labels.includes('Expiry'), missing: labels });
+    const cap = general?.querySelector('input[aria-label="Requests in flight"]');
+    const set = (v) => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
+      cap?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    };
+    const empty = cap?.value;
+    set('0');
+    await m.settle(80);
+    const refused = general?.querySelector('[role="alert"]')?.textContent ?? '';
+    set('3');
+    await m.settle(80);
+    results.push({
+      name: '/keys a cap of 0 is refused in the form, and a whole number from 1 is taken',
+      ok: empty === '' && cap?.getAttribute('placeholder') === 'No cap' && refused.includes('Requests in flight is a whole number of at least 1') && !general?.querySelector('[role="alert"]'),
+      missing: [String(empty), refused || 'no refusal', general?.querySelector('[role="alert"]')?.textContent ?? ''],
+    });
+  }
   results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
   {
     const poolSelect = dlg?.querySelector('select');
@@ -1391,6 +1503,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     }
     await m.settle(200);
     expect('/keys table has new key', m.text(), ['smoke']);
+    results.push({ name: '/keys a key created with a cap stores it', ok: (await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap === 3, missing: [String((await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap)] });
     const done = [...m.container.querySelectorAll('dialog[open] button')].find((b) => b.textContent?.trim() === 'Done');
     done?.click();
     await m.settle(200);
@@ -1453,6 +1566,11 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: off === 'false' && saved && rowOf('batch')?.querySelector('.badge')?.textContent?.trim() === 'disabled',
     missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('.badge')?.textContent?.trim() ?? 'no batch row'],
   });
+  const laptopDlg = await editOf('laptop');
+  const laptopCap = laptopDlg?.querySelector('input[aria-label="Requests in flight"]')?.value;
+  foot(laptopDlg, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({ name: "/keys the edit dialog opens with the key's in-flight cap", ok: laptopCap === '8', missing: [String(laptopCap)] });
   const ci = await editOf('ci');
   const lock = ci?.querySelector('button[role="switch"][aria-label="Enabled"]');
   results.push({
@@ -2839,7 +2957,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   rows()[0]?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
-  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Upstream', 'TTL', 'Next probe', 'Last request', 'State', 'main']);
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Upstream', 'TTL', 'Next probe', 'Last request', 'Net', 'State', 'main']);
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
@@ -2908,6 +3026,14 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions cold probe reason names the limit', ok: (cold?.getAttribute('title') ?? '').includes("cold probe limit"), missing: [cold?.getAttribute('title')] });
   }
   expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
+  {
+    const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
+    results.push({
+      name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
+      ok: nets.includes('-520 plan tokens') && nets.includes('1.6K plan tokens | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /plan tokens|\$/.test(n)),
+      missing: [...new Set(nets)],
+    });
+  }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
   collapseAll?.click();
@@ -2921,7 +3047,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
     'Cost reference',
-    'API list prices. For subscription upstreams these approximate quota consumption and are not billed as money.',
+    'API list prices. A subscription upstream on plan quota spends the plan meter columns instead of money.',
     'Model',
     'Uncached input',
     'Cache write 5m',
@@ -2933,13 +3059,19 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     'Hold warm 1h, 5m + probes',
     'Hold warm 1h, 1h + probe',
     '1h pays off after',
+    'Plan meter',
+    '5m write',
+    '1h write',
+    'Measured',
+    'unmeasured',
     'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
     'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
     'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
     'per prefix token',
     'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
     'Without warming, the 1-hour entry wins after a 5-minute pause.',
-    'plan quota rather than money',
+    'One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free',
+    "the pool's cache TTL policy keeps 1h for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the in-overage default is 5m.",
     'claude-fable-5-1',
     'claude-fable-5',
     'claude-opus-4-8',
@@ -2952,7 +3084,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
     results.push({
       name: '/sessions cost reference footnote is a definition list of six terms',
-      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Subscription upstreams']),
+      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Plan meter']),
       missing: terms,
     });
   }
@@ -2971,6 +3103,23 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === 'never within 1h', missing: fable });
   const haiku = priceRow('claude-haiku-4-5-20251001');
   results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
+  // Input, cache read, 5m write, 1h write and output, each times the model's factor, then the measurement date.
+  const plan = (row) => row.slice(11);
+  results.push({
+    name: '/sessions cost reference weighs every token type on the plan meter by the model factor',
+    ok: JSON.stringify(plan(fable)) === JSON.stringify(['3.61', '0.0939', '4.44', '4.44', '16.9', '2026-09-19']) && JSON.stringify(plan(priceRow('claude-opus-5'))) === JSON.stringify(['1', '0.026', '1.23', '1.23', '4.67', '2026-09-19']),
+    missing: [JSON.stringify(plan(fable)), JSON.stringify(plan(priceRow('claude-opus-5')))],
+  });
+  results.push({ name: '/sessions cost reference finds the undated factor row for a dated model', ok: JSON.stringify(plan(haiku)) === JSON.stringify(['0.36', '0.00936', '0.443', '0.443', '1.68', '2026-09-24']), missing: plan(haiku) });
+  {
+    const unmeasured = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === 'claude-fable-5')?.querySelector('.badge');
+    results.push({
+      name: '/sessions cost reference flags a factor row no meter run has measured',
+      ok: unmeasured?.textContent?.trim() === 'unmeasured' && (unmeasured.getAttribute('title') ?? '').includes('list-price ratio') && JSON.stringify(plan(priceRow('claude-fable-5')).slice(0, 5)) === JSON.stringify(['2', '0.052', '2.46', '2.46', '9.34']),
+      missing: [unmeasured?.textContent ?? 'no badge', JSON.stringify(plan(priceRow('claude-fable-5')))],
+    });
+  }
+  results.push({ name: '/sessions cost reference leaves a model with no factor row blank on the plan side', ok: plan(priceRow('claude-opus-4-8')).every((c) => c === '-') && plan(priceRow('claude-opus-4-8')).length === 6, missing: plan(priceRow('claude-opus-4-8')) });
   const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
   close?.click();
   await m.settle(200);

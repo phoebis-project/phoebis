@@ -9,8 +9,9 @@ records every console error and page error, and writes a full-page screenshot to
 the order the file defines them (pool chips, the caching controls, the select-below threshold, the routing cards, the
 compatibility card, the bootstrap cards, the Delete upstream button, the upstream lines, the alert rule dialog, the
 remaining cards, the error state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the request
-drawer, which opens once the request list's shot is taken). The script exits non-zero with the list of failures when
-any of that does not hold.
+drawer, which opens once the request list's shot is taken, the subscription end editor, the key dialog's cap field, the
+cost reference). A check that opens an editor or a dialog closes it again before the view's shot. The script exits
+non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
@@ -48,7 +49,8 @@ the mock's admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the week
 The mock's random draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the
 two directories shows. The dashboard's remaining cards and its empty state are checked against the router's seeded
 registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and no empty list on
-the dashboard.
+the dashboard. The subscription end editor and the cost reference's unmeasured badge need the story's OAuth upstream
+and unmeasured factor row, so against the router's seed those two parts stand down.
 
 ## On a host without Chromium
 

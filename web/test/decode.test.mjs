@@ -764,6 +764,24 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
 });
 
+test('settings decode the plan factors', () => {
+  const wire = fixture('settings');
+  const f = d.decodeSettings(wire).planFactors;
+  assert.deepEqual([f.measured, f.reference], [wire.plan_factors.measured, 'claude-opus-5']);
+  assert.deepEqual(Object.keys(f.models).sort(), Object.keys(wire.plan_factors.models).sort());
+  assert.deepEqual(f.models['claude-fable-5-1'], { cacheRead: 0.026, cacheWrite1h: 1.23, cacheWrite5m: 1.23, factor: 3.61, input: 1, measured: '2026-09-19', output: 4.67, unmeasured: false });
+  assert.deepEqual([f.models['claude-fable-5'].measured, f.models['claude-fable-5'].unmeasured], [null, true], 'a row the meter has not measured names no date');
+  const bare = { ...wire };
+  delete bare.plan_factors;
+  assert.deepEqual(d.decodeSettings(bare).planFactors, { measured: '', models: {}, reference: '' }, 'an answer without the table reads as an empty one');
+});
+
+test('an account patch encodes the cancelled flag and its end', () => {
+  const end = '2026-10-19T09:15:00.000Z';
+  assert.deepEqual(d.encodeAccountPatch({ cancelled: true, subscriptionEndsAt: end }), { cancelled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
+  assert.deepEqual(d.encodeAccountPatch({ cancelled: false, subscriptionEndsAt: null }), { cancelled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
+});
+
 test('settings, pricing, the import preview, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
   assert.equal(s.access.viewerConfigured, true);

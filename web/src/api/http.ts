@@ -1,4 +1,4 @@
-import type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
+import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
 
@@ -274,6 +274,7 @@ export class HttpApi implements Api {
     const r = await call<Record<string, unknown>>('POST', `/admin/alerts/rules/${enc(id)}/test`);
     return { error: (r.error as string | null) ?? null, status: typeof r.status === 'number' ? r.status : null };
   };
+  updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
   updateAlertRule = async (id: string, input: AlertRuleInput) => d.decodeAlertRule(await call('PATCH', `/admin/alerts/rules/${enc(id)}`, d.encodeRule(input)));
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
   // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.

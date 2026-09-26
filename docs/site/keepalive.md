@@ -143,13 +143,23 @@ spent by then.</dd>
 <dd>On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a
 1-hour entry for any idle span; a session with cache warming on may set `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on the
 client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
-<dt>Subscription upstreams</dt>
-<dd>Everything in this table is spent in plan quota rather than money.</dd>
+<dt>Plan meter</dt>
+<dd>One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the
+same as a 5-minute one, so on plan-funded traffic the long TTL is free and the pool's cache TTL policy keeps `1h`
+for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the
+in-overage default is `5m`.</dd>
 </dl>
 
-Every figure carries the same caveat: "API list prices. For subscription upstreams these approximate quota
-consumption and are not billed as money." A recipe's own net follows the same split: meter tokens on a
-subscription account outside overage, dollars on an api_key account or one in overage.
+Beside the prices a Plan meter column group reads the dated factor table the ledger ships
+(`crates/ledger/plan_factors.yaml`): per model the meter tokens one token of each type costs a subscription upstream
+on plan quota (input, cache read, 5m write, 1h write, output, each times the model's factor), the date the row was
+measured, and an `unmeasured` badge on a row that still carries its list-price ratio until a meter run fills it. A
+dated model id reads the row of its undated name; a model the table has no row for leaves the group blank.
+
+The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the plan meter columns
+instead of money." A recipe's own net follows the same split: meter tokens on a subscription account outside
+overage, dollars on an api_key account or one in overage. Each agent line of the Sessions view shows its net, as "N
+plan tokens", in dollars, or both for an agent whose upstream changed funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 

@@ -843,6 +843,169 @@ async function requestDrawer(theme) {
   for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
 }
 
+/** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */
+const compare = (mine, neighbour, keys, what) => {
+  if (!mine || !neighbour) return [`${what}: one side is not drawn to compare`];
+  const differs = keys.filter((key) => String(mine[key]) !== String(neighbour[key]));
+  return differs.length ? [`${what}: ${differs.join(', ')} differ (${JSON.stringify(mine)} against ${JSON.stringify(neighbour)})`] : [];
+};
+
+/**
+ * The identity card's subscription end editor on an OAuth upstream: its date field is the box of the status filter
+ * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
+ * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
+ * of the card. Ticking the box prefills a date. The router's seed has only an API-key upstream, which has no editor,
+ * so there the check stands down; the mock's first upstream is an OAuth one.
+ */
+async function subscriptionEndForm(theme) {
+  const say = (what) => failures.push(`${theme} /upstreams: ${what}`);
+  const identity = page.locator('.card', { has: page.locator('.card__title', { hasText: 'Identity' }) });
+  const open = identity.getByRole('button', { name: 'Edit end', exact: true });
+  if ((await open.count()) === 0) {
+    if (mock) say('the first upstream is an OAuth one in the story, yet its identity card has no Edit end button');
+    return;
+  }
+  const firstRow = () => identity.locator('.kv__row dt').first().evaluate((dt) => Math.round(dt.getBoundingClientRect().top - dt.closest('.card').getBoundingClientRect().top));
+  const button = (b) => ({ font: getComputedStyle(b).font, height: Math.round(b.getBoundingClientRect().height), padding: getComputedStyle(b).padding, radius: getComputedStyle(b).borderTopLeftRadius });
+  const rowBefore = await firstRow();
+  const editButton = await open.evaluate(button);
+  await open.click();
+  await identity.locator('label.row input[type="checkbox"]').check();
+  await settle();
+  const read = await page.evaluate(() => {
+    const box = (el) => {
+      if (!el) return null;
+      const style = getComputedStyle(el);
+      return {
+        background: style.backgroundColor,
+        border: `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}`,
+        font: `${style.fontFamily} ${style.fontSize} ${style.fontWeight}`,
+        height: Math.round(el.getBoundingClientRect().height),
+        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+        radius: style.borderTopLeftRadius,
+      };
+    };
+    const type = (el) => (el ? `${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
+    const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const ends = card?.querySelector('input[type="datetime-local"]');
+    return {
+      ends: box(ends),
+      fieldLabel: type(card?.querySelector('.field .field__label')),
+      filter: box(document.querySelector('select[aria-label="Status filter"]')),
+      prefill: ends?.value ?? null,
+      tickLabel: type(card?.querySelector('label.row .field__label')),
+    };
+  });
+  const save = await identity.getByRole('button', { name: 'Save', exact: true }).evaluate(button);
+  const rowAfter = await firstRow();
+  measurements.push(`${theme} /upstreams subscription end ${JSON.stringify({ ...read, save })}`);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
+  for (const finding of [
+    // A select keeps room for its chevron, so the padding is left out.
+    ...compare(read.ends, read.filter, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the status filter'),
+    ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
+  ]) say(finding);
+  if (read.tickLabel !== read.fieldLabel) say(`the Cancelled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
+  if (rowAfter !== rowBefore) say(`opening the editor moved the card's first row from ${rowBefore}px to ${rowAfter}px`);
+  // Closed again, so the view's shot is the card as it loaded.
+  await identity.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await settle();
+}
+
+/**
+ * The key dialog's Requests in flight field against the Name field in the same section: the same input box and the
+ * same hint type as the Pool field's. A cap of 0 raises the refusal and holds the Create button.
+ */
+async function keyCapField(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.getByRole('button', { name: 'Create API key', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+  } catch (error) {
+    say(`the create dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const cap = await measureInput('Requests in flight');
+  const name = await measureInput('Name');
+  const hints = await dialog.evaluate((el) => {
+    const hint = (text) => {
+      const node = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('.field__hint');
+      return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
+    };
+    return { cap: hint('Requests in flight'), pool: hint('Pool') };
+  });
+  measurements.push(`${theme} /keys cap field ${JSON.stringify({ cap, hints, name })}`);
+  for (const finding of compare(cap, name, ['background', 'border', 'font', 'height', 'padding'], 'the Requests in flight input against the Name input')) say(finding);
+  if (!hints.cap || hints.cap !== hints.pool) say(`the cap's hint reads ${hints.cap} against the Pool hint's ${hints.pool}`);
+  await dialog.locator('input[aria-label="Requests in flight"]').fill('0');
+  await settle();
+  const refused = await dialog.locator('[role="alert"]', { hasText: 'Requests in flight' }).count();
+  if (refused !== 1) say(`a cap of 0 raised ${refused} refusals, not one`);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
+/**
+ * The cost reference dialog from Sessions: the plan meter's column heads and cells read in the type of the price
+ * columns beside them, a row the factor table covers is the height of one it does not, an unmeasured badge is the
+ * box of the companion badge on the page behind it (the kind badge sits in a monospace cell), and the whole table
+ * fits the dialog without a sideways scroll.
+ */
+async function costReference(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.getByRole('button', { name: 'Cost reference', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await advance(LOAD_MS);
+    await dialog.locator('tbody tr td.num').first().waitFor({ timeout: 15_000 });
+  } catch (error) {
+    say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
+    const badge = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+    };
+    const dlg = [...document.querySelectorAll('dialog[open]')].pop();
+    const heads = [...dlg.querySelectorAll('thead th')];
+    // Both groups head a column Cache read: the price table's first, the plan meter's in the second header row.
+    const [priceRead, planRead] = heads.filter((th) => th.textContent?.trim() === 'Cache read');
+    const rows = [...dlg.querySelectorAll('tbody tr')];
+    // The plan meter cells close every row, six of them after the eleven price and payoff cells.
+    const covered = rows.find((r) => r.children.length === 17 && r.children[11].textContent?.trim() !== '-');
+    const bare = rows.find((r) => r.children.length === 17 && r.children[11].textContent?.trim() === '-');
+    const wrap = dlg.querySelector('.table-wrap');
+    return {
+      badge: badge(dlg.querySelector('tbody .badge')),
+      bareHeight: bare ? Math.round(bare.getBoundingClientRect().height) : null,
+      coveredHeight: covered ? Math.round(covered.getBoundingClientRect().height) : null,
+      group: type(heads.find((th) => th.textContent?.trim() === 'Plan meter')),
+      pageBadge: badge([...document.querySelectorAll('.sessions-table .badge')].find((b) => ['reporting', 'silent'].includes(b.textContent?.trim() ?? ''))),
+      overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
+      planCell: type(covered?.children[12]),
+      planHead: type(planRead),
+      priceCell: type(covered?.children[4]),
+      priceHead: type(priceRead),
+    };
+  });
+  measurements.push(`${theme} /sessions cost reference ${JSON.stringify(read)}`);
+  if (read.planHead === null || read.planHead !== read.priceHead) say(`the plan meter's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
+  if (read.group === null || read.group !== read.priceHead) say(`the Plan meter group head reads ${read.group} against the price heads' ${read.priceHead}`);
+  if (read.planCell === null || read.planCell !== read.priceCell) say(`a plan meter cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
+  if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with plan factors is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
+  if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow}px past the dialog`);
+  if (read.badge === null || read.pageBadge === null) {
+    if (mock) say(`the story carries an unmeasured factor row and a reporting companion, yet the badges read ${read.badge} and ${read.pageBadge}`);
+  } else if (read.badge !== read.pageBadge) say(`the unmeasured badge measures ${read.badge} against the companion badge's ${read.pageBadge}`);
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
@@ -882,7 +1045,10 @@ try {
       }
       if (['/', '/pools', '/upstreams'].includes(view.path)) await upstreamLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
-      if (view.path === '/sessions') await costCapRows(theme);
+      if (view.path === '/sessions') {
+        await costCapRows(theme);
+        await costReference(theme);
+      }
       if (view.path === '/pools') {
         await poolChips(theme);
         await poolCachingControls(theme);
@@ -897,7 +1063,11 @@ try {
         await compatibilityCard(theme);
         await bootstrapCards(theme);
       }
-      if (view.path === '/upstreams') await deleteUpstreamButton(theme);
+      if (view.path === '/upstreams') {
+        await deleteUpstreamButton(theme);
+        await subscriptionEndForm(theme);
+      }
+      if (view.path === '/keys') await keyCapField(theme);
       if (view.path === '/alerts') await alertRuleDialog(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.

@@ -56,6 +56,15 @@ export function fmtRelative(isoTime: string | null, now: number): string {
   return delta > 0 ? `in ${fmtDuration(delta)}` : `${fmtDuration(delta)} ago`;
 }
 
+/** "ends in 12 days", "ends in 3 hours", "ended 2 days ago": whole units counted down, so a part day is not a day. */
+export function fmtEndsIn(at: string, now: number): string {
+  const delta = Date.parse(at) - now;
+  const abs = Math.abs(delta);
+  const [n, unit]: [number, string] = abs >= 86_400_000 ? [Math.floor(abs / 86_400_000), 'day'] : abs >= 3_600_000 ? [Math.floor(abs / 3_600_000), 'hour'] : [Math.max(1, Math.floor(abs / 60_000)), 'minute'];
+  const span = `${n} ${unit}${n === 1 ? '' : 's'}`;
+  return delta > 0 ? `ends in ${span}` : `ended ${span} ago`;
+}
+
 export function fmtAbsolute(isoTime: string | null): string {
   if (!isoTime) return '-';
   const d = new Date(isoTime);

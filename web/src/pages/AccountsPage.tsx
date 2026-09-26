@@ -11,11 +11,13 @@ import { CoolingDown } from '@/components/CoolingDown';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
+import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE } from '@/lib/quota';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
+const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -168,10 +170,16 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(account.label);
+  // Null while the subscription end is not being edited.
+  const [endForm, setEndForm] = useState<SubscriptionEndForm | null>(null);
   useEffect(() => {
     setLabel(account.label);
     setEditing(false);
   }, [account.id, account.label]);
+  useEffect(() => setEndForm(null), [account.id]);
+  const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
+  const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+  const trialEndsAt = account.subscription?.trialEndsAt ?? null;
 
   const isOauth = account.kind === 'oauth';
   // A flagged upstream reports its flag as the status, so routing is the only honest read of whether it takes requests.
@@ -367,6 +375,14 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
         <Card
           title="Identity"
           className="card--fill"
+          actions={
+            // Kept while the editor is open, so the card's rows do not jump as the head loses its button.
+            canMutate && isOauth ? (
+              <Button size="sm" disabled={endForm !== null} onClick={() => setEndForm(subscriptionEndFormOf(account))}>
+                Edit end
+              </Button>
+            ) : undefined
+          }
         >
           <KeyValue
             className="kv--spread"
@@ -381,7 +397,8 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                       value: account.subscription ? `${account.plan ?? '-'}${account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}` : 'unknown until paired',
                     },
                     { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
-                    ...(account.subscription?.trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(account.subscription.trialEndsAt), value: fmtDate(account.subscription.trialEndsAt) }] : []),
+                    ...(endsAt ? [{ label: 'Ends', title: fmtAbsolute(endsAt), value: fmtEndsIn(endsAt, now) }] : []),
+                    ...(trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(trialEndsAt), value: fmtEndsIn(trialEndsAt, now) }] : []),
                     { label: 'Organization', value: account.subscription?.organizationType ?? '-' },
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]
@@ -391,6 +408,40 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                   ]
             }
           />
+          {endForm && (
+            <div className="capture" style={{ marginTop: 12 }}>
+              <label className="row">
+                <input type="checkbox" checked={endForm.cancelled} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked, account.subscription?.derivedEndsAt ?? null))} />
+                <span className="field__label">Cancelled</span>
+              </label>
+              <Field label="Ends" hint={END_HINT}>
+                <Input type="datetime-local" value={endForm.endsAt} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label="Ends" />
+              </Field>
+              {endRefusal && (
+                <div className="callout callout--critical" role="alert">
+                  <IconWarning size={16} />
+                  <div>{endRefusal}</div>
+                </div>
+              )}
+              <span className="row">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={busy || endRefusal !== null}
+                  onClick={() => {
+                    const patch = accountPatchOf(endForm);
+                    setEndForm(null);
+                    void run(() => api.updateAccount(account.id, patch), 'Subscription end saved');
+                  }}
+                >
+                  Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEndForm(null)}>
+                  Cancel
+                </Button>
+              </span>
+            </div>
+          )}
           {isOauth && <p className="muted detail__note">Renewal date is not reported by the provider.</p>}
         </Card>
 

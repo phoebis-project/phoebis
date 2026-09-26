@@ -1,9 +1,9 @@
-import type { Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
+import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
 import { WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
@@ -64,10 +64,11 @@ const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
 const rulesRefusal = (rules: ModelRule[] | undefined): string | null =>
   rules === undefined ? null : modelRulesRefusal(rules);
 
-/** The key routes read the list before the mode, so a body wrong in both is refused for its list. */
-const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
+/** The key routes read the list, then the mode, then the cap, so a body wrong in two is refused for the first. */
+const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'inFlightCap' | 'modelRules' | 'modelRulesMode'>>): string | null => {
   const mode = input.modelRulesMode;
-  return rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
+  const rules = rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
+  return rules ?? (input.inFlightCap === 0 ? 'in_flight_cap is at least 1' : null);
 };
 
 /** The shedding and failover refusals, in the order and words of the pool routes. */
@@ -413,6 +414,7 @@ export class MockApi implements Api {
       status: 'active',
       createdAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
+      inFlightCap: input.inFlightCap ?? null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
       notes: input.notes,
@@ -806,6 +808,20 @@ export class MockApi implements Api {
     const rule = this.rules.find((r) => r.id === id);
     if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
     return latency({ error: null, status: 200 }, 400);
+  }
+
+  /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
+  async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
+    this.mutation();
+    const a = this.account(accountId);
+    if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
+    if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
+    if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'cancelled needs subscription_ends_at', null);
+    // The route answers a subscription block for a cancelled OAuth row even before it pairs, so its end has a place.
+    const blank: Subscription = { billingType: '', derivedEndsAt: null, endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
+    const base = a.subscription ?? (patch.cancelled ? blank : null);
+    const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
+    return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
   }
 
   async updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {

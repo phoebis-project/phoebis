@@ -74,6 +74,15 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
+test('updateAccount is one PATCH that carries the cancelled flag and the end in milliseconds', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, { ...body, cancelled: true }));
+  const end = '2026-10-19T09:15:00.000Z';
+  const account = await new HttpApi().updateAccount('business', { cancelled: true, subscriptionEndsAt: end });
+  assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end) }]);
+  assert.equal(account.cancelled, true, 'the answer decodes as the account');
+});
+
 test('listRequests passes the user agent pattern as user_agent', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ userAgent: 'claude-cli/2.1.*' });

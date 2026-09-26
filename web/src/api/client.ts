@@ -51,11 +51,20 @@ import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
 
 export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
 
+/** The account route's cancellation pair; the route refuses an end without the flag and the flag without an end. */
+export interface AccountPatch {
+  cancelled: boolean;
+  /** An ISO instant, or null to clear it. */
+  subscriptionEndsAt: string | null;
+}
+
 export interface KeyInput {
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
+  /** Null clears the cap; undefined leaves the stored one alone. */
+  inFlightCap?: number | null;
   keepaliveOptOut: boolean;
   longContextTwins: boolean;
   modelRules: ModelRule[];
@@ -192,6 +201,7 @@ export interface Api {
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
   testAlertRule(id: string): Promise<AlertDeliveryTest>;
+  updateAccount(accountId: string, patch: AccountPatch): Promise<Account>;
   updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule>;
   updateKey(id: string, input: KeyInput): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput): Promise<Pool>;

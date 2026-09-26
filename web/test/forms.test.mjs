@@ -163,6 +163,47 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   assert.deepEqual([fresh.enabled, fresh.expiry, fresh.poolId, fresh.captureMode], [true, 'never', 'all', 'inherit'], 'a new key starts on, with no expiry, in the pool it was opened from');
 });
 
+test('a key form carries the in-flight cap and null clears it', () => {
+  const row = fixture('keys').keys[0];
+  const form = d.keyFormOf(d.decodeKey({ ...row, in_flight_cap: 4 }), 'unused');
+  assert.equal(form.inFlightCap, '4');
+  const body = d.encodeKey(d.keyInputOf(form, NOW));
+  assert.equal(body.in_flight_cap, 4);
+  assert.equal(d.decodeKey({ ...row, ...body }).inFlightCap, 4, 'the route answers the cap back as it was sent');
+  const cleared = d.keyInputOf({ ...form, inFlightCap: '' }, NOW);
+  assert.equal(cleared.inFlightCap, null);
+  assert.equal(d.encodeKey(cleared).in_flight_cap, null, 'an empty field sends null, which clears the stored cap');
+  assert.equal('in_flight_cap' in d.encodeKey({ ...cleared, inFlightCap: undefined }), false, 'a write without the field, a key moved between pools, keeps the stored cap');
+  assert.equal(d.keyFormOf(d.decodeKey(row), 'unused').inFlightCap, '', 'no cap opens as an empty field');
+  assert.equal(d.keyInputOf(d.keyFormOf(null, 'all'), NOW).inFlightCap, null, 'a new key starts with no cap');
+  for (const v of ['', '1', '16', '4294967295']) assert.equal(d.inFlightCapRefusal(v), null, `${JSON.stringify(v)} is taken`);
+  for (const v of ['0', '-1', '1.5', '4294967296', 'x']) assert.notEqual(d.inFlightCapRefusal(v), null, `${v} is refused as the route refuses it`);
+});
+
+test('ticking cancelled prefills the derived end, unticking clears it, and the form refuses what the route refuses', () => {
+  const body = fixture('account');
+  const derived = '2026-10-19T09:15:00.000Z';
+  const account = d.decodeAccount({ ...body, subscription: { ...body.subscription, derived_ends_at: Date.parse(derived) } });
+  const form = d.subscriptionEndFormOf(account);
+  assert.deepEqual(form, { cancelled: false, endsAt: '' }, 'an account never cancelled opens unticked with no end');
+  const ticked = d.tickCancelled(form, true, account.subscription.derivedEndsAt);
+  assert.equal(ticked.cancelled, true);
+  assert.equal(new Date(ticked.endsAt).toISOString(), derived, 'the field holds the derived end in local time');
+  const corrected = { ...ticked, endsAt: '2026-10-05T12:00' };
+  assert.equal(d.tickCancelled({ ...corrected, cancelled: false }, true, derived).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
+  assert.deepEqual(d.tickCancelled(corrected, false, derived), { cancelled: false, endsAt: '' }, 'unticking clears the end with the flag');
+  assert.equal(d.subscriptionEndRefusal(ticked), null);
+  assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '' }), null);
+  assert.equal(d.subscriptionEndRefusal({ cancelled: true, endsAt: '' }), 'A cancelled plan needs the date it ends.', 'a ticked box whose date was cleared');
+  assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '2026-10-05T12:00' }), 'An end is saved only with Cancelled ticked.');
+  assert.deepEqual(d.accountPatchOf(ticked), { cancelled: true, subscriptionEndsAt: derived });
+  assert.deepEqual(d.accountPatchOf({ cancelled: false, endsAt: '' }), { cancelled: false, subscriptionEndsAt: null });
+  const saved = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z'), derived_ends_at: Date.parse(derived) } });
+  const reopened = d.subscriptionEndFormOf(saved);
+  assert.equal(reopened.cancelled, true);
+  assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a cancelled account opens with the end it was saved with');
+});
+
 const rules = (...patterns) => patterns.map((p) => (p.startsWith('NOT ') ? { not: true, pattern: p.slice(4) } : { not: false, pattern: p }));
 
 test('a model rule list is refused in the route\'s order and words, and the refusal holds a pool save', () => {

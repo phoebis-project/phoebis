@@ -971,6 +971,12 @@ export interface PriceImportPreview {
   token: string;
 }
 
+/** Meter tokens per token of each type on the plan side; `factor` weighs the model against the reference and
+ *  multiplies every type column. */
+export interface PlanFactor { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; factor: number; input: number; measured: string | null; output: number; unmeasured: boolean }
+/** The dated table the ledger ships: one plain input token of `reference` on the 5-hour meter is the unit. */
+export interface PlanFactors { measured: string; models: Record<string, PlanFactor>; reference: string }
+
 export interface Settings {
   about: { profile: string; publicUrl: string | null; version: string };
   access: { adminConfigured: boolean; viewerConfigured: boolean };
@@ -978,6 +984,7 @@ export interface Settings {
   compatibility: { cacheDiagnostics: boolean; outboundGzip: boolean; profile: string; usageEntrypoint: string };
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
   listeners: { admin: string; metrics: string; proxy: string };
+  planFactors: PlanFactors;
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { pollIntervalSeconds: number; sampleRetentionDays: number };

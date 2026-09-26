@@ -43,6 +43,7 @@ const WRITES = [
   ['rotateKey', (api) => api.rotateKey('laptop')],
   ['startPairing', (api) => api.startPairing('team')],
   ['testAlertRule', (api) => api.testAlertRule('rule_7d')],
+  ['updateAccount', (api) => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' })],
   ['updateAlertRule', async (api) => api.updateAlertRule('rule_7d', ruleInputOf((await api.listAlertRules()).find((r) => r.id === 'rule_7d')))],
   ['updateKey', (api) => api.updateKey('laptop', { ...keyInput, name: 'laptop', expiresAt: undefined })],
   ['updatePool', async (api) => api.updatePool('all', await storyPool(api))],
@@ -201,6 +202,33 @@ test('a key write without the model fields takes the route\'s defaults on create
   const { modelRules: _p, ...unruled } = await storyPool(api);
   const pool = await api.createPool({ ...unruled, name: 'unruled' });
   assert.deepEqual(pool.modelRules, [], 'a pool created without a list starts with none');
+});
+
+test('an account patch is refused where the account route refuses it, and a cancelled end stands only with its flag', async () => {
+  const api = await as('admin');
+  const end = '2026-10-19T09:15:00.000Z';
+  const before = await api.listAccounts();
+  await assert.rejects(() => api.updateAccount('console', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is cancelled'));
+  await assert.rejects(() => api.updateAccount('business', { cancelled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs cancelled'));
+  await assert.rejects(() => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: null }), refusedAs(400, 'cancelled needs subscription_ends_at'));
+  await assert.rejects(() => api.updateAccount('nobody', { cancelled: false, subscriptionEndsAt: null }), refusedAs(404, 'account not found'));
+  assert.deepEqual(await api.listAccounts(), before, 'a refused patch stores nothing');
+  const cancelled = await api.updateAccount('business', { cancelled: true, subscriptionEndsAt: end });
+  assert.deepEqual([cancelled.cancelled, cancelled.subscription.endsAt], [true, end]);
+  const restored = await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
+  assert.deepEqual([restored.cancelled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
+  const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
+  assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth upstream that never paired still reports the end it was cancelled with');
+});
+
+test('a key cap of 0 is refused on create and edit with the key route\'s text', async () => {
+  const api = await as('admin');
+  const refused = refusedAs(400, 'in_flight_cap is at least 1');
+  await assert.rejects(() => api.createKey({ ...keyInput, inFlightCap: 0 }), refused);
+  await assert.rejects(() => api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: 0 }), refused);
+  assert.equal((await api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: 3 })).inFlightCap, 3);
+  assert.equal((await api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: null })).inFlightCap, null, 'null clears the cap');
+  assert.equal((await api.createKey({ ...keyInput, name: 'capped', inFlightCap: 2 })).key.inFlightCap, 2);
 });
 
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
