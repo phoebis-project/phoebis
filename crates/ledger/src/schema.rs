@@ -245,6 +245,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 17: the newest events of one kind are read on every poll of the Models view, and `events_at` made
 /// that a walk of the whole history whenever the kind had fewer rows than the limit; an index that starts with
 /// the kind seeks straight to them.
+///
+/// Version 18: the request row records the class the client named, nullable; the class is a dimension of the
+/// hourly rollup, so it joins the primary key after the effort and the table is rebuilt as version 16 rebuilt
+/// it, every existing row filed under `-`; the account rollup gains the rewrite tokens and the moves by reason;
+/// an attempt keeps its selection trace.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -554,5 +559,69 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_gen
     (
         17,
         "CREATE INDEX IF NOT EXISTS events_kind_at ON events (kind, at);",
+    ),
+    (
+        18,
+        "ALTER TABLE requests ADD COLUMN request_class TEXT;
+CREATE TABLE rollups_hourly_next (
+  hour INTEGER NOT NULL,
+  key_id TEXT NOT NULL,
+  key_generation INTEGER NOT NULL DEFAULT 0,
+  pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  canonical_model TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  client TEXT NOT NULL DEFAULT '-',
+  effort TEXT NOT NULL DEFAULT 'none',
+  request_class TEXT NOT NULL DEFAULT '-',
+  requests INTEGER NOT NULL,
+  succeeded INTEGER NOT NULL,
+  rate_limited INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  exhausted INTEGER NOT NULL,
+  rejected INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  failovers INTEGER NOT NULL,
+  cache_hits INTEGER NOT NULL,
+  cache_misses INTEGER NOT NULL,
+  uncached_requests INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_write_5m_tokens INTEGER NOT NULL,
+  cache_write_1h_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  thinking_tokens INTEGER NOT NULL DEFAULT 0,
+  web_search_requests INTEGER NOT NULL DEFAULT 0,
+  web_fetch_requests INTEGER NOT NULL DEFAULT 0,
+  estimated_usd REAL NOT NULL,
+  input_usd REAL NOT NULL,
+  cache_read_usd REAL NOT NULL,
+  cache_write_usd REAL NOT NULL,
+  output_usd REAL NOT NULL,
+  kept_warm_requests INTEGER NOT NULL,
+  kept_warm_tokens INTEGER NOT NULL,
+  saved_usd_gross REAL NOT NULL,
+  probe_cost_usd REAL NOT NULL,
+  probe_migrated INTEGER NOT NULL,
+  wasted_probes INTEGER NOT NULL,
+  wasted_probe_usd REAL NOT NULL,
+  wasted_probe_reasons_json TEXT NOT NULL,
+  probes_skipped INTEGER NOT NULL DEFAULT 0,
+  ttfb_hist BLOB NOT NULL,
+  ttfc_hist BLOB NOT NULL,
+  duration_hist BLOB NOT NULL,
+  output_tps_hist BLOB NOT NULL,
+  errors_json TEXT NOT NULL,
+  cache_miss_reasons_json TEXT NOT NULL,
+  PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class)
+);
+INSERT INTO rollups_hourly_next (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json) SELECT hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, '-', requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json FROM rollups_hourly;
+DROP TABLE rollups_hourly;
+ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
+CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
+ALTER TABLE account_rollups_hourly ADD COLUMN rewrite_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE account_rollups_hourly ADD COLUMN migrations_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE attempts ADD COLUMN selection TEXT;",
     ),
 ];

@@ -396,6 +396,7 @@ fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
         pin_epoch: selected.pin_epoch,
         started_at: selected.started_at,
         outcome: "transport_error".into(),
+        selection: selected.selection.clone(),
         ..AttemptRecord::default()
     }
 }
@@ -503,6 +504,14 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             last.thinking_tokens = usage.thinking_tokens;
             last.web_search_requests = usage.web_search_requests;
             last.web_fetch_requests = usage.web_fetch_requests;
+            // The trace crossed the bus at selection, before the response reported what it cached; folded in
+            // here so the request drawer reads one object rather than joining the attempt's own token column.
+            if let (Some(read), Some(trace)) = (usage.cache_read_tokens, &last.selection) {
+                if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
+                    value["cache_read"] = json!(read);
+                    last.selection = Some(value.to_string());
+                }
+            }
         }
         let response = &complete.response;
         last.stop_reason = response.stop_reason.clone();
@@ -638,6 +647,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         context_compacted: observed.client.context_compacted.clone(),
         prev_tool_ms: observed.client.prev_tool_ms,
         turn_origin: observed.client.turn_origin.clone(),
+        request_class: observed.client.request_class.clone(),
     };
     records.push(Record::Request {
         request,
@@ -746,6 +756,7 @@ mod tests {
             pin_epoch: Some(4),
             started_at: at,
             cache_ttl_ms: None,
+            selection: None,
         })
     }
     fn head(id: &str, n: u8, status: u16, outcome: AttemptOutcome, at: i64) -> Event {

@@ -40,11 +40,12 @@ pub use pricing::{
     PriceTable, Pricing,
 };
 pub use query::{
-    apply_filter, breakdown, bucket_seconds, dashboard, group_of, hour_ceil, key_request_totals,
-    latest_extra_usage, latest_quota, list_requests, parse_range, pool_traffic,
-    recent_events_of_kind, request_by_id, request_events, request_totals, series, session_activity,
-    Dashboard, GroupRow, LiveKeys, ProbeCounts, RequestFilter, RollupFilter, SeriesPoint,
-    SessionActivity, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
+    apply_filter, breakdown, bucket_seconds, burn_series, dashboard, group_of, hour_ceil,
+    key_request_totals, latest_extra_usage, latest_quota, list_requests, moves_by_reason,
+    parse_range, pool_traffic, recent_events_of_kind, request_by_id, request_events,
+    request_totals, rewrite_series, series, session_activity, BurnPoint, Dashboard, GroupRow,
+    LiveKeys, ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint, SessionActivity,
+    Totals, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll, Sampled};
 pub use record::{
@@ -54,7 +55,7 @@ pub use record::{
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_event, fold_keepalive, fold_request, hour_of,
     read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow,
-    KEY_RANGE_PREDICATE, UNATTRIBUTED,
+    KEY_RANGE_PREDICATE, NO_CLASS, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};

@@ -234,9 +234,16 @@ and, when it differs, the canonical id the router recorded, and the client hints
 context-compacted markers, the turn origin, and the tool time before the turn; the trail names an upstream that rejected
 the model and the one that served it. The table holds the requests up to the moment you opened it, so paging does not
 shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from
-which upstream to which and why: rate limited, upstream marked, overage, window spent, or utilization. When its pin was
-released without a move, the drawer says from which upstream and every reason the router found: account cooled, window
-spent, upstream paused, pin idle past the affinity window, and the rest.
+which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed, or
+window spent. When its pin was released without a move, the drawer says from which upstream and every reason the
+router found, among: already tried this request, the creating request's own client error, an account cooldown, the
+account deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing
+reauthorization, released outright, window spent, the subscription ended, never paired, or no longer serving the
+model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin was renewed, the
+cache-read tokens the response reported, and every candidate it passed over with the obstacle in its way: already
+tried, above the ceiling, at its in-flight cap, an account cooldown, at the pace floor, an operator hold, in overage,
+ranked behind another candidate, its subscription ended, its window spent, or winding down; three placement fields
+wait on a later release and read empty until then.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -244,21 +251,28 @@ spent, upstream paused, pin idle past the affinity window, and the rest.
 ### Analytics
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every
-chart and table by client, effort, key, kind, model, pool, upstream, or user agent; the client grouping reads the
-class and the user agent grouping the raw agent. A key deleted and created again under the same id appears twice
-under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures stay with the key that spent
-them. The client and user agent filters take the same patterns as the request log's, and under the user agent
-grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other agent
-under `other`. Traffic reports request volume by outcome and the error rate; Latency reports percentiles read from the
-merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served
-from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range;
-Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible
-time, and pin churn per upstream. Cooldown time books to the hour it elapses in as the interval runs, and a cooldown
-cleared early gives back only the hours it never held. A cooldown is booked up to seven days ahead of the announcement
-that set it, and a later announcement books the next stretch. Filtered to one session, the view sums the request log
-instead of the rollups, and the cost split, the cache write and read costs, and the Cache warming figures read as
-unavailable because the request log does not carry them; the Upstreams section keeps reading the rollups for the
-range, since they carry no session, and its subtitle says so.
+chart and table by client, effort, key, kind, model, pool, request class, upstream, or user agent; the client
+grouping reads the class and the user agent grouping the raw agent. The request class shown by this grouping is the
+value the client sent on its class header, verbatim, so a class a client adds later shows up under its own name; a
+classless request folds under the reserved value alongside a keepalive credit. A key deleted and created again under
+the same id appears twice under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures
+stay with the key that spent them. The client and user agent filters take the same patterns as the request log's, and
+under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two
+groups, every other agent under `other`. Traffic reports request volume by outcome and the error rate; Latency
+reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired
+between turns, the share of input served from cache, and the output split into thinking and plain output; Cost
+reports the estimated spend for the range; Cache warming reports what probes cost against what they saved; and
+Upstreams reports peak utilization, ineligible time, and pin churn per upstream. The range also carries what the
+account rollups keep: the plan's burn in meter tokens for a subscription account and in dollars for an api-key
+account, side by side and each split into cached and uncached tokens, a subscription account's meter tokens
+carrying the peak band's weight for the hour they landed in, the same weight the live fit divides by; the
+cache-write tokens the first request after a move paid to warm its new upstream; and the moves the range counted,
+by reason. Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives
+back only the hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and
+a later announcement books the next stretch. Filtered to one session, the view sums the request log instead of the
+rollups, and the cost split, the cache write and read costs, and the Cache warming figures read as unavailable
+because the request log does not carry them; the Upstreams section keeps reading the rollups for the range, since
+they carry no session, and its subtitle says so.
 
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-light.png#only-light)
 ![The Analytics view: the range and group-by controls over six report sections](assets/analytics-dark.png#only-dark)

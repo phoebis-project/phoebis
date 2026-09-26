@@ -272,3 +272,35 @@ fn recent_events_of_kind_answers_the_newest_first_and_stops_at_the_limit() {
         "the newest two, newest first"
     );
 }
+
+#[test]
+fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_event(
+            &tx,
+            &EventRecord {
+                at: 3_600_000,
+                kind: "pin_migrated".into(),
+                account_id: Some("b".into()),
+                detail: Some(r#"{"reason":"overage","from_account":"a"}"#.into()),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    let to = rows.iter().find(|r| r.account_id == "b").unwrap();
+    assert_eq!(to.migrations.get("overage"), Some(&1));
+    let from = rows.iter().find(|r| r.account_id == "a").unwrap();
+    assert_eq!(
+        from.migrations.get("overage"),
+        None,
+        "the source row counts pins_migrated_out, not a reason of its own"
+    );
+}

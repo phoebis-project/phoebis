@@ -318,6 +318,8 @@ pub struct AccountSelected {
     pub started_at: i64,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
     pub cache_ttl_ms: Option<i64>,
+    /// The selection trace as JSON, `None` for a probe's own placement.
+    pub selection: Option<String>,
 }
 
 #[derive(Clone, Debug)]

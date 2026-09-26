@@ -68,6 +68,8 @@ pub struct RequestRecord {
     pub prev_tool_ms: Option<i64>,
     /// `cc_turn_origin` off the attribution line; first-party only.
     pub turn_origin: Option<String>,
+    /// The class the client named on `x-claude-code-request-class`, `None` when it sent none.
+    pub request_class: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -120,6 +122,8 @@ pub struct AttemptRecord {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
+    /// The trace as stored, `cache_read` folded in at completion.
+    pub selection: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

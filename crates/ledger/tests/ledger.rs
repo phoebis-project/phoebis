@@ -1221,7 +1221,23 @@ fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
         pin_epoch: None,
         started_at: at,
         cache_ttl_ms: None,
+        selection: None,
     })
+}
+
+/// The same selection, carrying a real trace: for the tests that read what the attempt row stored.
+fn selected_event_with_trace(
+    id: &str,
+    attempt: u8,
+    account: &str,
+    at: i64,
+    trace: &str,
+) -> BusEvent {
+    let BusEvent::AccountSelected(mut selected) = selected_event(id, attempt, account, at) else {
+        unreachable!()
+    };
+    selected.selection = Some(trace.into());
+    BusEvent::AccountSelected(selected)
 }
 
 /// A head carrying the account's 5-hour reading, which the assembler turns into a header sample.
@@ -1529,4 +1545,316 @@ async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
         fits[0].scale
     );
     up.shutdown().await;
+}
+
+/// The 49-column shape `COLUMNS` held before the class dimension joined it, built by stripping the column this
+/// migration adds out of the live constant so a future dimension needs no matching edit here.
+fn pre_class_columns() -> String {
+    "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, \
+     requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, \
+     cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, \
+     cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, \
+     estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, \
+     kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, \
+     wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, \
+     errors_json, cache_miss_reasons_json"
+        .into()
+}
+
+#[tokio::test]
+async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        // The three columns this migration adds, each dropped back out so the replay below has to add them
+        // again; `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column
+        // cannot be dropped in place and the rebuild names its own columns regardless of what the source
+        // table still carries.
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE requests DROP COLUMN request_class; \
+                 ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; \
+                 ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
+                 ALTER TABLE attempts DROP COLUMN selection;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let columns = pre_class_columns();
+        db.write(|c| {
+            c.execute(
+                &format!(
+                    "INSERT INTO rollups_hourly ({columns}) VALUES \
+                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua', 'claude-code/cli', 'none', 5, 5, 0, 0, \
+                     0, 0, 5, 0, 0, 0, 5, 1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, \
+                     0, 0.0, '{{}}', 0, x'', x'', x'', x'', '{{}}', '{{}}')"
+                ),
+                [],
+            )?;
+            c.execute(
+                "UPDATE meta SET value = '17' WHERE key = 'schema_version'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 18);
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (
+            rows[0].request_class.as_str(),
+            rows[0].requests,
+            rows[0].output_tokens
+        ),
+        (phoebis_ledger::NO_CLASS, 5, 6),
+        "a row folded before the column existed takes the reserved class and keeps its counts"
+    );
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_request(
+            &tx,
+            &RequestRecord {
+                id: "r2".into(),
+                received_at: 3_600_000,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "m".into(),
+                kind: "inference".into(),
+                outcome: "succeeded".into(),
+                user_agent: Some("ua".into()),
+                client: Some("claude-code/cli".into()),
+                ..Default::default()
+            },
+            &[phoebis_ledger::AttemptRecord {
+                request_id: "r2".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                output_tokens: Some(1),
+                ..Default::default()
+            }],
+            None,
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "a fresh classless fold lands on the same reserved-class row"
+    );
+    assert_eq!((rows[0].requests, rows[0].output_tokens), (6, 7));
+}
+
+#[test]
+fn a_request_folds_under_its_class_and_a_classless_one_under_the_reserved_value() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, class: Option<&str>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: 3_600_000,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "m".into(),
+                kind: "inference".into(),
+                outcome: "succeeded".into(),
+                request_class: class.map(String::from),
+                ..Default::default()
+            },
+            &[phoebis_ledger::AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
+    plant("r1", Some("main"));
+    plant("r2", None);
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap();
+    let classes: Vec<&str> = rows.iter().map(|r| r.request_class.as_str()).collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "the named class and the reserved one are separate rows"
+    );
+    assert!(
+        classes.contains(&"main") && classes.contains(&phoebis_ledger::NO_CLASS),
+        "every other key part is equal, so only the class tells the two rows apart: {classes:?}"
+    );
+}
+
+#[test]
+fn an_attempt_keeps_its_selection_trace_with_the_cache_read_folded_in() {
+    let trace = r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":null,"skipped":[]}"#;
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    assembler.observe(observed_event("r1"));
+    assembler.observe(selected_event_with_trace("r1", 1, "a", minutes(1), trace));
+    let BusEvent::RequestComplete(mut complete) = complete_event("r1") else {
+        unreachable!()
+    };
+    complete.attempt = 1;
+    complete.account_id = Some("a".into());
+    complete.usage = Some(Usage {
+        cache_read_tokens: Some(42),
+        ..Usage::default()
+    });
+    let records = assembler.observe(BusEvent::RequestComplete(complete));
+    let [Record::Request { attempts, .. }] = records.as_slice() else {
+        panic!("{} records at completion", records.len());
+    };
+    let selection: serde_json::Value =
+        serde_json::from_str(attempts[0].selection.as_deref().unwrap()).unwrap();
+    assert_eq!(selection["strategy"], "pace");
+    assert_eq!(selection["cache_read"], 42);
+}
+
+#[test]
+fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_the_next_one_does_not(
+) {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let moved_trace =
+        r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: 3_600_000,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[phoebis_ledger::AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "b".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            cache_write_5m_tokens: Some(100),
+            cache_write_1h_tokens: Some(50),
+            selection: Some(moved_trace.into()),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r2".into(),
+            received_at: 3_600_500,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[phoebis_ledger::AttemptRecord {
+            request_id: "r2".into(),
+            attempt: 1,
+            account_id: "b".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            cache_write_5m_tokens: Some(30),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    let row = rows.iter().find(|r| r.account_id == "b").unwrap();
+    assert_eq!(
+        row.rewrite_tokens, 150,
+        "only the first request's cache write, the one whose trace named a move, counts as a rewrite"
+    );
+}
+
+#[test]
+fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_tokens_under_cooldown() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let moved_trace =
+        r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"cooldown","skipped":[]}"#;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: 3_600_000,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            outcome: "succeeded".into(),
+            attempts: 2,
+            ..Default::default()
+        },
+        &[
+            phoebis_ledger::AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "rate_limited".into(),
+                started_at: 3_600_000,
+                ..Default::default()
+            },
+            phoebis_ledger::AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 2,
+                account_id: "b".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                started_at: 3_600_050,
+                cache_write_5m_tokens: Some(80),
+                selection: Some(moved_trace.into()),
+                ..Default::default()
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_event(
+            &tx,
+            &EventRecord {
+                at: 3_600_100,
+                kind: "pin_migrated".into(),
+                account_id: Some("b".into()),
+                detail: Some(r#"{"reason":"cooldown","from_account":"a"}"#.into()),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    let row = rows.iter().find(|r| r.account_id == "b").unwrap();
+    assert_eq!(row.rewrite_tokens, 80);
+    assert_eq!(row.migrations.get("cooldown"), Some(&1));
 }

@@ -782,6 +782,7 @@ mod tests {
             pin_epoch: None,
             started_at: 1_010,
             cache_ttl_ms: None,
+            selection: None,
         })
     }
 

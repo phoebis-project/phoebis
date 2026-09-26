@@ -1,17 +1,20 @@
 //! Reads for the admin routes: the request log with its filters and cursor, the rollup series and breakdown
 //! with merged histograms, the dashboard's day, and the newest quota sample per window.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+use phoebis_routing::FIVE_HOUR;
+use phoebis_store::AccountKind;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
+use crate::plan::{PlanFactors, PlanWindows};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
-use crate::rollup::{read_rollups, RollupRow, UNATTRIBUTED};
+use crate::rollup::{read_account_rollups, read_rollups, RollupRow, UNATTRIBUTED};
 use crate::LedgerError;
 
 const HOUR_MS: i64 = 3_600_000;
@@ -543,6 +546,7 @@ pub const GROUP_BYS: &[&str] = &[
     "kind",
     "model",
     "pool",
+    "request_class",
     "user_agent",
 ];
 
@@ -627,6 +631,7 @@ pub fn group_of(
         "kind" => row.kind.clone(),
         "client" => row.client.clone(),
         "effort" => row.effort.clone(),
+        "request_class" => row.request_class.clone(),
         "user_agent" => {
             if agent_groups.is_empty() {
                 return row.user_agent.clone();
@@ -768,8 +773,8 @@ fn sum_groups(
         let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", ""),
                 false,
             )
         });
@@ -1134,6 +1139,147 @@ pub fn pool_traffic(
         }
         out.push(bucket);
         at += bucket_seconds;
+    }
+    Ok(out)
+}
+
+/// The range and scope of a series the query reads from the ledger itself, where `RollupFilter` narrows rows
+/// a caller already loaded.
+#[derive(Clone, Debug, Default)]
+pub struct SeriesFilter {
+    /// Milliseconds; the range is `from` inclusive to `to` exclusive.
+    pub from: i64,
+    pub to: i64,
+    /// One point per bucket, from `bucket_seconds(from, to)`; buckets align with the hour edges as `series` aligns them.
+    pub bucket_seconds: i64,
+    /// Account ids; empty means every account. The one scope `rewrite_series` and `moves_by_reason` read, since the account rollups carry no other dimension.
+    pub accounts: Vec<String>,
+    /// Key ids, matched on `key_id` alone; empty means every key. `rollups_hourly` only.
+    pub keys: Vec<String>,
+    /// Pool ids; empty means every pool. `rollups_hourly` only.
+    pub pools: Vec<String>,
+    /// Request classes, `NO_CLASS` naming the classless rows; empty means every class. `rollups_hourly` only.
+    pub request_classes: Vec<String>,
+}
+
+/// The bucket edges a `SeriesFilter` reads over, and the `MAX_POINTS` guard every series function shares.
+fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
+    let first = (filter.from / 1_000).div_euclid(filter.bucket_seconds) * filter.bucket_seconds;
+    let last = hour_ceil(filter.to);
+    let count = (last - first)
+        .checked_div(filter.bucket_seconds)
+        .unwrap_or(0);
+    if !(0..=MAX_POINTS).contains(&count) {
+        return Err(LedgerError::Yaml(format!(
+            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+        )));
+    }
+    Ok((first, last))
+}
+
+/// One point of the burn series: the row's tokens as meter tokens (a subscription account) and dollars.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct BurnPoint {
+    pub at: i64,
+    pub meter_tokens: f64,
+    pub usd: f64,
+    pub cached_tokens: u64,
+    pub uncached_tokens: u64,
+}
+
+/// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, bucket_at)`, the weight the fitted
+/// scale they are later divided by was built with. An api_key row prices in `estimated_usd` instead; a row
+/// whose account is not in `kinds` carries no price the caller could attribute, so it is left out entirely.
+pub fn burn_series(
+    conn: &Connection,
+    factors: &PlanFactors,
+    windows: &PlanWindows,
+    kinds: &HashMap<String, AccountKind>,
+    filter: &SeriesFilter,
+) -> Result<Vec<BurnPoint>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let rows = read_rollups(conn, first, last)?;
+    let matches = |r: &RollupRow| {
+        (filter.keys.is_empty() || filter.keys.contains(&r.key_id))
+            && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
+            && (filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
+            && (filter.request_classes.is_empty()
+                || filter.request_classes.contains(&r.request_class))
+    };
+    let mut points = Vec::new();
+    let mut at = first;
+    while at < last {
+        let mut point = BurnPoint {
+            at,
+            ..BurnPoint::default()
+        };
+        for row in rows
+            .iter()
+            .filter(|r| r.hour >= at && r.hour < at + filter.bucket_seconds && matches(r))
+        {
+            match kinds.get(&row.account_id) {
+                Some(AccountKind::Oauth) => {
+                    if let Some(tokens) = factors.meter_tokens(
+                        &row.canonical_model,
+                        row.input_tokens,
+                        row.cache_read_tokens,
+                        row.cache_write_5m_tokens,
+                        row.cache_write_1h_tokens,
+                        row.output_tokens,
+                    ) {
+                        point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, at * 1_000);
+                    }
+                }
+                Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
+                None => continue,
+            }
+            point.cached_tokens += row.cache_read_tokens;
+            point.uncached_tokens += row.input_tokens;
+        }
+        points.push(point);
+        at += filter.bucket_seconds;
+    }
+    Ok(points)
+}
+
+/// The cache-write tokens the account rollups booked as a rewrite, per bucket.
+pub fn rewrite_series(
+    conn: &Connection,
+    filter: &SeriesFilter,
+) -> Result<Vec<(i64, u64)>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let rows = read_account_rollups(conn, first, last)?;
+    let mut points = Vec::new();
+    let mut at = first;
+    while at < last {
+        let sum = rows
+            .iter()
+            .filter(|r| r.hour >= at && r.hour < at + filter.bucket_seconds)
+            .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
+            .map(|r| r.rewrite_tokens)
+            .sum();
+        points.push((at, sum));
+        at += filter.bucket_seconds;
+    }
+    Ok(points)
+}
+
+/// The moves the account rollups counted over the range, summed by reason across every bucket and account the
+/// filter admits.
+pub fn moves_by_reason(
+    conn: &Connection,
+    filter: &SeriesFilter,
+) -> Result<BTreeMap<String, u64>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let rows = read_account_rollups(conn, first, last)?;
+    let mut out = BTreeMap::new();
+    for row in rows
+        .iter()
+        .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
+    {
+        for (reason, count) in &row.migrations {
+            *out.entry(reason.clone()).or_default() += count;
+        }
     }
     Ok(out)
 }

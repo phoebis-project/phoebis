@@ -506,6 +506,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             pricing.clone(),
             bus.clone(),
             clock.clone(),
+            Duration::from_secs(config.routing.cooldown_fallback_seconds),
             Some(keepalive_gauge_source),
         ),
         stop_rx,

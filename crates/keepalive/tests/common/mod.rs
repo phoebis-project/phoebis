@@ -442,6 +442,7 @@ impl Rig {
             pin_epoch: Some(1),
             started_at: self.now(),
             cache_ttl_ms: None,
+            selection: None,
         })
     }
 

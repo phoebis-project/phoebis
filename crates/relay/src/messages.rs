@@ -22,7 +22,7 @@ use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     resolve, AccountTicket, EvidenceSource, Exhaustion, KeyPermit, KeyRefusal, OverageEvidence,
     PinRef, Presented, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    MODEL_REJECTED_REASON,
+    SelectionTrace, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
@@ -405,6 +405,7 @@ impl Trace {
         pin_epoch: Option<u64>,
         started_at: i64,
         cache_ttl_ms: Option<i64>,
+        trace: Option<&SelectionTrace>,
     ) {
         self.publish_fact(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
@@ -418,6 +419,7 @@ impl Trace {
             pin_epoch,
             started_at,
             cache_ttl_ms,
+            selection: trace.map(|t| serde_json::to_string(t).unwrap_or_default()),
         }))
         .await;
     }
@@ -1558,6 +1560,9 @@ impl Relay {
                     pin_epoch,
                     (self.clock)(),
                     cache_ttl_ms(ttl),
+                    // A probe replays a recipe rather than making its own placement, so its own trace names no
+                    // choice worth showing on a request drawer.
+                    (admitted.trace.kind != Kind::Probe).then_some(&selection.trace),
                 )
                 .await;
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to

@@ -1,15 +1,21 @@
 //! Rollups for a synthetic day equal a direct aggregation of the raw rows for every group-by, the unattributed
 //! bucket included, and merged-histogram percentiles lie within one bucket of the exact ones.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use phoebis_ledger::{
-    apply_filter, breakdown, bucket_index, delta_of, fold_keepalive, key_request_totals,
-    read_account_rollups, read_rollups, AttemptRecord, Histogram, KeepaliveDelta, LedgerDb,
-    LiveKeys, RequestRecord, RollupFilter, RollupRow, UNATTRIBUTED,
+    apply_filter, breakdown, bucket_index, burn_series, delta_of, fold_account, fold_event,
+    fold_keepalive, key_request_totals, moves_by_reason, read_account_rollups, read_rollups,
+    rewrite_series, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerDb, LiveKeys,
+    PlanFactors, PlanWindows, RequestRecord, RollupFilter, RollupRow, SeriesFilter, UNATTRIBUTED,
 };
+use phoebis_store::AccountKind;
 use rand::{RngExt, SeedableRng};
 
 const DAY_MS: i64 = 86_400_000;
+/// Monday 2026-09-21 at 14:00 UTC, inside the peak band.
+const WEEKDAY_PEAK: i64 = 1_789_999_200_000;
+/// Monday 2026-09-21 at 20:00 UTC, past the peak band on the same weekday.
+const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
 
 fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -655,4 +661,198 @@ fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles()
             .collect();
         within_one_bucket(&merged, &mut values);
     }
+}
+
+#[test]
+fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, class: Option<&str>| {
+        let (mut request, mut attempts) = synthetic_day(5).swap_remove(0);
+        request.id = id.into();
+        request.key_id = Some("k1".into());
+        request.key_generation = 0;
+        request.received_at = 1_000;
+        request.kind = "inference".into();
+        request.request_class = class.map(String::from);
+        for attempt in &mut attempts {
+            attempt.request_id = id.into();
+        }
+        db.insert_request(&request, &attempts, None).unwrap();
+    };
+    plant("r1", Some("main"));
+    plant("r2", Some("compaction"));
+    plant("r3", None);
+    let live = LiveKeys(BTreeMap::from([("k1".to_string(), 0)]));
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let groups = breakdown(&filtered, "request_class", false, &live, &[]);
+    let keys: Vec<&str> = groups.iter().map(|g| g.key.as_str()).collect();
+    assert!(
+        keys.contains(&"main") && keys.contains(&"compaction") && keys.contains(&UNATTRIBUTED),
+        "the named classes and the classless overhead land in their own groups: {keys:?}"
+    );
+}
+
+#[test]
+fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_in_dollars() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, account: &str, kind: &str, usd: Option<f64>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: 3_600_000,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: account.into(),
+                account_kind: kind.into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                output_tokens: Some(100),
+                estimated_usd: usd,
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
+    plant("sub", "oauth-a", "oauth", None);
+    plant("key", "api-b", "api_key", Some(1.25));
+    let factors = PlanFactors::shipped();
+    let windows = PlanWindows::shipped();
+    let kinds = HashMap::from([
+        ("oauth-a".to_string(), AccountKind::Oauth),
+        ("api-b".to_string(), AccountKind::ApiKey),
+    ]);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let points = db
+        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+        .unwrap();
+    let point = points
+        .iter()
+        .find(|p| p.meter_tokens > 0.0 || p.usd > 0.0)
+        .expect("the bucket both rows landed in");
+    assert!(
+        point.meter_tokens > 0.0,
+        "the subscription row prices in meter tokens"
+    );
+    assert!(
+        (point.usd - 1.25).abs() < 1e-9,
+        "the api-key row prices in dollars from estimated_usd"
+    );
+}
+
+#[test]
+fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_band_factor() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: at,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                output_tokens: Some(100),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    }
+    let factors = PlanFactors::shipped();
+    let windows = PlanWindows::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let filter = SeriesFilter {
+        from: WEEKDAY_PEAK - 3_600_000,
+        to: WEEKDAY_OFF_PEAK + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let points = db
+        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+        .unwrap();
+    let peak = points
+        .iter()
+        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_PEAK))
+        .unwrap();
+    let off_peak = points
+        .iter()
+        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK))
+        .unwrap();
+    assert!(
+        (peak.meter_tokens - off_peak.meter_tokens * 1.45).abs() < 1e-6,
+        "the peak hour weighs the same tokens 1.45 times the off-peak hour: {} vs {}",
+        peak.meter_tokens,
+        off_peak.meter_tokens
+    );
+}
+
+#[test]
+fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 3_600,
+                account_id: "a".into(),
+                rewrite_tokens: 40,
+                ..Default::default()
+            },
+        )?;
+        fold_event(
+            &tx,
+            &EventRecord {
+                at: 3_600_500,
+                kind: "pin_migrated".into(),
+                account_id: Some("a".into()),
+                detail: Some(r#"{"reason":"shed"}"#.into()),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let series = db.read_blocking(|c| rewrite_series(c, &filter)).unwrap();
+    assert_eq!(series.iter().map(|(_, n)| n).sum::<u64>(), 40);
+    let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
+    assert_eq!(moves.get("shed"), Some(&1));
 }

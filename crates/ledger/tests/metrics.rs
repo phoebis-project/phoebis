@@ -255,7 +255,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         phoebis_routing::RouterConfig::default(),
     )
     .unwrap();
-    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, None).await;
+    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, 60_000, None).await;
     assert_eq!(
         gauges.cooldowns,
         vec![("a".into(), "model:other".into(), 120)],
@@ -266,6 +266,62 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         text.matches("phoebis_account_cooldown_seconds{account=\"a\",scope=\"model:other\"}")
             .count(),
         1
+    );
+}
+
+#[tokio::test]
+async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_flag() {
+    use phoebis_store::{AccountKind, AccountRow, AccountState, StorageKey, Store};
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    for id in ["past", "ahead"] {
+        store
+            .insert_account(&AccountRow {
+                id: id.into(),
+                kind: AccountKind::Oauth,
+                label: id.into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+    }
+    let router = phoebis_routing::spawn(
+        store,
+        None,
+        Arc::new(|| 2_000),
+        phoebis_routing::RouterConfig::default(),
+    )
+    .unwrap();
+    let evidence = |reset: Option<i64>| phoebis_routing::OverageEvidence {
+        in_use: true,
+        since: Some(1_000),
+        reset,
+        observed_at: 1_000,
+        source: phoebis_routing::EvidenceSource::Head,
+        incarnation: 1,
+    };
+    router.report(phoebis_routing::Report::Overage {
+        account_id: "past".into(),
+        evidence: evidence(Some(1_500)),
+        incarnation: 1,
+    });
+    router.report(phoebis_routing::Report::Overage {
+        account_id: "ahead".into(),
+        evidence: evidence(Some(9_000)),
+        incarnation: 1,
+    });
+    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 2_000, 60_000, None).await;
+    let text = Metrics::new().render(&gauges, &[], 0);
+    assert!(
+        text.contains(r#"phoebis_account_overage_in_use{account="past"} 0"#),
+        "a reset already past now reads 0: {text}"
+    );
+    assert!(
+        text.contains(r#"phoebis_account_overage_in_use{account="ahead"} 1"#),
+        "a reset still ahead of now reads 1: {text}"
     );
 }
 

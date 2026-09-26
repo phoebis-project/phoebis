@@ -58,6 +58,7 @@ fn selected(id: &str, at: i64) -> phoebis_bus::Event {
         pin_epoch: None,
         started_at: at,
         cache_ttl_ms: None,
+        selection: None,
     })
 }
 

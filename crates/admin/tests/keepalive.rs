@@ -267,6 +267,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             pin_epoch: Some(1),
             started_at: now,
             cache_ttl_ms: None,
+            selection: None,
         }));
     parts
         .keepalive
@@ -501,6 +502,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             pin_epoch: Some(1),
             started_at: now,
             cache_ttl_ms: None,
+            selection: None,
         }));
     parts
         .keepalive

@@ -18,6 +18,9 @@ pub const UNATTRIBUTED: &str = "-";
 /// The value a request with no `output_config.effort` files under.
 pub const NO_EFFORT: &str = "none";
 
+/// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
+pub const NO_CLASS: &str = "-";
+
 /// How far past its announcement a cooldown is booked. The deadline is the upstream's to set, and the
 /// classifier saturates an absurd `Retry-After` to `i64::MAX`, so booking every hour up to it would hold the
 /// writer's transaction for good.
@@ -75,6 +78,9 @@ pub struct RollupRow {
     pub client: String,
     /// The request's `output_config.effort`, `NO_EFFORT` when it sent none; a dimension, so it sits in the key.
     pub effort: String,
+    /// The class the client named, `NO_CLASS` for a classless request and for a keepalive credit; a dimension,
+    /// so it sits in the key.
+    pub request_class: String,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -129,6 +135,7 @@ impl RollupRow {
         user_agent: &str,
         client: &str,
         effort: &str,
+        request_class: &str,
     ) -> RollupRow {
         RollupRow {
             hour,
@@ -141,6 +148,7 @@ impl RollupRow {
             user_agent: user_agent.into(),
             client: client.into(),
             effort: effort.into(),
+            request_class: request_class.into(),
             requests: 0,
             succeeded: 0,
             rate_limited: 0,
@@ -309,6 +317,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
         request.client.as_deref().unwrap_or(UNATTRIBUTED),
         request.effort.as_deref().unwrap_or(NO_EFFORT),
+        request.request_class.as_deref().unwrap_or(NO_CLASS),
     );
     d.requests = 1;
     match request.outcome.as_str() {
@@ -405,6 +414,10 @@ pub struct AccountRollupRow {
     pub pins_created: u64,
     pub pins_migrated_in: u64,
     pub pins_migrated_out: u64,
+    /// Cache-write tokens of the first request after each move that landed on the account in the hour.
+    pub rewrite_tokens: u64,
+    /// Moves that landed on the account in the hour, by the `pin_migrated` reason.
+    pub migrations: BTreeMap<String, u64>,
 }
 
 impl AccountRollupRow {
@@ -422,6 +435,8 @@ impl AccountRollupRow {
         self.pins_created += o.pins_created;
         self.pins_migrated_in += o.pins_migrated_in;
         self.pins_migrated_out += o.pins_migrated_out;
+        self.rewrite_tokens += o.rewrite_tokens;
+        add_counts(&mut self.migrations, &o.migrations);
     }
 }
 
@@ -471,6 +486,7 @@ pub fn fold_request(
             &delta.user_agent,
             &delta.client,
             &delta.effort,
+            &delta.request_class,
         )
     });
     row.add(&delta);
@@ -489,6 +505,21 @@ pub fn fold_request(
                 },
             )?;
         }
+    }
+    // The first attempt whose trace names a move is the one whose selection landed on this account; a
+    // fail-over recovers the reason from the invalidation table the same way a shed does, so both book their
+    // cache write as a rewrite. Later attempts on the same request never repeat the booking.
+    if let Some(a) = attempts.iter().find(|a| moved(a)) {
+        fold_account(
+            tx,
+            &AccountRollupRow {
+                hour: hour_of(a.started_at),
+                account_id: a.account_id.clone(),
+                rewrite_tokens: a.cache_write_5m_tokens.unwrap_or(0)
+                    + a.cache_write_1h_tokens.unwrap_or(0),
+                ..Default::default()
+            },
+        )?;
     }
     // The three utilization columns are maxima, so a replaced attempt's reading cannot be subtracted out of
     // them: every hour and account its old attempts fed is read again from the raw attempts that remain.
@@ -509,6 +540,15 @@ fn reads_utilization(a: &AttemptRecord) -> bool {
     a.ratelimit_5h_utilization.is_some()
         || a.ratelimit_7d_utilization.is_some()
         || a.ratelimit_7d_oi_utilization.is_some()
+}
+
+/// Whether the attempt's stored trace names a move: `shed`, `spent`, `overage`, `return_to_plan` and `drain`
+/// from the selector alike, `cooldown` and `mark` from a fail-over's recovered reason.
+fn moved(a: &AttemptRecord) -> bool {
+    a.selection
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .is_some_and(|v| !v["moved"].is_null())
 }
 
 /// One hour and account's utilization maxima, taken again from the raw attempts and written back over the
@@ -555,6 +595,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         UNATTRIBUTED,
         UNATTRIBUTED,
         NO_EFFORT,
+        NO_CLASS,
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;
@@ -603,10 +644,12 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             },
         ),
         ("pin_migrated", Some(to)) => {
+            let reason = detail["reason"].as_str().unwrap_or("unknown");
             fold_account(
                 tx,
                 &AccountRollupRow {
                     pins_migrated_in: 1,
+                    migrations: BTreeMap::from([(reason.to_string(), 1)]),
                     ..row(to)
                 },
             )?;
@@ -715,8 +758,13 @@ fn account_row(
 
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
     tx.execute(
-        "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max, row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64, row.pins_migrated_out as i64],
+        "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max,
+            row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64,
+            row.pins_migrated_out as i64, row.rewrite_tokens as i64,
+            serde_json::to_string(&row.migrations).unwrap_or_else(|_| "{}".into()),
+        ],
     )?;
     Ok(())
 }
@@ -818,8 +866,8 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
-const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out FROM account_rollups_hourly";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json";
+const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
     conn: &Connection,
@@ -827,8 +875,8 @@ pub(crate) fn read_rollup(
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class],
             row_to_rollup,
         )
         .optional()?)
@@ -836,8 +884,8 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class],
     )?;
     Ok(())
 }
@@ -846,9 +894,9 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)"),
         params![
-            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
+            r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
             r.input_tokens as i64, r.cache_read_tokens as i64, r.cache_write_5m_tokens as i64, r.cache_write_1h_tokens as i64, r.output_tokens as i64,
             r.thinking_tokens as i64, r.web_search_requests as i64, r.web_fetch_requests as i64,
@@ -885,45 +933,46 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         user_agent: r.get(offset + 7)?,
         client: r.get(offset + 8)?,
         effort: r.get(offset + 9)?,
-        requests: u(10)?,
-        succeeded: u(11)?,
-        rate_limited: u(12)?,
-        failed: u(13)?,
-        exhausted: u(14)?,
-        rejected: u(15)?,
-        attempts: u(16)?,
-        failovers: u(17)?,
-        cache_hits: u(18)?,
-        cache_misses: u(19)?,
-        uncached_requests: u(20)?,
-        input_tokens: u(21)?,
-        cache_read_tokens: u(22)?,
-        cache_write_5m_tokens: u(23)?,
-        cache_write_1h_tokens: u(24)?,
-        output_tokens: u(25)?,
-        thinking_tokens: u(26)?,
-        web_search_requests: u(27)?,
-        web_fetch_requests: u(28)?,
-        estimated_usd: r.get(offset + 29)?,
-        input_usd: r.get(offset + 30)?,
-        cache_read_usd: r.get(offset + 31)?,
-        cache_write_usd: r.get(offset + 32)?,
-        output_usd: r.get(offset + 33)?,
-        kept_warm_requests: u(34)?,
-        kept_warm_tokens: u(35)?,
-        saved_usd_gross: r.get(offset + 36)?,
-        probe_cost_usd: r.get(offset + 37)?,
-        probe_migrated: u(38)?,
-        wasted_probes: u(39)?,
-        wasted_probe_usd: r.get(offset + 40)?,
-        wasted_probe_reasons: counts(41)?,
-        probes_skipped: u(42)?,
-        ttfb_hist: hist(43)?,
-        ttfc_hist: hist(44)?,
-        duration_hist: hist(45)?,
-        output_tps_hist: hist(46)?,
-        errors: counts(47)?,
-        cache_miss_reasons: counts(48)?,
+        request_class: r.get(offset + 10)?,
+        requests: u(11)?,
+        succeeded: u(12)?,
+        rate_limited: u(13)?,
+        failed: u(14)?,
+        exhausted: u(15)?,
+        rejected: u(16)?,
+        attempts: u(17)?,
+        failovers: u(18)?,
+        cache_hits: u(19)?,
+        cache_misses: u(20)?,
+        uncached_requests: u(21)?,
+        input_tokens: u(22)?,
+        cache_read_tokens: u(23)?,
+        cache_write_5m_tokens: u(24)?,
+        cache_write_1h_tokens: u(25)?,
+        output_tokens: u(26)?,
+        thinking_tokens: u(27)?,
+        web_search_requests: u(28)?,
+        web_fetch_requests: u(29)?,
+        estimated_usd: r.get(offset + 30)?,
+        input_usd: r.get(offset + 31)?,
+        cache_read_usd: r.get(offset + 32)?,
+        cache_write_usd: r.get(offset + 33)?,
+        output_usd: r.get(offset + 34)?,
+        kept_warm_requests: u(35)?,
+        kept_warm_tokens: u(36)?,
+        saved_usd_gross: r.get(offset + 37)?,
+        probe_cost_usd: r.get(offset + 38)?,
+        probe_migrated: u(39)?,
+        wasted_probes: u(40)?,
+        wasted_probe_usd: r.get(offset + 41)?,
+        wasted_probe_reasons: counts(42)?,
+        probes_skipped: u(43)?,
+        ttfb_hist: hist(44)?,
+        ttfc_hist: hist(45)?,
+        duration_hist: hist(46)?,
+        output_tps_hist: hist(47)?,
+        errors: counts(48)?,
+        cache_miss_reasons: counts(49)?,
     })
 }
 
@@ -939,6 +988,8 @@ fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
         pins_created: r.get::<_, i64>(7)? as u64,
         pins_migrated_in: r.get::<_, i64>(8)? as u64,
         pins_migrated_out: r.get::<_, i64>(9)? as u64,
+        rewrite_tokens: r.get::<_, i64>(10)? as u64,
+        migrations: serde_json::from_str(&r.get::<_, String>(11)?).unwrap_or_default(),
     })
 }
 
@@ -947,7 +998,7 @@ pub fn read_rollups(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class"))?;
     let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -992,7 +1043,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class"))?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,
@@ -1025,6 +1076,7 @@ mod tests {
             .replace(", user_agent", "")
             .replace(", client", "")
             .replace(", effort", "")
+            .replace(", request_class", "")
             .replace(
                 ", thinking_tokens, web_search_requests, web_fetch_requests",
                 "",
@@ -1065,7 +1117,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 17);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 18);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
@@ -1107,7 +1159,7 @@ mod tests {
                      (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua', 'none', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
                      1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{{}}', 0, \
                      x'', x'', x'', x'', '{{}}', '{{}}')",
-                    COLUMNS.replace(", client", "")
+                    COLUMNS.replace(", client", "").replace(", request_class", "")
                 ),
                 [],
             )
@@ -1115,7 +1167,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 17);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 18);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1207,7 +1259,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 17);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 18);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1749,6 +1801,7 @@ mod tests {
             "claude-cli/2.1.269 (external, cli)",
             "claude-code/cli",
             "high",
+            "subagent",
         );
         r.requests = 10;
         r.succeeded = 11;
@@ -1902,6 +1955,7 @@ mod tests {
             let v7 = COLUMNS
                 .replace(", client", "")
                 .replace(", effort", "")
+                .replace(", request_class", "")
                 .replace(
                     ", thinking_tokens, web_search_requests, web_fetch_requests",
                     "",
@@ -1966,12 +2020,13 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 17);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 18);
         let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = old;
         expected.client = UNATTRIBUTED.into();
         expected.effort = NO_EFFORT.into();
+        expected.request_class = NO_CLASS.into();
         assert_eq!(
             rows[0], expected,
             "every old value is where it was; effort is none and the three sums are zero"

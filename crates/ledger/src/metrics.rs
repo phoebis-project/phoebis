@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
@@ -416,6 +417,7 @@ pub async fn gather(
     router: &RouterHandle,
     table: &PriceTable,
     now: i64,
+    fallback_ms: i64,
     keepalive: Option<&KeepaliveGaugeSource>,
 ) -> RoutingGauges {
     let snapshot = router.snapshot();
@@ -447,7 +449,7 @@ pub async fn gather(
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, e)| (id, e.in_use))
+        .map(|(id, e)| (id, e.stands(now, fallback_ms)))
         .collect();
     let live_accounts: BTreeSet<String> = snapshot.accounts().map(|a| a.id.clone()).collect();
     for id in &live_accounts {
@@ -475,8 +477,10 @@ pub fn metrics_router(
     pricing: Arc<Pricing>,
     bus: Bus,
     clock: Clock,
+    cooldown_fallback: Duration,
     keepalive: Option<KeepaliveGaugeSource>,
 ) -> Router {
+    let fallback_ms = cooldown_fallback.as_millis() as i64;
     Router::new()
         .route(
             "/metrics",
@@ -491,7 +495,8 @@ pub fn metrics_router(
                 );
                 async move {
                     let table = pricing.current();
-                    let gauges = gather(&router, &table, clock(), keepalive.as_ref()).await;
+                    let gauges =
+                        gather(&router, &table, clock(), fallback_ms, keepalive.as_ref()).await;
                     let text = metrics.render(&gauges, &bus.stats(), pricing.unknown_models());
                     (
                         [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],

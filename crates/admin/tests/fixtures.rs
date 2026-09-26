@@ -469,6 +469,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             pin_epoch: Some(1),
             started_at: now,
             cache_ttl_ms: None,
+            selection: None,
         }));
     parts
         .keepalive
@@ -705,6 +706,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         pin_epoch: Some(1),
         started_at: now + 5,
         cache_ttl_ms: None,
+        selection: None,
     }));
     parts.bus.publish(Event::ResponseHead(ResponseHead {
         request_id: "live-1".into(),

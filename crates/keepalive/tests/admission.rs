@@ -287,6 +287,7 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             pin_epoch: Some(2),
             started_at: r.now(),
             cache_ttl_ms: None,
+            selection: None,
         }));
     // Evidence stamped with the first attempt arrives after the second selection and is ignored.
     r.engine
