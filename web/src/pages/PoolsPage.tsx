@@ -561,7 +561,7 @@ const blankForm = (): PoolForm => ({
   modelRules: [],
   name: '',
   overage: 'prefer_plan',
-  preferSubscription: false,
+  preferSubscription: true,
   selectBelow: 80,
   selectBelowOn: false,
   sheddingCustom: false,

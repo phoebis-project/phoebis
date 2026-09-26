@@ -29,6 +29,9 @@ pub struct SelectRequest {
     /// A keepalive probe's replay of the recipe, from the relay trace's `Kind::Probe`; its headers and body
     /// are the re-arming request's, so it carries no warmth verdict of its own.
     pub probe: bool,
+    /// A `count_tokens` request, from the relay trace's `Kind::CountTokens`: it writes no cache, so it carries
+    /// no warmth verdict either, whatever its messages continue.
+    pub count: bool,
     /// `x-claude-code-request-class` as sent, `None` without the header.
     pub request_class: Option<String>,
     /// `x-claude-code-context-compacted` was present.
@@ -83,9 +86,10 @@ pub enum Warmth {
 /// continues the conversation, one that matches the static prefix without the tail restarted it, and one
 /// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
 /// fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
-/// its own, so it is judged by none of this: its renewal report stamps the refresh instead.
+/// its own, so it is judged by none of this: its renewal report stamps the refresh instead. A token count is
+/// judged by none of it either, since it creates no cache entry to be warm about.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
-    if request.probe {
+    if request.probe || request.count {
         return Warmth::Untouched;
     }
     if request.context_compacted {
@@ -420,6 +424,7 @@ pub fn select(
                 SelectResult::Selected(renew(
                     state,
                     snapshot,
+                    pool,
                     current,
                     request,
                     verdict,
@@ -500,6 +505,7 @@ pub fn select(
                 SelectResult::Selected(renew(
                     state,
                     snapshot,
+                    pool,
                     current,
                     request,
                     verdict,
@@ -608,6 +614,7 @@ pub fn select(
         &selection_set,
         request.now,
         request.fallback_ms,
+        !held,
         rng,
     ) else {
         let obstacles = obstacles
@@ -1035,6 +1042,7 @@ fn obstacle(
 fn renew(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
     current: &PinRow,
     request: &SelectRequest,
     verdict: Warmth,
@@ -1074,6 +1082,7 @@ fn renew(
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),
         trace: SelectionTrace {
+            strategy: pool.strategy.as_str(),
             renewed: true,
             ..SelectionTrace::default()
         },
@@ -1131,6 +1140,7 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
     }
 }
 
+/// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
@@ -1140,6 +1150,7 @@ fn choose<'a>(
     set: &[&'a Candidate],
     now: i64,
     fallback_ms: i64,
+    places: bool,
     rng: &mut impl Rng,
 ) -> Option<(&'a Candidate, Tier)> {
     let kind_ordered = pool.kind_ordered();
@@ -1210,7 +1221,7 @@ fn choose<'a>(
             // `resolve` happened to build the candidate list in.
             let mut cohort: Vec<&str> = tier.iter().map(|c| c.account_id.as_str()).collect();
             cohort.sort_unstable();
-            let i = state.round_robin_next(&pool.id, first, &cohort);
+            let i = state.round_robin_next(&pool.id, first, &cohort, places);
             tier.iter().copied().find(|c| c.account_id == cohort[i])
         }
     };

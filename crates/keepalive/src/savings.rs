@@ -245,7 +245,9 @@ impl Engine {
     /// oauth account's toward the plan-side one, its tokens priced through the plan table and weighted by the
     /// band its hour fell in. The rollup carries no funding, so an oauth account's overage or migrated probes
     /// before the restart price into the plan-side figure and never reach the dollar one for the rest of that
-    /// day, a bounded gap.
+    /// day, a bounded gap. An oauth row whose model the plan table cannot price is dropped from the plan-side
+    /// figure and reaches neither: live, such a probe settles in dollars, so a restart forgets that share of the
+    /// day's dollar count, as bounded a gap.
     pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
         let now = self.now();
         let day_start = now.div_euclid(86_400_000) * 86_400_000 / 1_000;

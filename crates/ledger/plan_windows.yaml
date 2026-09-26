@@ -30,7 +30,8 @@ bands:
   # (measured 2026-09-25) and output 1.44 (measured 2026-09-24), so the factor is 1.3 to 1.45 until one in-band
   # window reads both; 1.45 follows the output, which dominates a Claude Code request's meter cost. The edges are
   # steps, sharp within twenty minutes, measured at 12:00 and 18:00 UTC on 2026-09-25; they move with the zone
-  # (13:00 to 19:00 UTC from 2026-11-01). Weekends are untested.
+  # (13:00 to 19:00 UTC from 2026-11-01). The weekend is off: a Saturday probe inside the band hours read the
+  # off-peak rate, measured 2026-09-26.
   - zone: America/Los_Angeles
     weekdays: true
     from_hour: 5

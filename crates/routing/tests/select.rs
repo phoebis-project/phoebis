@@ -215,6 +215,7 @@ fn request(
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
+        count: false,
         request_class: None,
         context_compacted: false,
         static_hash: None,
@@ -3508,6 +3509,43 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
         picked(&select(&mut st, &s, &req, &mut rng()).0),
         "c",
         "a slot on any candidate ends the hold"
+    );
+}
+
+#[test]
+fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
+    let s = snapshot(Pool {
+        strategy: Strategy::RoundRobin,
+        members: vec![("a", 0), ("b", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let tickets: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|id| st.in_flight().dispatched(id, 1_000))
+        .collect();
+    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(
+        select(&mut st, &s, &req, &mut rng()).0,
+        SelectResult::Held {
+            account_id: "a".into()
+        },
+        "the round starts at a"
+    );
+    drop(tickets);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "a",
+        "the hold placed nothing, so the turn is still a's"
+    );
+    assert_eq!(
+        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        "b",
+        "the placement on a moved the turn on"
     );
 }
 

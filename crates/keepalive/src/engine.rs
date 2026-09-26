@@ -1995,7 +1995,7 @@ pub(crate) fn gate(
     let default_unit = Funding::of(account.kind, in_overage).unit();
     // A model the plan table lacks settles every probe in dollars whatever the funding, the same fall-back
     // `settled_cost` takes; the stop has to read the balance in that unit too, or a zero meter balance masks a
-    // negative dollar one no cap would otherwise catch.
+    // negative dollar one, which the meter cap never catches and the dollar cap catches only when set.
     let unit = if default_unit == SavingsUnit::MeterTokens
         && plan.factor(&agent.canonical_model).is_none()
     {

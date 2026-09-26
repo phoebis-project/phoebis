@@ -727,7 +727,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
 #[test]
 fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_in_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let plant = |id: &str, account: &str, kind: &str, usd: f64| {
+    let plant = |id: &str, account: &str, kind: &str, usd: f64, cache_read: Option<u64>| {
         db.insert_request(
             &RequestRecord {
                 id: id.into(),
@@ -749,6 +749,7 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
                 account_kind: kind.into(),
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000),
+                cache_read_tokens: cache_read,
                 output_tokens: Some(100),
                 estimated_usd: Some(usd),
                 ..Default::default()
@@ -759,10 +760,11 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
     };
     // Both rows carry a nonzero `estimated_usd`, so a burn that priced every row both ways instead of by kind
     // would still pass the dollar assertion; only pricing by kind can pass both.
-    plant("sub", "oauth-a", "oauth", 9.99);
-    plant("key", "api-b", "api_key", 1.25);
-    // Absent from `kinds` below: its tokens must reach neither total.
-    plant("unknown", "unknown-c", "oauth", 4.0);
+    plant("sub", "oauth-a", "oauth", 9.99, None);
+    plant("key", "api-b", "api_key", 1.25, None);
+    // Absent from `kinds` below: its tokens must reach neither total, its cache reads included, the one row
+    // carrying any so the cached half of the assertion below has something to leave out.
+    plant("unknown", "unknown-c", "oauth", 4.0, Some(500));
     let factors = PlanFactors::shipped();
     let windows = PlanWindows::shipped();
     let kinds = HashMap::from([

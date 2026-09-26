@@ -1,11 +1,15 @@
 //! A token count's own cache markers take the cache TTL rewrite and the restamp an inference request's do,
-//! and nothing else about its body changes.
+//! and nothing else about its body changes. A count writes no cache, so a pin it lands on keeps its warmth.
 mod common;
 use common::*;
 
+use std::sync::atomic::Ordering;
+
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{CACHE_DIAGNOSIS_BETA, EXTENDED_TTL_BETA};
+use phoebis_routing::warm;
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";
@@ -349,6 +353,95 @@ async fn a_400_on_a_count_strips_the_beta_for_that_leg_and_leaves_the_account_un
     assert!(
         beta_list(inference).iter().any(|b| b == EXTENDED_TTL_BETA),
         "and its beta with it"
+    );
+    up.shutdown().await;
+}
+
+/// `value` with every `cache_control` member removed, at any depth.
+fn unmarked(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("cache_control");
+            map.values_mut().for_each(unmarked);
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(unmarked),
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn a_count_on_a_pinned_session_leaves_the_pins_refresh_its_ttl_and_its_warmth_as_they_were() {
+    let up = FakeUpstream::start(vec![
+        count_rule(),
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("acct", OA, 0)], PoolSpec::default()).await;
+    let turn = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(turn.status(), 200);
+    turn.into_body().collect().await.unwrap();
+    let pin_of = || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.session_id == "s1")
+            .expect("the turn pinned its session")
+    };
+    let before = pin_of().await;
+    assert_eq!(
+        before.cache_ttl_ms, 3_600_000,
+        "the turn's one-hour markers"
+    );
+
+    // The turn's own conversation counted: its messages hold the pin's tail, so it reads as a continuation,
+    // and without a marker the TTL a renewal would write is the five-minute default.
+    let mut conversation: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).unwrap();
+    unmarked(&mut conversation);
+    let counted = serde_json::json!({
+        "messages": conversation["messages"],
+        "model": conversation["model"],
+        "system": conversation["system"],
+        "tools": conversation["tools"],
+    });
+    let mut count = count_request_with(
+        FixtureKind::CountOauthNonFirstParty,
+        &serde_json::to_vec(&counted).unwrap(),
+    );
+    set_header(&mut count, "x-claude-code-session-id", "s1");
+    let counted_at = NOW + 60_000;
+    h.clock.store(counted_at, Ordering::SeqCst);
+    let resp = h.app.clone().oneshot(count).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    assert!(up.requests()[1]
+        .line
+        .starts_with("POST /v1/messages/count_tokens"));
+
+    let after = pin_of().await;
+    assert_eq!(
+        (after.epoch, after.account_id.as_str()),
+        (before.epoch, before.account_id.as_str()),
+        "the count served on the pin"
+    );
+    assert_eq!(
+        (after.last_refresh_at, after.cache_ttl_ms),
+        (before.last_refresh_at, before.cache_ttl_ms),
+        "a count writes no cache, so it neither refreshes the pin nor names its TTL"
+    );
+    assert!(
+        warm(&after, counted_at + 600_000),
+        "the turn's hour still stands ten minutes after the count"
     );
     up.shutdown().await;
 }

@@ -211,6 +211,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            count: false,
             request_class: None,
             context_compacted: false,
             static_hash: None,

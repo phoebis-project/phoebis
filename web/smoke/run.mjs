@@ -1275,6 +1275,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  // The dialog sends the toggle on every save, so it has to start where the route seeds a new pool.
+  const prefer = dlg?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
+  results.push({
+    name: '/pools create dialog starts with subscription upstreams prioritized',
+    ok: prefer?.getAttribute('aria-checked') === 'true',
+    missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
+  });
   const nameInput = dlg?.querySelector('input');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(nameInput, 'draft');

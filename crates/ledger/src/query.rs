@@ -1210,9 +1210,8 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     }
     let first = (filter.from / 1_000).div_euclid(filter.bucket_seconds) * filter.bucket_seconds;
     let last = hour_ceil(filter.to);
-    let count = (last - first)
-        .checked_div(filter.bucket_seconds)
-        .unwrap_or(0);
+    // The ceiling: the series' `while at < last` loops walk a trailing partial bucket as a point of its own.
+    let count = (last - first).saturating_add(filter.bucket_seconds - 1) / filter.bucket_seconds;
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
             "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
@@ -1278,8 +1277,8 @@ fn price_usage(
 
 /// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the
 /// fitted scale they are later divided by was built with; read per row rather than per bucket, since a
-/// six-hour or daily bucket spans more than one band edge and only the row's own hour says which side of an
-/// edge it fell on.
+/// six-hour or daily bucket can straddle a band edge and only the row's own hour says which side of it the row
+/// fell on.
 pub fn burn_series(
     conn: &Connection,
     factors: &PlanFactors,

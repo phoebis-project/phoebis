@@ -11,6 +11,7 @@ use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use phoebis_ledger::{PlanFactors, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
+use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -275,7 +276,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     .or_insert(0.0) += record.cost_usd;
             }
             if unit == SavingsUnit::MeterTokens {
-                let weighted = cost_in_unit * engine.parts.windows.band_factor("five_hour", now);
+                let weighted = cost_in_unit * engine.parts.windows.band_factor(FIVE_HOUR, now);
                 *inner
                     .meter_spent_today
                     .entry(record.account.clone())

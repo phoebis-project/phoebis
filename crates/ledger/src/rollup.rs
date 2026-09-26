@@ -558,7 +558,7 @@ fn moved(a: &AttemptRecord) -> bool {
 
 /// The serving attempt (the last one; `finish` writes usage there and nowhere else) and its cache-write
 /// tokens, when its own trace names a move and it wrote anything; `None` otherwise, so a moved leg with
-/// nothing yet booked, or one whose write already left, books nothing.
+/// nothing yet booked books nothing.
 fn serving_rewrite(attempts: &[AttemptRecord]) -> Option<(&AttemptRecord, u64)> {
     let a = attempts.last()?;
     if !moved(a) {

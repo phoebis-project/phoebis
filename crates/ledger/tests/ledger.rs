@@ -1517,15 +1517,20 @@ async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
         (written() >= 3).then_some(())
     })
     .await;
-    assert_eq!(written(), 3, "nothing else reached the writer");
+    let before = written();
     let after = minutes(1) + IN_FLIGHT_TTL_MS;
     h.clock.store(after, Ordering::SeqCst);
     // The next tick ages the lost request out against the harness clock; its dropped attempt is the one record
     // left to count, and the fitter has closed the attempt by the time it is counted.
     wait_for_async(Duration::from_secs(5), || async {
-        (written() >= 4).then_some(())
+        (written() > before).then_some(())
     })
     .await;
+    assert_eq!(
+        written(),
+        before + 1,
+        "the jump adds the dropped attempt and nothing else"
+    );
     reading(&h, after + 5 * 60_000, 0.3125).await;
     h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
     h.bus.publish(observed_event("served"));

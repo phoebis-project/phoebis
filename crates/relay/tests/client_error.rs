@@ -75,6 +75,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            count: false,
             request_class: None,
             context_compacted: false,
             static_hash: None,
@@ -229,9 +230,9 @@ async fn a_pin_renewed_by_an_earlier_200_survives_a_later_400() {
     .await;
     let trace = next_trace(&h, "s1").await;
     assert_eq!(
-        (trace.renewed, trace.moved),
-        (true, None),
-        "the pin that served renews in place"
+        (trace.renewed, trace.moved, trace.strategy),
+        (true, None, "priority"),
+        "the pin that served renews in place, under the pool's strategy"
     );
     up.shutdown().await;
 }

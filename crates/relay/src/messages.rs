@@ -1196,6 +1196,7 @@ impl Relay {
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,
+                    count: admitted.trace.kind == Kind::CountTokens,
                     request_class: hints.request_class.clone(),
                     context_compacted: hints.context_compacted.is_some(),
                     static_hash: facts
@@ -2328,6 +2329,7 @@ impl Relay {
                 .or(ctx.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
+            renews: ctx.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
                 ctx.account.lifecycle_generation,

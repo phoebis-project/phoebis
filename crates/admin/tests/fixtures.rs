@@ -249,6 +249,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            count: false,
             request_class: None,
             context_compacted: false,
             static_hash: None,

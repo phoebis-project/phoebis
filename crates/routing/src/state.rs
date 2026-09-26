@@ -634,11 +634,23 @@ impl RoutingState {
     /// a tier but rotate apart, and a cohort whose membership changed is a key of its own that starts at 0. An
     /// account id is a slug, so joining the sorted ids names one cohort and no other; the caller sorts, and an
     /// unsorted cohort would split one rotation into several. In memory, so a restart starts every round again.
-    pub(crate) fn round_robin_next(&mut self, pool_id: &str, tier: Tier, cohort: &[&str]) -> usize {
+    /// Only a placement passes the turn on (`advance`): a held request lands nowhere, so the account it named
+    /// keeps its turn for the placement that follows.
+    pub(crate) fn round_robin_next(
+        &mut self,
+        pool_id: &str,
+        tier: Tier,
+        cohort: &[&str],
+        advance: bool,
+    ) -> usize {
         let key = (pool_id.to_string(), tier, cohort.join(","));
-        let slot = self.round_robin.entry(key).or_insert(0);
-        let index = *slot % cohort.len();
-        *slot = index + 1;
+        let index = self
+            .round_robin
+            .get(&key)
+            .map_or(0, |slot| slot % cohort.len());
+        if advance {
+            self.round_robin.insert(key, index + 1);
+        }
         index
     }
 

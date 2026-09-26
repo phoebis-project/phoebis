@@ -105,6 +105,9 @@ pub(crate) struct Renewal {
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
+    /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
+    /// pin it created still releases that pin.
+    pub renews: bool,
     /// The attempt's (incarnation, lifecycle, credential) generations, which fence a release.
     pub generations: (u64, u64, u64),
 }
@@ -128,6 +131,9 @@ impl Renewal {
                 lifecycle_generation,
                 credential_generation,
             });
+            return;
+        }
+        if !self.renews {
             return;
         }
         self.router.report(Report::PinRenewed {

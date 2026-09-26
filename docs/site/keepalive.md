@@ -74,15 +74,15 @@ collapsed "Probe tuning" group.
 
 A recipe's cache stays warm only for a request that continues the conversation it was built from. The engine
 reads the request's class first: `main`, `subagent`, and `compaction` re-arm the recipe; any other class, a
-title or a summary request among them, leaves the recipe, its schedule, and its credit untouched, and is counted
-under the `auxiliary` reason.
+title or a summary request among them, leaves the recipe, its schedule, and its credit untouched, and shows as
+`last_guard: auxiliary`.
 
 Without a class, the request's own two boundary-hash chains decide. A boundary that holds the recipe's last
 message hash re-arms it, since the request continues the same conversation. The same static prefix, the tools
 array and the system blocks, on the same model, with no continuation restarts the recipe, replacing its cached
-body the way a compaction does. A request matching neither the chain nor the prefix is counted under the
-`foreign` reason, and its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all
-re-arms on every request, the fallback the router's own warmth check applies for a client that sends none.
+body the way a compaction does. A request matching neither the chain nor the prefix shows as `last_guard: foreign`,
+and its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all re-arms on every
+request, the fallback the router's own warmth check applies for a client that sends none.
 
 The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
 foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.

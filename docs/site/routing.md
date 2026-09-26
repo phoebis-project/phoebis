@@ -305,7 +305,8 @@ restarted the conversation and reads cold; one that matches neither changes noth
 `x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the round's
 order on the request that carries the fact. A body the router cannot read refreshes the pin on every request. A
 keepalive probe replays another request's headers and body, so the router judges none of them: a probe never colds a
-session, and its renewal counts as a refresh.
+session, and its renewal counts as a refresh. A `count_tokens` request creates no cache entry, so it neither refreshes
+nor colds the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
 tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a

@@ -68,9 +68,12 @@ pub struct Rig {
     pub h: relay_common::Harness,
     pub ledger: Ledger,
     pub metrics: Arc<Metrics>,
+    /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
+    pub plan: Arc<PlanFactors>,
     pub sequence: u64,
     pub sub: Subscriber,
     pub up: FakeUpstream,
+    pub windows: Arc<PlanWindows>,
 }
 
 pub struct RigSpec {
@@ -165,6 +168,8 @@ pub async fn rig(spec: RigSpec) -> Rig {
         metrics.clone(),
         LedgerConfig::default(),
     );
+    let plan = Arc::new(spec.plan);
+    let windows = Arc::new(spec.windows);
     let engine = Engine::new(EngineParts {
         bus: bus.clone(),
         clock,
@@ -173,13 +178,13 @@ pub async fn rig(spec: RigSpec) -> Rig {
         lifecycle: spec.lifecycle,
         limits: spec.limits,
         metrics: metrics.clone(),
-        plan: Arc::new(spec.plan),
+        plan: plan.clone(),
         pricing,
         relay: h.relay.clone(),
         router: h.router.clone(),
         session_expiry: spec.session_expiry,
         store: h.store.clone(),
-        windows: Arc::new(spec.windows),
+        windows: windows.clone(),
     });
     let mut rig = Rig {
         bus,
@@ -189,9 +194,11 @@ pub async fn rig(spec: RigSpec) -> Rig {
         h,
         ledger,
         metrics,
+        plan,
         sequence: 0,
         sub,
         up,
+        windows,
     };
     rig.event(Event {
         event: "session_start".into(),
@@ -252,13 +259,13 @@ impl Rig {
             lifecycle: None,
             limits: KeepaliveLimits::default(),
             metrics: Arc::new(Metrics::new()),
-            plan: Arc::new(PlanFactors::shipped()),
+            plan: self.plan.clone(),
             pricing: Arc::new(Pricing::new(PriceTable::shipped())),
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
             session_expiry: Duration::from_secs(86_400),
             store: self.h.store.clone(),
-            windows: Arc::new(PlanWindows::shipped()),
+            windows: self.windows.clone(),
         })
     }
 

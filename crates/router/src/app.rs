@@ -654,8 +654,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
 }
 
 /// The routing task's burn prices and peak band: the shipped plan tables for the meter side and `prices` for
-/// dollars. The task keeps what it was given, so a price import confirmed later reaches the burn at the next
-/// start.
+/// dollars. The startup table is only the seed: a price import confirmed later replaces the dollar side in
+/// place.
 fn router_config(prices: &phoebis_ledger::PriceTable) -> phoebis_routing::RouterConfig {
     let windows = Arc::new(phoebis_ledger::PlanWindows::shipped());
     phoebis_routing::RouterConfig {
