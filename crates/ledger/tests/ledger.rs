@@ -1547,8 +1547,8 @@ async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
     up.shutdown().await;
 }
 
-/// The 49-column shape `COLUMNS` held before the class dimension joined it, built by stripping the column this
-/// migration adds out of the live constant so a future dimension needs no matching edit here.
+/// The 49-column shape `rollups_hourly` held before the class dimension joined it, written out by hand since
+/// an integration test cannot reach the crate's private `COLUMNS` constant to strip the new column out of it.
 fn pre_class_columns() -> String {
     "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, \
      requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, \
@@ -1567,7 +1567,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let path = dir.path().join("ledger.sqlite");
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
-        // The three columns this migration adds, each dropped back out so the replay below has to add them
+        // The four columns this migration adds, each dropped back out so the replay below has to add them
         // again; `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column
         // cannot be dropped in place and the rebuild names its own columns regardless of what the source
         // table still carries.
@@ -1727,38 +1727,57 @@ fn an_attempt_keeps_its_selection_trace_with_the_cache_read_folded_in() {
     assert_eq!(selection["cache_read"], 42);
 }
 
+/// The account's rewrite tokens over the whole table, for a test that checks the figure after each write.
+fn rewrite_tokens_of(db: &phoebis_ledger::LedgerDb, account_id: &str) -> u64 {
+    db.read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap()
+        .into_iter()
+        .find(|r| r.account_id == account_id)
+        .map(|r| r.rewrite_tokens)
+        .unwrap_or(0)
+}
+
 #[test]
 fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_the_next_one_does_not(
 ) {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     let moved_trace =
         r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#;
-    db.insert_request(
-        &RequestRecord {
-            id: "r1".into(),
-            received_at: 3_600_000,
-            key_id: Some("k".into()),
-            pool_id: Some("p".into()),
-            canonical_model: "m".into(),
-            kind: "inference".into(),
-            outcome: "succeeded".into(),
-            attempts: 1,
-            ..Default::default()
-        },
-        &[phoebis_ledger::AttemptRecord {
-            request_id: "r1".into(),
-            attempt: 1,
-            account_id: "b".into(),
-            account_kind: "oauth".into(),
-            outcome: "succeeded".into(),
-            cache_write_5m_tokens: Some(100),
-            cache_write_1h_tokens: Some(50),
-            selection: Some(moved_trace.into()),
-            ..Default::default()
-        }],
-        None,
-    )
-    .unwrap();
+    let unmoved_trace =
+        r#"{"strategy":"pace","tier":[0,1,0],"renewed":true,"moved":null,"skipped":[]}"#;
+    let r1 = RequestRecord {
+        id: "r1".into(),
+        received_at: 3_600_000,
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        canonical_model: "m".into(),
+        kind: "inference".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let r1_attempt = phoebis_ledger::AttemptRecord {
+        request_id: "r1".into(),
+        attempt: 1,
+        account_id: "b".into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        cache_write_5m_tokens: Some(100),
+        cache_write_1h_tokens: Some(50),
+        selection: Some(moved_trace.into()),
+        ..Default::default()
+    };
+    db.insert_request(&r1, std::slice::from_ref(&r1_attempt), None)
+        .unwrap();
+    assert_eq!(rewrite_tokens_of(&db, "b"), 150);
+    // A replay of the same request (the writer retries a record it never saw acknowledged) must not double
+    // the booking: the old serving attempt's write comes out before the new one goes back in.
+    db.insert_request(&r1, &[r1_attempt], None).unwrap();
+    assert_eq!(
+        rewrite_tokens_of(&db, "b"),
+        150,
+        "a replace subtracts the old booking before adding the new one"
+    );
     db.insert_request(
         &RequestRecord {
             id: "r2".into(),
@@ -1778,25 +1797,80 @@ fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_t
             account_kind: "oauth".into(),
             outcome: "succeeded".into(),
             cache_write_5m_tokens: Some(30),
+            selection: Some(unmoved_trace.into()),
             ..Default::default()
         }],
         None,
     )
     .unwrap();
-    let rows = db
-        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
-        .unwrap();
-    let row = rows.iter().find(|r| r.account_id == "b").unwrap();
     assert_eq!(
-        row.rewrite_tokens, 150,
-        "only the first request's cache write, the one whose trace named a move, counts as a rewrite"
+        rewrite_tokens_of(&db, "b"),
+        150,
+        "a renewed pin's trace names no move, so its cache write never counts as a rewrite"
+    );
+}
+
+#[test]
+fn a_retried_pass_of_a_moved_leg_books_the_attempt_that_carries_the_usage() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    // Every pass of one leg republishes the same trace; `finish` writes usage onto the serving attempt alone,
+    // so the first pass here carries the move but nothing to book, and the second carries both.
+    let moved_trace =
+        r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: 3_600_000,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            outcome: "succeeded".into(),
+            attempts: 2,
+            ..Default::default()
+        },
+        &[
+            phoebis_ledger::AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 1,
+                account_id: "b".into(),
+                account_kind: "oauth".into(),
+                outcome: "transport_error".into(),
+                started_at: 3_600_000,
+                selection: Some(moved_trace.into()),
+                ..Default::default()
+            },
+            phoebis_ledger::AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 2,
+                account_id: "b".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                started_at: 3_600_010,
+                cache_write_5m_tokens: Some(100),
+                cache_write_1h_tokens: Some(50),
+                selection: Some(moved_trace.into()),
+                ..Default::default()
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        rewrite_tokens_of(&db, "b"),
+        150,
+        "the retried pass shares the earlier attempt's trace, but only the serving attempt has usage to book"
     );
 }
 
 #[test]
 fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_tokens_under_cooldown() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    let moved_trace =
+    // A double move: the first attempt's own trace already names one (it is where an earlier shed landed),
+    // and its cache write must never be the one booked once a second move, the fail-over to B, follows it.
+    let shed_trace =
+        r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#;
+    let cooldown_trace =
         r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"cooldown","skipped":[]}"#;
     db.insert_request(
         &RequestRecord {
@@ -1818,6 +1892,8 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
                 account_kind: "oauth".into(),
                 outcome: "rate_limited".into(),
                 started_at: 3_600_000,
+                cache_write_5m_tokens: Some(999),
+                selection: Some(shed_trace.into()),
                 ..Default::default()
             },
             phoebis_ledger::AttemptRecord {
@@ -1828,7 +1904,7 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
                 outcome: "succeeded".into(),
                 started_at: 3_600_050,
                 cache_write_5m_tokens: Some(80),
-                selection: Some(moved_trace.into()),
+                selection: Some(cooldown_trace.into()),
                 ..Default::default()
             },
         ],
@@ -1857,4 +1933,9 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
     let row = rows.iter().find(|r| r.account_id == "b").unwrap();
     assert_eq!(row.rewrite_tokens, 80);
     assert_eq!(row.migrations.get("cooldown"), Some(&1));
+    assert_eq!(
+        rewrite_tokens_of(&db, "a"),
+        0,
+        "the double move books only the serving leg's write; the earlier account gets nothing"
+    );
 }

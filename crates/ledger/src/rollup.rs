@@ -506,17 +506,22 @@ pub fn fold_request(
             )?;
         }
     }
-    // The first attempt whose trace names a move is the one whose selection landed on this account; a
-    // fail-over recovers the reason from the invalidation table the same way a shed does, so both book their
-    // cache write as a rewrite. Later attempts on the same request never repeat the booking.
-    if let Some(a) = attempts.iter().find(|a| moved(a)) {
+    // `finish` writes usage onto the serving attempt alone, so that is the one attempt a trace naming a move
+    // can ever have anything to book: an earlier pass of the same leg (a retry in place, a strip retry, a 401
+    // replay) republishes the same trace with no usage yet, and an earlier leg's own attempt carries its own
+    // trace regardless of this one's.
+    if let Some((_, old_attempts)) = previous {
+        if let Some((a, tokens)) = serving_rewrite(old_attempts) {
+            unfold_rewrite(tx, hour_of(a.started_at), &a.account_id, tokens)?;
+        }
+    }
+    if let Some((a, tokens)) = serving_rewrite(attempts) {
         fold_account(
             tx,
             &AccountRollupRow {
                 hour: hour_of(a.started_at),
                 account_id: a.account_id.clone(),
-                rewrite_tokens: a.cache_write_5m_tokens.unwrap_or(0)
-                    + a.cache_write_1h_tokens.unwrap_or(0),
+                rewrite_tokens: tokens,
                 ..Default::default()
             },
         )?;
@@ -549,6 +554,18 @@ fn moved(a: &AttemptRecord) -> bool {
         .as_deref()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .is_some_and(|v| !v["moved"].is_null())
+}
+
+/// The serving attempt (the last one; `finish` writes usage there and nowhere else) and its cache-write
+/// tokens, when its own trace names a move and it wrote anything; `None` otherwise, so a moved leg with
+/// nothing yet booked, or one whose write already left, books nothing.
+fn serving_rewrite(attempts: &[AttemptRecord]) -> Option<(&AttemptRecord, u64)> {
+    let a = attempts.last()?;
+    if !moved(a) {
+        return None;
+    }
+    let tokens = a.cache_write_5m_tokens.unwrap_or(0) + a.cache_write_1h_tokens.unwrap_or(0);
+    (tokens > 0).then_some((a, tokens))
 }
 
 /// One hour and account's utilization maxima, taken again from the raw attempts and written back over the
@@ -778,6 +795,18 @@ fn unfold_cooldown(
 ) -> Result<(), LedgerError> {
     let mut row = account_row(tx, hour, account_id)?;
     row.cooldown_seconds = row.cooldown_seconds.saturating_sub(seconds);
+    write_account(tx, &row)
+}
+
+/// Takes back a replaced request's rewrite booking, so a replay of the same request never doubles it.
+fn unfold_rewrite(
+    tx: &Transaction<'_>,
+    hour: i64,
+    account_id: &str,
+    tokens: u64,
+) -> Result<(), LedgerError> {
+    let mut row = account_row(tx, hour, account_id)?;
+    row.rewrite_tokens = row.rewrite_tokens.saturating_sub(tokens);
     write_account(tx, &row)
 }
 

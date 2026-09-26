@@ -6,8 +6,10 @@ use phoebis_ledger::{
     apply_filter, breakdown, bucket_index, burn_series, delta_of, fold_account, fold_event,
     fold_keepalive, key_request_totals, moves_by_reason, read_account_rollups, read_rollups,
     rewrite_series, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerDb, LiveKeys,
-    PlanFactors, PlanWindows, RequestRecord, RollupFilter, RollupRow, SeriesFilter, UNATTRIBUTED,
+    PlanFactors, PlanWindows, RequestRecord, RollupFilter, RollupRow, SeriesFilter, NO_CLASS,
+    UNATTRIBUTED,
 };
+use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
 use rand::{RngExt, SeedableRng};
 
@@ -544,6 +546,35 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
     assert!(group.savings.gross_usd > 0.0);
 }
 
+#[test]
+fn a_keepalive_credits_row_files_under_the_reserved_class() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                at: 1_000,
+                key_id: "desktop".into(),
+                pool_id: "main".into(),
+                account_id: "a".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                kept_warm_requests: 1,
+                kept_warm_tokens: 2_000,
+                saved_usd_gross: 0.0036,
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].request_class, NO_CLASS);
+}
+
 /// One request the replace path rewrites, always under the same id.
 fn replaced(id: &str) -> RequestRecord {
     RequestRecord {
@@ -688,7 +719,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
     let groups = breakdown(&filtered, "request_class", false, &live, &[]);
     let keys: Vec<&str> = groups.iter().map(|g| g.key.as_str()).collect();
     assert!(
-        keys.contains(&"main") && keys.contains(&"compaction") && keys.contains(&UNATTRIBUTED),
+        keys.contains(&"main") && keys.contains(&"compaction") && keys.contains(&NO_CLASS),
         "the named classes and the classless overhead land in their own groups: {keys:?}"
     );
 }
@@ -696,7 +727,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
 #[test]
 fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_in_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let plant = |id: &str, account: &str, kind: &str, usd: Option<f64>| {
+    let plant = |id: &str, account: &str, kind: &str, usd: f64| {
         db.insert_request(
             &RequestRecord {
                 id: id.into(),
@@ -719,15 +750,19 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000),
                 output_tokens: Some(100),
-                estimated_usd: usd,
+                estimated_usd: Some(usd),
                 ..Default::default()
             }],
             None,
         )
         .unwrap();
     };
-    plant("sub", "oauth-a", "oauth", None);
-    plant("key", "api-b", "api_key", Some(1.25));
+    // Both rows carry a nonzero `estimated_usd`, so a burn that priced every row both ways instead of by kind
+    // would still pass the dollar assertion; only pricing by kind can pass both.
+    plant("sub", "oauth-a", "oauth", 9.99);
+    plant("key", "api-b", "api_key", 1.25);
+    // Absent from `kinds` below: its tokens must reach neither total.
+    plant("unknown", "unknown-c", "oauth", 4.0);
     let factors = PlanFactors::shipped();
     let windows = PlanWindows::shipped();
     let kinds = HashMap::from([
@@ -746,14 +781,25 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
     let point = points
         .iter()
         .find(|p| p.meter_tokens > 0.0 || p.usd > 0.0)
-        .expect("the bucket both rows landed in");
+        .expect("the bucket every tracked row landed in");
+    let hour = phoebis_ledger::hour_of(3_600_000);
+    let expected_meter = factors
+        .meter_tokens("claude-sonnet-5", 1_000, 0, 0, 0, 100)
+        .unwrap()
+        * windows.band_factor(FIVE_HOUR, hour * 1_000);
     assert!(
-        point.meter_tokens > 0.0,
-        "the subscription row prices in meter tokens"
+        (point.meter_tokens - expected_meter).abs() < 1e-9,
+        "the subscription row alone prices in meter tokens: {} vs {expected_meter}",
+        point.meter_tokens
     );
     assert!(
         (point.usd - 1.25).abs() < 1e-9,
-        "the api-key row prices in dollars from estimated_usd"
+        "the api-key row alone prices in dollars from estimated_usd"
+    );
+    assert_eq!(
+        (point.cached_tokens, point.uncached_tokens),
+        (0, 2_000),
+        "the row absent from kinds contributes to neither total"
     );
 }
 
@@ -803,17 +849,43 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         .unwrap();
     let peak = points
         .iter()
-        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_PEAK))
+        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_PEAK) * 1_000)
         .unwrap();
     let off_peak = points
         .iter()
-        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK))
+        .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000)
         .unwrap();
+    assert!(
+        off_peak.meter_tokens > 0.0,
+        "the off-peak row still prices, unweighed"
+    );
     assert!(
         (peak.meter_tokens - off_peak.meter_tokens * 1.45).abs() < 1e-6,
         "the peak hour weighs the same tokens 1.45 times the off-peak hour: {} vs {}",
         peak.meter_tokens,
         off_peak.meter_tokens
+    );
+    // A daily bucket holds both rows; each still reads its own hour's band rather than the bucket's midnight
+    // start, or the peak row would lose its weight entirely once the bucket outgrows the hour.
+    let daily_filter = SeriesFilter {
+        bucket_seconds: 86_400,
+        ..filter.clone()
+    };
+    let daily_points = db
+        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &daily_filter))
+        .unwrap();
+    let day = daily_points
+        .iter()
+        .find(|p| p.meter_tokens > 0.0)
+        .expect("the day both rows landed in");
+    let base = factors
+        .meter_tokens("claude-sonnet-5", 1_000, 0, 0, 0, 100)
+        .unwrap();
+    assert!(
+        (day.meter_tokens - (base * 1.45 + base)).abs() < 1e-6,
+        "the peak row weighs 1.45 and the off-peak row 1.0 in the one daily bucket they share: {} vs {}",
+        day.meter_tokens,
+        base * 1.45 + base
     );
 }
 
@@ -855,4 +927,67 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
     assert_eq!(series.iter().map(|(_, n)| n).sum::<u64>(), 40);
     let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
     assert_eq!(moves.get("shed"), Some(&1));
+}
+
+#[test]
+fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_all() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_event(
+            &tx,
+            &EventRecord {
+                at: 3_600_000,
+                kind: "pin_migrated".into(),
+                account_id: Some("a".into()),
+                detail: Some(r#"{"reason":"future_reason"}"#.into()),
+                ..Default::default()
+            },
+        )?;
+        fold_event(
+            &tx,
+            &EventRecord {
+                at: 3_600_100,
+                kind: "pin_migrated".into(),
+                account_id: Some("b".into()),
+                detail: Some("{}".into()),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
+    assert_eq!(
+        moves.get("future_reason"),
+        Some(&1),
+        "a reason no code names reads back as itself"
+    );
+    assert_eq!(
+        moves.get("unknown"),
+        Some(&1),
+        "no reason at all falls back to unknown"
+    );
+}
+
+#[test]
+fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // `SeriesFilter::default()` carries `bucket_seconds: 0`; the guard has to run before the division that
+    // would otherwise panic on it.
+    let filter = SeriesFilter::default();
+    assert!(db.read_blocking(|c| moves_by_reason(c, &filter)).is_err());
+    assert!(db.read_blocking(|c| rewrite_series(c, &filter)).is_err());
+    let factors = PlanFactors::shipped();
+    let windows = PlanWindows::shipped();
+    assert!(db
+        .read_blocking(|c| burn_series(c, &factors, &windows, &HashMap::new(), &filter))
+        .is_err());
 }

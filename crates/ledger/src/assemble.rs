@@ -506,10 +506,14 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             last.web_fetch_requests = usage.web_fetch_requests;
             // The trace crossed the bus at selection, before the response reported what it cached; folded in
             // here so the request drawer reads one object rather than joining the attempt's own token column.
+            // `as_object_mut` rather than indexing: the relay always serializes an object, but a stored trace
+            // that somehow did not must not panic the ledger task over one field it cannot add.
             if let (Some(read), Some(trace)) = (usage.cache_read_tokens, &last.selection) {
                 if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
-                    value["cache_read"] = json!(read);
-                    last.selection = Some(value.to_string());
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("cache_read".into(), json!(read));
+                        last.selection = Some(value.to_string());
+                    }
                 }
             }
         }

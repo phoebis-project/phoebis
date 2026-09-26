@@ -145,6 +145,10 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
         ),
         (1, "a", "oauth")
     );
+    assert!(
+        selected.selection.is_some(),
+        "a real request's own placement carries a trace"
+    );
     let Event::ResponseHead(head) = &events[2] else {
         panic!()
     };
@@ -1192,6 +1196,13 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
             phoebis_bus::Kind::Probe,
             Some("desktop")
         )
+    );
+    let Event::AccountSelected(selected) = &events[1] else {
+        panic!("{events:?}")
+    };
+    assert!(
+        selected.selection.is_none(),
+        "a probe replays a recipe rather than making its own placement"
     );
     let sent = up.requests();
     assert_eq!(sent.len(), 1);

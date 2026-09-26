@@ -1164,6 +1164,13 @@ pub struct SeriesFilter {
 
 /// The bucket edges a `SeriesFilter` reads over, and the `MAX_POINTS` guard every series function shares.
 fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
+    // Checked before the division below it: `SeriesFilter::default()` carries `bucket_seconds: 0`, and
+    // `div_euclid` panics on that rather than answering a range the guard below could still refuse.
+    if filter.bucket_seconds <= 0 {
+        return Err(LedgerError::Yaml(
+            "bucket_seconds must be positive".to_string(),
+        ));
+    }
     let first = (filter.from / 1_000).div_euclid(filter.bucket_seconds) * filter.bucket_seconds;
     let last = hour_ceil(filter.to);
     let count = (last - first)
@@ -1180,6 +1187,7 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
 /// One point of the burn series: the row's tokens as meter tokens (a subscription account) and dollars.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct BurnPoint {
+    /// Milliseconds, like every other series' `at`.
     pub at: i64,
     pub meter_tokens: f64,
     pub usd: f64,
@@ -1187,9 +1195,11 @@ pub struct BurnPoint {
     pub uncached_tokens: u64,
 }
 
-/// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, bucket_at)`, the weight the fitted
-/// scale they are later divided by was built with. An api_key row prices in `estimated_usd` instead; a row
-/// whose account is not in `kinds` carries no price the caller could attribute, so it is left out entirely.
+/// A subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the weight the
+/// fitted scale they are later divided by was built with; read per row rather than per bucket, since a
+/// six-hour or daily bucket spans more than one band edge and only the row's own hour says which side of an
+/// edge it fell on. An api_key row prices in `estimated_usd` instead; a row whose account is not in `kinds`
+/// carries no price the caller could attribute, so it is left out entirely.
 pub fn burn_series(
     conn: &Connection,
     factors: &PlanFactors,
@@ -1210,7 +1220,7 @@ pub fn burn_series(
     let mut at = first;
     while at < last {
         let mut point = BurnPoint {
-            at,
+            at: at * 1_000,
             ..BurnPoint::default()
         };
         for row in rows
@@ -1227,7 +1237,8 @@ pub fn burn_series(
                         row.cache_write_1h_tokens,
                         row.output_tokens,
                     ) {
-                        point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, at * 1_000);
+                        point.meter_tokens +=
+                            tokens * windows.band_factor(FIVE_HOUR, row.hour * 1_000);
                     }
                 }
                 Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
@@ -1242,7 +1253,8 @@ pub fn burn_series(
     Ok(points)
 }
 
-/// The cache-write tokens the account rollups booked as a rewrite, per bucket.
+/// The cache-write tokens the account rollups booked as a rewrite, per bucket; the bucket's `at` is
+/// milliseconds, like `BurnPoint.at`.
 pub fn rewrite_series(
     conn: &Connection,
     filter: &SeriesFilter,
@@ -1258,7 +1270,7 @@ pub fn rewrite_series(
             .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
             .map(|r| r.rewrite_tokens)
             .sum();
-        points.push((at, sum));
+        points.push((at * 1_000, sum));
         at += filter.bucket_seconds;
     }
     Ok(points)

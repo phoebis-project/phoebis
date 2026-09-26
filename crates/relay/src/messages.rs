@@ -419,7 +419,7 @@ impl Trace {
             pin_epoch,
             started_at,
             cache_ttl_ms,
-            selection: trace.map(|t| serde_json::to_string(t).unwrap_or_default()),
+            selection: trace.and_then(|t| serde_json::to_string(t).ok()),
         }))
         .await;
     }
