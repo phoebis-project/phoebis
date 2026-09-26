@@ -4,7 +4,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow};
 use common::*;
 use fake_upstream::Respond;
@@ -1114,5 +1114,390 @@ async fn an_aggregate_only_cache_write_reaches_the_cap() {
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::CapReached),
         "one aggregate-only write spent the day's cap"
+    );
+}
+
+/// Waits for the router to have applied a report this test just sent it.
+async fn settled<'a, F, Fut>(r: &'a Rig, check: F)
+where
+    F: Fn(&'a Rig) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !check(r).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the router never applied the report"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
+
+fn subscription_spec() -> RigSpec {
+    RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
+        limits: KeepaliveLimits {
+            oauth_prewarm_verified: true,
+            ..KeepaliveLimits::default()
+        },
+        pool: PoolSpec {
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    }
+}
+
+/// A title or a summary reads the cache but never re-armed the recipe, so it earns nothing; the next request
+/// that continues the conversation reads the same cache and earns the credit the auxiliary one could not.
+#[tokio::test]
+async fn the_credit_follows_only_a_re_arming_request() {
+    let mut r = rig(RigSpec::default()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one covering probe");
+    r.advance(60_000);
+    let before = r.status("main").net_usd;
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let mut auxiliary = r.request_with("main", &body);
+    relay_common::set_header(&mut auxiliary, "x-claude-code-request-class", "title");
+    let resp = r.h.app.clone().oneshot(auxiliary).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let aux_id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&aux_id)).await;
+    assert_eq!(
+        r.status("main").net_usd,
+        before,
+        "an auxiliary request never re-armed, so it earns nothing"
+    );
+    assert!(!row(&r, &aux_id).await.kept_warm);
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let credited = r.observe_with("main", &body).await;
+    assert!(
+        r.status("main").net_usd > before,
+        "the next continuing request earns the credit the auxiliary one left behind"
+    );
+    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &credited).await.kept_warm);
+}
+
+/// A subscription account's probes and credits are a proxy for quota, priced in meter tokens; an api_key
+/// account's stay in dollars, as before.
+#[tokio::test]
+async fn a_subscription_accounts_net_is_in_meter_tokens_and_an_api_key_accounts_in_dollars() {
+    let mut r = rig(subscription_spec()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let after_probe = r.status("main");
+    assert_eq!(
+        after_probe.net_usd, 0.0,
+        "a plan-funded probe costs no dollars"
+    );
+    assert!(after_probe.net_meter_tokens < 0.0, "{after_probe:?}");
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    let credited = r.observe_with("main", &body).await;
+    let after_credit = r.status("main");
+    assert!(
+        after_credit.net_meter_tokens > after_probe.net_meter_tokens,
+        "{after_credit:?}"
+    );
+    assert_eq!(after_credit.net_usd, 0.0);
+    assert!(row(&r, &credited).await.kept_warm);
+
+    let mut r = rig(RigSpec::default()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert!(status.net_usd < 0.0, "{status:?}");
+    assert_eq!(
+        status.net_meter_tokens, 0.0,
+        "an api_key account never touches the meter balance"
+    );
+}
+
+/// A subscription agent's two balances move independently of each other, and the stop always judges the
+/// balance the next probe would actually be charged against.
+#[tokio::test]
+async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balances_and_the_stop_reads_the_next_probes_unit(
+) {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            net_negative_grace_probes: 0,
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    let body = priced_body();
+    // Leg 1: on plan, the probe's cost and the next request's credit both land in meter tokens.
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    let after_plan_probe = r.status("main");
+    assert!(
+        after_plan_probe.net_meter_tokens < 0.0,
+        "{after_plan_probe:?}"
+    );
+    assert_eq!(after_plan_probe.net_usd, 0.0);
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    r.observe_with("main", &body).await;
+    let after_plan_credit = r.status("main");
+    assert!(
+        after_plan_credit.net_meter_tokens > after_plan_probe.net_meter_tokens,
+        "{after_plan_credit:?}"
+    );
+    assert_eq!(after_plan_credit.net_usd, 0.0);
+    let meter_balance = after_plan_credit.net_meter_tokens;
+
+    // Leg 2: the account enters overage; the next probe and credit land in dollars, the meter balance stands.
+    r.enter_overage("o", r.now() + 10_000_000);
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use && e.reset.unwrap() > r.now())
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.advance(270_000);
+    r.step().await;
+    let after_overage_probe = r.status("main");
+    assert!(after_overage_probe.net_usd < 0.0, "{after_overage_probe:?}");
+    assert_eq!(after_overage_probe.net_meter_tokens, meter_balance);
+    // With no grace, the very next due tick holds under the dollar balance alone: a positive meter balance
+    // never masks it, since the account is in overage and the stop reads the unit the next probe would be
+    // charged in.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::NetNegative,
+        "{:?}",
+        r.status("main")
+    );
+    assert_eq!(
+        r.status("main").net_meter_tokens,
+        meter_balance,
+        "still positive relative to where it started, and untouched by the dollar-side stop"
+    );
+
+    // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in meter tokens.
+    r.leave_overage("o");
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.reset.unwrap() < r.now())
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::Scheduled,
+        "the reset passing lifts the dollar-side stop"
+    );
+    r.advance(270_000);
+    r.step().await;
+    let after_return = r.status("main");
+    assert!(
+        after_return.net_meter_tokens < meter_balance,
+        "the next probe's cost landed in meter tokens again: {after_return:?}"
+    );
+}
+
+/// The funding a probe settles under is the one its own serving attempt captured, whatever the router's
+/// evidence says by the time the result is processed.
+#[tokio::test]
+async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
+    // Dispatched on plan; overage evidence lands before the gated response is released: still meter tokens.
+    let mut r = rig(subscription_spec()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(
+        OAUTH_SECRET,
+        "/v1/messages",
+        Respond::Gated(Box::new(cold_answer())),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.enter_overage("o", r.now() + 10_000_000);
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let status = r.status("main");
+    assert!(
+        status.net_meter_tokens < 0.0 && status.net_usd == 0.0,
+        "dispatched before the flip, so it settles in the unit it was dispatched under: {status:?}"
+    );
+
+    // The reverse: dispatched in overage; the reset passes before the gated response is released.
+    let mut r = rig(subscription_spec()).await;
+    r.enter_overage("o", r.now() + 10_000_000);
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(
+        OAUTH_SECRET,
+        "/v1/messages",
+        Respond::Gated(Box::new(cold_answer())),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.leave_overage("o");
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.reset.unwrap() < r.now())
+    })
+    .await;
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let status = r.status("main");
+    assert!(
+        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
+        "dispatched in overage, so it settles in dollars whatever the reset does meanwhile: {status:?}"
+    );
+}
+
+/// The plan-side cap counts a subscription account's probe meter tokens against the share of its 5-hour window,
+/// band-weighted at each probe's own time.
+#[tokio::test]
+async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_counts_more() {
+    let windows = phoebis_ledger::PlanWindows::shipped();
+    let hour_ms = 3_600_000i64;
+    let week: Vec<i64> = (0..7 * 24).map(|h| NOW + h as i64 * hour_ms).collect();
+    let in_band = *week
+        .iter()
+        .find(|&&at| windows.band_factor("five_hour", at) > 1.0)
+        .expect("the shipped table names a peak band");
+    let out_of_band = *week
+        .iter()
+        .find(|&&at| windows.band_factor("five_hour", at) == 1.0)
+        .expect("the shipped table leaves most hours at par");
+
+    // A probe outside the band, for the baseline the in-band probe below is compared against.
+    let mut r = rig(subscription_spec()).await;
+    r.clock
+        .store(out_of_band, std::sync::atomic::Ordering::SeqCst);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    let outside = r
+        .engine
+        .meter_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(outside > 0.0);
+
+    // The same probe inside the band counts more, by exactly the band's factor.
+    let mut r = rig(subscription_spec()).await;
+    r.clock.store(in_band, std::sync::atomic::Ordering::SeqCst);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    let inside = r
+        .engine
+        .meter_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    let factor = windows.band_factor("five_hour", in_band);
+    assert!(
+        (inside - outside * factor).abs() < 1e-6,
+        "{inside} against {outside} times {factor}"
+    );
+
+    // The cap stops probes for the day once the share is spent.
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.5),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    r.clock
+        .store(out_of_band, std::sync::atomic::Ordering::SeqCst);
+    r.h.router.report(phoebis_routing::Report::Fit {
+        row: phoebis_store::FitRow {
+            account_id: "o".into(),
+            window: "five_hour".into(),
+            scale: outside * 1.5,
+            confidence: 1.0,
+            intervals: 1,
+            corrections_json: "{}".into(),
+            fitted_at: r.now(),
+            incarnation: 1,
+            ..Default::default()
+        },
+        incarnation: 1,
+    });
+    settled(&r, |r| async move {
+        !r.h.router.fits().await.unwrap().is_empty()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the first probe alone spends past half the fitted window"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::CapReached)
     );
 }

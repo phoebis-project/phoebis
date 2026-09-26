@@ -140,6 +140,14 @@ pub struct RelayOutcome {
     pub cache_ttl_ms: Option<i64>,
 }
 
+/// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
+/// The keepalive's probe path is the one reader today: a probe's cost and the credit it later earns price
+/// through the funding its own serving attempt had, which can only be read off the selection that dispatched it.
+#[derive(Clone, Copy, Debug)]
+pub struct ServedUnder {
+    pub in_overage: bool,
+}
+
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
 /// engine never holds a key's secret (the store keeps a digest), so a probe authenticates by id; the extension
 /// can only be set in process, so the by-id path is not reachable from the socket. `allow_oauth` is the
@@ -1283,7 +1291,14 @@ impl Relay {
                 .await
             {
                 Leg::FailOver => continue,
-                Leg::Respond(response) => return response,
+                Leg::Respond(mut response) => {
+                    // Every kind rides this, not the probe path alone: the keepalive's is the only reader
+                    // today, but a request's own funding is a fact of its selection, not of who asked for it.
+                    response.extensions_mut().insert(ServedUnder {
+                        in_overage: selection.in_overage,
+                    });
+                    return response;
+                }
             }
         }
     }

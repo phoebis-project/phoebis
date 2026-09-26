@@ -9,12 +9,13 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
-use phoebis_ledger::PriceTable;
-use phoebis_relay::RelayOutcome;
+use phoebis_ledger::{PlanFactors, PriceTable};
+use phoebis_relay::{RelayOutcome, ServedUnder};
+use phoebis_store::AccountKind;
 use http_body_util::BodyExt;
 use serde_json::Value;
 
-use crate::engine::{Engine, Inner, Reason, SessionKey, Wasted};
+use crate::engine::{Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
 use crate::recipe::Recipe;
 use crate::savings::probe_cost;
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
@@ -43,14 +44,18 @@ pub(crate) struct ProbeJob {
 pub(crate) struct ProbeResult {
     pub status: u16,
     pub account: Option<String>,
-    /// The relay's own code for an answer it built itself, `accounts_exhausted` and `accounts_unavailable`
-    /// among them; `None` for an upstream answer forwarded as it came.
+    /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
+    /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
     pub error_code: Option<String>,
     /// `None` when the read crossed the usage bound or failed: nothing past it is a usage block.
     pub body: Option<Bytes>,
     /// The TTL the relay dispatched the probe's body with, off `RelayOutcome::cache_ttl_ms`; `None` when the
     /// body went as sent.
     pub cache_ttl_ms: Option<i64>,
+    /// The account's overage state at the selection the probe dispatched under, off `ServedUnder`.
+    pub in_overage: bool,
+    /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
+    pub retry_after_secs: Option<u64>,
 }
 
 pub(crate) enum Exchange {
@@ -97,6 +102,9 @@ pub struct ProbeRecord {
     pub cost_usd: f64,
     pub key: SessionKey,
     pub key_generation: i64,
+    /// The serving account's kind, looked up by `account` after the response; `None` when the account left the
+    /// registry between dispatch and landing.
+    pub kind: Option<AccountKind>,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
@@ -156,6 +164,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             error_code: None,
             body: None,
             cache_ttl_ms: None,
+            in_overage: false,
+            retry_after_secs: None,
         }),
         Ok(request) => {
             let relay = engine.parts.relay.clone();
@@ -168,6 +178,12 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 let response = relay.probe(marker, request).await;
                 let status = response.status().as_u16();
                 let outcome = response.extensions().get::<RelayOutcome>().cloned();
+                let served_under = response.extensions().get::<ServedUnder>().copied();
+                let retry_after_secs = response
+                    .headers()
+                    .get(header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
                 let body = read_bounded(response.into_body()).await;
                 ProbeResult {
                     status,
@@ -178,6 +194,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     error_code: outcome.as_ref().and_then(|o| o.error_code.clone()),
                     body,
                     cache_ttl_ms: outcome.as_ref().and_then(|o| o.cache_ttl_ms),
+                    in_overage: served_under.is_some_and(|s| s.in_overage),
+                    retry_after_secs,
                 }
             };
             // The whole exchange, the head and the body, sits in one arm: a cancellation or the deadline ends
@@ -191,9 +209,15 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     };
     let now = engine.now();
     let table = engine.parts.pricing.current();
+    let plan = engine.parts.plan.clone();
+    // The serving account's kind decides the unit this probe's cost and any later credit settle in; read from
+    // the snapshot taken here, after the response, so a registry write mid-exchange never changes which account
+    // this probe is charged against.
+    let snapshot = engine.parts.router.snapshot();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let record = inner.probe_record(&job, &exchange, &table);
+        let mut record = inner.probe_record(&job, &exchange, &table, &plan);
+        record.kind = snapshot.account(&record.account).map(|a| a.kind);
         inner.roll_day(now);
         if record.outcome != ProbeOutcome::Migrated {
             *inner
@@ -201,7 +225,25 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 .entry(record.pool_id.clone())
                 .or_insert(0.0) += record.cost_usd;
         }
-        let applied = inner.apply_probe(&job, exchange, &record, now);
+        // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
+        // request either, so its probe settles in dollars like today and the credit path never matches it.
+        let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
+        let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
+        let unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
+        let cost_in_unit = if record.outcome != ProbeOutcome::Migrated {
+            probe_cost(unit, &table, &plan, &record.canonical_model, record.usage)
+                .unwrap_or(record.cost_usd)
+        } else {
+            0.0
+        };
+        if funding == Some(Funding::Plan) && record.outcome != ProbeOutcome::Migrated {
+            let weighted = cost_in_unit * engine.parts.windows.band_factor("five_hour", now);
+            *inner
+                .meter_spent_today
+                .entry(record.account.clone())
+                .or_insert(0.0) += weighted;
+        }
+        let applied = inner.apply_probe(&job, exchange, &record, funding, cost_in_unit, now);
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
@@ -225,6 +267,7 @@ impl Inner {
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
+        plan: &PlanFactors,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
@@ -233,6 +276,7 @@ impl Inner {
             cost_usd: 0.0,
             key: job.key.clone(),
             key_generation: job.key_generation,
+            kind: None,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -257,7 +301,12 @@ impl Inner {
         }
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
-            record.cost_usd = probe_cost(table, &job.canonical_model, usage).unwrap_or(0.0);
+            // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
+            // through the price table; the funding-unit cost the agent's own net deducts is a second figure
+            // computed once the serving account's kind is known, back in `run_job`.
+            record.cost_usd =
+                probe_cost(SavingsUnit::Usd, table, plan, &job.canonical_model, usage)
+                    .unwrap_or(0.0);
         }
         if result
             .account
@@ -278,6 +327,8 @@ impl Inner {
         job: &ProbeJob,
         exchange: Exchange,
         record: &ProbeRecord,
+        funding: Option<Funding>,
+        cost_in_unit: f64,
         now: i64,
     ) -> Applied {
         let key = &job.key;
@@ -351,14 +402,22 @@ impl Inner {
         let cold_limit = agent.policy.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
-                self.probe_error(key, agent_id, 0, false, now);
+                self.probe_error(key, agent_id, 0, None, None, false, now);
                 return Applied::Landed { covered: false };
             }
             Exchange::Answered(result) => result,
         };
         if record.outcome != ProbeOutcome::Ok && record.outcome != ProbeOutcome::Migrated {
             let exhausted = record.outcome == ProbeOutcome::Exhausted;
-            self.probe_error(key, agent_id, result.status, exhausted, now);
+            self.probe_error(
+                key,
+                agent_id,
+                result.status,
+                result.error_code.as_deref(),
+                result.retry_after_secs,
+                exhausted,
+                now,
+            );
             return Applied::Landed { covered: false };
         }
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
@@ -378,13 +437,14 @@ impl Inner {
             .unanswered
             .push(if migrated { 0.0 } else { record.cost_usd });
         if !migrated {
-            let was_negative = agent.net_usd < 0.0;
-            agent.net_usd -= record.cost_usd;
+            let unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
+            let was_negative = agent.net.in_unit(unit) < 0.0;
+            agent.net.add(unit, -cost_in_unit);
             // The grace budget is granted on the way into a negative net, so the first paid probe leaves the
             // configured allowance; each further paid probe while negative spends one.
-            if agent.net_usd < 0.0 && !was_negative {
+            if agent.net.in_unit(unit) < 0.0 && !was_negative {
                 agent.grace_left = agent.policy.net_negative_grace_probes;
-            } else if agent.net_usd < 0.0 && agent.grace_left > 0 {
+            } else if agent.net.in_unit(unit) < 0.0 && agent.grace_left > 0 {
                 agent.grace_left -= 1;
             }
         }
@@ -458,7 +518,7 @@ impl Inner {
             return Applied::Landed { covered: false };
         }
         if usage.evidence() == 0 {
-            self.retry(key, agent_id, Reason::NoProbeCacheEvidence, now);
+            self.retry(key, agent_id, Reason::NoProbeCacheEvidence, now, None);
             return Applied::Landed { covered: false };
         }
         // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
@@ -487,6 +547,7 @@ impl Inner {
         if covered {
             agent.covered_since_real = true;
             agent.covered_account = Some(record.account.clone());
+            agent.covered_funding = funding;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
@@ -494,7 +555,7 @@ impl Inner {
             .due_at()
             .is_some_and(|due| due <= now)
         {
-            self.retry(key, agent_id, Reason::SlowProbe, now);
+            self.retry(key, agent_id, Reason::SlowProbe, now, None);
         }
         Applied::Landed { covered }
     }
@@ -510,22 +571,31 @@ impl Inner {
     }
 
     /// The Go `probeErrorLocked`, read from the answer the relay gave: a 429 after failover, or the exhaustion
-    /// 429 the relay answers when every account is cooled, is the quota pause; the untimed exhaustion 503, when
-    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
-    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
-    /// (status 0) is a transport error.
+    /// 429 the relay answers when every account is cooled, is the quota pause; a pool at its in-flight cap
+    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
+    /// next real request would; the untimed exhaustion 503, when every account of the pool was unusable at
+    /// selection, pauses under its own reason; a 5xx forwarded from upstream retries; any other 4xx is a shape
+    /// the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a transport error.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,
         agent_id: &str,
         status: u16,
+        error_code: Option<&str>,
+        retry_after_secs: Option<u64>,
         exhausted: bool,
         now: i64,
     ) {
+        if status == 429 && error_code == Some("accounts_at_cap") {
+            let delay_ms = retry_after_secs.map(|secs| (secs * 1_000) as i64);
+            self.retry(key, agent_id, Reason::ProbeQuotaExhausted, now, delay_ms);
+            return;
+        }
         let reason = match status {
             429 => Reason::ProbeQuotaExhausted,
             _ if exhausted => Reason::ProbePoolExhausted,
-            500..=599 => return self.retry(key, agent_id, Reason::RetryableProbeError, now),
+            500..=599 => return self.retry(key, agent_id, Reason::RetryableProbeError, now, None),
             401 | 403 => Reason::ProbeAuthenticationError,
             400..=499 => Reason::UnsupportedProbe,
             _ => Reason::ProbeTransportError,
@@ -534,9 +604,17 @@ impl Inner {
         self.pause(key, agent_id);
     }
 
-    /// Exponential backoff from the pool's `retry_seconds`, capped at its `retry_max_seconds`; the cold-probe
-    /// limit bounds consecutive failures as it bounds cold probes.
-    pub(crate) fn retry(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
+    /// Exponential backoff from the pool's `retry_seconds`, capped at its `retry_max_seconds`, unless
+    /// `override_delay_ms` names this attempt's own wait (the `accounts_at_cap` header); the cold-probe limit
+    /// bounds consecutive retries either way.
+    pub(crate) fn retry(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        reason: Reason,
+        now: i64,
+        override_delay_ms: Option<i64>,
+    ) {
         let agent = self
             .sessions
             .get_mut(key)
@@ -550,8 +628,10 @@ impl Inner {
             self.pause(key, agent_id);
             return;
         }
-        let exponent = (agent.failures - 1).min(4);
-        let delay = (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms());
+        let delay = override_delay_ms.unwrap_or_else(|| {
+            let exponent = (agent.failures - 1).min(4);
+            (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms())
+        });
         agent.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
@@ -586,5 +666,109 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
     match reason {
         Reason::IdleLimit => Some(Wasted::IdleLimit),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use crate::engine::{Agent, Session};
+
+    use super::*;
+
+    /// One session holding one never-probed agent, the minimum `probe_error`/`retry` need.
+    fn one_agent_inner() -> (Inner, SessionKey) {
+        let key: SessionKey = ("k".into(), "s".into());
+        let mut agents = BTreeMap::new();
+        agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
+        let mut sessions = BTreeMap::new();
+        sessions.insert(
+            key.clone(),
+            Session {
+                key_id: "k".into(),
+                key_generation: 0,
+                session_id: "s".into(),
+                instance: "i".into(),
+                sequence: 0,
+                lease: i64::MAX,
+                attended: true,
+                ended: false,
+                owner_id: None,
+                last_report_at: 0,
+                last_real_at: Some(0),
+                agents,
+            },
+        );
+        (
+            Inner {
+                lifecycle: None,
+                sessions,
+                pending: HashMap::new(),
+                reasons: BTreeMap::new(),
+                retained: 0,
+                agents: 1,
+                running: 0,
+                closed: false,
+                spent_today: BTreeMap::new(),
+                meter_spent_today: BTreeMap::new(),
+                spent_day: 0,
+                settlements: Vec::new(),
+                skipped: Vec::new(),
+                bus_gaps: 0,
+                gap_backlog: 0,
+                next_incarnation: 1,
+                fits: Vec::new(),
+            },
+            key,
+        )
+    }
+
+    #[test]
+    fn an_accounts_at_cap_429_retries_after_the_header_rather_than_pausing() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            429,
+            Some("accounts_at_cap"),
+            Some(3),
+            false,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert!(!agent.paused, "retries in place rather than pausing");
+        assert_eq!(
+            agent.retry_at,
+            Some(4_000),
+            "the header's seconds replace the backoff"
+        );
+        assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
+    }
+
+    #[test]
+    fn every_other_429_still_pauses_as_probe_quota_exhausted() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(&key, "main", 429, None, None, false, 1_000);
+        let agent = &inner.sessions[&key].agents["main"];
+        assert!(agent.paused);
+        assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
+    }
+
+    #[test]
+    fn accounts_at_cap_without_a_header_falls_back_to_the_usual_backoff() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            429,
+            Some("accounts_at_cap"),
+            None,
+            false,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert!(!agent.paused);
+        assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
     }
 }

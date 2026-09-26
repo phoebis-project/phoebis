@@ -83,6 +83,7 @@ const poolRefusal = (input: PoolInput): string | null => {
     if (key === 'retryMaxSeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
   }
   if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
+  if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
   if (k.enabled && affinity < 300) {
     return 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed';
   }

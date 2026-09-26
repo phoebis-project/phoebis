@@ -5,26 +5,39 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PriceTable, Record, UNATTRIBUTED};
+use phoebis_ledger::{KeepaliveDelta, PlanFactors, PriceTable, Record, UNATTRIBUTED};
 
-use crate::engine::{Engine, SessionKey, Settlement};
+use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
-/// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input.
+/// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
+/// unit the covering probe was funded under: dollars at list prices, or meter tokens through the plan table.
 pub(crate) fn gross_saving(
+    unit: SavingsUnit,
     table: &PriceTable,
+    plan: &PlanFactors,
     canonical_model: &str,
     cache_read_tokens: u64,
 ) -> Option<f64> {
-    let price = table.price(canonical_model)?;
-    Some(cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0)
+    match unit {
+        SavingsUnit::Usd => {
+            let price = table.price(canonical_model)?;
+            Some(cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0)
+        }
+        SavingsUnit::MeterTokens => {
+            let factor = plan.factor(canonical_model)?;
+            Some(cache_read_tokens as f64 * (factor.input - factor.cache_read) * factor.factor)
+        }
+    }
 }
 
-/// A probe's estimated cost at list prices, for every account kind; a subscription account's is a proxy for
-/// quota rather than money.
+/// A probe's estimated cost, in the unit the account serving it is funded under: dollars at list prices for an
+/// api_key account or a subscription account in overage, meter tokens through the plan table on plan.
 pub(crate) fn probe_cost(
+    unit: SavingsUnit,
     table: &PriceTable,
+    plan: &PlanFactors,
     canonical_model: &str,
     usage: ProbeUsage,
 ) -> Option<f64> {
@@ -35,16 +48,26 @@ pub(crate) fn probe_cost(
         (0, 0) => (usage.write, 0),
         split => split,
     };
-    table
-        .estimate(
+    match unit {
+        SavingsUnit::Usd => table
+            .estimate(
+                canonical_model,
+                usage.input,
+                usage.read,
+                five_minutes,
+                one_hour,
+                usage.output,
+            )
+            .map(|(total, _)| total),
+        SavingsUnit::MeterTokens => plan.meter_tokens(
             canonical_model,
             usage.input,
             usage.read,
             five_minutes,
             one_hour,
             usage.output,
-        )
-        .map(|(total, _)| total)
+        ),
+    }
 }
 
 /// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, which is
@@ -210,6 +233,11 @@ impl Engine {
         self.lock().spent_today.clone()
     }
 
+    /// Probe meter tokens per subscription account for the current UTC day, band-weighted at each probe's time.
+    pub fn meter_spent_today(&self) -> BTreeMap<String, f64> {
+        self.lock().meter_spent_today.clone()
+    }
+
     /// The pool's probe spend for the current UTC day, from the rollups: what a restart starts from.
     pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
         let now = self.now();
@@ -239,6 +267,7 @@ mod tests {
     #[test]
     fn an_aggregate_only_cache_write_costs_a_five_minute_write() {
         let table = PriceTable::shipped();
+        let plan = PlanFactors::shipped();
         let split = ProbeUsage {
             write: 2_000,
             five_minutes: 2_000,
@@ -248,10 +277,17 @@ mod tests {
             write: 2_000,
             ..ProbeUsage::default()
         };
-        let priced = probe_cost(&table, "claude-sonnet-5", split).expect("a priced model");
+        let priced = probe_cost(SavingsUnit::Usd, &table, &plan, "claude-sonnet-5", split)
+            .expect("a priced model");
         assert!(priced > 0.0, "{priced}");
         assert_eq!(
-            probe_cost(&table, "claude-sonnet-5", aggregate),
+            probe_cost(
+                SavingsUnit::Usd,
+                &table,
+                &plan,
+                "claude-sonnet-5",
+                aggregate
+            ),
             Some(priced)
         );
     }

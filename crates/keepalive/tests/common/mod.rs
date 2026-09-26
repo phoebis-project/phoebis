@@ -21,7 +21,8 @@ use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
 };
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
+    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanFactors, PlanWindows,
+    PriceTable, Pricing,
 };
 use phoebis_oauth::Clock;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -164,10 +165,12 @@ pub async fn rig(spec: RigSpec) -> Rig {
         lifecycle: spec.lifecycle,
         limits: spec.limits,
         metrics: metrics.clone(),
+        plan: Arc::new(PlanFactors::shipped()),
         pricing,
         relay: h.relay.clone(),
         router: h.router.clone(),
         session_expiry: spec.session_expiry,
+        windows: Arc::new(PlanWindows::shipped()),
     });
     let mut rig = Rig {
         bus,
@@ -433,6 +436,54 @@ impl Rig {
         })
     }
 
+    /// A second observation whose class, static hash, and boundary chain a guard test drives directly, rather
+    /// than the ones `observed` infers from the body alone.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observed_with_facts(
+        &self,
+        id: &str,
+        agent: &str,
+        request_class: Option<&str>,
+        static_hash: Option<&str>,
+        boundaries: &[&str],
+        body: &[u8],
+        model: &str,
+    ) -> BusEvent {
+        BusEvent::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: Some("desktop".into()),
+            key_generation: self.generation("desktop"),
+            pool_id: Some("main".into()),
+            session_id: Some("session".into()),
+            agent_id: Some(agent.into()),
+            parent_agent_id: None,
+            owner_id: None,
+            model: model.into(),
+            canonical_model: model.to_ascii_lowercase(),
+            wire_model: model.to_ascii_lowercase(),
+            stream: true,
+            headers: vec![
+                ("anthropic-beta".into(), "test-beta".into()),
+                ("x-claude-code-agent-id".into(), agent.into()),
+                ("x-claude-code-session-id".into(), "session".into()),
+            ],
+            body: Bytes::copy_from_slice(body),
+            body_capture_hours: 0,
+            shape: RequestShape::default(),
+            static_hash: static_hash.map(String::from),
+            boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
+            client: phoebis_bus::ClientFacts {
+                request_class: request_class.map(String::from),
+                ..phoebis_bus::ClientFacts::default()
+            },
+            presented_retired: false,
+            rotation_at: None,
+            received_at: self.now(),
+        })
+    }
+
     pub fn selected(&self, id: &str, account: &str) -> BusEvent {
         BusEvent::AccountSelected(AccountSelected {
             request_id: id.into(),
@@ -474,5 +525,41 @@ impl Rig {
             response_chunks: None,
             finished_at: self.now(),
         })
+    }
+
+    /// Reports evidence that stands: the plan-side cap and the overage gate both read it through the router's
+    /// view on the scheduling tick that follows.
+    pub fn enter_overage(&self, account: &str, reset_at: i64) {
+        let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
+        self.h.router.report(phoebis_routing::Report::Overage {
+            account_id: account.into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(self.now()),
+                reset: Some(reset_at),
+                observed_at: self.now(),
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation,
+            },
+            incarnation,
+        });
+    }
+
+    /// Reports evidence whose reset has already passed, so `OverageEvidence::stands` reads it as ended without
+    /// the fallback window ever coming into it.
+    pub fn leave_overage(&self, account: &str) {
+        let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
+        self.h.router.report(phoebis_routing::Report::Overage {
+            account_id: account.into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: None,
+                reset: Some(self.now() - 1),
+                observed_at: self.now(),
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation,
+            },
+            incarnation,
+        });
     }
 }

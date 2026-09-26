@@ -66,6 +66,7 @@ export interface CreateKeyInput extends KeyInput {
 
 /** Probe tuning a new pool starts with; the pool dialog shows these as its initial values. */
 export const KEEPALIVE_TUNING_DEFAULTS: Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled'> = {
+  capWindowSharePerDay: null,
   coldProbeLimit: 2,
   jitterSeconds1h: 30,
   jitterSeconds5m: 5,

@@ -195,6 +195,9 @@ export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
 export interface PoolKeepalive {
+  /** Probes stop for the day once a subscription account's probe meter tokens reach this share of its 5-hour
+   * window; null means uncapped. */
+  capWindowSharePerDay: number | null;
   /** Retries allowed for a session whose cache already went cold. */
   coldProbeLimit: number;
   /** Probes stop for the day once this is spent; null means uncapped. */
@@ -617,10 +620,12 @@ export interface Session {
 export type RecipeState = 'armed' | 'held' | 'probing';
 export type RecipeReason =
   | 'affinity_too_short'
+  | 'auxiliary'
   | 'awaiting_cache_evidence'
   | 'cap_reached'
   | 'cold_probes'
   | 'cooled'
+  | 'foreign'
   | 'idle_limit'
   | 'net_negative'
   | 'oauth_unverified'

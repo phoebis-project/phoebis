@@ -16,6 +16,10 @@ pub struct Recipe {
     /// What the body's own markers ask for; 0 when it carries none, and the response decides.
     pub ttl_ms: i64,
     pub size: usize,
+    /// The observation's own two hashes, stamped by the caller: `make_recipe` always leaves them `None`, since
+    /// it never sees the request facts they come from.
+    pub static_hash: Option<String>,
+    pub tail_hash: Option<String>,
 }
 
 pub fn valid_id(s: &str) -> bool {
@@ -196,6 +200,8 @@ pub fn make_recipe(
         model: model.to_string(),
         ttl_ms,
         size,
+        static_hash: None,
+        tail_hash: None,
     })
 }
 

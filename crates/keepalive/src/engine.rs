@@ -11,11 +11,11 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Event as BusEvent, LifecycleSender, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
 };
-use phoebis_ledger::{Ledger, Metrics, Pricing};
+use phoebis_ledger::{Ledger, Metrics, PlanFactors, PlanWindows, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::{RegistrySnapshot, RouterHandle};
-use phoebis_store::{AccountKind, AccountState, OveragePolicy};
+use phoebis_store::{AccountKind, AccountState, FitRow, OveragePolicy};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -105,6 +105,7 @@ reasons! {
     AffinityTooShort => "affinity_too_short",
     AgentReleased => "agent_released",
     AgentUnknown => "agent_unknown",
+    Auxiliary => "auxiliary",
     AwaitingCacheEvidence => "awaiting_cache_evidence",
     AwaitingRequest => "awaiting_request",
     AwaitingSelection => "awaiting_selection",
@@ -113,6 +114,7 @@ reasons! {
     Cooled => "cooled",
     FixedThinking => "fixed_thinking",
     ForcedTool => "forced_tool",
+    Foreign => "foreign",
     HeadersTooLarge => "headers_too_large",
     IdleLimit => "idle_limit",
     IneligibleCredential => "ineligible_credential",
@@ -163,6 +165,100 @@ reasons! {
     UnsupportedShape => "unsupported_shape",
 }
 
+/// What an observation does to the agent's recipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Guard {
+    Auxiliary,
+    Foreign,
+    Rearm,
+    Restart,
+}
+
+/// The hijack guard: a class names the turn directly; without one, the request's own chain against the armed
+/// recipe's two hashes decides, the same fallback the routing crate's `warmth_of` applies when a request
+/// carries no chain at all. `recipe` is the armed recipe's `(static_hash, tail_hash)`, `None` for a first
+/// observation with nothing to compare against.
+pub fn guard(
+    class: Option<&str>,
+    static_hash: Option<&str>,
+    boundaries: &[String],
+    recipe: Option<(&str, &str)>,
+    model_matches: bool,
+) -> Guard {
+    if let Some(class) = class {
+        return if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
+            Guard::Rearm
+        } else {
+            Guard::Auxiliary
+        };
+    }
+    let Some((recipe_static, recipe_tail)) = recipe else {
+        return Guard::Rearm;
+    };
+    if static_hash.is_none() && boundaries.is_empty() {
+        return Guard::Rearm;
+    }
+    if boundaries.iter().any(|boundary| boundary == recipe_tail) {
+        return Guard::Rearm;
+    }
+    if static_hash == Some(recipe_static) && model_matches {
+        return Guard::Restart;
+    }
+    Guard::Foreign
+}
+
+/// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
+pub type SavingsUnit = phoebis_routing::BurnUnit;
+
+/// How the attempt that served a probe was paid for, captured when it was served.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Funding {
+    ApiKey,
+    Overage,
+    Plan,
+}
+
+impl Funding {
+    pub fn of(kind: AccountKind, in_overage: bool) -> Funding {
+        match (kind, in_overage) {
+            (AccountKind::Oauth, false) => Funding::Plan,
+            (AccountKind::Oauth, true) => Funding::Overage,
+            (AccountKind::ApiKey, _) => Funding::ApiKey,
+        }
+    }
+
+    /// `Plan` is meter tokens, the other two dollars: `BurnUnit::of`'s rule.
+    pub fn unit(self) -> SavingsUnit {
+        match self {
+            Funding::Plan => SavingsUnit::MeterTokens,
+            Funding::ApiKey | Funding::Overage => SavingsUnit::Usd,
+        }
+    }
+}
+
+/// The two balances of an agent; a settlement lands in the unit of the attempt it settles.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Net {
+    pub meter_tokens: f64,
+    pub usd: f64,
+}
+
+impl Net {
+    pub fn in_unit(&self, unit: SavingsUnit) -> f64 {
+        match unit {
+            SavingsUnit::MeterTokens => self.meter_tokens,
+            SavingsUnit::Usd => self.usd,
+        }
+    }
+
+    pub(crate) fn add(&mut self, unit: SavingsUnit, delta: f64) {
+        match unit {
+            SavingsUnit::MeterTokens => self.meter_tokens += delta,
+            SavingsUnit::Usd => self.usd += delta,
+        }
+    }
+}
+
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
@@ -174,10 +270,14 @@ pub struct EngineParts {
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
+    /// The shipped meter-token weights, for a probe or a kept-warm saving on a plan-funded attempt.
+    pub plan: Arc<PlanFactors>,
     pub pricing: Arc<Pricing>,
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
+    /// The shipped window sizes and peak band, for the plan-side probe cap.
+    pub windows: Arc<PlanWindows>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -255,13 +355,16 @@ pub(crate) struct Agent {
     /// The savings ledger of this agent: the running net the pause rule reads, the grace probes left under a
     /// negative net, the cost of every probe since the last real request (settled as wasted when the recipe
     /// stops), and whether a probe with full coverage ran since that request.
-    pub net_usd: f64,
+    pub net: Net,
     pub grace_left: u32,
     pub unanswered: Vec<f64>,
     pub covered_since_real: bool,
     /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
     pub covered_account: Option<String>,
+    /// How the covering probe's serving attempt was funded, so the credit it earns later settles in the same
+    /// unit the probe's own cost did.
+    pub covered_funding: Option<Funding>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -298,11 +401,12 @@ impl Agent {
             probes: 0,
             migrations: 0,
             usage: ProbeUsage::default(),
-            net_usd: 0.0,
+            net: Net::default(),
             grace_left: 0,
             unanswered: Vec::new(),
             covered_since_real: false,
             covered_account: None,
+            covered_funding: None,
             last_real_at: None,
             last_stop: None,
         }
@@ -338,6 +442,10 @@ impl Agent {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
+    /// How the covering probe's serving attempt was funded; `None` when the account it warmed left the
+    /// registry before the probe landed, in which case the credit never fires (`same_account` cannot match a
+    /// gone account either).
+    pub funding: Option<Funding>,
     pub model: String,
     pub real_at: i64,
     pub ttl_ms: i64,
@@ -385,6 +493,9 @@ pub(crate) struct Inner {
     pub closed: bool,
     /// Probe cost per pool for the current UTC day, and the day it was summed for.
     pub spent_today: BTreeMap<String, f64>,
+    /// Probe meter tokens per subscription account for the current UTC day, band-weighted at each probe's
+    /// time; rolled at midnight beside `spent_today`.
+    pub meter_spent_today: BTreeMap<String, f64>,
     pub spent_day: i64,
     pub settlements: Vec<Settlement>,
     /// Due probes a gate withheld this tick, ledgered as skipped.
@@ -395,6 +506,9 @@ pub(crate) struct Inner {
     /// backlog cannot be trusted: the terminal event of any request among them may be one the gap dropped.
     pub gap_backlog: usize,
     pub next_incarnation: u64,
+    /// The scheduling tick's own copy of the router's fits, kept from the last successful ask when the router
+    /// is gone: the plan-side cap reads an account's calibrated scale from here.
+    pub fits: Vec<FitRow>,
 }
 
 pub struct Engine {
@@ -424,12 +538,14 @@ impl Engine {
                 running: 0,
                 closed: false,
                 spent_today: BTreeMap::new(),
+                meter_spent_today: BTreeMap::new(),
                 spent_day: 0,
                 settlements: Vec::new(),
                 skipped: Vec::new(),
                 bus_gaps: 0,
                 gap_backlog: 0,
                 next_incarnation: 0,
+                fits: Vec::new(),
             }),
             parts,
             cancel: CancellationToken::new(),
@@ -662,6 +778,7 @@ impl Inner {
         let day = now.div_euclid(86_400_000);
         if self.spent_day < day {
             self.spent_today.clear();
+            self.meter_spent_today.clear();
             self.spent_day = day;
         }
     }
@@ -760,6 +877,7 @@ pub struct AgentStatus {
     pub in_flight: bool,
     pub last_activity: i64,
     pub migrations: u64,
+    pub net_meter_tokens: f64,
     pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub paused: bool,
@@ -861,7 +979,8 @@ impl Engine {
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
-            net_usd: agent.net_usd,
+            net_meter_tokens: agent.net.meter_tokens,
+            net_usd: agent.net.usd,
             next_probe_at: agent.due_at(),
             paused: agent.paused,
             probe_usage: agent.usage,
@@ -939,6 +1058,35 @@ impl Engine {
                 .unwrap_or_default(),
             None => KeepalivePolicy::default(),
         };
+        // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
+        // covered-since-real flag a re-arming request's credit depends on; only the reason it counted is.
+        let recipe_hashes = agent.current.as_ref().map(|observation| {
+            (
+                observation.recipe.static_hash.as_deref().unwrap_or(""),
+                observation.recipe.tail_hash.as_deref().unwrap_or(""),
+            )
+        });
+        let model_matches = agent
+            .current
+            .as_ref()
+            .is_some_and(|observation| observation.recipe.model == observed.model);
+        match guard(
+            observed.client.request_class.as_deref(),
+            observed.static_hash.as_deref(),
+            &observed.boundaries,
+            recipe_hashes,
+            model_matches,
+        ) {
+            Guard::Auxiliary => {
+                inner.set_reason(&key, &agent_id, Reason::Auxiliary);
+                return;
+            }
+            Guard::Foreign => {
+                inner.set_reason(&key, &agent_id, Reason::Foreign);
+                return;
+            }
+            Guard::Rearm | Guard::Restart => {}
+        }
         if agent_id != MAIN_AGENT && !policy.warm_subagents {
             // The session's last real time still moves: a subagent working is a session in use, which the main
             // agent's idle limits read.
@@ -953,6 +1101,7 @@ impl Engine {
             agent.last_real_at.map(|real_at| PriorCoverage {
                 account: agent.covered_account.clone(),
                 covered: agent.covered_since_real,
+                funding: agent.covered_funding,
                 model: agent.canonical_model.clone(),
                 real_at,
                 ttl_ms: agent.ttl_ms,
@@ -965,6 +1114,7 @@ impl Engine {
         let agent = session.agents.get_mut(&agent_id).unwrap();
         agent.covered_since_real = false;
         agent.covered_account = None;
+        agent.covered_funding = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -980,9 +1130,10 @@ impl Engine {
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
-        // A real request grants the grace budget again while the net is negative: the net only rises on a
-        // request that lands warm, which needs a probe first.
-        if agent.net_usd < 0.0 {
+        // A real request grants the grace budget again while either balance is negative: the net only rises on
+        // a request that lands warm, which needs a probe first, and which unit the next one charges is not yet
+        // known here (selection has not run).
+        if agent.net.usd < 0.0 || agent.net.meter_tokens < 0.0 {
             agent.grace_left = agent.policy.net_negative_grace_probes;
         }
         // The engine's own transition out of parked, which no report will repeat: the companion's next busy
@@ -997,7 +1148,7 @@ impl Engine {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
         }
-        let recipe = match make_recipe(
+        let mut recipe = match make_recipe(
             &observed.headers,
             &observed.body,
             &observed.model,
@@ -1009,6 +1160,10 @@ impl Engine {
                 return;
             }
         };
+        // What the next observation's guard compares against: this request's own two hashes, not the ones a
+        // prior arm happened to leave behind.
+        recipe.static_hash = observed.static_hash.clone();
+        recipe.tail_hash = observed.boundaries.last().cloned();
         if inner.retained + recipe.size > limits.max_retained_bytes {
             inner.set_reason(&key, &agent_id, Reason::StorageLimit);
             return;
@@ -1202,23 +1357,42 @@ impl Engine {
                     // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
                     // saving to claim.
                     let same_account = prior.account == agent.account;
-                    (prior.covered && gap_exceeded && same_model && same_account && read > 0).then(
-                        || {
-                            (
-                                read,
-                                agent.key_generation,
-                                agent.pool_id.clone(),
-                                agent.account.clone(),
-                                agent.canonical_model.clone(),
-                            )
-                        },
-                    )
+                    // A dangling account (ruling: the probe that covered this recipe served on one the
+                    // registry has since dropped) earns no credit; `same_account` would already exclude it
+                    // once a real selection lands somewhere else, but a gone account funds nothing to check.
+                    let funded = prior.funding;
+                    (prior.covered
+                        && gap_exceeded
+                        && same_model
+                        && same_account
+                        && read > 0
+                        && funded.is_some())
+                    .then(|| {
+                        (
+                            read,
+                            agent.key_generation,
+                            agent.pool_id.clone(),
+                            agent.account.clone(),
+                            agent.canonical_model.clone(),
+                            funded.unwrap(),
+                        )
+                    })
                 })
         };
-        if let Some((read, key_generation, pool_id, account, model)) = credit {
+        if let Some((read, key_generation, pool_id, account, model, funding)) = credit {
             // The mark says a probe kept this request warm, which is true whatever the price table knows;
-            // the saving is what the table can put a number on, zero for a model it does not price.
-            let saving = gross_saving(&self.parts.pricing.current(), &model, read).unwrap_or(0.0);
+            // the saving is what the table can put a number on, zero for a model it does not price. The
+            // agent's own net settles in the covering probe's unit; the ledger's kept-warm column stays
+            // dollars whatever that unit was.
+            let plan = &self.parts.plan;
+            let table = self.parts.pricing.current();
+            let unit = funding.unit();
+            let saving_net = gross_saving(unit, &table, plan, &model, read).unwrap_or(0.0);
+            let saving_ledger = if unit == SavingsUnit::Usd {
+                saving_net
+            } else {
+                gross_saving(SavingsUnit::Usd, &table, plan, &model, read).unwrap_or(0.0)
+            };
             inner
                 .sessions
                 .get_mut(&key)
@@ -1226,8 +1400,9 @@ impl Engine {
                 .agents
                 .get_mut(&agent_id)
                 .unwrap()
-                .net_usd += saving;
-            credited = Some((read, key_generation, pool_id, account, model, saving));
+                .net
+                .add(unit, saving_net);
+            credited = Some((read, key_generation, pool_id, account, model, saving_ledger));
         }
         let (ready, armed) = inner.sessions[&key]
             .agents
@@ -1413,6 +1588,7 @@ impl Engine {
                     // the pool it resolves is the one whose budget bounds this probe.
                     let inner = &mut *inner;
                     let spent = &inner.spent_today;
+                    let meter_spent = &inner.meter_spent_today;
                     let agent = inner
                         .sessions
                         .get_mut(&key)
@@ -1420,7 +1596,7 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    gate(&view, agent, &key.1, spent)
+                    gate(&view, agent, &key.1, spent, meter_spent)
                 };
                 match held {
                     Some(Gate::Drop(reason, label)) => {
@@ -1554,6 +1730,9 @@ pub(crate) struct RouterView {
     /// A retained model name to the one the router keys its rows on, for the names that differ.
     pub canonical: HashMap<String, String>,
     pub cooled: BTreeSet<(String, String)>,
+    /// The scheduling tick's own copy of the router's fits, refreshed here and kept from the last successful
+    /// ask when the router is gone.
+    pub fits: Vec<FitRow>,
     pub overage: BTreeSet<String>,
     /// `(key, session, canonical model)` to the pinned account: the account a probe would actually run on.
     pub pins: BTreeMap<(String, String, String), String>,
@@ -1617,9 +1796,18 @@ impl Engine {
             .filter(|(_, e)| e.stands(now, fallback_ms))
             .map(|(id, _)| id)
             .collect();
+        // On `RouterGone` the copy already held stands: the plan-side cap reads a stale fit sooner than none.
+        let fits = match self.parts.router.fits().await {
+            Ok(fits) => {
+                self.lock().fits = fits.clone();
+                fits
+            }
+            Err(_) => self.lock().fits.clone(),
+        };
         RouterView {
             canonical,
             cooled,
+            fits,
             overage,
             pins,
             snapshot,
@@ -1664,6 +1852,7 @@ pub(crate) fn gate(
     agent: &mut Agent,
     session_id: &str,
     spent_today: &BTreeMap<String, f64>,
+    meter_spent_today: &BTreeMap<String, f64>,
 ) -> Option<Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
@@ -1736,8 +1925,112 @@ pub(crate) fn gate(
     {
         return Some(Gate::Hold(Reason::CapReached));
     }
-    if policy.stop_when_net_negative && agent.net_usd < 0.0 && agent.grace_left == 0 {
+    let in_overage = view.overage.contains(&account.id);
+    // The plan side counts a subscription account's probe meter tokens against the share of its 5-hour window,
+    // scaled by the fitted row when the router has calibrated one; uncapped otherwise.
+    if let Some(share) = policy.probe_cap_window_share_per_day {
+        if account.kind == AccountKind::Oauth {
+            let spent_meter = meter_spent_today.get(&account.id).copied().unwrap_or(0.0);
+            let scale = view
+                .fits
+                .iter()
+                .find(|row| row.account_id == account.id && row.window == "five_hour")
+                .map(|row| row.scale)
+                .filter(|scale| scale.is_finite() && *scale > 0.0);
+            if let Some(scale) = scale {
+                if spent_meter / scale >= share {
+                    return Some(Gate::Hold(Reason::CapReached));
+                }
+            }
+        }
+    }
+    let unit = Funding::of(account.kind, in_overage).unit();
+    if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
         return Some(Gate::Hold(Reason::NetNegative));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refreshing_class_rearms_whatever_the_chain_says() {
+        for class in phoebis_routing::REFRESHING_CLASSES.iter().copied() {
+            assert_eq!(
+                guard(Some(class), None, &[], Some(("s", "t")), false),
+                Guard::Rearm,
+                "{class}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_class_is_auxiliary() {
+        assert_eq!(
+            guard(Some("title"), None, &[], Some(("s", "t")), false),
+            Guard::Auxiliary
+        );
+    }
+
+    #[test]
+    fn a_first_observation_with_no_recipe_rearms_whatever_it_says() {
+        assert_eq!(
+            guard(None, Some("s"), &["t".to_string()], None, false),
+            Guard::Rearm
+        );
+    }
+
+    #[test]
+    fn a_body_without_a_chain_rearms_every_request() {
+        assert_eq!(
+            guard(None, None, &[], Some(("s", "t")), false),
+            Guard::Rearm
+        );
+    }
+
+    #[test]
+    fn boundaries_holding_the_recipes_tail_rearm() {
+        assert_eq!(
+            guard(
+                None,
+                Some("other"),
+                &["a".into(), "t".into()],
+                Some(("s", "t")),
+                false
+            ),
+            Guard::Rearm
+        );
+    }
+
+    #[test]
+    fn the_same_static_prefix_and_model_without_a_continuation_restarts() {
+        assert_eq!(
+            guard(None, Some("s"), &["fresh".into()], Some(("s", "t")), true),
+            Guard::Restart
+        );
+    }
+
+    #[test]
+    fn the_same_static_prefix_on_another_model_is_foreign_not_a_restart() {
+        assert_eq!(
+            guard(None, Some("s"), &["fresh".into()], Some(("s", "t")), false),
+            Guard::Foreign
+        );
+    }
+
+    #[test]
+    fn neither_the_chain_nor_the_static_prefix_matching_is_foreign() {
+        assert_eq!(
+            guard(
+                None,
+                Some("other"),
+                &["fresh".into()],
+                Some(("s", "t")),
+                false
+            ),
+            Guard::Foreign
+        );
+    }
 }

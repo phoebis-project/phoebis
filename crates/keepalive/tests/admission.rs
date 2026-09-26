@@ -667,3 +667,126 @@ async fn warm_subagents_off_retains_the_main_agent_and_declines_a_subagent() {
         0
     );
 }
+
+/// An armed recipe against the unchanged code before this test's assertions ran: every request below replaced
+/// it, since the guard did not exist. Run first to confirm the failure, per the plan's convention.
+#[tokio::test]
+async fn a_title_shaped_request_on_another_model_leaves_the_recipe_alone() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed_probe_at = r.status("main").next_probe_at;
+    let armed_bytes = r.engine.stats().retained_bytes;
+    r.engine.observe(r.observed_with_facts(
+        "aux",
+        "main",
+        Some("auxiliary"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        (
+            r.status("main").next_probe_at,
+            r.engine.stats().retained_bytes
+        ),
+        (armed_probe_at, armed_bytes),
+        "an auxiliary class leaves the schedule and the recipe alone"
+    );
+    assert_eq!(r.engine.reasons().get(&Reason::Auxiliary).copied(), Some(1));
+    let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
+    r.engine.observe(r.observed_with_facts(
+        "foreign",
+        "main",
+        None,
+        Some("a-different-static-prefix"),
+        &["a-different-boundary"],
+        other.as_bytes(),
+        "claude-opus-5",
+    ));
+    assert_eq!(
+        (r.status("main").next_probe_at, r.engine.stats().retained_bytes),
+        (armed_probe_at, armed_bytes),
+        "a request matching neither the chain nor the static prefix leaves the schedule and the recipe alone"
+    );
+    assert_eq!(r.engine.reasons().get(&Reason::Foreign).copied(), Some(1));
+}
+
+#[tokio::test]
+async fn a_tool_loop_request_re_arms_the_recipe() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed_bytes = r.engine.stats().retained_bytes;
+    let extended = BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]"#,
+    );
+    assert_ne!(extended, BODY, "the extension actually changed the body");
+    r.observe_with("main", &extended).await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::Scheduled,
+        "a tool round continues the conversation, so it re-arms normally"
+    );
+    assert!(
+        r.engine.stats().retained_bytes > armed_bytes,
+        "the recipe body is the new, larger one"
+    );
+}
+
+#[tokio::test]
+async fn a_compaction_restart_replaces_the_recipe() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed_bytes = r.engine.stats().retained_bytes;
+    r.engine.observe(r.observed_with_facts(
+        "compaction",
+        "main",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        r.status("main").reason,
+        Reason::AwaitingSelection,
+        "the compaction class re-arms the recipe as any other real request would"
+    );
+    assert!(
+        r.engine.stats().retained_bytes > 0,
+        "a fresh recipe replaced the discarded one"
+    );
+    // Without the class, the same static prefix on a fresh message chain restarts the recipe too.
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let restarted = BODY.replace("hello", "a fresh conversation");
+    assert_ne!(restarted, BODY);
+    r.observe_with("main", &restarted).await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::Scheduled,
+        "the same system prompt on a fresh chain restarts rather than staying foreign"
+    );
+    assert!(r.engine.stats().retained_bytes > armed_bytes || r.engine.stats().retained_bytes > 0);
+}
+
+#[tokio::test]
+async fn without_a_chain_every_request_re_arms() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.engine.observe(r.observed_with_facts(
+        "no-chain",
+        "main",
+        None,
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        r.status("main").reason,
+        Reason::AwaitingSelection,
+        "a body without a chain re-arms on every request, the routing crate's own warmth fallback"
+    );
+}

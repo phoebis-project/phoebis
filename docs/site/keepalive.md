@@ -70,9 +70,26 @@ with `keepalive_opt_out` is never retained.
 In the console: Pools, Edit, the Caching tab, "Keep prompt caches warm," the daily probe cost cap, and the
 collapsed "Probe tuning" group.
 
+## Which requests re-arm a recipe
+
+A recipe's cache stays warm only for a request that continues the conversation it was built from. The engine
+reads the request's class first: `main`, `subagent`, and `compaction` re-arm the recipe; any other class, a
+title or a summary request among them, leaves the recipe, its schedule, and its credit untouched, and is counted
+under the `auxiliary` reason.
+
+Without a class, the request's own two boundary-hash chains decide. A boundary that holds the recipe's last
+message hash re-arms it, since the request continues the same conversation. The same static prefix, the tools
+array and the system blocks, with no continuation restarts the recipe, replacing its cached body the way a
+compaction does. A request matching neither the chain nor the prefix is counted under the `foreign` reason, and
+its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all re-arms on every
+request, the fallback the router's own warmth check applies for a client that sends none.
+
+The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
+foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.
+
 ## Tuning fields
 
-The pool's `keepalive` object carries fourteen fields, each with its own default and bound:
+The pool's `keepalive` object carries fifteen fields, each with its own default and bound:
 
 | Field | Default | Accepts | What it does |
 | --- | --- | --- | --- |
@@ -85,6 +102,7 @@ The pool's `keepalive` object carries fourteen fields, each with its own default
 | `max_idle_seconds` | `3600` | 0 to 31536000 | Stops probing the main agent while reporting, every agent once silent. |
 | `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes instead of seconds. |
 | `net_negative_grace_probes` | `2` | 0 to 100 | Probes still granted once the net turns negative. |
+| `probe_cap_window_share_per_day` | unset | unset or 0 to 1 | A subscription account's daily cap, a window share. |
 | `probe_cost_cap_usd_per_day` | unset | unset or a positive number | Daily probe spend cap per pool. |
 | `retry_max_seconds` | `300` | 1 to 604800 (a week), at least `retry_seconds` | Ceiling the retry backoff doubles to. |
 | `retry_seconds` | `30` | 1 to 3600 | Base backoff after a failed probe, doubling each retry. |
@@ -92,11 +110,13 @@ The pool's `keepalive` object carries fourteen fields, each with its own default
 | `warm_subagents` | `true` | | Off retains only the main conversation's recipe; a subagent is never probed. |
 
 An out-of-range value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, except
-for two fields with their own message: `probe_cost_cap_usd_per_day` answers "keepalive.probe_cost_cap_usd_per_day
-must be null or a positive number," and `retry_max_seconds` answers "keepalive.retry_max_seconds must be at least
-keepalive.retry_seconds." The lead and jitter bounds stop short of their cache TTL because a lead or jitter at or
-past the TTL would put a probe's due time before the cache was even written. `GET /admin/pools` answers the full
-policy with every default filled in, so a pool created with `{}` shows every value above.
+for three fields with their own message: `probe_cap_window_share_per_day` answers
+"keepalive.probe_cap_window_share_per_day must be null or between 0 and 1," `probe_cost_cap_usd_per_day` answers
+"keepalive.probe_cost_cap_usd_per_day must be null or a positive number," and `retry_max_seconds` answers
+"keepalive.retry_max_seconds must be at least keepalive.retry_seconds." The lead and jitter bounds stop short of
+their cache TTL because a lead or jitter at or past the TTL would put a probe's due time before the cache was
+even written. `GET /admin/pools` answers the full policy with every default filled in, so a pool created with
+`{}` shows every value above.
 
 ## The cost reference
 
@@ -128,7 +148,8 @@ client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
 </dl>
 
 Every figure carries the same caveat: "API list prices. For subscription upstreams these approximate quota
-consumption and are not billed as money."
+consumption and are not billed as money." A recipe's own net follows the same split: meter tokens on a
+subscription account outside overage, dollars on an api_key account or one in overage.
 
 The four shipped rows, all prices in USD per million tokens:
 
@@ -145,15 +166,20 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of seventeen reasons attached:
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of nineteen reasons attached. Two
+of those, `auxiliary` and `foreign`, are not a hold at all: the recipe stays scheduled exactly as it was, and
+the reason only names the last request the guard set aside (see
+[Which requests re-arm a recipe](#which-requests-re-arm-a-recipe)).
 
 | Reason | Console label | What it means |
 | --- | --- | --- |
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
+| `auxiliary` | auxiliary request | The last request was not the conversation's next turn, and left the recipe alone. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap; probes resume at midnight UTC. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
+| `foreign` | foreign request | The last request matched neither the recipe's chain nor its static prefix. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
 | `net_negative` | net negative | Probes have cost more than they saved; held until a request lands warm. |
 | `oauth_unverified` | subscription probes off | Off until the account's expiry-crossing experiment passes. |

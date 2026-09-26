@@ -11,10 +11,12 @@ use crate::engine::{Agent, AgentState, Engine, Reason, Wasted, MAIN_AGENT};
 #[serde(rename_all = "snake_case")]
 pub enum ViewReason {
     AffinityTooShort,
+    Auxiliary,
     AwaitingCacheEvidence,
     CapReached,
     ColdProbes,
     Cooled,
+    Foreign,
     IdleLimit,
     NetNegative,
     OauthUnverified,
@@ -35,12 +37,14 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
     Some(match reason {
         AwaitingRequest | AwaitingSelection | Probing | Scheduled => return None,
         AffinityTooShort => ViewReason::AffinityTooShort,
+        Auxiliary => ViewReason::Auxiliary,
         AwaitingCacheEvidence | NoCacheEvidence | NoProbeCacheEvidence => {
             ViewReason::AwaitingCacheEvidence
         }
         CapReached => ViewReason::CapReached,
         RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
         Cooled => ViewReason::Cooled,
+        Foreign => ViewReason::Foreign,
         IdleLimit => ViewReason::IdleLimit,
         NetNegative => ViewReason::NetNegative,
         OauthUnverified => ViewReason::OauthUnverified,

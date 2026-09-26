@@ -112,6 +112,9 @@ pub struct KeepalivePolicy {
     pub max_idle_seconds: u64,
     pub max_idle_ticks: u64,
     pub net_negative_grace_probes: u32,
+    /// Probes stop for the day once a subscription account's probe meter tokens reach this share of its
+    /// 5-hour window; `None` is uncapped. Between 0 and 1.
+    pub probe_cap_window_share_per_day: Option<f64>,
     pub probe_cost_cap_usd_per_day: Option<f64>,
     pub retry_max_seconds: u64,
     pub retry_seconds: u64,
@@ -133,6 +136,7 @@ impl Default for KeepalivePolicy {
             max_idle_seconds: 3_600,
             max_idle_ticks: 0,
             net_negative_grace_probes: 2,
+            probe_cap_window_share_per_day: None,
             probe_cost_cap_usd_per_day: None,
             retry_max_seconds: 300,
             retry_seconds: 30,
@@ -157,6 +161,8 @@ pub enum PolicyError {
     },
     #[error("keepalive.retry_max_seconds must be at least keepalive.retry_seconds")]
     RetryMaxBelowRetry,
+    #[error("keepalive.probe_cap_window_share_per_day must be null or between 0 and 1")]
+    ShareOutOfRange,
     #[error("keepalive is not a policy object: {0}")]
     Shape(String),
 }
@@ -239,6 +245,12 @@ impl KeepalivePolicy {
             .is_some_and(|cap| cap <= 0.0 || !cap.is_finite())
         {
             return Err(PolicyError::CapNotPositive);
+        }
+        if self
+            .probe_cap_window_share_per_day
+            .is_some_and(|share| !(0.0..=1.0).contains(&share))
+        {
+            return Err(PolicyError::ShareOutOfRange);
         }
         Ok(())
     }

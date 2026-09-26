@@ -281,10 +281,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         lifecycle: Some(lifecycle_tx),
         limits: config.keepalive.clone(),
         metrics: metrics.clone(),
+        plan: Arc::new(phoebis_ledger::PlanFactors::shipped()),
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+        windows: Arc::new(phoebis_ledger::PlanWindows::shipped()),
     });
     // The day's spend comes from the rollups so a restart does not reset a pool's cap.
     keepalive.load_spent_today().await;

@@ -28,6 +28,7 @@
           "max_idle_seconds": 3600,
           "max_idle_ticks": 0,
           "net_negative_grace_probes": 2,
+          "probe_cap_window_share_per_day": null,
           "probe_cost_cap_usd_per_day": 4.0,
           "retry_max_seconds": 300,
           "retry_seconds": 30,
@@ -43,8 +44,8 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790334384116,
-        "updated_at": 1790334384116,
+        "created_at": 1790386992693,
+        "updated_at": 1790386992693,
         "members": [
           {
             "account_id": "business",
@@ -61,7 +62,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "5GkU9NZG",
+            "prefix": "MlX4kqne",
             "enabled": true
           }
         ],

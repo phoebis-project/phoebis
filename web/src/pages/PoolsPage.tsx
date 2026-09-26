@@ -534,6 +534,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
   tuning: {
+    capWindowSharePerDay: pool.keepalive.capWindowSharePerDay,
     coldProbeLimit: pool.keepalive.coldProbeLimit,
     jitterSeconds1h: pool.keepalive.jitterSeconds1h,
     jitterSeconds5m: pool.keepalive.jitterSeconds5m,

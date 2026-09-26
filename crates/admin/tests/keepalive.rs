@@ -205,6 +205,30 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     .await;
     assert_eq!(untouched.status(), 201);
     assert_eq!(json(untouched).await["keepalive"]["warm_subagents"], true);
+    let shared = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"keepalive":{"probe_cap_window_share_per_day":0.1}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(shared.status(), 200);
+    assert_eq!(
+        json(shared).await["keepalive"]["probe_cap_window_share_per_day"].as_f64(),
+        Some(0.1)
+    );
+    let refused_share = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"keepalive":{"probe_cap_window_share_per_day":1.5}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused_share.status(), 400);
+    assert!(json(refused_share).await["error"]
+        .as_str()
+        .unwrap()
+        .contains("probe_cap_window_share_per_day must be null or between 0 and 1"));
 }
 
 use phoebis_keepalive::Event;
