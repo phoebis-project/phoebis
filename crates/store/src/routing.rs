@@ -249,11 +249,12 @@ pub struct AffinityRow {
     /// under another incarnation is a replaced account's and is dropped.
     pub account_id: String,
     pub incarnation: u64,
-    /// `written_at` is the last report's time (the purge reads it). `ttl_ms` is the lifetime of the marker the
-    /// writing request carried on this boundary's tier, as sent upstream; 0 for a link the cache never
-    /// confirmed, which never places. `prefix_tokens` is the promised prefix: for a `static` row the relay's
-    /// estimate of the blocks the boundary covers (canonical bytes over four), for a `message`, `response` or
-    /// `request` row the cached tokens the upstream reported for the writing request.
+    /// `written_at` is the last report's time (the purge reads it). `ttl_ms` is the lifetime remaining as of
+    /// `written_at`: a report with cache evidence sets it to the marker's full lifetime as sent upstream, and an
+    /// unconfirmed refresh shortens it to what remained, so the boundary's warm deadline never moves; 0 for a
+    /// link the cache never confirmed, which never places. `prefix_tokens` is the promised prefix: for a
+    /// `static` row the relay's estimate of the blocks the boundary covers (canonical bytes over four), for a
+    /// `message`, `response` or `request` row the cached tokens the upstream reported for the writing request.
     pub written_at: i64,
     pub ttl_ms: i64,
     pub prefix_tokens: u64,

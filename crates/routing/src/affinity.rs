@@ -111,6 +111,10 @@ pub struct AffinityMap {
     parents: HashMap<String, EntryKey>,
     /// Keys refreshed in place since the last drain, not yet persisted.
     dirty: HashSet<EntryKey>,
+    /// A folded spelling to the dated id it resolved to, as `RoutingState::canonical` keeps it, so a report or
+    /// a lookup keys on the dated id once it is known, whichever spelling the caller names. An entry already
+    /// written under the old spelling is not rekeyed; it ages out through the purge.
+    resolutions: HashMap<String, String>,
 }
 
 impl AffinityMap {
@@ -139,7 +143,24 @@ impl AffinityMap {
         map
     }
 
+    /// The name the map keys a model's rows on: the dated id `model` resolved to, else `model` itself, as
+    /// `RoutingState::canonical` resolves it.
+    fn canonical<'a>(&'a self, model: &'a str) -> &'a str {
+        self.resolutions
+            .get(model)
+            .map(String::as_str)
+            .unwrap_or(model)
+    }
+
+    /// Learns a folded spelling's dated id, fed at load and when a resolution lands. Never rekeys an entry
+    /// already written under the old spelling; it ages out through the purge instead.
+    pub fn learn_resolution(&mut self, spelling: &str, dated_id: &str) {
+        self.resolutions
+            .insert(spelling.to_string(), dated_id.to_string());
+    }
+
     pub fn entry(&self, canonical_model: &str, hash: &str) -> Option<&AffinityEntry> {
+        let canonical_model = self.canonical(canonical_model);
         self.entries
             .get(&(canonical_model.to_string(), hash.to_string()))
     }
@@ -169,6 +190,7 @@ impl AffinityMap {
 
     /// Upserts the report's boundaries and parent ids; answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
+        let canonical_model = self.canonical(&report.canonical_model).to_string();
         let root = report.root.clone().unwrap_or_else(|| {
             report
                 .message_boundaries
@@ -182,7 +204,7 @@ impl AffinityMap {
 
         for boundary in &report.message_boundaries {
             if let Some(row) = self.upsert(
-                &report.canonical_model,
+                &canonical_model,
                 boundary,
                 AffinityChain::Message,
                 report,
@@ -194,37 +216,41 @@ impl AffinityMap {
                 rows.push(row);
             }
         }
-        if let Some(id) = &report.message_id {
-            if let Some(row) = self.upsert(
-                &report.canonical_model,
-                id,
-                AffinityChain::Response,
-                report,
-                &root,
-                message_confirmed,
-                message_ttl,
-                report.prefix_tokens,
-            ) {
-                rows.push(row);
+        // An empty root only happens with no message boundaries either, so there is no conversation to name:
+        // the parent ids are skipped rather than answering a parent-id match with an empty root.
+        if !root.is_empty() {
+            if let Some(id) = &report.message_id {
+                if let Some(row) = self.upsert(
+                    &canonical_model,
+                    id,
+                    AffinityChain::Response,
+                    report,
+                    &root,
+                    message_confirmed,
+                    message_ttl,
+                    report.prefix_tokens,
+                ) {
+                    rows.push(row);
+                }
+                self.parents
+                    .insert(id.clone(), (canonical_model.clone(), id.clone()));
             }
-            self.parents
-                .insert(id.clone(), (report.canonical_model.clone(), id.clone()));
-        }
-        if let Some(id) = &report.request_id {
-            if let Some(row) = self.upsert(
-                &report.canonical_model,
-                id,
-                AffinityChain::Request,
-                report,
-                &root,
-                message_confirmed,
-                message_ttl,
-                report.prefix_tokens,
-            ) {
-                rows.push(row);
+            if let Some(id) = &report.request_id {
+                if let Some(row) = self.upsert(
+                    &canonical_model,
+                    id,
+                    AffinityChain::Request,
+                    report,
+                    &root,
+                    message_confirmed,
+                    message_ttl,
+                    report.prefix_tokens,
+                ) {
+                    rows.push(row);
+                }
+                self.parents
+                    .insert(id.clone(), (canonical_model.clone(), id.clone()));
             }
-            self.parents
-                .insert(id.clone(), (report.canonical_model.clone(), id.clone()));
         }
         if report.cache_touched {
             let static_confirmed = report.static_ttl_ms.is_some();
@@ -232,7 +258,7 @@ impl AffinityMap {
             for (index, boundary) in report.static_boundaries.iter().enumerate() {
                 let size = report.static_sizes.get(index).copied().unwrap_or(0);
                 if let Some(row) = self.upsert(
-                    &report.canonical_model,
+                    &canonical_model,
                     boundary,
                     AffinityChain::Static,
                     report,
@@ -256,7 +282,7 @@ impl AffinityMap {
         ttl_of: impl Fn(&str) -> Option<i64>,
         incarnation_of: impl Fn(&str) -> Option<u64>,
     ) -> Vec<(String, String)> {
-        let gone: Vec<EntryKey> = self
+        let gone: HashSet<EntryKey> = self
             .entries
             .iter()
             .filter(|(_, entry)| {
@@ -273,7 +299,7 @@ impl AffinityMap {
             self.dirty.remove(key);
         }
         self.parents.retain(|_, key| !gone.contains(key));
-        gone
+        gone.into_iter().collect()
     }
 
     /// The refreshed rows not yet persisted, cleared.
@@ -315,13 +341,18 @@ impl AffinityMap {
         });
         if same_holder {
             let entry = self.entries.get_mut(&key).expect("checked above");
-            entry.written_at = report.now;
-            entry.incarnation = report.incarnation;
-            entry.root = root.to_string();
             if confirmed {
+                entry.written_at = report.now;
                 entry.ttl_ms = ttl_ms;
                 entry.prefix_tokens = prefix_tokens;
+            } else {
+                // Keeps the old warm deadline (written_at + ttl_ms) fixed: a link-only refresh must not revive
+                // a lapsed boundary by moving written_at forward while leaving the old full ttl_ms in place.
+                entry.ttl_ms = (entry.written_at + entry.ttl_ms - report.now).max(0);
+                entry.written_at = report.now;
             }
+            entry.incarnation = report.incarnation;
+            entry.root = root.to_string();
             self.dirty.insert(key);
             return None;
         }
@@ -407,6 +438,14 @@ mod tests {
             "two message boundaries plus the response and request ids"
         );
         assert_eq!(map.len(), 4);
+        let mut second = report("k", "a", 2_000);
+        second.message_boundaries.push("b3".into());
+        let more_rows = map.record(&second);
+        assert_eq!(
+            more_rows.len(),
+            1,
+            "the two boundaries and both parents refresh in place; only b3 is new"
+        );
     }
 
     #[test]
@@ -472,9 +511,16 @@ mod tests {
     #[test]
     fn a_report_without_cache_evidence_records_the_links_and_no_warmth() {
         let mut map = AffinityMap::default();
-        map.record(&report("k", "a", 1_000));
+        let mut r = report("k", "a", 1_000);
+        r.static_boundaries = vec!["s1".into()];
+        r.static_sizes = vec![10];
+        r.static_ttl_ms = Some(3_600_000);
+        r.message_ttl_ms = Some(300_000);
+        r.cache_touched = false;
+        map.record(&r);
         let entry = map.parent("resp-1").expect("the response id was recorded");
         assert!(!entry.live(1_000), "no warmth was ever confirmed");
+        assert_eq!(entry.ttl_ms, 0, "no warmth without cache evidence");
         assert_eq!(
             map.entry("m", "s1"),
             None,
@@ -497,7 +543,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        // An expired fourth boundary (account a3) above a live third (account a2): the walk steps over it.
+        // A fourth boundary the predicate refuses by account (a3) above a live third (a2): the walk steps over it.
         let (depth, _) = map
             .deepest("m", &boundaries, |e| e.account_id != "a3")
             .expect("the third boundary is accepted");
@@ -507,24 +553,45 @@ mod tests {
     #[test]
     fn the_lookup_steps_over_an_entry_under_another_incarnation() {
         let mut map = AffinityMap::default();
-        map.record(&report("k", "a", 1_000));
+        // b1 is still owned by a1's recorded incarnation; b2's account moved on to incarnation 2 since.
+        map.record(&AffinityReport {
+            message_boundaries: vec!["b1".into()],
+            request_id: None,
+            message_id: None,
+            ..report("k", "a1", 1_000)
+        });
+        map.record(&AffinityReport {
+            message_boundaries: vec!["b2".into()],
+            request_id: None,
+            message_id: None,
+            ..report("k", "a2", 2_000)
+        });
         let boundaries = vec!["b1".to_string(), "b2".to_string()];
-        let no_incarnation = |_: &str| None;
+        let incarnation_of = |account_id: &str| match account_id {
+            "a1" => Some(1),
+            "a2" => Some(2),
+            _ => None,
+        };
         let query = ConversationQuery {
             canonical_model: "m",
             key_id: "k",
             key_generation: 0,
             parent_ids: &[],
             message_boundaries: &boundaries,
-            incarnation_of: &no_incarnation,
+            incarnation_of: &incarnation_of,
         };
-        assert_eq!(map.conversation(&query), None);
+        let found = map
+            .conversation(&query)
+            .expect("b1's shallower entry is still owned");
+        assert_eq!(found.depth, Some(1));
     }
 
     #[test]
     fn the_purge_drops_an_entry_past_its_keys_ttl_one_whose_key_is_unserved_and_one_whose_account_was_replaced_and_keeps_the_rest(
     ) {
         let mut map = AffinityMap::default();
+        // "expired" and "unserved" sit on a live account, so their own clauses carry the purge, not the
+        // incarnation mismatch that "replaced" relies on.
         map.record(&AffinityReport {
             message_boundaries: vec!["expired".into()],
             ..report("expired-key", "a", 1_000)
@@ -535,7 +602,7 @@ mod tests {
         });
         map.record(&AffinityReport {
             message_boundaries: vec!["replaced".into()],
-            ..report("live-key", "a", 1_000)
+            ..report("live-key", "c", 1_000)
         });
         map.record(&AffinityReport {
             message_boundaries: vec!["kept".into()],
@@ -547,8 +614,12 @@ mod tests {
             _ => Some(1_000_000),
         };
         let incarnation_of = |account_id: &str| match account_id {
-            "a" => None,
-            _ => Some(1),
+            "a" => Some(1),
+            "b" => Some(1),
+            // Replaced under a new incarnation, not absent outright: distinguishes a mismatch from a gone
+            // account.
+            "c" => Some(2),
+            _ => None,
         };
         let now = 5_000;
         let gone = map.purge(now, ttl_of, incarnation_of);
@@ -601,5 +672,104 @@ mod tests {
         let found = map
             .conversation(&query)
             .expect("the parent id is found under a model the report never used");
+    }
+
+    #[test]
+    fn a_report_under_the_spelling_after_the_table_knows_its_dated_id_lands_under_the_dated_id() {
+        let mut map = AffinityMap::default();
+        map.learn_resolution("spelling", "dated");
+        let mut r = report("k", "a", 1_000);
+        r.canonical_model = "spelling".into();
+        map.record(&r);
+        assert!(map.entry("dated", "b2").is_some());
+    }
+
+    #[test]
+    fn a_lookup_with_the_spelling_finds_an_entry_recorded_under_the_dated_id() {
+        let mut map = AffinityMap::default();
+        map.learn_resolution("spelling", "dated");
+        let mut r = report("k", "a", 1_000);
+        r.canonical_model = "dated".into();
+        map.record(&r);
+        assert!(map.entry("spelling", "b2").is_some());
+    }
+
+    #[test]
+    fn an_entry_recorded_under_the_spelling_before_the_resolution_is_not_found_after_it_and_ages_out_through_the_purge(
+    ) {
+        let mut map = AffinityMap::default();
+        let mut r = report("k", "a", 1_000);
+        r.canonical_model = "spelling".into();
+        map.record(&r);
+        map.learn_resolution("spelling", "dated");
+        assert_eq!(
+            map.entry("dated", "b2"),
+            None,
+            "not found under the dated id"
+        );
+        assert_eq!(
+            map.entry("spelling", "b2"),
+            None,
+            "not found under the spelling either, since the lookup canonicalizes forward"
+        );
+        let ttl_of = |_: &str| Some(1_000);
+        let incarnation_of = |_: &str| Some(1);
+        let gone = map.purge(10_000, ttl_of, incarnation_of);
+        assert_eq!(
+            gone.len(),
+            4,
+            "the stranded entry still ages out on its own ttl"
+        );
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn a_report_with_no_root_and_no_message_boundaries_names_no_parent() {
+        let mut map = AffinityMap::default();
+        let report_without_root = AffinityReport {
+            message_boundaries: Vec::new(),
+            ..report("k", "a", 1_000)
+        };
+        let rows = map.record(&report_without_root);
+        assert!(
+            rows.is_empty(),
+            "no root can be named, so nothing is recorded"
+        );
+        assert!(map.parent("resp-1").is_none());
+        assert!(map.parent("req-1").is_none());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn an_unconfirmed_refresh_keeps_the_old_warm_deadline_and_a_confirmed_one_extends_it() {
+        let mut r = report("k", "a", 0);
+        r.cache_touched = true;
+        r.message_ttl_ms = Some(300_000); // five minutes
+
+        let mut unconfirmed = AffinityMap::default();
+        unconfirmed.record(&r);
+        let link_only = AffinityReport {
+            cache_touched: false,
+            ..report("k", "a", 240_000) // four minutes later
+        };
+        unconfirmed.record(&link_only);
+        assert!(
+            !unconfirmed.entry("m", "b2").unwrap().live(360_000),
+            "the original five-minute deadline was not moved: not live at six minutes"
+        );
+
+        let mut confirmed = AffinityMap::default();
+        confirmed.record(&r);
+        let confirmed_refresh = AffinityReport {
+            cache_touched: true,
+            message_ttl_ms: Some(300_000),
+            ..report("k", "a", 240_000)
+        };
+        confirmed.record(&confirmed_refresh);
+        assert!(
+            confirmed.entry("m", "b2").unwrap().live(540_000),
+            "a confirmed refresh resets the deadline from its own written_at: live to nine minutes"
+        );
+        assert!(!confirmed.entry("m", "b2").unwrap().live(540_001));
     }
 }

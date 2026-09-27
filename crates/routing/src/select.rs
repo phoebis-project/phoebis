@@ -282,7 +282,7 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i6
 }
 
 /// The pool's affinity in milliseconds, saturating for a value no clock reaches.
-fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
+pub(crate) fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
     i64::try_from(pool.affinity_ttl_seconds)
         .ok()
         .and_then(|s| s.checked_mul(1_000))
@@ -388,7 +388,7 @@ pub fn select(
     };
     let ttl_ms = affinity_ttl_ms(pool);
     // A marker-less request writes no cache, so under `when_cached` it has no pin to keep and spreads by the
-    // strategy instead of pinning; `always`, a marked request, or a non-portable one pins as before.
+    // strategy instead of pinning; `always`, a marked request, or a non-portable one still pins.
     let session = request.session_id.as_deref().filter(|_| {
         ttl_ms > 0
             && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)

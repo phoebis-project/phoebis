@@ -8,8 +8,6 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)";
-
 fn ok() -> Rule {
     Rule {
         path_prefix: "/v1/messages".into(),

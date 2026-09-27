@@ -14,6 +14,7 @@ use tokio::time::Instant;
 
 use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
+use crate::select::affinity_ttl_ms;
 use crate::RegistrySnapshot;
 
 /// The sample TTL a state nobody configured ages readings on. The router task replaces it with its own
@@ -522,8 +523,12 @@ pub struct RoutingState {
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
+        let mut affinity_map = AffinityMap::from_rows(load.affinity);
+        for resolution in &load.resolutions {
+            affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
+        }
         RoutingState {
-            affinity: Arc::new(RwLock::new(AffinityMap::from_rows(load.affinity))),
+            affinity: Arc::new(RwLock::new(affinity_map)),
             cooldowns: load
                 .cooldowns
                 .into_iter()
@@ -1076,6 +1081,10 @@ impl RoutingState {
         };
         self.resolutions
             .insert(spelling.to_string(), dated_id.to_string());
+        self.affinity
+            .write()
+            .expect("affinity lock poisoned")
+            .learn_resolution(spelling, dated_id);
 
         let moved_pins: Vec<PinRow> = self
             .pins
@@ -1208,12 +1217,7 @@ impl RoutingState {
                 let ttl = snapshot
                     .key(&p.key_id)
                     .and_then(|k| snapshot.pool(&k.pool_id))
-                    .map(|pool| {
-                        i64::try_from(pool.affinity_ttl_seconds)
-                            .ok()
-                            .and_then(|s| s.checked_mul(1_000))
-                            .unwrap_or(i64::MAX)
-                    });
+                    .map(affinity_ttl_ms);
                 match ttl {
                     // No key or no pool: nothing serves the pin any more.
                     None => Some((k.clone(), "unserved")),
@@ -1257,12 +1261,7 @@ impl RoutingState {
             snapshot
                 .key(key_id)
                 .and_then(|k| snapshot.pool(&k.pool_id))
-                .map(|pool| {
-                    i64::try_from(pool.affinity_ttl_seconds)
-                        .ok()
-                        .and_then(|s| s.checked_mul(1_000))
-                        .unwrap_or(i64::MAX)
-                })
+                .map(affinity_ttl_ms)
         };
         let affinity = self
             .affinity

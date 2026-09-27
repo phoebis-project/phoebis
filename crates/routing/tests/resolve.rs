@@ -81,6 +81,7 @@ fn snapshot() -> RegistrySnapshot {
             account("a"),
             account("b"),
             account("f"),
+            account("g"),
             account_kind("oauth-member", AccountKind::Oauth),
         ],
         credential_generations: Vec::new(),
@@ -188,15 +189,22 @@ fn snapshot() -> RegistrySnapshot {
             },
             PoolMember {
                 pool_id: "mixed".into(),
-                account_id: "oauth-member".into(),
+                account_id: "a".into(),
                 priority: 0,
                 budget_usd: None,
                 budget_period: BudgetPeriod::Month,
             },
             PoolMember {
                 pool_id: "mixed".into(),
-                account_id: "a".into(),
+                account_id: "oauth-member".into(),
                 priority: 1,
+                budget_usd: None,
+                budget_period: BudgetPeriod::Month,
+            },
+            PoolMember {
+                pool_id: "mixed".into(),
+                account_id: "g".into(),
+                priority: 2,
                 budget_usd: None,
                 budget_period: BudgetPeriod::Month,
             },
@@ -353,6 +361,6 @@ fn a_claude_code_request_resolves_every_member_regardless_of_kind() {
             "claude-sonnet-5",
         )
         .unwrap()),
-        ["oauth-member".to_string(), "a".to_string()]
+        ["a".to_string(), "oauth-member".to_string(), "g".to_string()]
     );
 }

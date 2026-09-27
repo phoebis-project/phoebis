@@ -760,7 +760,7 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
         .method("POST")
         .uri("/v1/messages/count_tokens")
         .header("Authorization", "Bearer phoebis-testkey")
-        .header("User-Agent", "claude-cli/2.1.269 (external, sdk-cli)")
+        .header("User-Agent", CLAUDE_CLI_USER_AGENT)
         .header("x-claude-code-session-id", "s1")
         .body(Body::from(
             r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#,

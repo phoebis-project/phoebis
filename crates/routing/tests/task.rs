@@ -3305,7 +3305,6 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
     .await;
 
     store.delete_account("a", "test").unwrap();
-    handle.reload().await.unwrap();
     store
         .insert_account(&AccountRow {
             id: "a".into(),
@@ -3331,6 +3330,8 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
             "test",
         )
         .unwrap();
+    // A single reload sees the account already recreated under a fresh incarnation, so the purge drops the
+    // old holder's entry as one under another incarnation, not as one whose account is gone.
     handle.reload().await.unwrap();
     assert!(
         handle.affinity().read().unwrap().is_empty(),

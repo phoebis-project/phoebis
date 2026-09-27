@@ -140,7 +140,7 @@ async fn an_oauth_account_adds_the_oauth_beta_once_and_an_api_key_account_strips
     let raw = lines(
         &[
             "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
-            "User-Agent: claude-cli/2.1.269 (external, sdk-cli)",
+            &format!("User-Agent: {CLAUDE_CLI_USER_AGENT}"),
             &format!("anthropic-beta: {caller}"),
             "anthropic-version: 2023-06-01",
         ],
@@ -331,7 +331,7 @@ async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
     let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
-         User-Agent: claude-cli/2.1.269 (external, sdk-cli)\r\n\
+         User-Agent: {CLAUDE_CLI_USER_AGENT}\r\n\
          anthropic-beta: claude-code-20250219\r\nanthropic-beta: claude-code-20250219\r\n\
          anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\nContent-Length: {length}\r\n\r\n",
         length = native.len()
@@ -457,7 +457,7 @@ async fn two_beta_lines_reach_the_upstream_as_one_list() {
     let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
-         User-Agent: claude-cli/2.1.269 (external, sdk-cli)\r\n\
+         User-Agent: {CLAUDE_CLI_USER_AGENT}\r\n\
          anthropic-beta: claude-code-20250219\r\nanthropic-beta: interleaved-thinking-2025-05-14\r\n\
          anthropic-version: 2023-06-01\r\nContent-Length: {length}\r\n\r\n",
         length = native.len()

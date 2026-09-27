@@ -30,6 +30,8 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
+/// The Claude Code CLI's user agent, so a test whose point is not the client class needs no shape of its own.
+pub const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)";
 pub const KEY: &str = "phoebis-testkey";
 /// A raw Messages caller, not Claude Code.
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
