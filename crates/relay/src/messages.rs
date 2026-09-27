@@ -1037,7 +1037,7 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
-        let client_class = ClientClass::of_label(&identity.client);
+        let client_class = identity.class;
         let candidates = match resolve(
             &snapshot,
             &key,

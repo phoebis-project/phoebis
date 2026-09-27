@@ -38,13 +38,15 @@ impl Chains {
         let mut static_sizes = Vec::new();
         let mut running_bytes: u64 = 0;
         let mut previous = Sha256::digest(STATIC_SEED).to_vec();
-        previous = boundary(&previous, tools);
-        running_bytes += canonical_len(tools);
+        let (next, len) = boundary(&previous, tools);
+        previous = next;
+        running_bytes += len;
         static_boundaries.push(hex(&previous));
         static_sizes.push(running_bytes / 4);
         for block in system_blocks(root.get("system")) {
-            previous = boundary(&previous, block);
-            running_bytes += canonical_len(block);
+            let (next, len) = boundary(&previous, block);
+            previous = next;
+            running_bytes += len;
             static_boundaries.push(hex(&previous));
             static_sizes.push(running_bytes / 4);
         }
@@ -52,7 +54,7 @@ impl Chains {
         let mut previous = Sha256::digest(MESSAGE_SEED).to_vec();
         if let Some(Value::Array(messages)) = root.get("messages") {
             for message in messages {
-                previous = boundary(&previous, message);
+                previous = boundary(&previous, message).0;
                 message_boundaries.push(hex(&previous));
             }
         }
@@ -107,21 +109,16 @@ pub fn canonical(value: &Value, out: &mut Vec<u8>) {
     }
 }
 
-/// One link of a chain: the digest of the previous boundary's bytes and the block's canonical form.
-fn boundary(previous: &[u8], block: &Value) -> Vec<u8> {
+/// One link of a chain: the digest of the previous boundary's bytes and the block's canonical form, plus the
+/// canonical byte length the static chain's promised-size estimate needs, so a caller never canonicalizes the
+/// same block twice.
+fn boundary(previous: &[u8], block: &Value) -> (Vec<u8>, u64) {
     let mut bytes = Vec::new();
     canonical(block, &mut bytes);
     let mut hasher = Sha256::new();
     hasher.update(previous);
     hasher.update(&bytes);
-    hasher.finalize().to_vec()
-}
-
-/// A block's canonical byte length, for the static chain's promised-size estimate.
-fn canonical_len(block: &Value) -> u64 {
-    let mut bytes = Vec::new();
-    canonical(block, &mut bytes);
-    bytes.len() as u64
+    (hasher.finalize().to_vec(), bytes.len() as u64)
 }
 
 fn hex(bytes: &[u8]) -> String {

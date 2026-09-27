@@ -351,8 +351,10 @@ impl AffinityMap {
                 entry.ttl_ms = (entry.written_at + entry.ttl_ms - report.now).max(0);
                 entry.written_at = report.now;
             }
+            // The root stays the one the boundary was first recorded under: a later writer sharing it (a fork's
+            // own turns landing on the same account) refreshes the links and the warmth, never re-roots the
+            // conversation that got here first.
             entry.incarnation = report.incarnation;
-            entry.root = root.to_string();
             self.dirty.insert(key);
             return None;
         }

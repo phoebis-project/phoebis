@@ -126,7 +126,7 @@ impl BodyFacts {
 }
 
 /// A marker without a `ttl` is the upstream's five-minute default; `1h` is the one other value it takes.
-fn marker_ttl_ms(marker: &Value) -> i64 {
+pub(crate) fn marker_ttl_ms(marker: &Value) -> i64 {
     match marker.get("ttl").and_then(Value::as_str) {
         Some("1h") => 3_600_000,
         _ => 300_000,

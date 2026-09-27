@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::Request;
 use phoebis_bus::{Bus, Event, Fork};
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -154,7 +154,7 @@ async fn a_one_hour_static_tier_and_a_five_minute_tail_record_both_lifetimes() {
 async fn a_marker_on_the_tail_alone_leaves_the_static_boundaries_unrecorded() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: ok("msg_1", None, false),
+        respond: ok("msg_1", None, true),
     }])
     .await;
     let (h, mut sub) = setup(&up, &one()).await;
@@ -167,6 +167,7 @@ async fn a_marker_on_the_tail_alone_leaves_the_static_boundaries_unrecorded() {
     }]);
     let chains = phoebis_relay::Chains::read(&value).unwrap();
     let static_hash = chains.static_hash().unwrap().to_string();
+    let tail_hash = chains.tail_hash().unwrap().to_string();
 
     send(&h, req(&value)).await;
     identified(&mut sub).await;
@@ -174,9 +175,24 @@ async fn a_marker_on_the_tail_alone_leaves_the_static_boundaries_unrecorded() {
     {
         let map = h.router.affinity();
         let guard = map.read().unwrap();
+        let now = h.clock.load(std::sync::atomic::Ordering::SeqCst);
+        let static_entry = guard
+            .entry(MODEL, &static_hash)
+            .expect("the links are always recorded, even without a marker of their own");
+        assert_eq!(
+            static_entry.ttl_ms, 0,
+            "no marker on the static tier confirms no warmth"
+        );
         assert!(
-            guard.entry(MODEL, &static_hash).is_none(),
-            "no cache evidence at all, so the static tier is never written"
+            !static_entry.live(now),
+            "an unconfirmed link is never live, so the static tier is never placed by"
+        );
+        let message_entry = guard
+            .entry(MODEL, &tail_hash)
+            .expect("the tail's own marker lands on the message tier");
+        assert_eq!(
+            message_entry.ttl_ms, 300_000,
+            "the tail's marker with no ttl member is the five-minute default"
         );
     }
     up.shutdown().await;
@@ -206,6 +222,7 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
 
     let account_id = h.router.pins().await.unwrap()[0].account_id.clone();
     let key = h.store.api_key("desktop").unwrap().unwrap();
+    let now = h.clock.load(std::sync::atomic::Ordering::SeqCst);
     {
         let map = h.router.affinity();
         let guard = map.read().unwrap();
@@ -214,7 +231,7 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
                 .entry(MODEL, boundary)
                 .expect("every message boundary lands in the map");
             assert_eq!(entry.chain, phoebis_routing::AffinityChain::Message);
-            assert!(entry.live(0));
+            assert!(entry.live(now));
             assert_eq!(entry.account_id, account_id);
             assert_eq!(entry.key_id, key.id);
             assert_eq!(entry.key_generation, key.created_at);
@@ -231,6 +248,46 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
             .entry(MODEL, &static_hash)
             .expect("the static boundary lands too, under the same cache evidence");
         assert_eq!(static_entry.chain, phoebis_routing::AffinityChain::Static);
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_streamed_answer_lands_its_message_id_in_the_affinity_map() {
+    let events = vec![
+        SseEvent {
+            event: "message_start".into(),
+            data: r#"{"type":"message_start","message":{"id":"msg_stream_1","usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
+        },
+        SseEvent {
+            event: "message_stop".into(),
+            data: r#"{"type":"message_stop"}"#.into(),
+        },
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events,
+            delay_between: std::time::Duration::from_millis(1),
+        },
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let mut value = body(vec![user("a streamed turn")]);
+    value["stream"] = json!(true);
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        let response_entry = guard
+            .parent("msg_stream_1")
+            .expect("the streamed answer's own message id lands as a response link, off the message_start event");
+        assert_eq!(response_entry.chain, phoebis_routing::AffinityChain::Response);
     }
     up.shutdown().await;
 }
@@ -381,6 +438,50 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
         identified(&mut sub).await,
         Fork::default(),
         "s2's own continuation carries no fork"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let four = vec![
+        user("one"),
+        assistant("two"),
+        user("three"),
+        assistant("four"),
+    ];
+    let mut s1_req = req(&body(four.clone()));
+    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    send(&h, s1_req).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+
+    let mut s2_messages = four[..3].to_vec();
+    s2_messages.push(assistant("a different fourth"));
+    let mut s2_req = req(&body(s2_messages));
+    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    send(&h, s2_req).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+
+    // s1's own retry of its fourth message shares a boundary s2's fork also wrote (both on the one account this
+    // harness has): the shared boundary must keep s1's own root, not the latest writer's.
+    let mut s1_retry = four[..3].to_vec();
+    s1_retry.push(assistant("a retried fourth"));
+    let mut s1_retry_req = req(&body(s1_retry));
+    set_header(&mut s1_retry_req, "x-claude-code-session-id", "s1");
+    send(&h, s1_retry_req).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork::default(),
+        "s1's own retry after s2's fork reads no false fork"
     );
     up.shutdown().await;
 }

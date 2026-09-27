@@ -370,19 +370,9 @@ pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
     }
     let ttl_ms = |span: Option<(usize, usize)>| {
         span.map(|(start, end)| {
-            let hour = serde_json::from_slice::<serde_json::Value>(&body[start..end])
+            serde_json::from_slice::<serde_json::Value>(&body[start..end])
                 .ok()
-                .and_then(|marker| {
-                    marker
-                        .get("ttl")
-                        .and_then(|t| t.as_str().map(str::to_string))
-                })
-                == Some("1h".to_string());
-            if hour {
-                3_600_000
-            } else {
-                300_000
-            }
+                .map_or(300_000, |marker| crate::facts::marker_ttl_ms(&marker))
         })
     };
     (ttl_ms(static_marker), ttl_ms(message_marker))
