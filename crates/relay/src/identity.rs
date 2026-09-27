@@ -2,6 +2,8 @@
 
 use axum::http::HeaderMap;
 use phoebis_bus::OTHER_CLIENT;
+use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery};
+use phoebis_store::{AffinitySource, ApiKeyRow};
 
 use crate::billing::entrypoint_of;
 use crate::RelayError;
@@ -30,8 +32,16 @@ pub struct RequestIdentity {
     pub canonical_model: String,
     /// `claude-code/<entrypoint>` or `other`: a log label, never a gate.
     pub client: String,
+    /// The class the label maps to.
+    pub class: ClientClass,
+    /// For a request whose messages continue another conversation of the key and generation: that
+    /// conversation's root (its session id) and the matched depth. The session id stays
+    /// the identity; `None` for a session's own continuation.
+    pub forked_from: Option<String>,
+    pub fork_depth: Option<u32>,
 }
 
+/// Reads what the request says about itself, which `climb` completes with the fork facts.
 pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, RelayError> {
     let model = string_member(body, &["model"]).ok_or(RelayError::NoModel)?;
     let folded_model = {
@@ -49,6 +59,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     }
     // The header is the client's own statement of the session.
     let session_id = header_id(headers, "x-claude-code-session-id");
+    let client = client_class(headers);
     Ok(RequestIdentity {
         session_id,
         agent_id: header_id(headers, "x-claude-code-agent-id")
@@ -58,8 +69,62 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         model,
         canonical_model: folded_model.clone(),
         folded_model,
-        client: client_class(headers),
+        class: ClientClass::of_label(&client),
+        client,
+        forked_from: None,
+        fork_depth: None,
     })
+}
+
+/// Fixes `session_id` for the key's `affinity_source`, and `forked_from` and
+/// `fork_depth` for a request with a session id; reads `canonical_model`. `message_boundaries` are the request's own, from
+/// `BodyFacts.chains` (empty for a body without a chain): the fork detection's input, which `RequestIdentity` does
+/// not retain.
+pub fn climb(
+    identity: &mut RequestIdentity,
+    key: &ApiKeyRow,
+    message_boundaries: &[String],
+    lookup: &dyn ConversationLookup,
+) {
+    let canonical_model = identity.canonical_model.clone();
+    // The relay has no incarnation reading of its own; the `RouterHandle` implementation substitutes the
+    // snapshot's, so a raw lookup only sees this when it is not that handle.
+    let no_incarnation = |_: &str| None;
+    let ask = |parent_ids: &[String], boundaries: &[String]| {
+        // A boundary-less, parent-less call would answer nothing anyway; skipped so the lookup is never
+        // reached over an empty slice.
+        if parent_ids.is_empty() && boundaries.is_empty() {
+            return None;
+        }
+        lookup.conversation(&ConversationQuery {
+            canonical_model: &canonical_model,
+            key_id: &key.id,
+            key_generation: key.created_at,
+            parent_ids,
+            message_boundaries: boundaries,
+            incarnation_of: &no_incarnation,
+        })
+    };
+
+    // A fixed source other than `Session` runs its own rung alone, so rung 1's tentative guess never leaks
+    // through as the resolved identity.
+    if !matches!(
+        key.affinity_source,
+        AffinitySource::Auto | AffinitySource::Session
+    ) {
+        identity.session_id = None;
+    }
+
+    // A session that has no pin of its own is new to the map, so its deepest own-key match names the
+    // conversation it branched from; the session id keeps the identity.
+    if identity.session_id.is_some() {
+        if let Some(m) = ask(&[], message_boundaries) {
+            if identity.session_id.as_deref() != Some(m.root.as_str()) {
+                identity.forked_from = Some(m.root);
+                identity.fork_depth = m.depth;
+            }
+        }
+    }
 }
 
 /// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
@@ -206,5 +271,147 @@ mod tests {
             OTHER_CLIENT,
             "a stainless header on an agent outside Claude Code does not change the label"
         );
+    }
+
+    #[test]
+    fn the_class_is_derived_from_the_same_label_the_client_field_carries() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::USER_AGENT,
+            "claude-cli/2.1.269".parse().unwrap(),
+        );
+        let identity = identify(&headers, BODY).expect("the body has a model");
+        assert_eq!(identity.class, ClientClass::ClaudeCode);
+        assert_eq!(identity.client, "claude-code/cli");
+        let identity = identify(&HeaderMap::new(), BODY).expect("the body has a model");
+        assert_eq!(identity.class, ClientClass::Other);
+    }
+
+    // -- climb --
+
+    use std::collections::HashMap;
+
+    use phoebis_routing::ConversationMatch;
+    use phoebis_store::RulesMode;
+
+    fn key(source: AffinitySource) -> ApiKeyRow {
+        ApiKeyRow {
+            id: "k".into(),
+            label: "k".into(),
+            notes: None,
+            pool_id: "main".into(),
+            enabled: true,
+            revoked_at: None,
+            expires_at: None,
+            model_rules: Vec::new(),
+            model_rules_mode: RulesMode::Extend,
+            long_context_twins: false,
+            keepalive_opt_out: false,
+            body_capture_hours: None,
+            secret_digest: Vec::new(),
+            prefix: "k".into(),
+            created_at: 0,
+            rotated_at: None,
+            last_used_at: None,
+            retired_secret_last_used_at: None,
+            in_flight_cap: None,
+            affinity_source: source,
+        }
+    }
+
+    fn identity_of(
+        session_id: Option<&str>,
+    ) -> RequestIdentity {
+        RequestIdentity {
+            session_id: session_id.map(String::from),
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-4-5".into(),
+            folded_model: "claude-sonnet-4-5".into(),
+            canonical_model: "claude-sonnet-4-5".into(),
+            client: "claude-code/cli".into(),
+            class: ClientClass::ClaudeCode,
+            forked_from: None,
+            fork_depth: None,
+        }
+    }
+
+    fn matched(root: &str, depth: Option<u32>) -> ConversationMatch {
+        ConversationMatch {
+            root: root.into(),
+            depth,
+        }
+    }
+
+    /// A `HashMap`-backed lookup, filtered by the owning key the way the real map filters by key id.
+    struct Stub(HashMap<&'static str, (&'static str, ConversationMatch)>);
+
+    impl ConversationLookup for Stub {
+        fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch> {
+            query.message_boundaries.iter().rev().find_map(|b| {
+                self.0
+                    .get(b.as_str())
+                    .filter(|(owner, _)| *owner == query.key_id)
+                    .map(|(_, m)| m.clone())
+            })
+        }
+    }
+
+    #[test]
+    fn a_session_header_names_the_conversation() {
+        let mut identity = identity_of(Some("s1"));
+        let k = key(AffinitySource::Auto);
+        climb(&mut identity, &k, &[], &Stub(HashMap::new()));
+        assert_eq!(identity.session_id.as_deref(), Some("s1"));
+        assert_eq!(identity.forked_from, None);
+        assert_eq!(identity.fork_depth, None);
+    }
+
+    #[test]
+    fn an_empty_boundary_slice_never_reaches_the_lookup() {
+        struct Panicking;
+        impl ConversationLookup for Panicking {
+            fn conversation(&self, _: &ConversationQuery<'_>) -> Option<ConversationMatch> {
+                panic!("the lookup must never be asked with an empty boundary slice")
+            }
+        }
+        let mut identity = identity_of(Some("s1"));
+        let k = key(AffinitySource::Content);
+        climb(&mut identity, &k, &[], &Panicking);
+        assert_eq!(identity.forked_from, None);
+    }
+
+    #[test]
+    fn a_session_request_whose_messages_continue_another_conversation_is_a_fork_of_it() {
+        let mut identity = identity_of(Some("s1"));
+        let k = key(AffinitySource::Auto);
+        let mut map = HashMap::new();
+        map.insert("b3", ("k", matched("s0", Some(3))));
+        climb(
+            &mut identity,
+            &k,
+            &["b1".into(), "b2".into(), "b3".into()],
+            &Stub(map),
+        );
+        assert_eq!(identity.session_id.as_deref(), Some("s1"));
+        assert_eq!(identity.forked_from.as_deref(), Some("s0"));
+        assert_eq!(identity.fork_depth, Some(3));
+    }
+
+    #[test]
+    fn a_session_requests_own_continuation_is_no_fork() {
+        let mut identity = identity_of(Some("s1"));
+        let k = key(AffinitySource::Auto);
+        let mut map = HashMap::new();
+        map.insert("b3", ("k", matched("s1", Some(3))));
+        climb(
+            &mut identity,
+            &k,
+            &["b1".into(), "b2".into(), "b3".into()],
+            &Stub(map),
+        );
+        assert_eq!(identity.forked_from, None);
+        assert_eq!(identity.fork_depth, None);
     }
 }

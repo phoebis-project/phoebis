@@ -8,7 +8,7 @@ use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use phoebis_bus::{Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
-use phoebis_routing::{PinRef, PinUsage, Report, RouterHandle};
+use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
@@ -92,6 +92,8 @@ pub(crate) struct Publish {
     pub on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
     /// The pin a committed answer renews, or a rejection releases, sent with the usage `finish` assembled.
     pub renewal: Option<Renewal>,
+    /// The conversation report a committed answer sends, beside the renewal.
+    pub affinity: Option<AffinityFacts>,
 }
 
 /// A pinned answer's report on its pin, sent once the answer has ended and its usage is known: a renewal, or
@@ -144,6 +146,70 @@ impl Renewal {
             canonical_model: self.canonical_model,
             cache_ttl_ms: self.cache_ttl_ms,
         });
+    }
+}
+
+/// A completed inference or probe answer's report on its conversation: built at the commit beside the renewal
+/// with every fact the request knows, completed and sent as `Report::Affinity` once the answer has ended and its
+/// message id and usage are known. A token count builds none: it writes no cache.
+pub(crate) struct AffinityFacts {
+    pub router: RouterHandle,
+    pub account_id: String,
+    pub incarnation: u64,
+    pub key_id: String,
+    pub key_generation: i64,
+    pub canonical_model: String,
+    /// The identity's `session_id`, `None` for a request with no identity (the first message boundary is the
+    /// root then).
+    pub root: Option<String>,
+    pub static_boundaries: Vec<String>,
+    pub static_sizes: Vec<u64>,
+    pub message_boundaries: Vec<String>,
+    /// The upstream head's `request-id`, the id a client sends back as `cc_prev_req`.
+    pub request_id: Option<String>,
+    /// `tier_ttls` of the body as this pass sent it upstream.
+    pub static_ttl_ms: Option<i64>,
+    pub message_ttl_ms: Option<i64>,
+}
+
+impl AffinityFacts {
+    /// Converts into `AffinityReport` (`cache_touched` and `prefix_tokens` from the usage's three cache fields,
+    /// false and 0 without them) and sends `Report::Affinity` through `router.report`; a committed answer only
+    /// (`status == 200`), since a rejection continues no conversation.
+    pub(crate) fn send(
+        self,
+        now: i64,
+        status: u16,
+        message_id: Option<String>,
+        usage: Option<&Usage>,
+    ) {
+        // A rejection continues no conversation, so it leaves no link to resolve a later request by.
+        if status != 200 {
+            return;
+        }
+        let cached = |field: fn(&Usage) -> Option<u64>| usage.and_then(field).unwrap_or(0);
+        let prefix_tokens = cached(|u| u.cache_read_tokens)
+            + cached(|u| u.cache_write_5m_tokens)
+            + cached(|u| u.cache_write_1h_tokens);
+        let report = AffinityReport {
+            account_id: self.account_id,
+            incarnation: self.incarnation,
+            key_id: self.key_id,
+            key_generation: self.key_generation,
+            canonical_model: self.canonical_model,
+            root: self.root,
+            static_boundaries: self.static_boundaries,
+            message_boundaries: self.message_boundaries,
+            static_sizes: self.static_sizes,
+            message_id,
+            request_id: self.request_id,
+            static_ttl_ms: self.static_ttl_ms,
+            message_ttl_ms: self.message_ttl_ms,
+            cache_touched: prefix_tokens > 0,
+            prefix_tokens,
+            now,
+        };
+        self.router.report(Report::Affinity(report));
     }
 }
 
@@ -318,6 +384,14 @@ impl Publish {
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
         if let Some(renewal) = self.renewal.take() {
             renewal.send((self.clock)(), self.status, usage.as_ref());
+        }
+        if let Some(affinity) = self.affinity.take() {
+            affinity.send(
+                (self.clock)(),
+                self.status,
+                self.message_id.clone(),
+                usage.as_ref(),
+            );
         }
         self.trace
             .complete(

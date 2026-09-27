@@ -340,6 +340,54 @@ fn add_top_level_cache_control(body: &mut Vec<u8>, ttl: CacheTtl) {
     }
 }
 
+/// The lifetime of the deepest marker on each tier of an edited body, `(static, message)` in ms: a marker inside
+/// `tools[]` or `system[]` is the static tier's, one inside `messages[]` the message tier's, a top-level member
+/// both; `None` for a tier without a marker.
+pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
+    let Ok(spans) = phoebis_cch::cache_control_spans(body) else {
+        return (None, None);
+    };
+    let tools = phoebis_cch::object_member_span(body, &["tools"]);
+    let system = phoebis_cch::object_member_span(body, &["system"]);
+    let messages = phoebis_cch::object_member_span(body, &["messages"]);
+    let within = |span: Option<(usize, usize)>, at: usize| {
+        span.is_some_and(|(start, end)| (start..end).contains(&at))
+    };
+    // The deepest marker per tier by offset: the last one in body order, which is the tail the pin's warmth
+    // reads. A marker inside neither container is a top-level member and counts for both tiers.
+    let mut static_marker = None;
+    let mut message_marker = None;
+    for (start, end) in spans {
+        let is_static = within(tools, start) || within(system, start);
+        let is_message = within(messages, start);
+        let is_top_level = !is_static && !is_message;
+        if (is_static || is_top_level) && static_marker.is_none_or(|(s, _)| start > s) {
+            static_marker = Some((start, end));
+        }
+        if (is_message || is_top_level) && message_marker.is_none_or(|(s, _)| start > s) {
+            message_marker = Some((start, end));
+        }
+    }
+    let ttl_ms = |span: Option<(usize, usize)>| {
+        span.map(|(start, end)| {
+            let hour = serde_json::from_slice::<serde_json::Value>(&body[start..end])
+                .ok()
+                .and_then(|marker| {
+                    marker
+                        .get("ttl")
+                        .and_then(|t| t.as_str().map(str::to_string))
+                })
+                == Some("1h".to_string());
+            if hour {
+                3_600_000
+            } else {
+                300_000
+            }
+        })
+    };
+    (ttl_ms(static_marker), ttl_ms(message_marker))
+}
+
 /// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
 /// without `stream` gets it last. Never rewrites a member the client sent.
 fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
@@ -767,6 +815,26 @@ mod tests {
         for (start, end) in spans {
             assert_eq!(&body[start..end], br#"{"type":"ephemeral","ttl":"1h"}"#);
         }
+    }
+
+    #[test]
+    fn tier_ttls_reads_the_deepest_marker_per_tier_and_a_top_level_marker_counts_for_both() {
+        let mixed = br#"{"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}],"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]},{"role":"assistant","content":[{"type":"text","text":"y","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        assert_eq!(
+            tier_ttls(mixed),
+            (Some(3_600_000), Some(3_600_000)),
+            "the deepest marker of each tier wins: the last system block and the last message"
+        );
+        let tail_only = br#"{"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}]}"#;
+        assert_eq!(
+            tier_ttls(tail_only),
+            (None, Some(300_000)),
+            "a marker on the tail alone leaves the static tier unrecorded"
+        );
+        let top_level = br#"{"cache_control":{"type":"ephemeral"}}"#;
+        assert_eq!(tier_ttls(top_level), (Some(300_000), Some(300_000)));
+        assert_eq!(tier_ttls(br#"{"messages":[]}"#), (None, None));
+        assert_eq!(tier_ttls(b"not json"), (None, None));
     }
 
     #[test]

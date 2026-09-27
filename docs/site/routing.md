@@ -155,6 +155,7 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `model_rules`, `model_rules_mode`, `long_context_twins` | see Model rules and the client page's models listing |
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
+| `affinity_source` | `auto`, `session`, `user_id`, `content`, or `whole_key`, default `auto`; see [Clients](#clients) |
 
 Rotate issues a new secret under the same id; a revoked key cannot be rotated. Revoke is permanent; a revoked
 key cannot be re-enabled (`409`). Delete removes the key outright. The console's warning when body capture is on
@@ -171,6 +172,12 @@ the admin secret can read them."
 
 Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller
 (the entrypoint token it names, `cli` when it names none) and `other` for anything else.
+
+A conversation is identified by its session header: the session id the client sends names it.
+A key's `affinity_source` fixes one of these rungs instead of walking the whole
+ladder, and a request that does not fit a fixed rung has no identity and no pin. A new session id whose messages
+continue another conversation of the same key keeps its own identity, and is recorded as a fork of that
+conversation at the depth where the two part.
 
 ## Model rules
 
@@ -216,7 +223,7 @@ ledger recorded.
 
 Selection keys every request by `(key id, root session, canonical model)`. The router holds all routing state
 and answers every request over a channel, so two concurrent first requests of the same session cannot claim
-different accounts.
+different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.

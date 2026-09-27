@@ -1,0 +1,386 @@
+//! The conversation climb end to end: what the relay resolves, what lands in the affinity map, and what the pin
+//! sees, for the shapes a conversation's boundaries take across turns, forks, and agents.
+mod common;
+
+use axum::body::Body;
+use axum::http::Request;
+use phoebis_bus::{Bus, Event, Fork};
+use common::*;
+use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
+use serde_json::{json, Value};
+use tower::ServiceExt;
+
+const MODEL: &str = "claude-sonnet-4-5";
+
+fn user(text: &str) -> Value {
+    json!({"role": "user", "content": text})
+}
+
+fn assistant(text: &str) -> Value {
+    json!({"role": "assistant", "content": text})
+}
+
+fn body(messages: Vec<Value>) -> Value {
+    json!({"model": MODEL, "messages": messages})
+}
+
+fn req(value: &Value) -> Request<Body> {
+    use phoebis_profile::fixtures::{inference_head, FixtureKind};
+    let bytes = serde_json::to_vec(value).unwrap();
+    let mut request = request_from_fixture(inference_head(FixtureKind::ApiKey), &bytes, KEY);
+    remove_header(&mut request, "x-claude-code-session-id");
+    request
+}
+
+/// A 200 answer naming `id`, the given `request-id` header when one is asked for, and a cache write in its
+/// usage unless `cache` says otherwise.
+fn ok(id: &str, request_id: Option<&str>, cache: bool) -> Respond {
+    let mut usage = json!({"input_tokens": 10, "output_tokens": 5});
+    if cache {
+        usage["cache_creation_input_tokens"] = json!(200);
+    }
+    let headers = request_id
+        .map(|rid| vec![("request-id".to_string(), rid.to_string())])
+        .unwrap_or_default();
+    Respond::Json {
+        status: 200,
+        headers,
+        body: json!({"id": id, "type": "message", "content": [], "usage": usage})
+            .to_string()
+            .into_bytes(),
+    }
+}
+
+/// A generic 400 that names no injected field: it classifies as a straight commit, forwarded as it came.
+fn a_400() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#
+            .to_vec(),
+    }
+}
+
+/// One harness with its own bus subscriber, so a test reads the fork and the router's own state side by side
+/// without repeating the wiring.
+async fn setup(up: &FakeUpstream, accounts: &[TestAccount]) -> (Harness, phoebis_bus::Subscriber) {
+    let bus = Bus::new();
+    let sub = bus.subscribe("test");
+    let h = harness_with_bus(up, accounts, PoolSpec::default(), bus).await;
+    (h, sub)
+}
+
+fn one() -> Vec<TestAccount> {
+    vec![api_key("a", "sk-ant-api03-CLIMBONE", 0)]
+}
+
+fn two() -> Vec<TestAccount> {
+    vec![
+        api_key("a", "sk-ant-api03-CLIMBTWOA", 0),
+        api_key("b", "sk-ant-api03-CLIMBTWOB", 1),
+    ]
+}
+
+/// Drives the request to completion the way a real client would: dropping the response without reading its
+/// body closes the channel the body-relay task forwards chunks through, which the task reads as the caller
+/// having gone, aborting the read before the answer's `id` or usage ever arrives.
+async fn send(h: &Harness, request: Request<Body>) {
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    let _ = resp.into_body().collect().await;
+}
+
+/// Forces a round trip through the router task's own command queue: since a report only reaches the affinity
+/// map when the task drains it, and the relay's own lookup reads the map directly with no round trip of its
+/// own, a later request's climb is only guaranteed to see an earlier one's report once something ordered on
+/// the same queue (a pins read answers) has come back.
+async fn settle(h: &Harness) {
+    let _ = h.router.pins().await;
+}
+
+/// The fork facts of the request's own observed event, once its response has landed.
+async fn identified(sub: &mut phoebis_bus::Subscriber) -> Fork {
+    let events = drain_until_complete(sub).await;
+    let Some(Event::RequestObserved(observed)) = events
+        .iter()
+        .find(|e| matches!(e, Event::RequestObserved(_)))
+    else {
+        panic!("{events:?}")
+    };
+    observed.fork.clone()
+}
+
+#[tokio::test]
+async fn a_one_hour_static_tier_and_a_five_minute_tail_record_both_lifetimes() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let mut value = body(vec![user("hi"), assistant("hello")]);
+    value["system"] = json!([
+        {"type": "text", "text": "be helpful"},
+        {"type": "text", "text": "a second block", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+    ]);
+    value["messages"][1]["content"] =
+        json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}]);
+    let chains = phoebis_relay::Chains::read(&value).unwrap();
+    let static_hash = chains.static_hash().unwrap().to_string();
+    let tail_hash = chains.tail_hash().unwrap().to_string();
+
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        assert_eq!(
+            guard.entry(MODEL, &static_hash).unwrap().ttl_ms,
+            3_600_000,
+            "the last system block's hour marker is the static tier's"
+        );
+        assert_eq!(
+            guard.entry(MODEL, &tail_hash).unwrap().ttl_ms,
+            300_000,
+            "the last message's marker with no ttl member is the five-minute default"
+        );
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_marker_on_the_tail_alone_leaves_the_static_boundaries_unrecorded() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, false),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let mut value = body(vec![user("a body with a marker on its own tail alone")]);
+    value["messages"][0]["content"] = json!([{
+        "type": "text",
+        "text": "a body with a marker on its own tail alone",
+        "cache_control": {"type": "ephemeral"},
+    }]);
+    let chains = phoebis_relay::Chains::read(&value).unwrap();
+    let static_hash = chains.static_hash().unwrap().to_string();
+
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        assert!(
+            guard.entry(MODEL, &static_hash).is_none(),
+            "no cache evidence at all, so the static tier is never written"
+        );
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", Some("req_up_0001"), true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let mut value = body(vec![user("first"), assistant("second")]);
+    value["system"] =
+        json!([{"type": "text", "text": "be helpful", "cache_control": {"type": "ephemeral"}}]);
+    value["messages"][1]["content"] =
+        json!([{"type": "text", "text": "second", "cache_control": {"type": "ephemeral"}}]);
+    let chains = phoebis_relay::Chains::read(&value).unwrap();
+    let static_hash = chains.static_hash().unwrap().to_string();
+    let message_boundaries = chains.message_boundaries.clone();
+
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+
+    let account_id = h.router.pins().await.unwrap()[0].account_id.clone();
+    let key = h.store.api_key("desktop").unwrap().unwrap();
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        for boundary in &message_boundaries {
+            let entry = guard
+                .entry(MODEL, boundary)
+                .expect("every message boundary lands in the map");
+            assert_eq!(entry.chain, phoebis_routing::AffinityChain::Message);
+            assert!(entry.live(0));
+            assert_eq!(entry.account_id, account_id);
+            assert_eq!(entry.key_id, key.id);
+            assert_eq!(entry.key_generation, key.created_at);
+        }
+        let response_entry = guard
+            .parent("msg_1")
+            .expect("the answer's own id lands as a response link");
+        assert_eq!(response_entry.chain, phoebis_routing::AffinityChain::Response);
+        let request_entry = guard
+            .parent("req_up_0001")
+            .expect("the upstream's request-id lands as a request link");
+        assert_eq!(request_entry.chain, phoebis_routing::AffinityChain::Request);
+        let static_entry = guard
+            .entry(MODEL, &static_hash)
+            .expect("the static boundary lands too, under the same cache evidence");
+        assert_eq!(static_entry.chain, phoebis_routing::AffinityChain::Static);
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_rejected_answer_and_a_token_count_record_no_affinity_entry() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages/count_tokens".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"input_tokens":7}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: a_400(),
+        },
+    ])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let rejected = body(vec![user("a request the account rejects")]);
+    let chains = phoebis_relay::Chains::read(&rejected).unwrap();
+    let rejected_boundary = chains.message_boundaries[0].clone();
+    send(&h, req(&rejected)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        assert!(
+            guard.entry(MODEL, &rejected_boundary).is_none(),
+            "a rejected answer continues no conversation"
+        );
+    }
+
+    use phoebis_profile::fixtures::{inference_head, FixtureKind};
+    let counted = body(vec![user("a token count of its own content")]);
+    let count_chains = phoebis_relay::Chains::read(&counted).unwrap();
+    let counted_boundary = count_chains.message_boundaries[0].clone();
+    let count_bytes = serde_json::to_vec(&counted).unwrap();
+    let count_req =
+        request_from_fixture(inference_head(FixtureKind::CountApiKey), &count_bytes, KEY);
+    send(&h, count_req).await;
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        assert!(
+            guard.entry(MODEL, &counted_boundary).is_none(),
+            "a token count writes no cache and records nothing"
+        );
+    }
+    up.shutdown().await;
+}
+
+// -- The fork detection cases --
+
+#[tokio::test]
+async fn a_subagents_first_request_identifies_by_its_session_under_its_own_agent() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let mut value = body(vec![user("a subagent's own opening turn")]);
+    value["system"] = json!([{
+        "type": "text",
+        "text": "the subagent's own static prefix",
+        "cache_control": {"type": "ephemeral"},
+    }]);
+    let static_hash = phoebis_relay::Chains::read(&value)
+        .unwrap()
+        .static_hash()
+        .unwrap()
+        .to_string();
+    let mut request = req(&value);
+    set_header(&mut request, "x-claude-code-session-id", "s1");
+    set_header(&mut request, "x-claude-code-agent-id", "sub-1");
+    set_header(&mut request, "x-claude-code-parent-agent-id", "main");
+    send(&h, request).await;
+    assert_eq!(identified(&mut sub).await, Fork::default());
+    settle(&h).await;
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].agent_id, "sub-1", "a pin under its own agent");
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        assert!(
+            guard.entry(MODEL, &static_hash).is_some(),
+            "the map holds the subagent's own static boundaries"
+        );
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_of_it() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    let four = vec![
+        user("one"),
+        assistant("two"),
+        user("three"),
+        assistant("four"),
+    ];
+    let mut s1_req = req(&body(four.clone()));
+    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    send(&h, s1_req).await;
+    assert_eq!(identified(&mut sub).await, Fork::default());
+    settle(&h).await;
+
+    let mut s2_messages = four[..3].to_vec();
+    s2_messages.push(assistant("a different fourth"));
+    let mut s2_req = req(&body(s2_messages.clone()));
+    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    send(&h, s2_req).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork {
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+        }
+    );
+    settle(&h).await;
+    let pins = h.router.pins().await.unwrap();
+    assert!(
+        pins.iter().any(|p| p.session_id == "s2"),
+        "s2 pins under its own id"
+    );
+
+    let mut s2_extended = s2_messages;
+    s2_extended.push(user("continuing s2's own branch"));
+    let mut s2_req2 = req(&body(s2_extended));
+    set_header(&mut s2_req2, "x-claude-code-session-id", "s2");
+    send(&h, s2_req2).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork::default(),
+        "s2's own continuation carries no fork"
+    );
+    up.shutdown().await;
+}

@@ -20,6 +20,10 @@ pub struct Chains {
     pub static_boundaries: Vec<String>,
     /// One boundary per entry of `messages`, on a seed of its own.
     pub message_boundaries: Vec<String>,
+    /// Parallel to `static_boundaries`: the estimated token size of the blocks up to and including each
+    /// boundary, the canonical bytes the chain hashed over four; 0 at the empty-tools boundary of a request
+    /// without tools.
+    pub static_sizes: Vec<u64>,
 }
 
 impl Chains {
@@ -31,12 +35,18 @@ impl Chains {
         let empty_array = Value::Array(Vec::new());
         let tools = root.get("tools").unwrap_or(&empty_array);
         let mut static_boundaries = Vec::new();
+        let mut static_sizes = Vec::new();
+        let mut running_bytes: u64 = 0;
         let mut previous = Sha256::digest(STATIC_SEED).to_vec();
         previous = boundary(&previous, tools);
+        running_bytes += canonical_len(tools);
         static_boundaries.push(hex(&previous));
+        static_sizes.push(running_bytes / 4);
         for block in system_blocks(root.get("system")) {
             previous = boundary(&previous, block);
+            running_bytes += canonical_len(block);
             static_boundaries.push(hex(&previous));
+            static_sizes.push(running_bytes / 4);
         }
         let mut message_boundaries = Vec::new();
         let mut previous = Sha256::digest(MESSAGE_SEED).to_vec();
@@ -49,6 +59,7 @@ impl Chains {
         Some(Chains {
             static_boundaries,
             message_boundaries,
+            static_sizes,
         })
     }
 
@@ -104,6 +115,13 @@ fn boundary(previous: &[u8], block: &Value) -> Vec<u8> {
     hasher.update(previous);
     hasher.update(&bytes);
     hasher.finalize().to_vec()
+}
+
+/// A block's canonical byte length, for the static chain's promised-size estimate.
+fn canonical_len(block: &Value) -> u64 {
+    let mut bytes = Vec::new();
+    canonical(block, &mut bytes);
+    bytes.len() as u64
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -277,5 +295,36 @@ mod tests {
         assert_eq!(Chains::read(&json!("just a string")), None);
         assert_eq!(Chains::read(&json!(42)), None);
         assert_eq!(Chains::read(&json!(null)), None);
+    }
+
+    #[test]
+    fn the_static_sizes_grow_with_the_blocks_and_the_empty_tools_boundary_is_zero() {
+        let no_tools = read(json!({"system": [{"type": "text", "text": "be helpful"}]}));
+        assert_eq!(
+            no_tools.static_sizes[0], 0,
+            "an empty tools array's canonical bytes are too short to be even one token"
+        );
+        assert_eq!(
+            no_tools.static_sizes.len(),
+            no_tools.static_boundaries.len()
+        );
+        assert!(
+            no_tools.static_sizes[1] > no_tools.static_sizes[0],
+            "the system block adds to the running count"
+        );
+        let with_tools = read(json!({
+            "tools": [{"name": "a", "input_schema": {"type": "object"}}],
+            "system": [
+                {"type": "text", "text": "be helpful"},
+                {"type": "text", "text": "be very precise and thorough about it"},
+            ],
+        }));
+        assert!(with_tools.static_sizes[0] > 0, "a real tools array counts");
+        assert!(
+            with_tools.static_sizes[1] > with_tools.static_sizes[0]
+                && with_tools.static_sizes[2] > with_tools.static_sizes[1],
+            "each boundary's size is cumulative over the ones before it: {:?}",
+            with_tools.static_sizes
+        );
     }
 }

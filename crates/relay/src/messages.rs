@@ -14,8 +14,8 @@ use axum::routing::{get, head, post};
 use axum::Router;
 use bytes::Bytes;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Bus, ClientFacts, CooldownSet, Event, Kind, Origin, Outcome,
-    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    AccountSelected, AttemptOutcome, Bus, ClientFacts, CooldownSet, Event, Fork, Kind,
+    Origin, Outcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
     ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -39,8 +39,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
+use crate::body::tier_ttls;
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
+use crate::chains::Chains;
 use crate::classify::{
     classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict, MARGIN_MS,
 };
@@ -54,16 +56,16 @@ use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
-use crate::identity::{client_class, identify, RequestIdentity};
+use crate::identity::{client_class, climb, identify, RequestIdentity};
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
-use crate::observe::{answer_from_json, published_headers, wants_stream};
+use crate::observe::{answer_from_json, message_id_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, Checkin, Drained, PostCommit, Publish, Relayed, Renewal,
-    ReturnToPool, MAX_BUFFERED_BODY,
+    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, PostCommit, Publish, Relayed,
+    Renewal, ReturnToPool, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
@@ -398,6 +400,12 @@ impl Trace {
             static_hash,
             boundaries,
             client,
+            fork: identity
+                .map(|i| Fork {
+                    forked_from: i.forked_from.clone(),
+                    fork_depth: i.fork_depth,
+                })
+                .unwrap_or_default(),
             presented_retired,
             rotation_at,
             received_at: self.received_at,
@@ -996,6 +1004,15 @@ impl Relay {
         // The resolved name is substituted before anything downstream reads it, so the observed event, the
         // routing decision, and the ledger agree.
         identity.canonical_model = self.catalog.canonical_for(&identity.folded_model).await;
+        climb(
+            &mut identity,
+            &key,
+            facts
+                .chains
+                .as_ref()
+                .map_or(&[][..], |c| c.message_boundaries.as_slice()),
+            &self.router,
+        );
         trace
             .observed(
                 Some(&key),
@@ -1142,6 +1159,7 @@ impl Relay {
         let admitted = Admitted {
             cache_ttl_policy,
             caller: &parts.headers,
+            chains: facts.chains.as_ref(),
             client_version,
             diagnostics,
             fallback_ms,
@@ -1637,6 +1655,7 @@ impl Relay {
                 can_retry_in_place: !retried_in_place,
                 can_strip: !stripped_once,
                 cancel,
+                chains: admitted.chains,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 fallback_ms: admitted.fallback_ms,
@@ -1660,6 +1679,7 @@ impl Relay {
                 retry_in_place: admitted.retry_in_place,
                 spent: *spent,
                 ticket: Some(ticket),
+                tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
             };
             let request = RawRequest {
@@ -1899,6 +1919,7 @@ impl Relay {
                     let release = self.release_on(&ctx, head.status);
                     return Next::Respond(
                         self.stream(Forward {
+                            affinity: None,
                             caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
@@ -2069,6 +2090,7 @@ impl Relay {
                                 ctx.caller,
                                 outcome,
                                 release,
+                                None,
                             )
                             .await,
                         );
@@ -2087,6 +2109,7 @@ impl Relay {
                         ctx.caller,
                         outcome,
                         release,
+                        None,
                     )
                     .await,
                 );
@@ -2142,6 +2165,7 @@ impl Relay {
                 });
                 // Sent where the answer ends, the only place its usage is known.
                 let renewal = self.renewal(&ctx);
+                let affinity = self.affinity(&ctx, &head);
                 let (prefix, observer) = match held {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
@@ -2217,13 +2241,14 @@ impl Relay {
                 let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(
-                            ctx.trace, &head, buffered, ctx.caller, outcome, renewal,
+                            ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
                         )
                         .await
                     }
                     None => {
                         let guards = ctx.guards();
                         self.stream(Forward {
+                            affinity,
                             caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
@@ -2282,6 +2307,7 @@ impl Relay {
             let guards = ctx.guards();
             return Next::Respond(
                 self.stream(Forward {
+                    affinity: None,
                     caller: ctx.caller,
                     cancel: ctx.cancel.clone(),
                     checkin,
@@ -2325,7 +2351,7 @@ impl Relay {
             );
         }
         Next::Respond(
-            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None)
+            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
                 .await,
         )
     }
@@ -2352,6 +2378,40 @@ impl Relay {
                 ctx.account.lifecycle_generation,
                 ctx.credential_generation,
             ),
+        })
+    }
+
+    /// The conversation report a committed answer sends once its usage is known: every fact the request knows,
+    /// whatever the cache did and whether or not the request holds a pin, so a marker-less conversation still
+    /// links its turns. `None` for a token count, which writes no cache.
+    fn affinity(&self, ctx: &Responding<'_>, head: &ResponseHead) -> Option<AffinityFacts> {
+        if ctx.trace.kind == Kind::CountTokens {
+            return None;
+        }
+        let root = ctx.identity.session_id.clone();
+        Some(AffinityFacts {
+            router: self.router.clone(),
+            account_id: ctx.account.id.clone(),
+            incarnation: ctx.account.incarnation,
+            key_id: ctx.key.id.clone(),
+            key_generation: ctx.key.created_at,
+            canonical_model: ctx.identity.canonical_model.clone(),
+            root,
+            static_boundaries: ctx
+                .chains
+                .map(|c| c.static_boundaries.clone())
+                .unwrap_or_default(),
+            static_sizes: ctx
+                .chains
+                .map(|c| c.static_sizes.clone())
+                .unwrap_or_default(),
+            message_boundaries: ctx
+                .chains
+                .map(|c| c.message_boundaries.clone())
+                .unwrap_or_default(),
+            request_id: head.get("request-id").map(str::to_string),
+            static_ttl_ms: ctx.tier_ttls.0,
+            message_ttl_ms: ctx.tier_ttls.1,
         })
     }
 
@@ -2642,6 +2702,7 @@ impl Relay {
         forward: Forward<'_, C>,
     ) -> Response {
         let Forward {
+            affinity,
             caller,
             cancel,
             checkin,
@@ -2681,7 +2742,8 @@ impl Relay {
         let publish = (trace.bus_attached()
             || on_message_id.is_some()
             || head.status == 200
-            || renewal.is_some())
+            || renewal.is_some()
+            || affinity.is_some())
         .then(|| {
             Publish {
                 trace: trace.clone(),
@@ -2713,6 +2775,7 @@ impl Relay {
                 pending_message_id: None,
                 on_message_id,
                 renewal,
+                affinity,
             }
         });
         let body = relay_body(
@@ -2734,6 +2797,7 @@ impl Relay {
     }
 
     /// `renewal` is sent once the answer's usage is read, beside the completion.
+    #[allow(clippy::too_many_arguments)]
     async fn forward_buffered(
         &self,
         trace: &Trace,
@@ -2742,6 +2806,7 @@ impl Relay {
         caller: &HeaderMap,
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
+        affinity: Option<AffinityFacts>,
     ) -> Response {
         let (builder, decoder) = match forward_head(head, caller) {
             Ok(parts) => parts,
@@ -2782,6 +2847,7 @@ impl Relay {
         // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
         // chunk was promised text and coded bytes are worse than none.
         let mut chunk_published = false;
+        let mut message_id = None;
         let answer = match inspectable_copy(head, &raw).map(Bytes::from) {
             None => None,
             Some(text) => {
@@ -2793,6 +2859,7 @@ impl Relay {
                     phase: None,
                 });
                 chunk_published = true;
+                message_id = message_id_from_json(&text, &[]);
                 // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
                 // body task.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
@@ -2804,6 +2871,9 @@ impl Relay {
         };
         if let Some(renewal) = renewal {
             renewal.send((self.clock)(), head.status, usage.as_ref());
+        }
+        if let Some(affinity) = affinity {
+            affinity.send((self.clock)(), head.status, message_id, usage.as_ref());
         }
         let response = built(builder, Body::from(payload.clone()));
         // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but
@@ -2836,6 +2906,8 @@ fn unreachable_outcome(outcome: RelayOutcome) -> RelayOutcome {
 
 /// A response whose head is settled and whose body is still on the wire.
 struct Forward<'a, C> {
+    /// The conversation report a committed answer sends, beside the renewal; `None` for a rejection.
+    affinity: Option<AffinityFacts>,
     caller: &'a HeaderMap,
     cancel: CancellationToken,
     checkin: Checkin,
@@ -2877,6 +2949,9 @@ struct Responding<'a> {
     /// not read here; the one-round rule is the only gate.
     can_strip: bool,
     cancel: &'a CancellationToken,
+    /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
+    /// chain.
+    chains: Option<&'a Chains>,
     client_version: Option<String>,
     credential_generation: u64,
     fallback_ms: i64,
@@ -2900,6 +2975,8 @@ struct Responding<'a> {
     spent: u8,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
+    /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
+    tier_ttls: (Option<i64>, Option<i64>),
     trace: &'a Trace,
 }
 
@@ -2949,6 +3026,9 @@ struct Admitted<'a> {
     /// same request against the same policy, only the account's overage state changes per destination.
     cache_ttl_policy: CacheTtlPolicy,
     caller: &'a HeaderMap,
+    /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
+    /// chain.
+    chains: Option<&'a Chains>,
     client_version: Option<String>,
     /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a
     /// `count_tokens` request: the public schema refuses an unknown top-level member and the beta names nothing

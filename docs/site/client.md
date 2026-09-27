@@ -163,6 +163,15 @@ account: `429` with the error type `rate_limit_error`, the error code `key_in_fl
 pool's `retry_in_place_seconds`, one second when that is 0. A request counts from its admission until its response ends,
 a stream for its whole length. A `count_tokens` request takes no slot and is never refused for want of one.
 
+### How a request is identified
+
+A conversation is identified by the `x-claude-code-session-id` header.
+A key's `affinity_source` can fix one of these instead of the router walking the whole
+list. Every one of these hints is optional: a client that sends none of them is still relayed.
+A client that forks a session under a new id, whose messages
+continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is
+recorded beside it, visible in the console, without moving the new session off the account its own history names.
+
 ## Your key's usage
 
 `GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens,

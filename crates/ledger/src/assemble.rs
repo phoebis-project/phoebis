@@ -725,6 +725,7 @@ mod tests {
             static_hash: None,
             boundaries: Vec::new(),
             client: ClientFacts::default(),
+            fork: Fork::default(),
             presented_retired: false,
             rotation_at: None,
             received_at: 1_000,

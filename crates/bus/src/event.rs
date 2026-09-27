@@ -265,6 +265,16 @@ impl Default for ClientFacts {
     }
 }
 
+/// What the relay's fork detection read of the request: for one whose messages continue another conversation
+/// of the key and generation at depth 2 or deeper, that conversation's root (its session id) and the matched
+/// depth. Both `None` for a session's own continuation, a match at depth 1, an auxiliary request and a refusal
+/// published before the climb ran.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Fork {
+    pub forked_from: Option<String>,
+    pub fork_depth: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RequestObserved {
     pub request_id: String,
@@ -300,6 +310,8 @@ pub struct RequestObserved {
     /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
     /// unstructured, as the caller spelled them.
     pub client: ClientFacts,
+    /// What the fork detection read, both members `None` for a refusal published before the climb ran.
+    pub fork: Fork,
     /// The caller presented the secret a rotation retired.
     pub presented_retired: bool,
     /// The key's `rotated_at` at authentication, `None` for a key never rotated: which rotation a retired

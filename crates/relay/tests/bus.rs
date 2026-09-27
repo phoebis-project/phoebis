@@ -3,7 +3,10 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use phoebis_bus::{AttemptOutcome, Bus, ClientFacts, Event, Outcome, Phase, ResponseChunk, Subscriber};
+use phoebis_bus::{
+    AttemptOutcome, Bus, ClientFacts, Event, Fork, Outcome, Phase, ResponseChunk,
+    Subscriber,
+};
 use phoebis_relay::Limits;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
@@ -709,6 +712,33 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
             ..Default::default()
         }
     );
+    up.shutdown().await;
+}
+
+/// A session's own turn continues no other conversation, so its observed event carries no fork facts.
+#[tokio::test]
+async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
+    use phoebis_profile::fixtures::{inference_head, FixtureKind};
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[api_key("a", A, 0)], PoolSpec::default(), bus).await;
+    let plain_body =
+        br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#;
+
+    let mut with_session =
+        request_from_fixture(inference_head(FixtureKind::ApiKey), plain_body, KEY);
+    set_header(&mut with_session, "x-claude-code-session-id", "s1");
+    h.app.clone().oneshot(with_session).await.unwrap();
+    let (events, _) = drain(&mut sub);
+    let Event::RequestObserved(observed) = &events[0] else {
+        panic!("{events:?}")
+    };
+    assert_eq!(observed.fork, Fork::default());
     up.shutdown().await;
 }
 
