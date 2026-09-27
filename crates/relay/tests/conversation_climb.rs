@@ -151,7 +151,7 @@ async fn a_one_hour_static_tier_and_a_five_minute_tail_record_both_lifetimes() {
 }
 
 #[tokio::test]
-async fn a_marker_on_the_tail_alone_leaves_the_static_boundaries_unrecorded() {
+async fn a_marker_on_the_tail_alone_records_the_static_boundaries_as_links_without_warmth() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: ok("msg_1", None, true),
@@ -396,7 +396,7 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
         respond: ok("msg_1", None, true),
     }])
     .await;
-    let (h, mut sub) = setup(&up, &one()).await;
+    let (h, mut sub) = setup(&up, &two()).await;
 
     let four = vec![
         user("one"),
@@ -404,12 +404,23 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
         user("three"),
         assistant("four"),
     ];
+    // s1's own conversation is served by account "b" alone, so the fork's own placement below tells apart
+    // from a repeat of the base's account: a fork holds its own pin, placed by the strategy with no regard
+    // for the base's account; landing with the base's own account is a later placement concern.
+    h.store
+        .set_pool_members("main", &[member("b", 1)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
     let mut s1_req = req(&body(four.clone()));
     set_header(&mut s1_req, "x-claude-code-session-id", "s1");
     send(&h, s1_req).await;
     assert_eq!(identified(&mut sub).await, Fork::default());
     settle(&h).await;
 
+    h.store
+        .set_pool_members("main", &[member("a", 0), member("b", 1)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
     let mut s2_messages = four[..3].to_vec();
     s2_messages.push(assistant("a different fourth"));
     let mut s2_req = req(&body(s2_messages.clone()));
@@ -424,9 +435,13 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
     );
     settle(&h).await;
     let pins = h.router.pins().await.unwrap();
-    assert!(
-        pins.iter().any(|p| p.session_id == "s2"),
-        "s2 pins under its own id"
+    let fork_pin = pins
+        .iter()
+        .find(|p| p.session_id == "s2")
+        .expect("s2 pins under its own id");
+    assert_eq!(
+        fork_pin.account_id, "a",
+        "the fork's own pin is the strategy's fresh placement, not a repeat of the base's account \"b\""
     );
 
     let mut s2_extended = s2_messages;
@@ -482,6 +497,62 @@ async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root
         identified(&mut sub).await,
         Fork::default(),
         "s1's own retry after s2's fork reads no false fork"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_fork_that_lands_on_another_account_still_leaves_the_base_its_own_root() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &two()).await;
+
+    let four = vec![
+        user("one"),
+        assistant("two"),
+        user("three"),
+        assistant("four"),
+    ];
+    h.store
+        .set_pool_members("main", &[member("a", 0)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let mut s1_req = req(&body(four.clone()));
+    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    send(&h, s1_req).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+
+    // s2's fork writes the shared boundaries from the other account: the root belongs to s1's conversation
+    // regardless, since the writer is still the same key and generation, only a different account.
+    h.store
+        .set_pool_members("main", &[member("b", 1)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let mut s2_messages = four[..3].to_vec();
+    s2_messages.push(assistant("a different fourth"));
+    let mut s2_req = req(&body(s2_messages));
+    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    send(&h, s2_req).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+
+    h.store
+        .set_pool_members("main", &[member("a", 0), member("b", 1)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let mut s1_retry = four[..3].to_vec();
+    s1_retry.push(assistant("a retried fourth"));
+    let mut s1_retry_req = req(&body(s1_retry));
+    set_header(&mut s1_retry_req, "x-claude-code-session-id", "s1");
+    send(&h, s1_retry_req).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork::default(),
+        "s1's own retry after a fork on another account reads no false fork"
     );
     up.shutdown().await;
 }

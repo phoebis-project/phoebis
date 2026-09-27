@@ -2620,6 +2620,7 @@ impl Relay {
             request_id: trace.request_id.clone(),
             key_id: key.map(|k| k.id.clone()),
             pool_id: key.map(|k| k.pool_id.clone()),
+            // Matches `RequestObserved.session_id`: the client's own session.
             session_id: identity.and_then(|i| i.session_id.clone()),
             canonical_model: identity.map(|i| i.canonical_model.clone()),
             account_id: account_id.to_string(),

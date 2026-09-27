@@ -358,6 +358,13 @@ impl AffinityMap {
             self.dirty.insert(key);
             return None;
         }
+        // A writer of the same key and generation keeps the root the boundary was first recorded under, even
+        // from another account (a fork placed elsewhere, a migrated base): only another key or generation, a
+        // different tenant, replaces it.
+        let inherited_root = self.entries.get(&key).and_then(|entry| {
+            (entry.key_id == report.key_id && entry.key_generation == report.key_generation)
+                .then(|| entry.root.clone())
+        });
         let entry = AffinityEntry {
             chain,
             account_id: report.account_id.clone(),
@@ -367,7 +374,7 @@ impl AffinityMap {
             prefix_tokens: if confirmed { prefix_tokens } else { 0 },
             key_id: report.key_id.clone(),
             key_generation: report.key_generation,
-            root: root.to_string(),
+            root: inherited_root.unwrap_or_else(|| root.to_string()),
         };
         let row = row_of(&key, &entry);
         self.dirty.remove(&key);

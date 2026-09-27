@@ -1571,6 +1571,7 @@ async fn a_subscription_accounts_net_is_in_meter_tokens_and_an_api_key_accounts_
         "{after_credit:?}"
     );
     assert_eq!(after_credit.net_usd, 0.0);
+    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     assert!(row(&r, &credited).await.kept_warm);
 
     let mut r = rig(RigSpec::default()).await;
