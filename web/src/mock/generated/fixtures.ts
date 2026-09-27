@@ -5058,6 +5058,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": "claude-sonnet-5",
           "actor": null,
           "detail": {
+            "agent_id": "main",
             "from_account": "direct",
             "epoch": 2,
             "reason": "spent"
@@ -5072,6 +5073,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": "claude-sonnet-5",
           "actor": null,
           "detail": {
+            "agent_id": "main",
             "reasons": [
               "cooldown",
               "spent"

@@ -692,7 +692,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
 }
 
 /// The main agent's two pins are considered in the four-part key's sort order, model last; whichever pin the
-/// caller used most recently still wins even when it is the one that sorts first.
+/// caller used most recently still wins even when the older pin sorts first.
 #[tokio::test]
 async fn a_main_agents_two_pins_show_whichever_it_used_last_even_when_the_older_pin_sorts_first() {
     let (first, _up, store, _router) = common::admin_parts().await;

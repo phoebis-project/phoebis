@@ -4,7 +4,9 @@
 mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
-use phoebis_routing::{resolve, EvidenceSource, OverageEvidence, Report, SelectRequest, SelectResult};
+use phoebis_routing::{
+    resolve, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest, SelectResult,
+};
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
 use common::*;
 
@@ -564,15 +566,85 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
     })
     .await;
     let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
-    let other_id = if first == "a" { "b" } else { "a" };
-    // The agent's own real request meets a 429 on the pinned account and migrates its pin.
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
+    let (other, other_id) = if first == "a" { (B, "b") } else { (A, "a") };
+    let pin =
+        r.h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.session_id == "session" && p.agent_id == "main")
+            .expect("the first observed request left a pin");
+    r.h.router.report(Report::Cooldown {
+        account_id: first.clone(),
+        row: CooldownRow {
+            account_id: first.clone(),
+            scope: "account".into(),
+            until: r.now() + 600_000,
+            set_at: r.now(),
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(PinRef {
+            key_id: pin.key_id.clone(),
+            session_id: pin.session_id.clone(),
+            agent_id: pin.agent_id.clone(),
+            model: pin.model.clone(),
+            epoch: pin.epoch,
+        }),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    settled(&r, |r| {
+        let first = first.clone();
+        async move {
+            r.h.router
+                .cooldowns()
+                .await
+                .unwrap()
+                .iter()
+                .any(|c| c.account_id == first)
+        }
+    })
+    .await;
+    // A direct select the engine never observes, so the recipe below still names the account the pin left.
+    let snapshot = r.h.router.snapshot();
+    let key = snapshot.key(&pin.key_id).unwrap();
+    let answer =
+        r.h.router
+            .select(SelectRequest {
+                key_id: pin.key_id.clone(),
+                key_generation: key.created_at,
+                agent_id: pin.agent_id.clone(),
+                session_id: Some(pin.session_id.clone()),
+                canonical_model: pin.model.clone(),
+                candidates: resolve(&snapshot, key, &pin.model, &pin.model).unwrap(),
+                portable: true,
+                attempted: vec![],
+                now: r.now(),
+                fallback_ms: 60_000,
+                revision: snapshot.revision,
+                probe: false,
+                count: false,
+                request_class: None,
+                context_compacted: false,
+                static_hash: None,
+                boundaries: Vec::new(),
+            })
+            .await
+            .unwrap();
+    assert!(
+        matches!(&answer.result, SelectResult::Selected(selection) if selection.account.id == other_id),
+        "the router places the freed session on the other account"
     );
-    r.observe("main").await;
+    assert_eq!(
+        r.status("main").account_id.as_deref(),
+        Some(first.as_str()),
+        "the recipe still names the old account until the tick reads the pin"
+    );
     r.h.router.clear_cooldown(&first, "account").await.unwrap();
     r.advance(270_000);
     r.step().await;

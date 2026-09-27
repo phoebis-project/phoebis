@@ -13,6 +13,7 @@ import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
+import { requestTrail } from '@/lib/trail';
 import { StatusBadge } from './DashboardPage';
 
 const COLUMNS = [
@@ -367,17 +368,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
-  // The route lists the session's events by time alone, so a move or a release belongs to this request only when
-  // it is the same pin's, keyed by key, session, and canonical model; a model's rejection or permit only when it
-  // carries this request's id.
-  const trail =
-    r === null || fetched === null
-      ? []
-      : fetched.events.filter((e) =>
-          e.kind === 'pin_migrated' || e.kind === 'pin_expired'
-            ? e.detail !== null && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.canonicalModel
-            : (e.kind === 'model_rejected' || e.kind === 'model_permitted') && e.detail?.source_request_id === r.id,
-        );
+  const trail = r === null || fetched === null ? [] : requestTrail(fetched.events, r);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);

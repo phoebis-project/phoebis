@@ -2698,8 +2698,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
 }
 
 #[tokio::test]
-async fn a_siblings_fresh_placement_inside_the_migration_window_reports_its_own_creation_and_the_invalidated_agent_still_reports_its_move(
-) {
+async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_invalidation() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));

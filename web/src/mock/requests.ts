@@ -397,20 +397,20 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     for (let i = 1; i < r.attempts.length; i += 1) {
       const from = r.attempts[i - 1];
       if (from.outcome !== 'rate_limited') continue;
-      events.push({ ...pin, accountId: r.attempts[i].accountId, at: r.attempts[i].startedAt, detail: { epoch: i + 1, from_account: from.accountId, reason: 'cooldown' }, kind: 'pin_migrated' });
+      events.push({ ...pin, accountId: r.attempts[i].accountId, at: r.attempts[i].startedAt, detail: { agent_id: r.agentId, epoch: i + 1, from_account: from.accountId, reason: 'cooldown' }, kind: 'pin_migrated' });
     }
     // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429.
     const lane = LANES.find((l) => l.keyId === r.keyId);
     // One draw either way for this seed only: the chance the forced row skips comes up false here, and a seed where it came up true would spend a weighted draw as well and shift every later row.
     if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
       const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
-      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
+      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
       spentOwed = false;
     }
     // One release for the drawer and the smoke checks: a pin that expired on a cooled account whose window was
     // spent, with no sibling holding allowance to move to.
     if (events.length === 0 && releaseOwed && r.status === 200 && lane && lane.accountIds.length > 1) {
-      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { reasons: ['cooldown', 'spent'] }, kind: 'pin_expired' });
+      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['cooldown', 'spent'] }, kind: 'pin_expired' });
       releaseOwed = false;
     }
     if (events.length) out.set(r.id, events);
@@ -462,9 +462,9 @@ function addStoryEvents() {
   const owed: ((r: RequestLog, from: string) => RequestEvent)[] = [];
   const pinned = (r: RequestLog) => ({ keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId });
   const shedMoved = [...REQUEST_EVENTS.values()].some((events) => events.some((e) => e.detail?.reason === 'shed'));
-  if (!shedMoved) owed.push((r, from) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
-  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { reasons: ['client_error'] }, kind: 'pin_expired' }));
-  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
+  if (!shedMoved) owed.push((r, from) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
+  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['client_error'] }, kind: 'pin_expired' }));
+  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
   for (const r of REQUESTS) {
     const lane = LANES.find((l) => l.keyId === r.keyId);
     const next = owed[0];

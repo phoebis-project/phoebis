@@ -405,7 +405,7 @@ CREATE TABLE keepalive_budgets (
 // wrote reads 'main', which is what every request before this migration was. The primary key cannot be altered
 // in place, so the table is rebuilt rather than columned onto in place. The cache TTL text is reshaped from one
 // rule set into two, `plan` and `metered`, so a metered account's TTL no longer rides the same object as a plan
-// account's; the old override leaves with its five-minute default carried onto the metered set. The
+// account's; the in-overage override leaves with its five-minute default carried onto the metered set. The
 // affinity table is the placement index that lets a fresh session or a subagent cohort land where its prefix is
 // warm.
 const V29: &str = r#"

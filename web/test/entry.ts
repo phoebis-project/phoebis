@@ -13,5 +13,6 @@ export * from '@/lib/presets';
 export * from '@/lib/projection';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';
+export * from '@/lib/trail';
 export { MockApi } from '@/mock';
 export { liveFeed } from '@/mock/live';

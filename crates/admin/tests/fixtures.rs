@@ -359,7 +359,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         session_id: Some("s1".into()),
         model: Some("claude-sonnet-5".into()),
         actor: None,
-        detail: Some(j!({ "from_account": "direct", "epoch": 2, "reason": "spent" }).to_string()),
+        detail: Some(
+            j!({ "agent_id": "main", "from_account": "direct", "epoch": 2, "reason": "spent" })
+                .to_string(),
+        ),
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 200,
@@ -369,7 +372,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         session_id: Some("s1".into()),
         model: Some("claude-sonnet-5".into()),
         actor: None,
-        detail: Some(j!({ "reasons": ["cooldown", "spent"] }).to_string()),
+        detail: Some(j!({ "agent_id": "main", "reasons": ["cooldown", "spent"] }).to_string()),
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
     // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.

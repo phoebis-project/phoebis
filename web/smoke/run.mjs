@@ -1198,8 +1198,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
 
   {
     // A model picked in the picker but never added must not carry into the dialog's next opening. `PoolDialog`
-    // never unmounts (it renders unconditionally beside the pool grid), so closing and reopening it exercises
-    // the same component instance the bug lived in.
+    // never unmounts (it renders unconditionally beside the pool grid), so closing and reopening it is what
+    // proves the picker starts empty on every open.
     const picker = () => dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
     const options = [...(picker()?.querySelectorAll('option') ?? [])].map((o) => o.value).filter(Boolean);
     const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
