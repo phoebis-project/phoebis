@@ -71,41 +71,41 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790531711814,
-        "updated_at": 1790531711814,
+        "created_at": 1790537533594,
+        "updated_at": 1790537533594,
         "members": [
           {
             "account_id": "business",
             "priority": 0,
             "eligible": "eligible",
             "kind": "oauth",
-            "budget_usd": 50.0,
+            "budget_usd": null,
             "budget_period": "month",
-            "spent_usd": 0.0072,
-            "period_end": 2678400000
+            "spent_usd": null,
+            "period_end": null
           },
           {
             "account_id": "direct",
             "priority": 1,
             "eligible": "eligible",
             "kind": "api_key",
-            "budget_usd": null,
+            "budget_usd": 50.0,
             "budget_period": "month",
-            "spent_usd": null,
-            "period_end": null
+            "spent_usd": 0.0036,
+            "period_end": 2678400000
           }
         ],
         "keys": [
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "AqauiZbh",
+            "prefix": "APWqYsMl",
             "enabled": true
           }
         ],
         "status": "active",
-        "requests_24h": 4,
-        "cost_24h": 0.018,
+        "requests_24h": 5,
+        "cost_24h": 0.0216,
         "active_pins": 1,
         "traffic_24h": [
           {
@@ -271,10 +271,10 @@
           },
           {
             "at": 0,
-            "requests": 2,
+            "requests": 3,
             "failed": 1,
-            "tokens": 3600,
-            "cost_usd": 0.0072
+            "tokens": 5400,
+            "cost_usd": 0.0108
           }
         ]
       }

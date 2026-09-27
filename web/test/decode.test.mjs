@@ -139,7 +139,7 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.deepEqual(k.modelRules, [{ not: true, pattern: 'claude-opus-*' }]);
   assert.equal(k.modelRulesMode, 'extend');
   assert.equal(k.longContextTwins, true);
-  assert.equal(k.lifetime.requests, 3);
+  assert.equal(k.lifetime.requests, 4);
   assert.equal(k.usage7d.tokens > 0, true);
   assert.equal(typeof k.sessionsOnRetiredSecret, 'number');
   assert.equal(k.retiredSecretLastUsedAt, null, 'a key whose retired secret never authenticated carries no time');
@@ -427,14 +427,14 @@ test('a captured body carries the bytes the route counted, never the bytes the d
 test('analytics groups and points keep the histograms and reasons whole', () => {
   const rows = fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup);
   const desktop = rows.find((g) => g.key === 'desktop');
-  assert.equal(desktop.requests, 3);
+  assert.equal(desktop.requests, 4);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
   assert.equal(earlier.label, 'desktop (deleted)');
   assert.equal(earlier.requests, 1);
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
-  assert.equal(desktop.cacheMissReasons.none, 3);
-  assert.equal(desktop.tokens.thinking, 120);
+  assert.equal(desktop.cacheMissReasons.none, 4);
+  assert.equal(desktop.tokens.thinking, 160);
   assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
   assert.equal(desktop.errors.upstream_error, 1);
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
@@ -450,7 +450,7 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.equal(burn.points.length, body.points.length);
   const last = burn.points[burn.points.length - 1];
   const wire = body.points[body.points.length - 1];
-  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: 1_000, group: 'business', meterTokens: 1_864.08, planPercent: wire.plan_percent, uncachedTokens: 2_000, usd: 0 });
+  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: 500, group: 'direct', meterTokens: 0, planPercent: wire.plan_percent, uncachedTokens: 1_000, usd: 0.0036 });
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the upstream one answers the share as null, which is no fit rather than an idle window.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, group: 'desktop', plan_percent: null }] }).points;

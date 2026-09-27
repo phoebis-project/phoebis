@@ -230,6 +230,231 @@
         "cached_tokens": 1000,
         "uncached_tokens": 2000,
         "plan_percent": 0.00031355424726661063
+      },
+      {
+        "at": -86400000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -82800000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -79200000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -75600000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -72000000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -68400000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -64800000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -61200000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -57600000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -54000000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -50400000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -46800000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -43200000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -39600000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -36000000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -32400000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -28800000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -25200000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -21600000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -18000000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -14400000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -10800000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -7200000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": -3600000,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0,
+        "cached_tokens": 0,
+        "uncached_tokens": 0,
+        "plan_percent": null
+      },
+      {
+        "at": 0,
+        "group": "direct",
+        "meter_tokens": 0.0,
+        "usd": 0.0036,
+        "cached_tokens": 500,
+        "uncached_tokens": 1000,
+        "plan_percent": null
       }
     ]
   }

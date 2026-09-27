@@ -661,9 +661,8 @@ pub(crate) async fn set_members(
     }
 }
 
-/// One member row. Its own function, beside the pool's own `json!` call, for the same reason `requests.rs`
-/// keeps `attempt_json` beside `request_summary`: one row's worth of fields reads clearly on its own rather
-/// than nested inline inside the pool's larger literal.
+/// One member row. Its own function, beside the pool's own `json!` call, so one row's worth of fields reads
+/// clearly on its own rather than nested inline inside the pool's larger literal.
 fn member_json(
     m: &PoolMember,
     accounts: &[phoebis_store::AccountRow],
@@ -741,10 +740,10 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     let spends = state.router.member_spends().await.unwrap_or_default();
     let snapshot = state.router.snapshot();
     let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
-    // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready, a
-    // subscription past its saved end, an account-wide cooldown, overage the pool's policy admits no substitute
-    // for, or a budget the member's own spend has reached. `None` is eligible. An ended subscription reads
-    // `unavailable` as a paused account does: both stay skipped until an operator acts.
+    // Why routing would refuse a member, mirroring the selector's `obstacle` in the order it checks them: not
+    // enabled or not ready, a subscription past its saved end, an account-wide cooldown, a budget the member's
+    // own spend has reached, or overage the pool's policy admits no substitute for. `None` is eligible. An
+    // ended subscription reads `unavailable` as a paused account does: both stay skipped until an operator acts.
     let ineligible = |m: &PoolMember| -> Option<&'static str> {
         let ready = accounts
             .iter()
@@ -762,13 +761,6 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         {
             return Some("cooldown");
         }
-        if row.overage_policy == OveragePolicy::Never
-            && overages
-                .iter()
-                .any(|(id, e)| *id == m.account_id && e.stands(now, fallback_ms))
-        {
-            return Some("overage");
-        }
         if let (Some(budget), Some(spend)) = (
             m.budget_usd,
             crate::routes::member_spend_of(
@@ -779,9 +771,16 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
                 m.budget_period,
             ),
         ) {
-            if spend.spent_usd >= budget {
+            if crate::routes::budget_exceeded(spend, budget, now) {
                 return Some("budget");
             }
+        }
+        if row.overage_policy == OveragePolicy::Never
+            && overages
+                .iter()
+                .any(|(id, e)| *id == m.account_id && e.stands(now, fallback_ms))
+        {
+            return Some("overage");
         }
         None
     };

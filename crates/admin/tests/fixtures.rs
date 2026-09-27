@@ -325,6 +325,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             context_compacted: Some("auto".into()),
             prev_tool_ms: Some(1_235),
             turn_origin: Some("human".into()),
+            forked_from: Some("s0".into()),
+            fork_depth: Some(2),
             ..request(
                 key_generation,
                 "r-failover",
@@ -437,8 +439,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
-            forked_from: Some("s0".into()),
-            fork_depth: Some(2),
             ..request(
                 key_generation,
                 "r-captured",
@@ -502,6 +502,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "succeeded",
         ),
         attempts: vec![AttemptRecord {
+            account_kind: "api_key".into(),
             selection: Some(
                 r#"{"placement":{"rung":"content","depth":2,"prefix_tokens":500}}"#.into(),
             ),

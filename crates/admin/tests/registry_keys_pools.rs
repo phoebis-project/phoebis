@@ -2190,6 +2190,36 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
         (Some("budget"), Some("exhausted")),
         "a member whose spend reached its budget is ineligible, and its only pool reads exhausted"
     );
+    // Also in overage, under a policy that would otherwise read it as the obstacle: the selector checks
+    // budget first, and this route must answer the same obstacle it would.
+    patch(
+        app,
+        "/admin/pools/main",
+        r#"{"overage_policy":"never"}"#,
+        Some(&cookie),
+    )
+    .await;
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "direct".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(common::NOW - 3_600_000),
+            reset: Some(common::NOW + 3_600_000),
+            observed_at: common::NOW,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    let both = wait_json(app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["overage_policy"] == "never"
+    })
+    .await;
+    assert_eq!(
+        both["pools"][0]["members"][0]["eligible"].as_str(),
+        Some("budget"),
+        "budget is checked ahead of overage, the same order the selector's obstacle uses"
+    );
 }
 
 #[tokio::test]

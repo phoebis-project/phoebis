@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790531711817,
+        "key_generation": 1790537533598,
         "session_id": "s-fixture",
         "agent_id": "main",
         "model": "claude-sonnet-5",
@@ -38,7 +38,41 @@
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790531711817,
+        "key_generation": 1790537533598,
+        "session_id": "s3",
+        "agent_id": null,
+        "model": "claude-sonnet-5",
+        "account_id": "direct",
+        "epoch": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_request_at": 970000,
+        "requests": 1,
+        "pinned": false,
+        "burn": null,
+        "burn_unit": null,
+        "burn_at": null,
+        "cache_ttl_ms": null,
+        "last_input_tokens": null,
+        "last_refresh_at": null,
+        "shed_from": null,
+        "historical": false,
+        "companion": "none",
+        "companion_since": null,
+        "agents": 0,
+        "keepalive": {
+          "last_guard": null,
+          "net_meter_tokens": null,
+          "net_usd": null,
+          "next_probe_at": null,
+          "state": null
+        },
+        "forked_from": null,
+        "fork_depth": null
+      },
+      {
+        "key_id": "desktop",
+        "key_generation": 1790537533598,
         "session_id": "s1",
         "agent_id": null,
         "model": "claude-sonnet-5",
@@ -63,16 +97,16 @@
           "last_guard": "rearm",
           "net_meter_tokens": 0.0,
           "net_usd": 0.0,
-          "next_probe_at": 1239999,
+          "next_probe_at": 1235486,
           "state": "busy"
         },
         "historical": false,
-        "forked_from": null,
-        "fork_depth": null
+        "forked_from": "s0",
+        "fork_depth": 2
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790531711817,
+        "key_generation": 1790537533598,
         "session_id": "s2",
         "agent_id": null,
         "model": "claude-sonnet-5",

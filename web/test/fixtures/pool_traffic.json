@@ -176,10 +176,10 @@
       },
       {
         "at": 0,
-        "requests": 2,
+        "requests": 3,
         "failed": 1,
-        "tokens": 3600,
-        "cost_usd": 0.0072
+        "tokens": 5400,
+        "cost_usd": 0.0108
       }
     ]
   }

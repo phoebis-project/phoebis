@@ -133,7 +133,7 @@ test('the burn, rewrite and fit reads send the range and the grouping and answer
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
   assert.deepEqual([fitsUrl.pathname, fitsUrl.search], ['/admin/analytics/fits', ''], 'the fits route reads no query');
-  assert.deepEqual([burn.bucketSeconds, burn.points.length, burn.points.at(-1).meterTokens], [3_600, bodies['/admin/analytics/burn'].points.length, 1_864.08]);
+  assert.deepEqual([burn.bucketSeconds, burn.points.length, burn.points.at(-1).meterTokens], [3_600, bodies['/admin/analytics/burn'].points.length, 0]);
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
   assert.deepEqual(fits.map((f) => [f.accountId, f.window, f.drift]), [['business', 'five_hour', 0.5]]);
 });

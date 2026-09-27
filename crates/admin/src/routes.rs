@@ -1260,6 +1260,13 @@ pub(crate) fn member_spend_of<'a>(
         .find(|s| s.pool_id == pool_id && s.account_id == account_id && s.period == budget_period)
 }
 
+/// Whether `spend` is, right now, an obstacle to `budget`: mirrors the selector's own `budget_exhausted`, so a
+/// report outside its own period (superseded by the next one, or not yet begun) never reads as exhaustion here
+/// either.
+pub(crate) fn budget_exceeded(spend: &MemberSpend, budget: f64, now: i64) -> bool {
+    spend.period_start <= now && now < spend.period_end && spend.spent_usd >= budget
+}
+
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
 pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
     d: D,
@@ -1293,7 +1300,7 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{member_spend_of, same_authority};
+    use super::{budget_exceeded, member_spend_of, same_authority};
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
 
@@ -1335,6 +1342,35 @@ mod tests {
         assert!(
             member_spend_of(&spends, "main", "b", Some(50.0), BudgetPeriod::Month).is_none(),
             "a different account reads null"
+        );
+    }
+
+    #[test]
+    fn budget_exceeded_reads_false_once_the_reports_own_period_has_passed() {
+        let spend = MemberSpend {
+            pool_id: "main".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 1_000,
+            spent_usd: 50.0,
+            observed_at: 0,
+        };
+        assert!(
+            budget_exceeded(&spend, 50.0, 500),
+            "over budget, inside the report's own period"
+        );
+        assert!(
+            !budget_exceeded(&spend, 50.0, 1_000),
+            "a report the next period has already superseded is not an obstacle, however far over budget it read"
+        );
+        assert!(
+            !budget_exceeded(&spend, 50.0, -1),
+            "a report whose period has not yet begun (a clock skew) is not an obstacle either"
+        );
+        assert!(
+            !budget_exceeded(&spend, 100.0, 500),
+            "under budget, inside the period"
         );
     }
 }
