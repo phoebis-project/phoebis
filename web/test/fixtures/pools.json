@@ -10,6 +10,11 @@
         "prefer_subscription": true,
         "affinity_ttl_seconds": 600,
         "overage_policy": "prefer_plan",
+        "affinity_mode": "always",
+        "subagent_placement": "by_cohort",
+        "session_placement": "by_strategy",
+        "min_shared_prefix_tokens": 20000,
+        "quota_headers": "pass",
         "migrate_above_utilization": null,
         "select_below_utilization": null,
         "model_rules": [
@@ -66,25 +71,35 @@
         },
         "cache_diagnostics": null,
         "body_capture_hours": 24,
-        "created_at": 1790465806561,
-        "updated_at": 1790465806561,
+        "created_at": 1790531711814,
+        "updated_at": 1790531711814,
         "members": [
           {
             "account_id": "business",
             "priority": 0,
-            "eligible": "eligible"
+            "eligible": "eligible",
+            "kind": "oauth",
+            "budget_usd": 50.0,
+            "budget_period": "month",
+            "spent_usd": 0.0072,
+            "period_end": 2678400000
           },
           {
             "account_id": "direct",
             "priority": 1,
-            "eligible": "eligible"
+            "eligible": "eligible",
+            "kind": "api_key",
+            "budget_usd": null,
+            "budget_period": "month",
+            "spent_usd": null,
+            "period_end": null
           }
         ],
         "keys": [
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "KOUbhRXc",
+            "prefix": "AqauiZbh",
             "enabled": true
           }
         ],

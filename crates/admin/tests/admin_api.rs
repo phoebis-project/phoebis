@@ -1061,3 +1061,194 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "a passed reset reads as not in overage, so the reading returns to the meter"
     );
 }
+
+#[tokio::test]
+async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_its_base() {
+    use phoebis_ledger::{Record, RequestRecord};
+    use common::{generation, login, post, wait_json};
+    use std::sync::atomic::Ordering;
+
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(
+        &seed.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+        Some(&seeding),
+    )
+    .await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let key_generation = generation(&seed.store, "desktop");
+    // Advanced well past the epoch, so the activity cutoff (`now` minus the harness's 24-hour session
+    // expiry) lands at a positive instant: only then can a request be planted both before and after it.
+    let now = common::NOW + 200_000_000;
+    let cutoff = now - 86_400_000;
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "pinned-old".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "business".into(),
+            epoch: 1,
+            created_at: now - 90_000_000,
+            last_used_at: now - 1_000,
+            key_generation,
+            incarnation: 1,
+            burn: 1.0,
+            burn_at: Some(now - 1_000),
+            burn_usd: 0.1,
+            last_input_tokens: 100,
+            last_refresh_at: now - 1_000,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+        })
+        .unwrap();
+    // The router task loads its pins at spawn, so the pin above needs the store written before this call.
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    parts.clock_cell.store(now, Ordering::SeqCst);
+    let cookie = login(&parts.app, "admin-secret").await;
+
+    let request = |id: &str, session: &str, at: i64| RequestRecord {
+        id: id.into(),
+        received_at: at,
+        key_id: Some("desktop".into()),
+        key_generation,
+        session_id: Some(session.into()),
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        ..Default::default()
+    };
+    parts.ledger.record(Record::Request {
+        request: request("r-plain", "sess-plain", now - 1_000),
+        attempts: vec![],
+        bodies: None,
+    });
+    parts.ledger.record(Record::Request {
+        request: request("r-pseudo", "e31a9f0011", now - 2_000),
+        attempts: vec![],
+        bodies: None,
+    });
+    // Older than `cutoff`: absent from the ledger's own activity window, so only the live pin surfaces it.
+    assert!(now - 90_000_000 < cutoff);
+    parts.ledger.record(Record::Request {
+        request: request("r-pinned-old", "pinned-old", now - 90_000_000),
+        attempts: vec![],
+        bodies: None,
+    });
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+            ..request("r-forked", "sess-forked", now - 3_000)
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"].as_array().unwrap().len() >= 4
+    })
+    .await;
+    let row = |session: &str| {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == session)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (
+            row("sess-forked")["forked_from"].as_str(),
+            row("sess-forked")["fork_depth"].as_i64()
+        ),
+        (Some("s1"), Some(3)),
+        "a session whose first request forked from another names it and the matched depth"
+    );
+    for session in ["sess-plain", "e31a9f0011", "pinned-old"] {
+        assert_eq!(
+            (
+                row(session)["forked_from"].as_str(),
+                row(session)["fork_depth"].as_i64()
+            ),
+            (None, None),
+            "{session}: no fork, so both read null"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_request_row_answers_its_fork_fields() {
+    use phoebis_ledger::{Record, RequestRecord};
+    use common::{generation, get, json, login, post, wait_json};
+
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let key_generation = generation(&parts.store, "desktop");
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-forked".into(),
+            received_at: common::NOW,
+            key_id: Some("desktop".into()),
+            key_generation,
+            session_id: Some("s2".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    let requests = wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        !v["requests"].as_array().unwrap().is_empty()
+    })
+    .await;
+    let row = &requests["requests"][0];
+    assert_eq!(
+        (row["forked_from"].as_str(), row["fork_depth"].as_i64()),
+        (Some("s1"), Some(3)),
+        "a request row answers its two fork fields"
+    );
+    let detail = json(get(&parts.app, "/admin/requests/r-forked", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            detail["request"]["forked_from"].as_str(),
+            detail["request"]["fork_depth"].as_i64(),
+        ),
+        (Some("s1"), Some(3)),
+        "the detail route answers the same fields"
+    );
+}

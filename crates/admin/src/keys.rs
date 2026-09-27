@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
+use phoebis_store::{AffinitySource, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
 
@@ -48,6 +48,8 @@ struct KeyInput {
     body_capture_hours: Option<Option<u32>>,
     #[serde(default, deserialize_with = "double_option")]
     in_flight_cap: Option<Option<u32>>,
+    #[serde(default)]
+    affinity_source: Option<String>,
 }
 
 fn new_secret() -> String {
@@ -114,6 +116,17 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
             ));
         }
         row.in_flight_cap = cap;
+    }
+    if let Some(source) = &input.affinity_source {
+        row.affinity_source = match AffinitySource::parse(source) {
+            Some(source) => source,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "affinity_source must be auto, session, user_id, content, or whole_key",
+                ))
+            }
+        };
     }
     Ok(())
 }
@@ -417,6 +430,7 @@ fn key_json(
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
         "in_flight_cap": row.in_flight_cap,
+        "affinity_source": row.affinity_source.as_str(),
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },

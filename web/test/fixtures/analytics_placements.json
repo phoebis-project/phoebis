@@ -1,0 +1,8 @@
+{
+  "route": "GET /admin/analytics/placements?range=24h",
+  "body": {
+    "from": -85400000,
+    "to": 1000000,
+    "rows": []
+  }
+}

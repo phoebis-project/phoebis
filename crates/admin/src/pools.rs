@@ -11,8 +11,9 @@ use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{
-    Affinity, BudgetPeriod, Failover, MemberWrite, OveragePolicy, PoolMember, PoolRow,
-    QuotaHeaders, Shedding, StoreError, Strategy, WarmSessions,
+    Affinity, AffinityMode, BudgetPeriod, Failover, MemberWrite, OveragePolicy, PoolMember,
+    PoolRow, QuotaHeaders, SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement,
+    WarmSessions,
 };
 use serde_json::{json, Value};
 
@@ -27,6 +28,44 @@ struct MemberInput {
     account_id: String,
     #[serde(default)]
     priority: u32,
+    #[serde(default)]
+    budget_usd: Option<f64>,
+    #[serde(default)]
+    budget_period: Option<String>,
+}
+
+/// Turns the wire members into store writes, refusing a non-positive budget or an unknown period before any
+/// write lands; a member list replaces the pool's whole membership, so an absent budget clears it.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> {
+    members
+        .iter()
+        .map(|m| {
+            if m.budget_usd.is_some_and(|b| b <= 0.0) {
+                return Err(failure(StatusCode::BAD_REQUEST, "budget_usd is above 0"));
+            }
+            let budget_period = match &m.budget_period {
+                Some(period) => match BudgetPeriod::parse(period) {
+                    Some(period) => period,
+                    None => {
+                        return Err(failure(
+                            StatusCode::BAD_REQUEST,
+                            "budget_period must be day or month",
+                        ))
+                    }
+                },
+                None => BudgetPeriod::Month,
+            };
+            Ok(MemberWrite {
+                account_id: m.account_id.clone(),
+                priority: m.priority,
+                budget_usd: m.budget_usd,
+                budget_period,
+            })
+        })
+        .collect()
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -82,6 +121,16 @@ struct PoolInput {
     overage_move_grace_minutes: Option<u32>,
     #[serde(default)]
     wind_down_minutes: Option<u32>,
+    #[serde(default)]
+    affinity_mode: Option<String>,
+    #[serde(default)]
+    subagent_placement: Option<String>,
+    #[serde(default)]
+    session_placement: Option<String>,
+    #[serde(default)]
+    min_shared_prefix_tokens: Option<u64>,
+    #[serde(default)]
+    quota_headers: Option<String>,
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -340,6 +389,53 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         }
         row.failover.wind_down_minutes = minutes;
     }
+    if let Some(mode) = &input.affinity_mode {
+        row.affinity.mode = match AffinityMode::parse(mode) {
+            Some(mode) => mode,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "affinity_mode must be always or when_cached",
+                ))
+            }
+        };
+    }
+    if let Some(placement) = &input.subagent_placement {
+        row.affinity.subagent_placement = match SubagentPlacement::parse(placement) {
+            Some(placement) => placement,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "subagent_placement must be by_cohort, by_strategy, or with_main",
+                ))
+            }
+        };
+    }
+    if let Some(placement) = &input.session_placement {
+        row.affinity.session_placement = match SessionPlacement::parse(placement) {
+            Some(placement) => placement,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "session_placement must be by_strategy or by_warm_prefix",
+                ))
+            }
+        };
+    }
+    if let Some(tokens) = input.min_shared_prefix_tokens {
+        row.affinity.min_shared_prefix_tokens = tokens;
+    }
+    if let Some(headers) = &input.quota_headers {
+        row.quota_headers = match QuotaHeaders::parse(headers) {
+            Some(headers) => headers,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "quota_headers must be hide or pass",
+                ))
+            }
+        };
+    }
     // Checked over the whole row rather than over the edited field alone, so lowering affinity under an
     // enabled policy is refused exactly as enabling under a short affinity is.
     if let Err(error) =
@@ -408,23 +504,18 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
+    let writes = match &input.members {
+        Some(members) => match member_writes(members) {
+            Ok(writes) => Some(writes),
+            Err(refusal) => return refusal,
+        },
+        None => None,
+    };
     if let Err(error) = state.store.insert_pool(&row, ACTOR) {
         return store_failure(error);
     }
-    if let Some(members) = &input.members {
-        match state.store.set_pool_members(
-            &row.id,
-            &members
-                .iter()
-                .map(|m| MemberWrite {
-                    account_id: m.account_id.clone(),
-                    priority: m.priority,
-                    budget_usd: None,
-                    budget_period: BudgetPeriod::Month,
-                })
-                .collect::<Vec<_>>(),
-            ACTOR,
-        ) {
+    if let Some(writes) = &writes {
+        match state.store.set_pool_members(&row.id, writes, ACTOR) {
             Ok(()) => {}
             Err(StoreError::AccountNotFound(id)) => {
                 // The pool was never published, so nothing needs a reload here; but a rollback that fails
@@ -465,37 +556,32 @@ pub(crate) async fn patch(
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    if let Some(members) = &input.members {
-        for member in members {
-            match state.store.account(&member.account_id) {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    return failure(
-                        StatusCode::NOT_FOUND,
-                        &format!("account {} not found", member.account_id),
-                    )
+    let writes = match &input.members {
+        Some(members) => {
+            for member in members {
+                match state.store.account(&member.account_id) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        return failure(
+                            StatusCode::NOT_FOUND,
+                            &format!("account {} not found", member.account_id),
+                        )
+                    }
+                    Err(error) => return store_failure(error),
                 }
-                Err(error) => return store_failure(error),
+            }
+            match member_writes(members) {
+                Ok(writes) => Some(writes),
+                Err(refusal) => return refusal,
             }
         }
-    }
+        None => None,
+    };
     if let Err(error) = state.store.update_pool(&row, ACTOR) {
         return store_failure(error);
     }
-    if let Some(members) = &input.members {
-        if let Err(error) = state.store.set_pool_members(
-            &row.id,
-            &members
-                .iter()
-                .map(|m| MemberWrite {
-                    account_id: m.account_id.clone(),
-                    priority: m.priority,
-                    budget_usd: None,
-                    budget_period: BudgetPeriod::Month,
-                })
-                .collect::<Vec<_>>(),
-            ACTOR,
-        ) {
+    if let Some(writes) = &writes {
+        if let Err(error) = state.store.set_pool_members(&row.id, writes, ACTOR) {
             let reason = match error {
                 StoreError::AccountNotFound(id) => format!("account {id} not found"),
                 error => {
@@ -554,20 +640,11 @@ pub(crate) async fn set_members(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
-    match state.store.set_pool_members(
-        &id,
-        &input
-            .members
-            .iter()
-            .map(|m| MemberWrite {
-                account_id: m.account_id.clone(),
-                priority: m.priority,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
-            })
-            .collect::<Vec<_>>(),
-        ACTOR,
-    ) {
+    let writes = match member_writes(&input.members) {
+        Ok(writes) => writes,
+        Err(refusal) => return refusal,
+    };
+    match state.store.set_pool_members(&id, &writes, ACTOR) {
         Ok(()) => {}
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
@@ -581,6 +658,31 @@ pub(crate) async fn set_members(
         Ok(v) => Json(v).into_response(),
         Err(e) => store_failure(e),
     }
+}
+
+/// One member row. Its own function, beside the pool's own `json!` call, because nested inline the two
+/// overflow the macro's expansion depth.
+fn member_json(
+    m: &PoolMember,
+    accounts: &[phoebis_store::AccountRow],
+    spends: &[phoebis_routing::MemberSpend],
+    eligible: &str,
+) -> Value {
+    let kind = accounts
+        .iter()
+        .find(|a| a.id == m.account_id)
+        .map(|a| match a.kind {
+            phoebis_store::AccountKind::ApiKey => "api_key",
+            phoebis_store::AccountKind::Oauth => "oauth",
+        });
+    let spend = spends
+        .iter()
+        .find(|s| s.pool_id == m.pool_id && s.account_id == m.account_id);
+    json!({
+        "account_id": m.account_id, "priority": m.priority, "eligible": eligible,
+        "kind": kind, "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
+        "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
+    })
 }
 
 pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, StoreError> {
@@ -630,6 +732,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = state.store.accounts()?;
+    let spends = state.router.member_spends().await.unwrap_or_default();
     let snapshot = state.router.snapshot();
     let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
     // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready, a
@@ -677,6 +780,9 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "strategy": row.strategy.as_str(),
         "prefer_subscription": row.prefer_subscription,
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
+        "affinity_mode": row.affinity.mode.as_str(), "subagent_placement": row.affinity.subagent_placement.as_str(),
+        "session_placement": row.affinity.session_placement.as_str(), "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
+        "quota_headers": row.quota_headers.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
         "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,
@@ -689,7 +795,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
-        "members": members.iter().map(|m| json!({ "account_id": m.account_id, "priority": m.priority, "eligible": ineligible(m).unwrap_or("eligible") })).collect::<Vec<_>>(),
+        "members": members.iter().map(|m| member_json(m, &accounts, &spends, ineligible(m).unwrap_or("eligible"))).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,
         "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),

@@ -164,6 +164,67 @@ pub(crate) async fn breakdown(
     Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted, &live, &agent_groups) })).into_response()
 }
 
+pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
+    let snapshot = state.router.snapshot();
+    let spends = state.router.member_spends().await.unwrap_or_default();
+    let mut members: Vec<Value> = snapshot
+        .budgeted_members()
+        .map(|m| {
+            let spend = spends
+                .iter()
+                .find(|s| s.pool_id == m.pool_id && s.account_id == m.account_id);
+            json!({
+                "pool_id": m.pool_id, "account_id": m.account_id,
+                "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
+                "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
+            })
+        })
+        .collect();
+    members.sort_by(|a, b| {
+        (a["pool_id"].as_str(), a["account_id"].as_str())
+            .cmp(&(b["pool_id"].as_str(), b["account_id"].as_str()))
+    });
+    Json(json!({ "members": members })).into_response()
+}
+
+pub(crate) async fn placements(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let (from, to) = match parse_range(q.get("range").map(String::as_str), (state.clock)()) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let filter = filter_of(&q);
+    if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
+        || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
+        || !phoebis_ledger::patterns_within_bounds(&filter.clients)
+    {
+        return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
+    }
+    let live = LiveKeys::from_snapshot(&state.router.snapshot());
+    let rows = match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::placements(c, &filter, &live, from, to))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    let rows: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "rung": r.rung, "placements": r.placements, "hits": r.hits,
+                "hit_share": (r.placements > 0).then(|| r.hits as f64 / r.placements as f64),
+                "cache_read_tokens": r.cache_read_tokens, "promised_tokens": r.promised_tokens,
+            })
+        })
+        .collect();
+    Json(json!({ "from": from, "to": to, "rows": rows })).into_response()
+}
+
 pub(crate) async fn accounts(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,

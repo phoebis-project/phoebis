@@ -211,7 +211,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -628,11 +628,16 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "analytics_breakdown",
             "/admin/analytics/breakdown?range=24h&group_by=key",
         ),
+        ("analytics_budgets", "/admin/analytics/budgets"),
         (
             "analytics_burn",
             "/admin/analytics/burn?range=24h&group_by=account",
         ),
         ("analytics_fits", "/admin/analytics/fits"),
+        (
+            "analytics_placements",
+            "/admin/analytics/placements?range=24h",
+        ),
         ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (
             "analytics_series",

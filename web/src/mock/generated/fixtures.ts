@@ -1254,6 +1254,21 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "analytics_budgets": {
+    "route": "GET /admin/analytics/budgets",
+    "body": {
+      "members": [
+        {
+          "pool_id": "main",
+          "account_id": "business",
+          "budget_usd": 50,
+          "budget_period": "month",
+          "spent_usd": 0.0072,
+          "period_end": 2678400000
+        }
+      ]
+    }
+  },
   "analytics_burn": {
     "route": "GET /admin/analytics/burn?range=24h&group_by=account",
     "body": {
@@ -1509,6 +1524,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "band_divergent": false
         }
       ]
+    }
+  },
+  "analytics_placements": {
+    "route": "GET /admin/analytics/placements?range=24h",
+    "body": {
+      "from": -85400000,
+      "to": 1000000,
+      "rows": []
     }
   },
   "analytics_rewrites": {
@@ -2962,7 +2985,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -2974,6 +2997,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -3065,7 +3090,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -3077,6 +3102,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 502,
           "outcome": "failed",
           "error_code": "upstream_error",
@@ -3180,6 +3207,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -3271,7 +3300,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -3283,6 +3312,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -3409,7 +3440,9 @@ export const FIXTURES: Record<string, Fixture> = {
                     "account_id": "direct",
                     "obstacle": "ranked"
                   }
-                ]
+                ],
+                "placement": null,
+                "cohort_hold": null
               },
               "response": {
                 "cleared_input_tokens": null,
@@ -3527,8 +3560,9 @@ export const FIXTURES: Record<string, Fixture> = {
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
       "in_flight_cap": null,
-      "prefix": "TAamlUMm",
-      "created_at": 1790412878207,
+      "affinity_source": "auto",
+      "prefix": "AqauiZbh",
+      "created_at": 1790531711817,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -3592,8 +3626,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
           "in_flight_cap": null,
-          "prefix": "TAamlUMm",
-          "created_at": 1790412878207,
+          "affinity_source": "auto",
+          "prefix": "AqauiZbh",
+          "created_at": 1790531711817,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
@@ -4560,6 +4595,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "prefer_subscription": true,
           "affinity_ttl_seconds": 600,
           "overage_policy": "prefer_plan",
+          "affinity_mode": "always",
+          "subagent_placement": "by_cohort",
+          "session_placement": "by_strategy",
+          "min_shared_prefix_tokens": 20000,
+          "quota_headers": "pass",
           "migrate_above_utilization": null,
           "select_below_utilization": null,
           "model_rules": [
@@ -4616,25 +4656,35 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cache_diagnostics": null,
           "body_capture_hours": 24,
-          "created_at": 1790465806561,
-          "updated_at": 1790465806561,
+          "created_at": 1790531711814,
+          "updated_at": 1790531711814,
           "members": [
             {
               "account_id": "business",
               "priority": 0,
-              "eligible": "eligible"
+              "eligible": "eligible",
+              "kind": "oauth",
+              "budget_usd": 50,
+              "budget_period": "month",
+              "spent_usd": 0.0072,
+              "period_end": 2678400000
             },
             {
               "account_id": "direct",
               "priority": 1,
-              "eligible": "eligible"
+              "eligible": "eligible",
+              "kind": "api_key",
+              "budget_usd": null,
+              "budget_period": "month",
+              "spent_usd": null,
+              "period_end": null
             }
           ],
           "keys": [
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "KOUbhRXc",
+              "prefix": "AqauiZbh",
               "enabled": true
             }
           ],
@@ -4895,7 +4945,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790412878207,
+        "key_generation": 1790531711817,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -4907,6 +4957,8 @@ export const FIXTURES: Record<string, Fixture> = {
         "origin": "client",
         "transport": "sse",
         "request_class": null,
+        "forked_from": null,
+        "fork_depth": null,
         "status": 200,
         "outcome": "succeeded",
         "error_code": null,
@@ -5033,7 +5085,9 @@ export const FIXTURES: Record<string, Fixture> = {
                   "account_id": "direct",
                   "obstacle": "ranked"
                 }
-              ]
+              ],
+              "placement": null,
+              "cohort_hold": null
             },
             "response": {
               "cleared_input_tokens": null,
@@ -5146,7 +5200,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5158,6 +5212,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -5249,7 +5305,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -5261,6 +5317,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 502,
           "outcome": "failed",
           "error_code": "upstream_error",
@@ -5364,6 +5422,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -5455,7 +5515,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790412878207,
+          "key_generation": 1790531711817,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5467,6 +5527,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -5593,7 +5655,9 @@ export const FIXTURES: Record<string, Fixture> = {
                     "account_id": "direct",
                     "obstacle": "ranked"
                   }
-                ]
+                ],
+                "placement": null,
+                "cohort_hold": null
               },
               "response": {
                 "cleared_input_tokens": null,
@@ -5625,7 +5689,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790465806565,
+          "key_generation": 1790531711817,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -5653,11 +5717,13 @@ export const FIXTURES: Record<string, Fixture> = {
             "net_usd": null,
             "next_probe_at": null,
             "state": null
-          }
+          },
+          "forked_from": null,
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790465806565,
+          "key_generation": 1790531711817,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -5682,14 +5748,16 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_guard": "rearm",
             "net_meter_tokens": 0,
             "net_usd": 0,
-            "next_probe_at": 1236323,
+            "next_probe_at": 1239999,
             "state": "busy"
           },
-          "historical": false
+          "historical": false,
+          "forked_from": null,
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790465806565,
+          "key_generation": 1790531711817,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -5717,7 +5785,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "net_usd": null,
             "next_probe_at": null,
             "state": null
-          }
+          },
+          "forked_from": null,
+          "fork_depth": null
         },
         {
           "key_id": "desktop",
@@ -5749,7 +5819,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "net_usd": null,
             "next_probe_at": null,
             "state": null
-          }
+          },
+          "forked_from": null,
+          "fork_depth": null
         }
       ]
     }

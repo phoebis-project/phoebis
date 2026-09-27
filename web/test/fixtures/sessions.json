@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1790465806565,
+        "key_generation": 1790531711817,
         "session_id": "s-fixture",
         "agent_id": "main",
         "model": "claude-sonnet-5",
@@ -32,11 +32,13 @@
           "net_usd": null,
           "next_probe_at": null,
           "state": null
-        }
+        },
+        "forked_from": null,
+        "fork_depth": null
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790465806565,
+        "key_generation": 1790531711817,
         "session_id": "s1",
         "agent_id": null,
         "model": "claude-sonnet-5",
@@ -61,14 +63,16 @@
           "last_guard": "rearm",
           "net_meter_tokens": 0.0,
           "net_usd": 0.0,
-          "next_probe_at": 1236323,
+          "next_probe_at": 1239999,
           "state": "busy"
         },
-        "historical": false
+        "historical": false,
+        "forked_from": null,
+        "fork_depth": null
       },
       {
         "key_id": "desktop",
-        "key_generation": 1790465806565,
+        "key_generation": 1790531711817,
         "session_id": "s2",
         "agent_id": null,
         "model": "claude-sonnet-5",
@@ -96,7 +100,9 @@
           "net_usd": null,
           "next_probe_at": null,
           "state": null
-        }
+        },
+        "forked_from": null,
+        "fork_depth": null
       },
       {
         "key_id": "desktop",
@@ -128,7 +134,9 @@
           "net_usd": null,
           "next_probe_at": null,
           "state": null
-        }
+        },
+        "forked_from": null,
+        "fork_depth": null
       }
     ]
   }

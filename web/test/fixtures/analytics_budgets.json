@@ -1,0 +1,15 @@
+{
+  "route": "GET /admin/analytics/budgets",
+  "body": {
+    "members": [
+      {
+        "pool_id": "main",
+        "account_id": "business",
+        "budget_usd": 50.0,
+        "budget_period": "month",
+        "spent_usd": 0.0072,
+        "period_end": 2678400000
+      }
+    ]
+  }
+}

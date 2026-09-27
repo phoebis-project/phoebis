@@ -204,6 +204,34 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["account_id"] = json!(recipe.account_id);
         }
     }
+    // One read over every row's key, after the pin, activity and engine passes have settled who belongs on
+    let identity_keys: Vec<(String, i64, String)> = rows.keys().cloned().collect();
+    let identities = match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::session_identities(c, &identity_keys))
+        .await
+    {
+        Ok(identities) => identities,
+        Err(e) => return Err(crate::analytics::ledger_failure(e)),
+    };
+    let identity_by_key: std::collections::BTreeMap<
+        (String, i64, String),
+        phoebis_ledger::SessionIdentity,
+    > = identities
+        .into_iter()
+        .map(|i| {
+            (
+                (i.key_id.clone(), i.key_generation, i.session_id.clone()),
+                i,
+            )
+        })
+        .collect();
+    for (key, entry) in rows.iter_mut() {
+        let identity = identity_by_key.get(key);
+        entry["forked_from"] = json!(identity.and_then(|i| i.forked_from.clone()));
+        entry["fork_depth"] = json!(identity.and_then(|i| i.fork_depth));
+    }
     let mut out: Vec<serde_json::Value> = rows.into_values().collect();
     let latest = |v: &serde_json::Value| {
         v["last_used_at"]

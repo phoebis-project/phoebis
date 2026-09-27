@@ -1262,6 +1262,59 @@ async fn a_key_carries_an_in_flight_cap_that_null_clears_and_zero_is_refused() {
 }
 
 #[tokio::test]
+async fn a_key_accepts_its_affinity_source_and_refuses_a_bad_value() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let created = json(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        created["affinity_source"].as_str(),
+        Some("auto"),
+        "the source defaults to auto"
+    );
+    let patched = json(
+        patch(
+            &app,
+            "/admin/keys/desktop",
+            r#"{"affinity_source":"content"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        patched["affinity_source"].as_str(),
+        Some("content"),
+        "a patch round-trips the source"
+    );
+    for (body, message) in [
+        (
+            r#"{"affinity_source":"whatever"}"#,
+            "affinity_source must be auto, session, user_id, content, or whole_key",
+        ),
+    ] {
+        let refused = patch(&app, "/admin/keys/desktop", body, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{body}");
+        assert_eq!(json(refused).await["error"].as_str(), Some(message));
+    }
+}
+
+#[tokio::test]
 async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1541,6 +1594,27 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
 }
 
 #[tokio::test]
+async fn a_cache_ttl_patch_with_an_unknown_field_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let refused = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"cache_ttl":{"unknown_field":"5m"}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+}
+
+#[tokio::test]
 async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -1811,6 +1885,172 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         (Some(1.0), Some(1.0), Some(300), Some(300), Some(10_080)),
         "every field's upper inclusive edge is accepted"
     );
+}
+
+#[tokio::test]
+async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    use common::{generation, wait_json};
+
+    let parts = common::admin_parts_full().await;
+    let app = &parts.app;
+    let cookie = login(app, "admin-secret").await;
+    let created = json(
+        post(
+            app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority",
+                "members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"}]}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            created["affinity_mode"].as_str(),
+            created["subagent_placement"].as_str(),
+            created["session_placement"].as_str(),
+            created["min_shared_prefix_tokens"].as_u64(),
+            created["quota_headers"].as_str(),
+            created["cache_ttl"]["inject_when_absent"].as_bool(),
+        ),
+        (
+            Some("always"),
+            Some("by_cohort"),
+            Some("by_strategy"),
+            Some(20_000),
+            Some("pass"),
+            Some(false)
+        ),
+        "the five fields and the toggle default to the shipped preset"
+    );
+    assert_eq!(
+        (
+            created["members"][0]["budget_usd"].as_f64(),
+            created["members"][0]["budget_period"].as_str(),
+            created["members"][0]["kind"].as_str(),
+        ),
+        (Some(50.0), Some("month"), Some("oauth")),
+        "a member's budget and its account's kind are answered"
+    );
+    post(
+        app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let key_generation = generation(&parts.store, "desktop");
+    // A real priced request against the budgeted member, so the writer's own refresh reports a real spend
+    // over the ledger; the route's job is reading that report back, not computing it.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r1".into(),
+            received_at: common::NOW,
+            key_id: Some("desktop".into()),
+            key_generation,
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    let spent = wait_json(app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["members"][0]["spent_usd"]
+            .as_f64()
+            .is_some_and(|s| s > 0.0)
+    })
+    .await;
+    assert!(
+        spent["pools"][0]["members"][0]["period_end"]
+            .as_i64()
+            .is_some_and(|p| p > common::NOW),
+        "the period end is the budget period's own boundary, ahead of now"
+    );
+    let patched = json(
+        patch(
+            app,
+            "/admin/pools/main",
+            r#"{"affinity_mode":"when_cached","subagent_placement":"with_main","session_placement":"by_warm_prefix",
+                "min_shared_prefix_tokens":5000,"quota_headers":"hide",
+                "members":[{"account_id":"business","priority":0,"budget_usd":10.0,"budget_period":"day"}]}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            patched["affinity_mode"].as_str(),
+            patched["subagent_placement"].as_str(),
+            patched["session_placement"].as_str(),
+            patched["min_shared_prefix_tokens"].as_u64(),
+            patched["quota_headers"].as_str(),
+            patched["members"][0]["budget_usd"].as_f64(),
+            patched["members"][0]["budget_period"].as_str(),
+        ),
+        (
+            Some("when_cached"),
+            Some("with_main"),
+            Some("by_warm_prefix"),
+            Some(5_000),
+            Some("hide"),
+            Some(10.0),
+            Some("day")
+        ),
+        "a patch round-trips the five fields and a member's budget"
+    );
+    for (body, message) in [
+        (
+            r#"{"affinity_mode":"sometimes"}"#,
+            "affinity_mode must be always or when_cached",
+        ),
+        (
+            r#"{"subagent_placement":"nowhere"}"#,
+            "subagent_placement must be by_cohort, by_strategy, or with_main",
+        ),
+        (
+            r#"{"session_placement":"nowhere"}"#,
+            "session_placement must be by_strategy or by_warm_prefix",
+        ),
+        (
+            r#"{"quota_headers":"maybe"}"#,
+            "quota_headers must be hide or pass",
+        ),
+        (
+            r#"{"members":[{"account_id":"business","priority":0,"budget_usd":0}]}"#,
+            "budget_usd is above 0",
+        ),
+        (
+            r#"{"members":[{"account_id":"business","priority":0,"budget_usd":-5}]}"#,
+            "budget_usd is above 0",
+        ),
+        (
+            r#"{"members":[{"account_id":"business","priority":0,"budget_period":"week"}]}"#,
+            "budget_period must be day or month",
+        ),
+    ] {
+        let refused = patch(app, "/admin/pools/main", body, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{body}");
+        assert_eq!(json(refused).await["error"].as_str(), Some(message));
+    }
 }
 
 #[tokio::test]

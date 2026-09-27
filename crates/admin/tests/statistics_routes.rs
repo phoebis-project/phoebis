@@ -1887,3 +1887,128 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
         "a named object on the wire, never a tuple: {body}"
     );
 }
+
+#[tokio::test]
+async fn budgets_route_answers_a_members_spend_against_its_budget() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority",
+        "members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"}]}"#, Some(&cookie)).await;
+    // A real priced attempt, so the writer's own refresh reports a real spend; the route's job is reading it
+    // back, not computing it.
+    parts
+        .ledger
+        .record(record("r1", common::NOW, "claude-sonnet-5", "s1"));
+    let budgets = wait_json(&parts.app, "/admin/analytics/budgets", &cookie, |v| {
+        v["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["spent_usd"].as_f64().is_some_and(|s| s > 0.0))
+    })
+    .await;
+    let member = &budgets["members"][0];
+    assert_eq!(
+        (
+            member["pool_id"].as_str(),
+            member["account_id"].as_str(),
+            member["budget_usd"].as_f64(),
+            member["budget_period"].as_str(),
+        ),
+        (Some("main"), Some("business"), Some(50.0), Some("month")),
+        "a budgeted member names its pool, account, and budget"
+    );
+    assert!(
+        member["period_end"]
+            .as_i64()
+            .is_some_and(|p| p > common::NOW),
+        "the period end is the budget period's own boundary, ahead of now"
+    );
+}
+
+#[tokio::test]
+async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let plant = |id: &str, at: i64, rung: &str, prefix_tokens: u64, cache_read_tokens: u64| {
+        Record::Request {
+            request: RequestRecord {
+                id: id.into(),
+                received_at: at,
+                finished_at: Some(at + 500),
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                cache_read_tokens: Some(cache_read_tokens),
+                selection: Some(format!(
+                    r#"{{"placement":{{"rung":"{rung}","depth":1,"prefix_tokens":{prefix_tokens}}}}}"#
+                )),
+                ..Default::default()
+            }],
+            bodies: None,
+        }
+    };
+    parts
+        .ledger
+        .record(plant("p-content", common::NOW - 5_000, "content", 500, 500));
+    parts
+        .ledger
+        .record(plant("p-static", common::NOW - 4_000, "static", 200, 50));
+    for id in ["p-content", "p-static"] {
+        fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+            parts.db.request(id).await.unwrap()
+        })
+        .await;
+    }
+    let placed = json(
+        get(
+            &parts.app,
+            "/admin/analytics/placements?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = |rung: &str| {
+        placed["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["rung"] == rung)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (
+            row("content")["placements"].as_u64(),
+            row("content")["hits"].as_u64(),
+            row("content")["hit_share"].as_f64(),
+            row("content")["cache_read_tokens"].as_u64(),
+            row("content")["promised_tokens"].as_u64(),
+        ),
+        (Some(1), Some(1), Some(1.0), Some(500), Some(500)),
+        "a content placement is a hit once the response reads at least the promised prefix"
+    );
+    assert_eq!(
+        (
+            row("static")["placements"].as_u64(),
+            row("static")["hits"].as_u64(),
+            row("static")["hit_share"].as_f64(),
+        ),
+        (Some(1), Some(1), Some(1.0)),
+        "a static placement is a hit on any read at all"
+    );
+}
